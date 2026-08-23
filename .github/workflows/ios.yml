@@ -1,6 +1,24 @@
-name: Build for iOS
+name: Build iOS Native UI
 
 on:
+  push:
+    branches:
+      - main
+    paths:
+      - "ios/**"
+      - "lib/**"
+      - "assets/**"
+      - "pubspec.yaml"
+      - "pubspec.lock"
+      - ".github/workflows/ios.yml"
+  pull_request:
+    paths:
+      - "ios/**"
+      - "lib/**"
+      - "assets/**"
+      - "pubspec.yaml"
+      - "pubspec.lock"
+      - ".github/workflows/ios.yml"
   workflow_call:
     inputs:
       tag:
@@ -10,9 +28,13 @@ on:
         type: string
   workflow_dispatch:
 
+concurrency:
+  group: piliglass-ios-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build-macos-app:
-    name: Release IOS
+    name: Build UIKit shell + Flutter features
     runs-on: macos-26
     steps:
       - name: Checkout code

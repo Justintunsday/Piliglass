@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:PiliPlus/common/style.dart';
 import 'package:PiliPlus/common/widgets/custom_height_widget.dart';
 import 'package:PiliPlus/common/widgets/image/network_img_layer.dart';
@@ -77,7 +79,8 @@ class _HomePageState extends CommonPageState<HomePage>
     }
     return Column(
       children: [
-        if (!_mainController.useSideBar &&
+        if (!Platform.isIOS &&
+            !_mainController.useSideBar &&
             MediaQuery.sizeOf(context).isPortrait)
           customAppBar(),
         tabBar,

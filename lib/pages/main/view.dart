@@ -44,6 +44,9 @@ class _MainAppState extends PopScopeState<MainApp>
         WindowListener,
         TrayListener {
   final _mainController = Get.put(MainController());
+  static const _nativeUIChannel = MethodChannel('piliglass/native_ui');
+  Worker? _nativeSelectedIndexWorker;
+  Worker? _nativeDynamicBadgeWorker;
   late final _setting = GStorage.setting;
   late EdgeInsets _padding;
   late ColorScheme _colorScheme;
@@ -56,6 +59,9 @@ class _MainAppState extends PopScopeState<MainApp>
   void initState() {
     super.initState();
     addObserverMobile(this);
+    if (Platform.isIOS) {
+      _configureNativeUI();
+    }
     if (PlatformUtils.isDesktop) {
       windowManager
         ..addListener(this)
@@ -68,6 +74,51 @@ class _MainAppState extends PopScopeState<MainApp>
       // FlutterSmartDialog throws
       PiliScheme.init();
     }
+  }
+
+  void _configureNativeUI() {
+    _nativeUIChannel.setMethodCallHandler((call) async {
+      switch (call.method) {
+        case 'selectTab':
+          final index = call.arguments as int;
+          if (index >= 0 && index < _mainController.navigationBars.length) {
+            _mainController.setIndex(index);
+          }
+          return;
+        case 'openSearch':
+          Get.toNamed('/search');
+          return;
+      }
+    });
+
+    _nativeSelectedIndexWorker = ever<int>(
+      _mainController.selectedIndex,
+      (index) => _nativeUIChannel.invokeMethod('setSelectedIndex', index),
+    );
+    _nativeDynamicBadgeWorker = ever<int>(
+      _mainController.dynCount,
+      _syncNativeDynamicBadge,
+    );
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _nativeUIChannel.invokeMethod('configure', {
+        'titles': _mainController.navigationBars.map((e) => e.label).toList(),
+        'selectedIndex': _mainController.selectedIndex.value,
+      });
+      _syncNativeDynamicBadge(_mainController.dynCount.value);
+    });
+  }
+
+  void _syncNativeDynamicBadge(int count) {
+    final index = _mainController.navigationBars.indexOf(
+      NavigationBarType.dynamics,
+    );
+    if (index < 0) return;
+    _nativeUIChannel.invokeMethod('setBadge', {
+      'index': index,
+      'value': count <= 0 ? '' : (count > 99 ? '99+' : count.toString()),
+    });
   }
 
   @override
@@ -92,6 +143,9 @@ class _MainAppState extends PopScopeState<MainApp>
   @override
   void didPopNext() {
     addObserverMobile(this);
+    if (Platform.isIOS) {
+      _nativeUIChannel.invokeMethod('setChromeVisible', true);
+    }
     _mainController
       ..checkUnreadDynamic()
       ..checkDefaultSearch(true)
@@ -102,6 +156,9 @@ class _MainAppState extends PopScopeState<MainApp>
   @override
   void didPushNext() {
     removeObserverMobile(this);
+    if (Platform.isIOS) {
+      _nativeUIChannel.invokeMethod('setChromeVisible', false);
+    }
     super.didPushNext();
   }
 
@@ -123,6 +180,11 @@ class _MainAppState extends PopScopeState<MainApp>
     }
     removeObserverMobile(this);
     PiliScheme.listener?.cancel();
+    _nativeSelectedIndexWorker?.dispose();
+    _nativeDynamicBadgeWorker?.dispose();
+    if (Platform.isIOS) {
+      _nativeUIChannel.setMethodCallHandler(null);
+    }
     GStorage.close();
     super.dispose();
   }
@@ -465,6 +527,19 @@ class _MainAppState extends PopScopeState<MainApp>
         controller: _mainController.controller,
         physics: const NeverScrollableScrollPhysics(),
         children: _mainController.navigationBars.map((i) => i.page).toList(),
+      );
+    }
+
+    if (Platform.isIOS) {
+      child = Material(child: child);
+      return AnnotatedRegion<SystemUiOverlayStyle>(
+        value: SystemUiOverlayStyle(
+          statusBarColor: Colors.transparent,
+          statusBarBrightness: _colorScheme.brightness,
+          statusBarIconBrightness: _colorScheme.brightness.reverse,
+          systemStatusBarContrastEnforced: false,
+        ),
+        child: child,
       );
     }
 
