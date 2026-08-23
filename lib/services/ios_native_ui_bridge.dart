@@ -78,7 +78,7 @@ final class IOSNativeUIBridge {
       _channel.invokeMethod<void>('configure', {
         'titles': mainController.navigationBars.map((e) => e.label).toList(),
         'selectedIndex': mainController.selectedIndex.value,
-        'minimumIOSVersion': 14,
+        'minimumIOSVersion': 15,
         'mode': 'native-root-flutter-features',
       });
       _syncDynamicBadge(mainController.dynCount.value);
