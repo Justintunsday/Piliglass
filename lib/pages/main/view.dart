@@ -13,6 +13,7 @@ import 'package:PiliPlus/pages/home/view.dart';
 import 'package:PiliPlus/pages/main/controller.dart';
 import 'package:PiliPlus/plugin/pl_player/controller.dart';
 import 'package:PiliPlus/plugin/pl_player/models/play_status.dart';
+import 'package:PiliPlus/services/ios_native_ui_bridge.dart';
 import 'package:PiliPlus/utils/android/android_helper.dart';
 import 'package:PiliPlus/utils/app_scheme.dart';
 import 'package:PiliPlus/utils/extension/context_ext.dart';
@@ -22,7 +23,6 @@ import 'package:PiliPlus/utils/mobile_observer.dart';
 import 'package:PiliPlus/utils/platform_utils.dart';
 import 'package:PiliPlus/utils/storage.dart';
 import 'package:PiliPlus/utils/storage_key.dart';
-import 'package:flutter/services.dart';
 import 'package:get/get.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:tray_manager/tray_manager.dart';
@@ -44,9 +44,7 @@ class _MainAppState extends PopScopeState<MainApp>
         WindowListener,
         TrayListener {
   final _mainController = Get.put(MainController());
-  static const _nativeUIChannel = MethodChannel('piliglass/native_ui');
-  Worker? _nativeSelectedIndexWorker;
-  Worker? _nativeDynamicBadgeWorker;
+  IOSNativeUIBridge? _nativeUIBridge;
   late final _setting = GStorage.setting;
   late EdgeInsets _padding;
   late ColorScheme _colorScheme;
@@ -60,7 +58,7 @@ class _MainAppState extends PopScopeState<MainApp>
     super.initState();
     addObserverMobile(this);
     if (Platform.isIOS) {
-      _configureNativeUI();
+      (_nativeUIBridge = IOSNativeUIBridge(_mainController)).start();
     }
     if (PlatformUtils.isDesktop) {
       windowManager
@@ -74,51 +72,6 @@ class _MainAppState extends PopScopeState<MainApp>
       // FlutterSmartDialog throws
       PiliScheme.init();
     }
-  }
-
-  void _configureNativeUI() {
-    _nativeUIChannel.setMethodCallHandler((call) async {
-      switch (call.method) {
-        case 'selectTab':
-          final index = call.arguments as int;
-          if (index >= 0 && index < _mainController.navigationBars.length) {
-            _mainController.setIndex(index);
-          }
-          return;
-        case 'openSearch':
-          Get.toNamed('/search');
-          return;
-      }
-    });
-
-    _nativeSelectedIndexWorker = ever<int>(
-      _mainController.selectedIndex,
-      (index) => _nativeUIChannel.invokeMethod('setSelectedIndex', index),
-    );
-    _nativeDynamicBadgeWorker = ever<int>(
-      _mainController.dynCount,
-      _syncNativeDynamicBadge,
-    );
-
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) return;
-      _nativeUIChannel.invokeMethod('configure', {
-        'titles': _mainController.navigationBars.map((e) => e.label).toList(),
-        'selectedIndex': _mainController.selectedIndex.value,
-      });
-      _syncNativeDynamicBadge(_mainController.dynCount.value);
-    });
-  }
-
-  void _syncNativeDynamicBadge(int count) {
-    final index = _mainController.navigationBars.indexOf(
-      NavigationBarType.dynamics,
-    );
-    if (index < 0) return;
-    _nativeUIChannel.invokeMethod('setBadge', {
-      'index': index,
-      'value': count <= 0 ? '' : (count > 99 ? '99+' : count.toString()),
-    });
   }
 
   @override
@@ -144,7 +97,7 @@ class _MainAppState extends PopScopeState<MainApp>
   void didPopNext() {
     addObserverMobile(this);
     if (Platform.isIOS) {
-      _nativeUIChannel.invokeMethod('setChromeVisible', true);
+      _nativeUIBridge?.setNativeRootVisible(true);
     }
     _mainController
       ..checkUnreadDynamic()
@@ -157,7 +110,7 @@ class _MainAppState extends PopScopeState<MainApp>
   void didPushNext() {
     removeObserverMobile(this);
     if (Platform.isIOS) {
-      _nativeUIChannel.invokeMethod('setChromeVisible', false);
+      _nativeUIBridge?.setNativeRootVisible(false);
     }
     super.didPushNext();
   }
@@ -180,11 +133,7 @@ class _MainAppState extends PopScopeState<MainApp>
     }
     removeObserverMobile(this);
     PiliScheme.listener?.cancel();
-    _nativeSelectedIndexWorker?.dispose();
-    _nativeDynamicBadgeWorker?.dispose();
-    if (Platform.isIOS) {
-      _nativeUIChannel.setMethodCallHandler(null);
-    }
+    _nativeUIBridge?.dispose();
     GStorage.close();
     super.dispose();
   }

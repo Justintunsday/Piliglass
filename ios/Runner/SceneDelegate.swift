@@ -19,7 +19,7 @@ class SceneDelegate: FlutterSceneDelegate {
       return
     }
 
-    window?.rootViewController = PiliNativeContainerViewController(
+    window?.rootViewController = PiliNativeRootViewController(
       flutterViewController: flutterViewController
     )
     window?.makeKeyAndVisible()
