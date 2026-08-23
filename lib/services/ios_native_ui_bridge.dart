@@ -2,18 +2,28 @@ import 'dart:async';
 
 import 'package:PiliPlus/http/loading_state.dart';
 import 'package:PiliPlus/http/search.dart';
+import 'package:PiliPlus/http/video.dart';
 import 'package:PiliPlus/models/common/dynamic/dynamics_type.dart';
 import 'package:PiliPlus/models/common/nav_bar_config.dart';
 import 'package:PiliPlus/models/common/search/search_type.dart';
+import 'package:PiliPlus/models/common/setting_type.dart';
 import 'package:PiliPlus/models/search/result.dart';
+import 'package:PiliPlus/pages/about/view.dart';
 import 'package:PiliPlus/pages/dynamics/controller.dart';
 import 'package:PiliPlus/pages/dynamics_tab/controller.dart';
 import 'package:PiliPlus/pages/main/controller.dart';
 import 'package:PiliPlus/pages/mine/controller.dart';
 import 'package:PiliPlus/pages/rcmd/controller.dart';
+import 'package:PiliPlus/pages/setting/common_setting.dart';
+import 'package:PiliPlus/pages/webdav/view.dart';
+import 'package:PiliPlus/services/service_locator.dart';
 import 'package:PiliPlus/utils/app_scheme.dart';
+import 'package:PiliPlus/utils/date_utils.dart';
 import 'package:PiliPlus/utils/extension/get_ext.dart';
+import 'package:PiliPlus/utils/id_utils.dart';
 import 'package:PiliPlus/utils/page_utils.dart';
+import 'package:PiliPlus/utils/storage.dart';
+import 'package:PiliPlus/utils/storage_key.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:get/get.dart';
@@ -104,10 +114,20 @@ final class IOSNativeUIBridge {
         return _loadMore(_arguments(call)['section']?.toString());
       case 'openVideo':
         return _openVideo(_arguments(call));
+      case 'loadVideoDetail':
+        return _loadVideoDetail(_arguments(call));
+      case 'playVideo':
+        return _playVideo(_arguments(call));
       case 'openDynamic':
         return _openDynamic(_arguments(call));
       case 'openRoute':
         return _openRoute(_arguments(call));
+      case 'loadNativeSettings':
+        return _nativeSettingsSnapshot();
+      case 'setNativeSetting':
+        return _setNativeSetting(_arguments(call));
+      case 'openSettingsSection':
+        return _openSettingsSection(_arguments(call));
       case 'searchVideos':
         return _searchVideos(_arguments(call));
       // Kept for older native shells that still emit this action.
@@ -154,6 +174,217 @@ final class IOSNativeUIBridge {
     final aid = _asInt(arguments['aid']);
     if (bvid == null && aid == null) return;
     await PiliScheme.videoPush(aid, bvid);
+  }
+
+  Future<Map<String, dynamic>> _loadVideoDetail(
+    Map<dynamic, dynamic> arguments,
+  ) async {
+    var bvid = _nonEmpty(arguments['bvid']?.toString());
+    final aid = _asInt(arguments['aid']);
+    if (bvid == null && aid != null) bvid = IdUtils.av2bv(aid);
+    if (bvid == null) {
+      return const {'state': 'error', 'error': '缺少视频编号'};
+    }
+
+    final result = await VideoHttp.videoIntro(bvid: bvid);
+    return switch (result) {
+      Loading() => const {'state': 'loading'},
+      Error(:final errMsg, :final code) => {
+        'state': 'error',
+        'error': errMsg ?? '视频简介加载失败',
+        'code': ?code,
+      },
+      Success(:final response) => {
+        'state': 'success',
+        'video': {
+          'aid': response.aid ?? aid,
+          'bvid': response.bvid ?? bvid,
+          'cid': response.cid,
+          'title': response.title ?? arguments['title']?.toString() ?? '',
+          'cover': _normalizeURL(
+            response.pic ?? arguments['cover']?.toString(),
+          ),
+          'duration': response.duration ?? 0,
+          'durationText': _durationText(response.duration ?? 0),
+          'owner': response.owner?.name ?? '',
+          'ownerId': response.owner?.mid,
+          'ownerFace': _normalizeURL(response.owner?.face),
+          'description': response.desc ?? '',
+          'pubdate': response.pubdate,
+          'pubdateText': DateFormatUtils.format(response.pubdate),
+          'view': response.stat?.view ?? 0,
+          'viewText': _compactNumber(response.stat?.view),
+          'danmaku': response.stat?.danmaku ?? 0,
+          'danmakuText': _compactNumber(response.stat?.danmaku),
+          'reply': response.stat?.reply ?? 0,
+          'like': response.stat?.like ?? 0,
+          'coin': response.stat?.coin.toInt() ?? 0,
+          'favorite': response.stat?.favorite ?? 0,
+          'share': response.stat?.share ?? 0,
+          'redirectURL': response.redirectUrl,
+          'pages': (response.pages ?? const [])
+              .asMap()
+              .entries
+              .map(
+                (entry) => {
+                  'index': entry.key + 1,
+                  'cid': entry.value.cid,
+                  'title': entry.value.part ?? 'P${entry.key + 1}',
+                  'duration': entry.value.duration ?? 0,
+                  'durationText': _durationText(entry.value.duration ?? 0),
+                  'cover': _normalizeURL(entry.value.firstFrame),
+                },
+              )
+              .toList(),
+        },
+      },
+    };
+  }
+
+  Future<void> _playVideo(Map<dynamic, dynamic> arguments) async {
+    final bvid = _nonEmpty(arguments['bvid']?.toString());
+    final aid = _asInt(arguments['aid']);
+    final part = _asInt(arguments['part']);
+    if (bvid == null && aid == null) return;
+    await PiliScheme.videoPush(
+      aid,
+      bvid,
+      part: part?.toString(),
+    );
+  }
+
+  static const List<Map<String, dynamic>> _nativeSettingDefinitions = [
+    {
+      'key': SettingBoxKey.autoPlayEnable,
+      'title': '自动播放',
+      'subtitle': '进入播放页后自动开始播放',
+      'group': '播放',
+      'default': false,
+    },
+    {
+      'key': SettingBoxKey.enableShowDanmaku,
+      'title': '显示弹幕',
+      'subtitle': '播放器中加载并显示弹幕',
+      'group': '播放',
+      'default': true,
+    },
+    {
+      'key': SettingBoxKey.enableQuickDouble,
+      'title': '双击快退/快进',
+      'subtitle': '左侧双击快退，右侧双击快进',
+      'group': '播放',
+      'default': true,
+    },
+    {
+      'key': SettingBoxKey.enableSlideVolumeBrightness,
+      'title': '滑动调节亮度和音量',
+      'subtitle': '在播放器左右区域上下滑动',
+      'group': '播放',
+      'default': true,
+    },
+    {
+      'key': SettingBoxKey.enableBackgroundPlay,
+      'title': '后台音频服务',
+      'subtitle': '提升后台播放与系统控制兼容性',
+      'group': '播放',
+      'default': true,
+    },
+    {
+      'key': SettingBoxKey.showRelatedVideo,
+      'title': '显示相关视频',
+      'subtitle': '在视频详情中显示相关推荐',
+      'group': '详情',
+      'default': true,
+    },
+    {
+      'key': SettingBoxKey.showVideoReply,
+      'title': '显示视频评论',
+      'subtitle': '在视频详情中加载评论',
+      'group': '详情',
+      'default': true,
+    },
+    {
+      'key': SettingBoxKey.alwaysExpandIntroPanel,
+      'title': '默认展开简介',
+      'subtitle': '进入详情时完整展示视频简介',
+      'group': '详情',
+      'default': false,
+    },
+    {
+      'key': SettingBoxKey.appRcmd,
+      'title': '使用 App 端推荐',
+      'subtitle': '修改后下次启动生效',
+      'group': '推荐与搜索',
+      'default': true,
+      'needsRestart': true,
+    },
+    {
+      'key': SettingBoxKey.searchSuggestion,
+      'title': '搜索建议',
+      'subtitle': '输入搜索词时显示建议',
+      'group': '推荐与搜索',
+      'default': true,
+    },
+    {
+      'key': SettingBoxKey.recordSearchHistory,
+      'title': '记录搜索历史',
+      'subtitle': '在本机保存搜索历史',
+      'group': '推荐与搜索',
+      'default': true,
+    },
+  ];
+
+  Map<String, dynamic> _nativeSettingsSnapshot() => {
+    'state': 'success',
+    'items': _nativeSettingDefinitions
+        .map(
+          (item) => {
+            ...item,
+            'value': GStorage.setting.get(
+              item['key'],
+              defaultValue: item['default'],
+            ),
+          },
+        )
+        .toList(),
+  };
+
+  Future<Map<String, dynamic>> _setNativeSetting(
+    Map<dynamic, dynamic> arguments,
+  ) async {
+    final key = arguments['key']?.toString();
+    final definition = _nativeSettingDefinitions.firstWhereOrNull(
+      (item) => item['key'] == key,
+    );
+    if (definition == null || arguments['value'] is! bool) {
+      return const {'state': 'error', 'error': '不支持的设置项'};
+    }
+    final value = arguments['value'] as bool;
+    await GStorage.setting.put(key, value);
+    if (key == SettingBoxKey.enableBackgroundPlay) {
+      videoPlayerServiceHandler?.enableBackgroundPlay = value;
+    }
+    return _nativeSettingsSnapshot();
+  }
+
+  Future<void> _openSettingsSection(Map<dynamic, dynamic> arguments) async {
+    final section = arguments['section']?.toString();
+    final type = switch (section) {
+      'privacy' => SettingType.privacySetting,
+      'recommend' => SettingType.recommendSetting,
+      'video' => SettingType.videoSetting,
+      'player' => SettingType.playSetting,
+      'style' => SettingType.styleSetting,
+      'extra' => SettingType.extraSetting,
+      _ => null,
+    };
+    if (type != null) {
+      await Get.to(() => CommonSetting(settingType: type));
+    } else if (section == 'webdav') {
+      await Get.to(() => const WebDavSettingPage());
+    } else if (section == 'about') {
+      await Get.to(() => const AboutPage());
+    }
   }
 
   Future<void> _openDynamic(Map<dynamic, dynamic> arguments) async {
