@@ -426,6 +426,29 @@ final class IOSNativeUIBridge {
         'code': ?code,
       },
       Success(:final response) => () {
+        List<String> nativeTrackUrls(
+          Iterable<String> urls, {
+          bool isAudio = false,
+        }) {
+          final rawUrls = urls.where((url) => url.isNotEmpty).toList();
+          if (rawUrls.isEmpty) return const [];
+          final result = <String>[];
+
+          // AVFoundation is more sensitive to CDN host rewrites than mpv.
+          // Try the signed URL returned by Bilibili first, then the user's
+          // preferred CDN and every backup URL from the playurl response.
+          void add(String url) {
+            if (url.isNotEmpty && !result.contains(url)) result.add(url);
+          }
+
+          add(rawUrls.first);
+          add(VideoUtils.getCdnUrl(rawUrls, isAudio: isAudio));
+          for (final url in rawUrls.skip(1)) {
+            add(url);
+          }
+          return result;
+        }
+
         final qualityValues = response.acceptQuality ?? const <int>[];
         final qualityDescriptions = response.acceptDesc ?? const [];
         final formatByQuality = {
@@ -476,9 +499,15 @@ final class IOSNativeUIBridge {
           }
           candidates.sort((a, b) => codecRank(a).compareTo(codecRank(b)));
           final selectedVideo = candidates.first;
-          final videoUrl = VideoUtils.getCdnUrl(selectedVideo.playUrls);
+          final videoUrls = <String>[];
+          for (final candidate in candidates) {
+            for (final url in nativeTrackUrls(candidate.playUrls)) {
+              if (!videoUrls.contains(url)) videoUrls.add(url);
+            }
+          }
+          final videoUrl = videoUrls.firstOrNull ?? '';
 
-          final audioCandidates = dash.audio ?? const [];
+          final audioCandidates = [...?dash.audio];
           if (audioCandidates.isNotEmpty) {
             audioCandidates.sort((a, b) {
               int rank(dynamic item) {
@@ -492,13 +521,16 @@ final class IOSNativeUIBridge {
               return (b.bandWidth ?? 0).compareTo(a.bandWidth ?? 0);
             });
           }
-          final selectedAudio = audioCandidates.firstOrNull;
-          final audioUrl = selectedAudio == null
-              ? null
-              : VideoUtils.getCdnUrl(
-                  selectedAudio.playUrls,
-                  isAudio: true,
-                );
+          final audioUrls = <String>[];
+          for (final candidate in audioCandidates) {
+            for (final url in nativeTrackUrls(
+              candidate.playUrls,
+              isAudio: true,
+            )) {
+              if (!audioUrls.contains(url)) audioUrls.add(url);
+            }
+          }
+          final audioUrl = audioUrls.firstOrNull;
           if (videoUrl.isEmpty) {
             return const {
               'state': 'error',
@@ -514,6 +546,8 @@ final class IOSNativeUIBridge {
               {
                 'url': videoUrl,
                 'audioURL': audioUrl,
+                'videoURLs': videoUrls,
+                'audioURLs': audioUrls,
                 'duration': durationMs,
                 'codec': selectedVideo.codecs ?? '',
                 'width': selectedVideo.width ?? 0,

@@ -648,11 +648,19 @@ private final class PiliNativeViewModel: ObservableObject {
           let map = piliDictionary(row)
           guard let rawURL = piliString(map["url"]), let url = URL(string: rawURL) else { continue }
           let audioURL = piliString(map["audioURL"]).flatMap(URL.init(string:))
+          let videoURLs = (map["videoURLs"] as? [Any] ?? []).compactMap {
+            piliString($0).flatMap(URL.init(string:))
+          }
+          let audioURLs = (map["audioURLs"] as? [Any] ?? []).compactMap {
+            piliString($0).flatMap(URL.init(string:))
+          }
           segments.append(
             PiliNativePlayerSegment(
               url: url,
               duration: Double(piliInt(map["duration"])) / 1000,
               audioURL: audioURL,
+              alternativeURLs: videoURLs.filter { $0 != url },
+              alternativeAudioURLs: audioURLs.filter { $0 != audioURL },
               isHDR: piliBool(map["hdr"]),
               qualityValue: piliInt(map["quality"]),
               codec: piliString(map["codec"]) ?? ""
