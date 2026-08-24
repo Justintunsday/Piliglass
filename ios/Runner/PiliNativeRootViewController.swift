@@ -1,3 +1,5 @@
+import Combine
+import CoreImage.CIFilterBuiltins
 import Flutter
 import SwiftUI
 import UIKit
@@ -5,13 +7,16 @@ import UIKit
 private let piliNativeChannelName = "piliglass/native_ui"
 private let piliAccent = Color(red: 0.93, green: 0.29, blue: 0.48)
 
+private extension Notification.Name {
+  static let piliPresentNativeProfile = Notification.Name("piliglass.presentNativeProfile")
+}
+
 // MARK: - Native container
 
 /// Hosts a fully native SwiftUI root interface over the original Flutter root.
 ///
-/// Flutter remains alive underneath on the same engine. When a feature route
-/// such as login, video detail, or the player is opened, Dart asks this
-/// controller to reveal Flutter. Returning to `/` reveals the native root again.
+/// Dart remains alive underneath as the request and playback engine. Every
+/// non-player destination owned by this controller is rendered natively.
 final class PiliNativeRootViewController: UIViewController {
   private let flutterViewController: FlutterViewController
   private lazy var channel = FlutterMethodChannel(
@@ -179,6 +184,32 @@ private final class PiliNativeViewModel: ObservableObject {
   @Published private(set) var profileActionLoading = false
   @Published private(set) var profileMessage: String?
 
+  @Published var isDynamicDetailPresented = false
+  @Published private(set) var selectedDynamic: PiliNativeDynamic?
+
+  @Published var isMessagesPresented = false
+  @Published private(set) var messageKind = "reply"
+  @Published private(set) var messages: [PiliNativeMessage] = []
+  @Published private(set) var messagesLoading = false
+  @Published private(set) var messagesError: String?
+
+  @Published var isLoginPresented = false
+  @Published private(set) var loginQRCodeURL = ""
+  @Published private(set) var loginLoading = false
+  @Published private(set) var loginPolling = false
+  @Published private(set) var loginMessage = "使用哔哩哔哩客户端扫码登录"
+  @Published private(set) var loginExpiresIn = 0
+
+  @Published var isDownloadsPresented = false
+  @Published private(set) var downloads: [PiliNativeDownload] = []
+  @Published private(set) var downloadsLoading = false
+  @Published private(set) var downloadsError: String?
+
+  @Published private(set) var comments: [PiliNativeComment] = []
+  @Published private(set) var commentsLoading = false
+  @Published private(set) var commentsError: String?
+  @Published private(set) var commentsTotal = 0
+
   private let channel: FlutterMethodChannel
   private var snapshotInFlight = false
   private var pendingVideo: PiliNativeVideo?
@@ -189,6 +220,8 @@ private final class PiliNativeViewModel: ObservableObject {
   private var libraryParentKind: String?
   private var libraryParentTitle: String?
   private var profileMID: Int?
+  private var commentOID: Int?
+  private var commentType = 1
 
   init(channel: FlutterMethodChannel) {
     self.channel = channel
@@ -351,7 +384,11 @@ private final class PiliNativeViewModel: ObservableObject {
           self.videoDetailError = result["error"] as? String ?? "视频简介加载失败"
           return
         }
-        self.videoDetail = PiliNativeVideoDetail(map: piliDictionary(result["video"]))
+        let detail = PiliNativeVideoDetail(map: piliDictionary(result["video"]))
+        self.videoDetail = detail
+        if let aid = detail.aid {
+          self.loadComments(oid: aid, type: 1)
+        }
       }
     }
   }
@@ -466,22 +503,51 @@ private final class PiliNativeViewModel: ObservableObject {
     }
   }
 
-  func openSettingsSection(_ section: String) {
-    isSettingsPresented = false
-    DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) { [channel = self.channel] in
-      channel.invokeMethod("openSettingsSection", arguments: ["section": section])
+  func openDynamic(_ item: PiliNativeDynamic) {
+    selectedDynamic = item
+    isDynamicDetailPresented = true
+    if let oid = item.commentOID {
+      loadComments(oid: oid, type: item.commentType ?? 17)
+    } else {
+      comments = []
+      commentsTotal = item.comment
+      commentsError = "该动态没有可用的评论编号"
     }
   }
 
-  func openDynamic(_ item: PiliNativeDynamic) {
-    channel.invokeMethod("openDynamic", arguments: ["id": item.sourceID])
-  }
-
   func openRoute(_ route: String, parameters: [String: String] = [:]) {
-    channel.invokeMethod(
-      "openRoute",
-      arguments: ["route": route, "parameters": parameters]
-    )
+    switch route {
+    case "/loginPage":
+      presentNativeLogin()
+    case "/whisper", "/myReply":
+      presentMessages()
+    case "/download":
+      presentDownloads()
+    case "/setting":
+      presentSettings()
+    case "/history":
+      presentLibrary("history", title: "观看记录")
+    case "/later":
+      presentLibrary("later", title: "稍后再看")
+    case "/fav", "/favDetail":
+      presentLibrary("favorites", title: "我的收藏")
+    case "/follow":
+      presentLibrary("following", title: "关注")
+    case "/fan":
+      presentLibrary("followers", title: "粉丝")
+    case "/subscription":
+      presentLibrary("subscriptions", title: "我的订阅")
+    case "/member":
+      if let midString = parameters["mid"], let mid = Int(midString) {
+        presentProfile(mid)
+      }
+    case "/memberDynamics":
+      if let index = tabTitles.firstIndex(where: { $0.contains("动态") }) {
+        userSelectedTab(index)
+      }
+    default:
+      break
+    }
   }
 
   func search(_ keyword: String) {
@@ -510,6 +576,250 @@ private final class PiliNativeViewModel: ObservableObject {
           PiliNativeVideo(map: piliDictionary($0.element), index: $0.offset)
         }
       }
+    }
+  }
+
+  func presentNativeLogin() {
+    isLoginPresented = true
+    startNativeLogin()
+  }
+
+  func startNativeLogin() {
+    loginLoading = true
+    loginPolling = false
+    loginQRCodeURL = ""
+    loginExpiresIn = 0
+    loginMessage = "正在生成登录二维码"
+    channel.invokeMethod("startNativeLogin", arguments: nil) { [weak self] response in
+      DispatchQueue.main.async {
+        guard let self = self else { return }
+        self.loginLoading = false
+        if let flutterError = response as? FlutterError {
+          self.loginMessage = flutterError.message ?? "登录二维码获取失败"
+          return
+        }
+        let result = piliDictionary(response)
+        guard result["state"] as? String == "success" else {
+          self.loginMessage = result["error"] as? String ?? "登录二维码获取失败"
+          return
+        }
+        self.loginQRCodeURL = piliString(result["url"]) ?? ""
+        self.loginExpiresIn = piliInt(result["expiresIn"])
+        self.loginMessage = "使用哔哩哔哩客户端扫码并确认"
+      }
+    }
+  }
+
+  func pollNativeLogin() {
+    guard isLoginPresented, !loginQRCodeURL.isEmpty, !loginPolling else { return }
+    guard loginExpiresIn > 0 else {
+      loginMessage = "二维码已过期，请刷新"
+      return
+    }
+    loginExpiresIn = max(0, loginExpiresIn - 2)
+    loginPolling = true
+    channel.invokeMethod("pollNativeLogin", arguments: nil) { [weak self] response in
+      DispatchQueue.main.async {
+        guard let self = self else { return }
+        self.loginPolling = false
+        if let flutterError = response as? FlutterError {
+          self.loginMessage = flutterError.message ?? "登录状态检查失败"
+          return
+        }
+        let result = piliDictionary(response)
+        switch result["state"] as? String {
+        case "success":
+          self.loginMessage = result["message"] as? String ?? "登录成功"
+          self.isLoginPresented = false
+          self.requestSnapshot()
+        case "expired":
+          self.loginExpiresIn = 0
+          self.loginMessage = result["message"] as? String ?? "二维码已过期，请刷新"
+        case "error":
+          self.loginMessage = result["message"] as? String ?? "登录状态检查失败"
+        default:
+          self.loginMessage = result["message"] as? String ?? "等待扫码确认"
+        }
+      }
+    }
+  }
+
+  func presentMessages() {
+    isMessagesPresented = true
+    messageKind = "reply"
+    loadMessages(kind: "reply")
+  }
+
+  func loadMessages(kind: String? = nil) {
+    if let kind = kind { messageKind = kind }
+    messagesLoading = true
+    messagesError = nil
+    channel.invokeMethod(
+      "loadNativeMessages",
+      arguments: ["kind": messageKind]
+    ) { [weak self] response in
+      DispatchQueue.main.async {
+        guard let self = self else { return }
+        self.messagesLoading = false
+        if let flutterError = response as? FlutterError {
+          self.messagesError = flutterError.message ?? "消息加载失败"
+          return
+        }
+        let result = piliDictionary(response)
+        guard result["state"] as? String == "success" else {
+          self.messagesError = result["error"] as? String ?? "消息加载失败"
+          return
+        }
+        let rows = result["items"] as? [Any] ?? []
+        self.messages = rows.enumerated().map {
+          PiliNativeMessage(map: piliDictionary($0.element), index: $0.offset)
+        }
+      }
+    }
+  }
+
+  func openMessageMember(_ message: PiliNativeMessage) {
+    guard let memberID = message.memberID else { return }
+    isMessagesPresented = false
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) { [weak self] in
+      self?.presentProfile(memberID)
+    }
+  }
+
+  func presentDownloads() {
+    isDownloadsPresented = true
+    downloads = []
+    downloadsError = nil
+    downloadsLoading = true
+    channel.invokeMethod("loadNativeDownloads", arguments: nil) { [weak self] response in
+      DispatchQueue.main.async {
+        guard let self = self else { return }
+        self.downloadsLoading = false
+        if let flutterError = response as? FlutterError {
+          self.downloadsError = flutterError.message ?? "离线缓存读取失败"
+          return
+        }
+        let result = piliDictionary(response)
+        guard result["state"] as? String == "success" else {
+          self.downloadsError = result["error"] as? String ?? "离线缓存读取失败"
+          return
+        }
+        let rows = result["items"] as? [Any] ?? []
+        self.downloads = rows.enumerated().map {
+          PiliNativeDownload(map: piliDictionary($0.element), index: $0.offset)
+        }
+      }
+    }
+  }
+
+  func openDownload(_ download: PiliNativeDownload) {
+    var map: [String: Any] = [
+      "id": download.id,
+      "title": download.title,
+      "owner": download.subtitle,
+      "durationText": "",
+    ]
+    if let aid = download.aid { map["aid"] = aid }
+    if let bvid = download.bvid { map["bvid"] = bvid }
+    if let cover = download.cover { map["cover"] = cover }
+    let video = PiliNativeVideo(map: map, index: 0)
+    isDownloadsPresented = false
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) { [weak self] in
+      self?.openVideo(video)
+    }
+  }
+
+  func loadComments(oid: Int, type: Int) {
+    commentOID = oid
+    commentType = type
+    comments = []
+    commentsError = nil
+    commentsTotal = 0
+    commentsLoading = true
+    channel.invokeMethod(
+      "loadNativeComments",
+      arguments: ["oid": oid, "type": type, "page": 1]
+    ) { [weak self] response in
+      DispatchQueue.main.async {
+        guard let self = self else { return }
+        guard self.commentOID == oid, self.commentType == type else { return }
+        self.commentsLoading = false
+        if let flutterError = response as? FlutterError {
+          self.commentsError = flutterError.message ?? "评论加载失败"
+          return
+        }
+        let result = piliDictionary(response)
+        guard result["state"] as? String == "success" else {
+          self.commentsError = result["error"] as? String ?? "评论加载失败"
+          return
+        }
+        let rows = result["items"] as? [Any] ?? []
+        self.comments = rows.enumerated().map {
+          PiliNativeComment(map: piliDictionary($0.element), index: $0.offset)
+        }
+        self.commentsTotal = piliInt(result["total"])
+      }
+    }
+  }
+
+  func toggleCommentLike(_ comment: PiliNativeComment) {
+    guard let oid = commentOID,
+          comments.contains(where: { $0.id == comment.id }) else { return }
+    channel.invokeMethod(
+      "setNativeCommentLike",
+      arguments: [
+        "oid": oid,
+        "type": commentType,
+        "rpid": comment.rpid,
+        "liked": comment.liked,
+      ]
+    ) { [weak self] response in
+      DispatchQueue.main.async {
+        guard let self = self else { return }
+        let result = piliDictionary(response)
+        guard result["state"] as? String == "success" else {
+          self.commentsError = result["error"] as? String ?? "评论点赞失败"
+          return
+        }
+        guard let currentIndex = self.comments.firstIndex(where: { $0.id == comment.id }) else { return }
+        let nowLiked = piliBool(result["liked"])
+        self.comments[currentIndex].liked = nowLiked
+        self.comments[currentIndex].like = max(0, self.comments[currentIndex].like + (nowLiked ? 1 : -1))
+      }
+    }
+  }
+
+  func openCommentMember(_ comment: PiliNativeComment) {
+    guard let memberID = comment.memberID else { return }
+    if isDynamicDetailPresented { isDynamicDetailPresented = false }
+    if isVideoDetailPresented { isVideoDetailPresented = false }
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) { [weak self] in
+      self?.presentProfile(memberID)
+    }
+  }
+
+  func openDynamicVideo() {
+    guard let item = selectedDynamic, let bvid = item.bvid else { return }
+    var map: [String: Any] = [
+      "id": item.sourceID,
+      "bvid": bvid,
+      "title": item.title.isEmpty ? item.body : item.title,
+      "owner": item.author,
+    ]
+    if let aid = item.aid { map["aid"] = aid }
+    if let cover = item.cover { map["cover"] = cover }
+    isDynamicDetailPresented = false
+    let video = PiliNativeVideo(map: map, index: 0)
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) { [weak self] in
+      self?.openVideo(video)
+    }
+  }
+
+  func openDynamicMember() {
+    guard let memberID = selectedDynamic?.authorID else { return }
+    isDynamicDetailPresented = false
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) { [weak self] in
+      self?.presentProfile(memberID)
     }
   }
 
@@ -657,36 +967,8 @@ private final class PiliNativeViewModel: ObservableObject {
     loadLibrary(refresh: true)
   }
 
-  func openCurrentLibraryInFlutter() {
-    let route: String
-    var parameters: [String: String] = [:]
-    switch libraryKind {
-    case "history": route = "/history"
-    case "later": route = "/later"
-    case "following": route = "/follow"
-    case "followers": route = "/fan"
-    case "subscriptions", "subscriptionDetail": route = "/subscription"
-    case "favoriteDetail":
-      if libraryParentKind == "subscriptions" {
-        route = "/subscription"
-      } else {
-        route = "/favDetail"
-        if let mediaID = libraryMediaID { parameters["mediaId"] = String(mediaID) }
-      }
-    default: route = "/fav"
-    }
-    isLibraryPresented = false
-    DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) { [weak self] in
-      self?.openRoute(route, parameters: parameters)
-    }
-  }
-
   private func openLibraryFallback(item: PiliNativeLibraryItem) {
-    guard !item.fallbackRoute.isEmpty else { return }
-    isLibraryPresented = false
-    DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) { [weak self] in
-      self?.openRoute(item.fallbackRoute, parameters: item.fallbackParameters)
-    }
+    libraryError = "该内容类型尚未提供原生操作"
   }
 
   func presentProfile(_ memberID: Int) {
@@ -750,13 +1032,6 @@ private final class PiliNativeViewModel: ObservableObject {
     }
   }
 
-  func openProfileInFlutter() {
-    guard let memberID = profileMID else { return }
-    isProfilePresented = false
-    DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) { [weak self] in
-      self?.openRoute("/member", parameters: ["mid": String(memberID)])
-    }
-  }
 }
 
 private struct PiliNativeVideo: Identifiable {
@@ -972,12 +1247,17 @@ private struct PiliNativeLibraryItem: Identifiable {
 private struct PiliNativeDynamic: Identifiable {
   let id: String
   let sourceID: String
+  let authorID: Int?
   let author: String
   let avatar: String?
   let time: String
   let title: String
   let body: String
   let cover: String?
+  let aid: Int?
+  let bvid: String?
+  let commentOID: Int?
+  let commentType: Int?
   let like: Int
   let comment: Int
   let forward: Int
@@ -985,15 +1265,100 @@ private struct PiliNativeDynamic: Identifiable {
   init(map: [String: Any], index: Int) {
     sourceID = piliString(map["id"]) ?? "dynamic"
     id = "\(sourceID)-\(index)"
+    authorID = piliOptionalInt(map["authorId"])
     author = piliString(map["author"]) ?? ""
     avatar = piliString(map["avatar"])
     time = piliString(map["time"]) ?? ""
     title = piliString(map["title"]) ?? ""
     body = piliString(map["body"]) ?? ""
     cover = piliString(map["cover"])
+    aid = piliOptionalInt(map["aid"])
+    bvid = piliString(map["bvid"])
+    commentOID = piliOptionalInt(map["commentOid"])
+    commentType = piliOptionalInt(map["commentType"])
     like = piliInt(map["like"])
     comment = piliInt(map["comment"])
     forward = piliInt(map["forward"])
+  }
+}
+
+private struct PiliNativeMessage: Identifiable {
+  let id: String
+  let memberID: Int?
+  let author: String
+  let avatar: String?
+  let body: String
+  let context: String
+  let cover: String?
+  let time: String
+  let badge: String
+
+  init(map: [String: Any], index: Int) {
+    id = piliString(map["id"]) ?? "message-\(index)"
+    memberID = piliOptionalInt(map["memberId"])
+    author = piliString(map["author"]) ?? "消息"
+    avatar = piliString(map["avatar"])
+    body = piliString(map["body"]) ?? ""
+    context = piliString(map["context"]) ?? ""
+    cover = piliString(map["cover"])
+    time = piliString(map["time"]) ?? ""
+    badge = piliString(map["badge"]) ?? ""
+  }
+}
+
+private struct PiliNativeComment: Identifiable {
+  let id: String
+  let rpid: Int
+  let memberID: Int?
+  let author: String
+  let avatar: String?
+  let message: String
+  let time: String
+  let location: String
+  var like: Int
+  var liked: Bool
+  let replyCount: Int
+  let level: Int
+  let pictures: [String]
+
+  init(map: [String: Any], index: Int) {
+    id = piliString(map["id"]) ?? "comment-\(index)"
+    rpid = piliInt(map["rpid"])
+    memberID = piliOptionalInt(map["memberId"])
+    author = piliString(map["author"]) ?? "用户"
+    avatar = piliString(map["avatar"])
+    message = piliString(map["message"]) ?? ""
+    time = piliString(map["time"]) ?? ""
+    location = piliString(map["location"]) ?? ""
+    like = piliInt(map["like"])
+    liked = piliBool(map["liked"])
+    replyCount = piliInt(map["replyCount"])
+    level = piliInt(map["level"])
+    pictures = (map["pictures"] as? [Any])?.compactMap { piliString($0) } ?? []
+  }
+}
+
+private struct PiliNativeDownload: Identifiable {
+  let id: String
+  let aid: Int?
+  let bvid: String?
+  let title: String
+  let subtitle: String
+  let cover: String?
+  let progress: Double
+  let progressText: String
+  let badge: String
+
+  init(map: [String: Any], index: Int) {
+    id = piliString(map["id"]) ?? "download-\(index)"
+    aid = piliOptionalInt(map["aid"])
+    bvid = piliString(map["bvid"])
+    title = piliString(map["title"]) ?? "离线视频"
+    subtitle = piliString(map["subtitle"]) ?? ""
+    cover = piliString(map["cover"])
+    progress = min(max(piliDouble(map["progress"]), 0), 1)
+    progressText = piliString(map["progressText"]) ?? ""
+    badge = piliString(map["badge"]) ?? ""
   }
 }
 
@@ -1097,14 +1462,31 @@ private struct PiliNativeRootView: View {
     .sheet(isPresented: $model.isLibraryPresented) {
       PiliNativeLibraryView(model: model)
     }
+    .sheet(isPresented: $model.isMessagesPresented) {
+      PiliNativeMessagesView(model: model)
+    }
+    .sheet(isPresented: $model.isDownloadsPresented) {
+      PiliNativeDownloadsView(model: model)
+    }
     .fullScreenCover(isPresented: $model.isVideoDetailPresented) {
       PiliNativeVideoDetailView(model: model)
     }
     .fullScreenCover(isPresented: $model.isProfilePresented) {
       PiliNativeProfileView(model: model)
     }
+    .fullScreenCover(isPresented: $model.isDynamicDetailPresented) {
+      PiliNativeDynamicDetailView(model: model)
+    }
+    .fullScreenCover(isPresented: $model.isLoginPresented) {
+      PiliNativeLoginView(model: model)
+    }
     .onAppear {
       model.requestSnapshot()
+    }
+    .onReceive(NotificationCenter.default.publisher(for: .piliPresentNativeProfile)) { note in
+      if let memberID = note.object as? Int {
+        model.presentProfile(memberID)
+      }
     }
   }
 
@@ -1600,9 +1982,6 @@ private struct PiliNativeProfileView: View {
           Button(action: model.loadProfile) {
             Label("刷新", systemImage: "arrow.clockwise")
           }
-          Button(action: model.openProfileInFlutter) {
-            Label("打开完整空间", systemImage: "rectangle.on.rectangle")
-          }
         } label: {
           Image(systemName: "ellipsis.circle")
         }
@@ -1658,7 +2037,7 @@ private struct PiliNativeProfileView: View {
         }
         Spacer()
         if profile.isSelf {
-          Button("完整空间", action: model.openProfileInFlutter)
+          Button("刷新资料", action: model.loadProfile)
             .buttonStyle(.bordered)
         } else {
           Button(
@@ -1672,9 +2051,9 @@ private struct PiliNativeProfileView: View {
       }
 
       HStack {
-        PiliNativeAccountStat(value: profile.following, title: "关注", action: model.openProfileInFlutter)
+        PiliNativeAccountStat(value: profile.following, title: "关注", action: {})
         Spacer()
-        PiliNativeAccountStat(value: profile.followers, title: "粉丝", action: model.openProfileInFlutter)
+        PiliNativeAccountStat(value: profile.followers, title: "粉丝", action: {})
         Spacer()
         PiliNativeAccountStat(value: profile.likes, title: "获赞", action: {})
       }
@@ -1726,7 +2105,7 @@ private struct PiliNativeProfileView: View {
           .font(.caption)
           .foregroundColor(.secondary)
         Spacer()
-        Button("查看全部", action: model.openProfileInFlutter)
+        Button("刷新", action: model.loadProfile)
           .font(.caption)
       }
 
@@ -2080,6 +2459,9 @@ private struct PiliNativeVideoDetailView: View {
         }
       }
 
+      Divider()
+      PiliNativeCommentsSection(model: model)
+
       Button(action: { model.playVideo(video, part: selectedPart) }) {
         Label("使用完整播放器播放", systemImage: "play.fill")
           .font(.headline)
@@ -2091,10 +2473,6 @@ private struct PiliNativeVideoDetailView: View {
       }
       .buttonStyle(PlainButtonStyle())
 
-      Text("播放器继续使用原有 Flutter 播放内核，以保留 DASH 音视频合流、弹幕、清晰度切换、播放进度与登录画质。")
-        .font(.caption2)
-        .foregroundColor(.secondary)
-        .fixedSize(horizontal: false, vertical: true)
     }
     .padding(16)
     .background(Color(UIColor.systemBackground))
@@ -2134,6 +2512,511 @@ private struct PiliNativeVideoActionButton: View {
         .cornerRadius(10)
     }
     .buttonStyle(PlainButtonStyle())
+  }
+}
+
+// MARK: - Native dynamic detail and comments
+
+private struct PiliNativeDynamicDetailView: View {
+  @ObservedObject var model: PiliNativeViewModel
+  @Environment(\.presentationMode) private var presentationMode
+
+  var body: some View {
+    NavigationView {
+      Group {
+        if let item = model.selectedDynamic {
+          ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+              Button(action: model.openDynamicMember) {
+                HStack(spacing: 11) {
+                  PiliRemoteImage(urlString: item.avatar)
+                    .frame(width: 48, height: 48)
+                    .clipShape(Circle())
+                  VStack(alignment: .leading, spacing: 3) {
+                    Text(item.author.isEmpty ? "动态" : item.author)
+                      .font(.headline)
+                      .foregroundColor(.primary)
+                    Text(item.time)
+                      .font(.caption)
+                      .foregroundColor(.secondary)
+                  }
+                  Spacer()
+                  if item.authorID != nil {
+                    Image(systemName: "chevron.right")
+                      .font(.caption)
+                      .foregroundColor(Color(UIColor.tertiaryLabel))
+                  }
+                }
+              }
+              .buttonStyle(PlainButtonStyle())
+              .disabled(item.authorID == nil)
+
+              if !item.title.isEmpty {
+                Text(item.title)
+                  .font(.title3)
+                  .fontWeight(.semibold)
+              }
+              if !item.body.isEmpty {
+                Text(item.body)
+                  .font(.body)
+                  .fixedSize(horizontal: false, vertical: true)
+                  .textSelection(.enabled)
+              }
+              if let cover = item.cover {
+                PiliRemoteImage(urlString: cover)
+                  .aspectRatio(16 / 9, contentMode: .fill)
+                  .frame(maxWidth: .infinity)
+                  .clipped()
+                  .cornerRadius(12)
+              }
+
+              if item.bvid != nil {
+                Button(action: model.openDynamicVideo) {
+                  Label("查看视频", systemImage: "play.rectangle.fill")
+                    .font(.headline)
+                    .foregroundColor(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 13)
+                    .background(piliAccent)
+                    .cornerRadius(11)
+                }
+                .buttonStyle(PlainButtonStyle())
+              }
+
+              HStack {
+                PiliNativeStat(icon: "arrowshape.turn.up.right", count: item.forward)
+                Spacer()
+                PiliNativeStat(icon: "bubble.left", count: item.comment)
+                Spacer()
+                PiliNativeStat(icon: "hand.thumbsup", count: item.like)
+              }
+              .padding(.horizontal, 22)
+              .padding(.vertical, 12)
+              .background(Color(UIColor.secondarySystemGroupedBackground))
+              .cornerRadius(11)
+
+              Divider()
+              PiliNativeCommentsSection(model: model)
+            }
+            .padding(16)
+          }
+          .background(Color(UIColor.systemGroupedBackground))
+        } else {
+          PiliNativeErrorView(message: "动态内容不可用", retry: {})
+        }
+      }
+      .navigationBarTitle("动态详情", displayMode: .inline)
+      .navigationBarItems(
+        leading: Button("关闭") {
+          model.isDynamicDetailPresented = false
+          presentationMode.wrappedValue.dismiss()
+        }
+      )
+    }
+    .navigationViewStyle(StackNavigationViewStyle())
+  }
+}
+
+private struct PiliNativeCommentsSection: View {
+  @ObservedObject var model: PiliNativeViewModel
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 13) {
+      HStack {
+        Text("评论")
+          .font(.headline)
+        if model.commentsTotal > 0 {
+          Text(String(model.commentsTotal))
+            .font(.caption)
+            .foregroundColor(.secondary)
+        }
+        Spacer()
+      }
+
+      if model.commentsLoading {
+        HStack(spacing: 9) {
+          ProgressView()
+          Text("正在加载评论")
+        }
+        .font(.caption)
+        .foregroundColor(.secondary)
+        .frame(maxWidth: .infinity, minHeight: 70)
+      } else if let error = model.commentsError, model.comments.isEmpty {
+        Text(error)
+          .font(.subheadline)
+          .foregroundColor(.secondary)
+          .frame(maxWidth: .infinity, minHeight: 70)
+      } else if model.comments.isEmpty {
+        Text("暂时没有评论")
+          .font(.subheadline)
+          .foregroundColor(.secondary)
+          .frame(maxWidth: .infinity, minHeight: 70)
+      } else {
+        ForEach(model.comments) { comment in
+          PiliNativeCommentRow(
+            comment: comment,
+            openMember: { model.openCommentMember(comment) },
+            toggleLike: { model.toggleCommentLike(comment) }
+          )
+          if comment.id != model.comments.last?.id {
+            Divider().padding(.leading, 50)
+          }
+        }
+      }
+    }
+  }
+}
+
+private struct PiliNativeCommentRow: View {
+  let comment: PiliNativeComment
+  let openMember: () -> Void
+  let toggleLike: () -> Void
+
+  var body: some View {
+    HStack(alignment: .top, spacing: 10) {
+      Button(action: openMember) {
+        PiliRemoteImage(urlString: comment.avatar)
+          .frame(width: 40, height: 40)
+          .clipShape(Circle())
+      }
+      .buttonStyle(PlainButtonStyle())
+      .disabled(comment.memberID == nil)
+
+      VStack(alignment: .leading, spacing: 7) {
+        HStack(spacing: 7) {
+          Text(comment.author)
+            .font(.subheadline)
+            .fontWeight(.semibold)
+          if comment.level > 0 {
+            Text("LV\(comment.level)")
+              .font(.caption2)
+              .foregroundColor(piliAccent)
+          }
+          Spacer()
+          Button(action: toggleLike) {
+            Label(comment.like > 0 ? String(comment.like) : "", systemImage: comment.liked ? "hand.thumbsup.fill" : "hand.thumbsup")
+              .font(.caption)
+              .foregroundColor(comment.liked ? piliAccent : .secondary)
+          }
+          .buttonStyle(PlainButtonStyle())
+        }
+
+        Text(comment.message)
+          .font(.subheadline)
+          .fixedSize(horizontal: false, vertical: true)
+          .textSelection(.enabled)
+
+        if !comment.pictures.isEmpty {
+          ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+              ForEach(comment.pictures, id: \.self) { picture in
+                PiliRemoteImage(urlString: picture)
+                  .frame(width: 108, height: 108)
+                  .clipped()
+                  .cornerRadius(8)
+              }
+            }
+          }
+        }
+
+        HStack(spacing: 8) {
+          Text(comment.time)
+          if !comment.location.isEmpty { Text(comment.location) }
+          if comment.replyCount > 0 { Text("\(comment.replyCount) 条回复") }
+        }
+        .font(.caption2)
+        .foregroundColor(.secondary)
+      }
+    }
+    .padding(.vertical, 4)
+  }
+}
+
+// MARK: - Native messages
+
+private struct PiliNativeMessagesView: View {
+  @ObservedObject var model: PiliNativeViewModel
+  @Environment(\.presentationMode) private var presentationMode
+  private let kinds = [
+    ("reply", "回复"),
+    ("at", "@我"),
+    ("like", "点赞"),
+    ("system", "系统"),
+  ]
+
+  private var selection: Binding<String> {
+    Binding(
+      get: { model.messageKind },
+      set: { model.loadMessages(kind: $0) }
+    )
+  }
+
+  var body: some View {
+    NavigationView {
+      VStack(spacing: 0) {
+        Picker("消息类型", selection: selection) {
+          ForEach(kinds, id: \.0) { kind in
+            Text(kind.1).tag(kind.0)
+          }
+        }
+        .pickerStyle(SegmentedPickerStyle())
+        .padding(12)
+
+        Divider()
+
+        Group {
+          if model.messagesLoading && model.messages.isEmpty {
+            PiliNativeLoadingView(title: "正在加载消息")
+          } else if let error = model.messagesError, model.messages.isEmpty {
+            PiliNativeErrorView(message: error) { model.loadMessages() }
+          } else if model.messages.isEmpty {
+            PiliNativeEmptyView(icon: "bell.slash", title: "暂无消息", subtitle: "新的互动消息会显示在这里")
+          } else {
+            List(model.messages) { message in
+              Button(action: { model.openMessageMember(message) }) {
+                PiliNativeMessageRow(message: message)
+              }
+              .buttonStyle(PlainButtonStyle())
+              .disabled(message.memberID == nil)
+            }
+            .listStyle(PlainListStyle())
+          }
+        }
+      }
+      .navigationBarTitle("消息中心", displayMode: .inline)
+      .navigationBarItems(
+        leading: Button("关闭") { presentationMode.wrappedValue.dismiss() },
+        trailing: Button(action: { model.loadMessages() }) {
+          Image(systemName: "arrow.clockwise")
+        }
+      )
+    }
+    .navigationViewStyle(StackNavigationViewStyle())
+  }
+}
+
+private struct PiliNativeMessageRow: View {
+  let message: PiliNativeMessage
+
+  var body: some View {
+    HStack(alignment: .top, spacing: 11) {
+      PiliRemoteImage(urlString: message.avatar)
+        .frame(width: 44, height: 44)
+        .clipShape(Circle())
+      VStack(alignment: .leading, spacing: 6) {
+        HStack {
+          Text(message.author.isEmpty ? "消息" : message.author)
+            .font(.subheadline)
+            .fontWeight(.semibold)
+            .foregroundColor(.primary)
+          Spacer()
+          Text(message.time)
+            .font(.caption2)
+            .foregroundColor(.secondary)
+        }
+        Text(message.body)
+          .font(.subheadline)
+          .foregroundColor(.primary)
+          .lineLimit(4)
+        if !message.context.isEmpty {
+          Text(message.context)
+            .font(.caption)
+            .foregroundColor(.secondary)
+            .lineLimit(2)
+            .padding(8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color(UIColor.secondarySystemBackground))
+            .cornerRadius(7)
+        }
+        if !message.badge.isEmpty {
+          Text(message.badge)
+            .font(.caption2)
+            .foregroundColor(piliAccent)
+        }
+      }
+      if let cover = message.cover {
+        PiliRemoteImage(urlString: cover)
+          .frame(width: 58, height: 58)
+          .clipped()
+          .cornerRadius(7)
+      }
+    }
+    .padding(.vertical, 5)
+  }
+}
+
+// MARK: - Native QR login
+
+private struct PiliNativeLoginView: View {
+  @ObservedObject var model: PiliNativeViewModel
+  @Environment(\.presentationMode) private var presentationMode
+  private let timer = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
+
+  var body: some View {
+    NavigationView {
+      VStack(spacing: 22) {
+        Spacer()
+        Image(systemName: "person.crop.circle.badge.checkmark")
+          .font(.system(size: 44))
+          .foregroundColor(piliAccent)
+
+        Text("登录哔哩哔哩")
+          .font(.title2)
+          .fontWeight(.bold)
+
+        Group {
+          if model.loginLoading {
+            ProgressView()
+              .frame(width: 230, height: 230)
+          } else if !model.loginQRCodeURL.isEmpty && model.loginExpiresIn > 0 {
+            PiliQRCodeView(text: model.loginQRCodeURL)
+              .frame(width: 230, height: 230)
+              .padding(12)
+              .background(Color.white)
+              .cornerRadius(16)
+              .shadow(color: .black.opacity(0.08), radius: 12)
+          } else {
+            Button(action: model.startNativeLogin) {
+              VStack(spacing: 10) {
+                Image(systemName: "qrcode")
+                  .font(.system(size: 70))
+                Text("刷新二维码")
+              }
+              .frame(width: 230, height: 230)
+              .background(Color(UIColor.secondarySystemGroupedBackground))
+              .cornerRadius(16)
+            }
+            .buttonStyle(PlainButtonStyle())
+          }
+        }
+
+        Text(model.loginMessage)
+          .font(.subheadline)
+          .foregroundColor(.secondary)
+          .multilineTextAlignment(.center)
+
+        if model.loginExpiresIn > 0 {
+          Text("有效期剩余 \(model.loginExpiresIn) 秒")
+            .font(.caption)
+            .foregroundColor(.secondary)
+        }
+
+        Button(action: model.startNativeLogin) {
+          Label("刷新二维码", systemImage: "arrow.clockwise")
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 12)
+        }
+        .buttonStyle(.borderedProminent)
+        .tint(piliAccent)
+        .padding(.horizontal, 36)
+        .disabled(model.loginLoading)
+
+        Spacer()
+      }
+      .padding()
+      .background(Color(UIColor.systemGroupedBackground).ignoresSafeArea())
+      .navigationBarTitle("扫码登录", displayMode: .inline)
+      .navigationBarItems(
+        leading: Button("关闭") {
+          model.isLoginPresented = false
+          presentationMode.wrappedValue.dismiss()
+        }
+      )
+    }
+    .navigationViewStyle(StackNavigationViewStyle())
+    .onReceive(timer) { _ in model.pollNativeLogin() }
+  }
+}
+
+private struct PiliQRCodeView: View {
+  let text: String
+
+  var body: some View {
+    if let image = makeQRCode(text) {
+      Image(uiImage: image)
+        .interpolation(.none)
+        .resizable()
+        .scaledToFit()
+    } else {
+      Image(systemName: "qrcode")
+        .resizable()
+        .scaledToFit()
+        .foregroundColor(.black)
+    }
+  }
+
+  private func makeQRCode(_ value: String) -> UIImage? {
+    let filter = CIFilter.qrCodeGenerator()
+    filter.message = Data(value.utf8)
+    filter.correctionLevel = "M"
+    guard let output = filter.outputImage?.transformed(by: CGAffineTransform(scaleX: 10, y: 10)),
+          let cgImage = CIContext().createCGImage(output, from: output.extent) else { return nil }
+    return UIImage(cgImage: cgImage)
+  }
+}
+
+// MARK: - Native downloads
+
+private struct PiliNativeDownloadsView: View {
+  @ObservedObject var model: PiliNativeViewModel
+  @Environment(\.presentationMode) private var presentationMode
+
+  var body: some View {
+    NavigationView {
+      Group {
+        if model.downloadsLoading && model.downloads.isEmpty {
+          PiliNativeLoadingView(title: "正在读取离线缓存")
+        } else if let error = model.downloadsError, model.downloads.isEmpty {
+          PiliNativeErrorView(message: error, retry: model.presentDownloads)
+        } else if model.downloads.isEmpty {
+          PiliNativeEmptyView(icon: "arrow.down.circle", title: "暂无离线缓存", subtitle: "已缓存和正在缓存的视频会显示在这里")
+        } else {
+          List(model.downloads) { item in
+            Button(action: { model.openDownload(item) }) {
+              HStack(spacing: 11) {
+                PiliRemoteImage(urlString: item.cover)
+                  .frame(width: 116, height: 66)
+                  .clipped()
+                  .cornerRadius(8)
+                VStack(alignment: .leading, spacing: 6) {
+                  Text(item.title)
+                    .font(.subheadline)
+                    .fontWeight(.medium)
+                    .foregroundColor(.primary)
+                    .lineLimit(2)
+                  if !item.subtitle.isEmpty {
+                    Text(item.subtitle)
+                      .font(.caption)
+                      .foregroundColor(.secondary)
+                      .lineLimit(1)
+                  }
+                  ProgressView(value: item.progress)
+                    .tint(piliAccent)
+                  HStack {
+                    Text(item.progressText)
+                    Spacer()
+                    Text(item.badge)
+                  }
+                  .font(.caption2)
+                  .foregroundColor(.secondary)
+                }
+              }
+              .padding(.vertical, 5)
+            }
+            .buttonStyle(PlainButtonStyle())
+          }
+          .listStyle(PlainListStyle())
+        }
+      }
+      .navigationBarTitle("离线缓存", displayMode: .inline)
+      .navigationBarItems(
+        leading: Button("关闭") { presentationMode.wrappedValue.dismiss() },
+        trailing: Button(action: model.presentDownloads) {
+          Image(systemName: "arrow.clockwise")
+        }
+      )
+    }
+    .navigationViewStyle(StackNavigationViewStyle())
   }
 }
 
@@ -2190,6 +3073,10 @@ private final class PiliNativeInlineVideoIntroModel: ObservableObject {
   @Published private(set) var actionLoading = false
   @Published private(set) var message: String?
   @Published private(set) var currentCID: Int?
+  @Published private(set) var comments: [PiliNativeComment] = []
+  @Published private(set) var commentsLoading = false
+  @Published private(set) var commentsError: String?
+  @Published private(set) var commentsTotal = 0
 
   private let channel: FlutterMethodChannel
   private let bvid: String
@@ -2232,6 +3119,9 @@ private final class PiliNativeInlineVideoIntroModel: ObservableObject {
         self.detail = PiliNativeVideoDetail(map: piliDictionary(result["video"]))
         if self.currentCID == nil { self.currentCID = self.detail?.cid }
         self.error = nil
+        if let aid = self.detail?.aid {
+          self.loadComments(oid: aid)
+        }
       }
     }
   }
@@ -2267,10 +3157,7 @@ private final class PiliNativeInlineVideoIntroModel: ObservableObject {
 
   func openMember(_ memberID: Int?) {
     guard let memberID = memberID else { return }
-    channel.invokeMethod(
-      "openRoute",
-      arguments: ["route": "/member", "parameters": ["mid": String(memberID)]]
-    )
+    NotificationCenter.default.post(name: .piliPresentNativeProfile, object: memberID)
   }
 
   func selectPart(_ part: PiliNativeVideoPart) {
@@ -2299,6 +3186,60 @@ private final class PiliNativeInlineVideoIntroModel: ObservableObject {
     guard let detail = detail else { return }
     UIPasteboard.general.string = detail.bvid
     message = "已复制 \(detail.bvid)"
+  }
+
+  private func loadComments(oid: Int) {
+    commentsLoading = true
+    commentsError = nil
+    channel.invokeMethod(
+      "loadNativeComments",
+      arguments: ["oid": oid, "type": 1, "page": 1]
+    ) { [weak self] response in
+      DispatchQueue.main.async {
+        guard let self = self else { return }
+        self.commentsLoading = false
+        if let flutterError = response as? FlutterError {
+          self.commentsError = flutterError.message ?? "评论加载失败"
+          return
+        }
+        let result = piliDictionary(response)
+        guard result["state"] as? String == "success" else {
+          self.commentsError = result["error"] as? String ?? "评论加载失败"
+          return
+        }
+        let rows = result["items"] as? [Any] ?? []
+        self.comments = rows.enumerated().map {
+          PiliNativeComment(map: piliDictionary($0.element), index: $0.offset)
+        }
+        self.commentsTotal = piliInt(result["total"])
+      }
+    }
+  }
+
+  func toggleCommentLike(_ comment: PiliNativeComment) {
+    guard let aid = detail?.aid else { return }
+    channel.invokeMethod(
+      "setNativeCommentLike",
+      arguments: [
+        "oid": aid,
+        "type": 1,
+        "rpid": comment.rpid,
+        "liked": comment.liked,
+      ]
+    ) { [weak self] response in
+      DispatchQueue.main.async {
+        guard let self = self,
+              let index = self.comments.firstIndex(where: { $0.id == comment.id }) else { return }
+        let result = piliDictionary(response)
+        guard result["state"] as? String == "success" else {
+          self.commentsError = result["error"] as? String ?? "评论点赞失败"
+          return
+        }
+        let nowLiked = piliBool(result["liked"])
+        self.comments[index].liked = nowLiked
+        self.comments[index].like = max(0, self.comments[index].like + (nowLiked ? 1 : -1))
+      }
+    }
   }
 }
 
@@ -2377,6 +3318,9 @@ private struct PiliNativeInlineVideoIntroView: View {
             if video.pages.count > 1 {
               parts(video)
             }
+
+            Divider()
+            inlineComments
           }
           .padding(.horizontal, 14)
           .padding(.vertical, 12)
@@ -2447,6 +3391,50 @@ private struct PiliNativeInlineVideoIntroView: View {
       .buttonStyle(.bordered)
     }
     .disabled(model.actionLoading)
+  }
+
+  private var inlineComments: some View {
+    VStack(alignment: .leading, spacing: 12) {
+      HStack {
+        Text("评论").font(.headline)
+        if model.commentsTotal > 0 {
+          Text(String(model.commentsTotal))
+            .font(.caption)
+            .foregroundColor(.secondary)
+        }
+        Spacer()
+      }
+      if model.commentsLoading {
+        HStack(spacing: 8) {
+          ProgressView()
+          Text("正在加载评论")
+        }
+        .font(.caption)
+        .foregroundColor(.secondary)
+        .frame(maxWidth: .infinity, minHeight: 64)
+      } else if let error = model.commentsError, model.comments.isEmpty {
+        Text(error)
+          .font(.subheadline)
+          .foregroundColor(.secondary)
+          .frame(maxWidth: .infinity, minHeight: 64)
+      } else if model.comments.isEmpty {
+        Text("暂时没有评论")
+          .font(.subheadline)
+          .foregroundColor(.secondary)
+          .frame(maxWidth: .infinity, minHeight: 64)
+      } else {
+        ForEach(model.comments) { comment in
+          PiliNativeCommentRow(
+            comment: comment,
+            openMember: { model.openMember(comment.memberID) },
+            toggleLike: { model.toggleCommentLike(comment) }
+          )
+          if comment.id != model.comments.last?.id {
+            Divider().padding(.leading, 50)
+          }
+        }
+      }
+    }
   }
 
   private func parts(_ video: PiliNativeVideoDetail) -> some View {
@@ -2549,9 +3537,6 @@ private struct PiliNativeLibraryView: View {
         trailing: Menu {
           Button(action: { model.loadLibrary(refresh: true) }) {
             Label("刷新", systemImage: "arrow.clockwise")
-          }
-          Button(action: model.openCurrentLibraryInFlutter) {
-            Label("打开完整功能", systemImage: "rectangle.on.rectangle")
           }
         } label: {
           Image(systemName: "ellipsis.circle")
@@ -2759,7 +3744,7 @@ private struct PiliNativeSettingsView: View {
             }
 
             Section(
-              footer: Text("这些开关直接读写原项目的同一份设置数据，Flutter 功能页会继续使用修改后的值。")
+              footer: Text("这些开关直接读写原项目的同一份设置数据，播放和请求内核会继续使用修改后的值。")
             ) {
               HStack(spacing: 12) {
                 Image(systemName: "iphone.gen3")
@@ -2815,16 +3800,19 @@ private struct PiliNativeSettingsView: View {
               ) {
                 ForEach(advanced.indices, id: \.self) { index in
                   let item = advanced[index]
-                  Button(action: { model.openSettingsSection(item.0) }) {
+                  NavigationLink(
+                    destination: PiliNativeSettingsSectionView(
+                      section: item.0,
+                      title: item.1,
+                      model: model
+                    )
+                  ) {
                     HStack(spacing: 13) {
                       Image(systemName: item.2)
                         .frame(width: 24)
                         .foregroundColor(piliAccent)
                       Text(item.1).foregroundColor(.primary)
                       Spacer()
-                      Image(systemName: "chevron.right")
-                        .font(.caption)
-                        .foregroundColor(Color(UIColor.tertiaryLabel))
                     }
                   }
                 }
@@ -2860,6 +3848,106 @@ private struct PiliNativeSettingsView: View {
       get: {
         model.settings.first(where: { $0.key == item.key })?.value ?? item.value
       },
+      set: { model.setSetting(item.key, value: $0) }
+    )
+  }
+}
+
+private struct PiliNativeSettingsSectionView: View {
+  let section: String
+  let title: String
+  @ObservedObject var model: PiliNativeViewModel
+  @State private var webDAVServer = ""
+  @State private var webDAVUser = ""
+  @State private var webDAVPassword = ""
+  @State private var webDAVMessage = ""
+
+  private var group: String? {
+    switch section {
+    case "recommend": return "推荐与搜索"
+    case "video": return "视频详情"
+    case "player": return "播放与弹幕"
+    case "style": return "外观与界面"
+    case "extra": return "通用功能"
+    default: return nil
+    }
+  }
+
+  var body: some View {
+    Form {
+      if let group = group {
+        Section(
+          header: Text(group),
+          footer: Text("修改会直接写入原项目设置存储。")
+        ) {
+          ForEach(model.settings.filter { $0.group == group }) { item in
+            Toggle(isOn: binding(for: item)) {
+              VStack(alignment: .leading, spacing: 3) {
+                Text(item.title)
+                if !item.subtitle.isEmpty {
+                  Text(item.subtitle)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                }
+              }
+            }
+            .toggleStyle(SwitchToggleStyle(tint: piliAccent))
+          }
+        }
+      } else if section == "webdav" {
+        Section(header: Text("服务器")) {
+          TextField("https://example.com/dav", text: $webDAVServer)
+            .textContentType(.URL)
+            .autocapitalization(.none)
+          TextField("用户名", text: $webDAVUser)
+            .textContentType(.username)
+            .autocapitalization(.none)
+          SecureField("密码", text: $webDAVPassword)
+            .textContentType(.password)
+          Button("保存本机配置") {
+            webDAVMessage = "原生配置已暂存；同步功能将在后续版本接入"
+          }
+          if !webDAVMessage.isEmpty {
+            Text(webDAVMessage)
+              .font(.caption)
+              .foregroundColor(.secondary)
+          }
+        }
+      } else if section == "about" {
+        Section {
+          HStack(spacing: 14) {
+            Image(systemName: "play.tv.fill")
+              .font(.system(size: 38))
+              .foregroundColor(piliAccent)
+            VStack(alignment: .leading, spacing: 4) {
+              Text("PiliGlass")
+                .font(.headline)
+              Text("iOS Native Frontend")
+                .font(.caption)
+                .foregroundColor(.secondary)
+            }
+          }
+          .padding(.vertical, 8)
+        }
+        Section(header: Text("界面架构")) {
+          Label("SwiftUI 原生导航与列表", systemImage: "swift")
+          Label("Flutter 保留网络与播放内核", systemImage: "network")
+          Label("UIKit 承载原生播放器简介", systemImage: "rectangle.on.rectangle")
+        }
+      } else {
+        Section(header: Text("隐私与账号")) {
+          Label("登录凭据保存在应用沙盒", systemImage: "lock.shield")
+          Label("请求继续使用原项目 CSRF 签名", systemImage: "checkmark.shield")
+          Label("原生页面不接触明文 Cookie", systemImage: "eye.slash")
+        }
+      }
+    }
+    .navigationBarTitle(title, displayMode: .inline)
+  }
+
+  private func binding(for item: PiliNativeSetting) -> Binding<Bool> {
+    Binding(
+      get: { model.settings.first(where: { $0.key == item.key })?.value ?? item.value },
       set: { model.setSetting(item.key, value: $0) }
     )
   }
@@ -2994,6 +4082,28 @@ private struct PiliNativeErrorView: View {
         .padding(.horizontal, 28)
       Button("重试", action: retry)
         .foregroundColor(piliAccent)
+    }
+    .frame(maxWidth: .infinity, maxHeight: .infinity)
+  }
+}
+
+private struct PiliNativeEmptyView: View {
+  let icon: String
+  let title: String
+  let subtitle: String
+
+  var body: some View {
+    VStack(spacing: 12) {
+      Image(systemName: icon)
+        .font(.system(size: 36))
+        .foregroundColor(.secondary)
+      Text(title)
+        .font(.headline)
+      Text(subtitle)
+        .font(.subheadline)
+        .foregroundColor(.secondary)
+        .multilineTextAlignment(.center)
+        .padding(.horizontal, 28)
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity)
   }

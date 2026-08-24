@@ -3,11 +3,15 @@ import 'dart:async';
 import 'package:PiliPlus/http/fav.dart';
 import 'package:PiliPlus/http/fan.dart';
 import 'package:PiliPlus/http/follow.dart';
+import 'package:PiliPlus/http/login.dart';
 import 'package:PiliPlus/http/loading_state.dart';
 import 'package:PiliPlus/http/member.dart';
+import 'package:PiliPlus/http/msg.dart';
+import 'package:PiliPlus/http/reply.dart';
 import 'package:PiliPlus/http/search.dart';
 import 'package:PiliPlus/http/user.dart';
 import 'package:PiliPlus/http/video.dart';
+import 'package:PiliPlus/models/common/account_type.dart';
 import 'package:PiliPlus/models/common/dynamic/dynamics_type.dart';
 import 'package:PiliPlus/models/common/nav_bar_config.dart';
 import 'package:PiliPlus/models/common/search/search_type.dart';
@@ -23,8 +27,10 @@ import 'package:PiliPlus/pages/setting/common_setting.dart';
 import 'package:PiliPlus/pages/video/introduction/ugc/controller.dart';
 import 'package:PiliPlus/pages/webdav/view.dart';
 import 'package:PiliPlus/services/service_locator.dart';
+import 'package:PiliPlus/services/download/download_service.dart';
 import 'package:PiliPlus/utils/app_scheme.dart';
 import 'package:PiliPlus/utils/accounts.dart';
+import 'package:PiliPlus/utils/accounts/account.dart';
 import 'package:PiliPlus/utils/date_utils.dart';
 import 'package:PiliPlus/utils/extension/get_ext.dart';
 import 'package:PiliPlus/utils/id_utils.dart';
@@ -49,6 +55,7 @@ final class IOSNativeUIBridge {
   final List<Worker> _workers = <Worker>[];
   Timer? _snapshotTimer;
   bool _disposed = false;
+  String? _nativeLoginAuthCode;
 
   late final RcmdController _homeController =
       Get.putOrFind<RcmdController>(RcmdController.new);
@@ -147,6 +154,18 @@ final class IOSNativeUIBridge {
         return _loadNativeProfile(_arguments(call));
       case 'setNativeProfileFollow':
         return _setNativeProfileFollow(_arguments(call));
+      case 'startNativeLogin':
+        return _startNativeLogin();
+      case 'pollNativeLogin':
+        return _pollNativeLogin();
+      case 'loadNativeMessages':
+        return _loadNativeMessages(_arguments(call));
+      case 'loadNativeComments':
+        return _loadNativeComments(_arguments(call));
+      case 'setNativeCommentLike':
+        return _setNativeCommentLike(_arguments(call));
+      case 'loadNativeDownloads':
+        return _loadNativeDownloads();
       // Kept for older native shells that still emit this action.
       case 'openSearch':
         return _openRoute(const {'route': '/search'});
@@ -1020,6 +1039,320 @@ final class IOSNativeUIBridge {
         : const {'state': 'error', 'error': '关注状态修改失败'};
   }
 
+  Future<Map<String, dynamic>> _startNativeLogin() async {
+    final result = await LoginHttp.getHDcode();
+    return switch (result) {
+      Loading() => const {'state': 'loading'},
+      Error(:final errMsg, :final code) => {
+        'state': 'error',
+        'error': errMsg ?? '登录二维码获取失败',
+        'code': ?code,
+      },
+      Success(:final response) => () {
+        _nativeLoginAuthCode = response.authCode;
+        return {
+          'state': 'success',
+          'url': response.url,
+          'expiresIn': 180,
+        };
+      }(),
+    };
+  }
+
+  Future<Map<String, dynamic>> _pollNativeLogin() async {
+    final authCode = _nativeLoginAuthCode;
+    if (authCode == null || authCode.isEmpty) {
+      return const {'state': 'expired', 'message': '二维码已失效，请刷新'};
+    }
+    try {
+      final result = await LoginHttp.codePoll(authCode);
+      if (result['status'] == true) {
+        final data = result['data'] as Map;
+        final cookieInfo = data['cookie_info']?['cookies'] as List?;
+        if (cookieInfo == null) {
+          return const {'state': 'error', 'message': '登录接口未返回身份信息'};
+        }
+        final account = LoginAccount(
+          BiliCookieJar.fromList(cookieInfo),
+          data['access_token']?.toString(),
+          data['refresh_token']?.toString(),
+        );
+        for (final type in AccountType.values) {
+          await Accounts.set(type, account);
+        }
+        await AnonymousAccount().delete();
+        _nativeLoginAuthCode = null;
+        await _mineController.onRefresh();
+        _scheduleSnapshot();
+        return {
+          'state': 'success',
+          'message': '登录成功',
+          'mid': account.mid,
+        };
+      }
+      final code = _asInt(result['code']);
+      if (code == 86038) {
+        _nativeLoginAuthCode = null;
+        return const {'state': 'expired', 'message': '二维码已过期，请刷新'};
+      }
+      return {
+        'state': 'waiting',
+        'message': result['msg']?.toString() ?? '等待扫码确认',
+        'code': ?code,
+      };
+    } catch (error) {
+      return {'state': 'error', 'message': '登录状态检查失败：$error'};
+    }
+  }
+
+  Future<Map<String, dynamic>> _loadNativeMessages(
+    Map<dynamic, dynamic> arguments,
+  ) async {
+    if (!Accounts.main.isLogin) {
+      return const {'state': 'error', 'error': '请先登录账号'};
+    }
+    final kind = arguments['kind']?.toString() ?? 'reply';
+    try {
+      if (kind == 'reply') {
+        final result = await MsgHttp.msgFeedReplyMe();
+        return switch (result) {
+          Loading() => const {'state': 'loading'},
+          Error(:final errMsg) => {
+            'state': 'error',
+            'error': errMsg ?? '回复消息加载失败',
+          },
+          Success(:final response) => {
+            'state': 'success',
+            'items': (response.items ?? const []).asMap().entries.map((entry) {
+              final item = entry.value;
+              return {
+                'id': item.id?.toString() ?? 'reply-${entry.key}',
+                'author': item.user?.nickname ?? '用户',
+                'memberId': item.user?.mid,
+                'avatar': _normalizeURL(item.user?.avatar),
+                'body': item.item?.rootReplyContent ?? '回复了你',
+                'context': item.item?.sourceContent ?? '',
+                'time': DateFormatUtils.format(item.replyTime),
+                'badge': item.counts != null && item.counts! > 1
+                    ? '${item.counts} 条回复'
+                    : '回复',
+              };
+            }).toList(),
+          },
+        };
+      }
+      if (kind == 'at') {
+        final result = await MsgHttp.msgFeedAtMe();
+        return switch (result) {
+          Loading() => const {'state': 'loading'},
+          Error(:final errMsg) => {
+            'state': 'error',
+            'error': errMsg ?? '@消息加载失败',
+          },
+          Success(:final response) => {
+            'state': 'success',
+            'items': (response.items ?? const []).asMap().entries.map((entry) {
+              final item = entry.value;
+              return {
+                'id': item.id?.toString() ?? 'at-${entry.key}',
+                'author': item.user?.nickname ?? '用户',
+                'memberId': item.user?.mid,
+                'avatar': _normalizeURL(item.user?.avatar),
+                'body': '在内容中提到了你',
+                'context': item.item?.sourceContent ?? '',
+                'cover': _normalizeURL(item.item?.image),
+                'time': DateFormatUtils.format(item.atTime),
+                'badge': '@我',
+              };
+            }).toList(),
+          },
+        };
+      }
+      if (kind == 'like') {
+        final result = await MsgHttp.msgFeedLikeMe();
+        return switch (result) {
+          Loading() => const {'state': 'loading'},
+          Error(:final errMsg) => {
+            'state': 'error',
+            'error': errMsg ?? '点赞消息加载失败',
+          },
+          Success(:final response) => () {
+            final items = [
+              ...?response.latest?.items,
+              ...?response.total?.items,
+            ];
+            return {
+              'state': 'success',
+              'items': items.asMap().entries.map((entry) {
+                final item = entry.value;
+                final users = item.users ?? const [];
+                return {
+                  'id': item.id?.toString() ?? 'like-${entry.key}',
+                  'author': users
+                      .map((user) => user.nickname)
+                      .whereType<String>()
+                      .take(3)
+                      .join('、'),
+                  'avatar': _normalizeURL(
+                    users.isEmpty ? null : users.first.avatar,
+                  ),
+                  'body': '赞了你的内容',
+                  'context': item.item?.title ?? '',
+                  'cover': _normalizeURL(item.item?.image),
+                  'time': DateFormatUtils.format(item.likeTime),
+                  'badge': item.counts != null && item.counts! > 1
+                      ? '${item.counts} 个赞'
+                      : '点赞',
+                };
+              }).toList(),
+            };
+          }(),
+        };
+      }
+
+      final result = await MsgHttp.msgFeedNotify();
+      return switch (result) {
+        Loading() => const {'state': 'loading'},
+        Error(:final errMsg) => {
+          'state': 'error',
+          'error': errMsg ?? '系统通知加载失败',
+        },
+        Success(:final response) => {
+          'state': 'success',
+          'items': (response ?? const []).asMap().entries.map((entry) {
+            final item = entry.value;
+            return {
+              'id': item.id?.toString() ?? 'system-${entry.key}',
+              'author': item.title ?? '系统通知',
+              'body': item.content ?? '',
+              'context': '',
+              'time': item.timeAt ?? '',
+              'badge': '系统',
+            };
+          }).toList(),
+        },
+      };
+    } catch (error) {
+      return {'state': 'error', 'error': '消息加载失败：$error'};
+    }
+  }
+
+  Future<Map<String, dynamic>> _loadNativeComments(
+    Map<dynamic, dynamic> arguments,
+  ) async {
+    final oid = _asInt(arguments['oid']);
+    final type = _asInt(arguments['type']) ?? 1;
+    final page = _asInt(arguments['page']) ?? 1;
+    if (oid == null || oid <= 0) {
+      return const {'state': 'error', 'error': '评论参数无效'};
+    }
+    final result = await ReplyHttp.replyList(
+      isLogin: Accounts.main.isLogin,
+      oid: oid,
+      nextOffset: '',
+      type: type,
+      page: page,
+      sort: 1,
+    );
+    return switch (result) {
+      Loading() => const {'state': 'loading'},
+      Error(:final errMsg, :final code) => {
+        'state': 'error',
+        'error': errMsg ?? '评论加载失败',
+        'code': ?code,
+      },
+      Success(:final response) => () {
+        final replies = <dynamic>[
+          ...?response.topReplies,
+          ...?response.replies,
+        ];
+        return {
+          'state': 'success',
+          'total': response.cursor?.allCount ?? replies.length,
+          'hasMore': response.cursor?.isEnd != true,
+          'items': replies.asMap().entries.map((entry) {
+            final item = entry.value;
+            return {
+              'id': item.rpid?.toString() ?? 'comment-${entry.key}',
+              'rpid': item.rpid,
+              'memberId': _asInt(item.member?.mid),
+              'author': item.member?.uname ?? '用户',
+              'avatar': _normalizeURL(item.member?.avatar),
+              'message': item.content?.message ?? '',
+              'time': item.replyControl?.timeDesc ??
+                  DateFormatUtils.format(item.ctime),
+              'location': item.replyControl?.location ?? '',
+              'like': item.like ?? 0,
+              'liked': item.action == 1,
+              'replyCount': item.rcount ?? item.replies?.length ?? 0,
+              'level': item.member?.levelInfo?.currentLevel ?? 0,
+              'pictures': (item.content?.pictures ?? const [])
+                  .map((picture) => _normalizeURL(picture.imgSrc))
+                  .whereType<String>()
+                  .toList(),
+            };
+          }).toList(),
+        };
+      }(),
+    };
+  }
+
+  Future<Map<String, dynamic>> _setNativeCommentLike(
+    Map<dynamic, dynamic> arguments,
+  ) async {
+    if (!Accounts.main.isLogin) {
+      return const {'state': 'error', 'error': '请先登录账号'};
+    }
+    final oid = _asInt(arguments['oid']);
+    final rpid = _asInt(arguments['rpid']);
+    final type = _asInt(arguments['type']) ?? 1;
+    final liked = arguments['liked'] == true;
+    if (oid == null || rpid == null) {
+      return const {'state': 'error', 'error': '评论操作参数无效'};
+    }
+    final result = await ReplyHttp.likeReply(
+      type: type,
+      oid: oid,
+      rpid: rpid,
+      action: liked ? 0 : 1,
+    );
+    return result.isSuccess
+        ? {'state': 'success', 'liked': !liked}
+        : const {'state': 'error', 'error': '评论点赞失败'};
+  }
+
+  Future<Map<String, dynamic>> _loadNativeDownloads() async {
+    try {
+      final service = Get.find<DownloadService>();
+      await service.waitForInitialization;
+      final items = [...service.downloadList, ...service.waitDownloadQueue];
+      return {
+        'state': 'success',
+        'items': items.asMap().entries.map((entry) {
+          final item = entry.value;
+          final total = item.totalBytes > 0 ? item.totalBytes : item.guessedTotalBytes;
+          final progress = total > 0 ? item.downloadedBytes / total : 0.0;
+          return {
+            'id': '${item.cid}-${entry.key}',
+            'aid': item.avid,
+            'bvid': item.bvid,
+            'title': item.showTitle,
+            'subtitle': item.title,
+            'cover': _normalizeURL(item.cover),
+            'owner': item.ownerName ?? '',
+            'progress': progress.clamp(0.0, 1.0),
+            'progressText': item.isCompleted
+                ? '已缓存'
+                : '${(progress * 100).round()}%',
+            'badge': item.qualityPithyDescription,
+          };
+        }).toList(),
+      };
+    } catch (error) {
+      return {'state': 'error', 'error': '离线缓存读取失败：$error'};
+    }
+  }
+
   Future<Map<String, dynamic>> _loadNativeHistory(
     Map<dynamic, dynamic> arguments,
   ) async {
@@ -1450,6 +1783,9 @@ final class IOSNativeUIBridge {
         'body': body ?? '',
         'cover': _normalizeURL(cover),
         'bvid': archive?.bvid?.toString(),
+        'aid': _asInt(archive?.aid),
+        'commentOid': _asInt(item.basic?.commentIdStr),
+        'commentType': _asInt(item.basic?.commentType),
         'like': _asInt(stat?.like?.count) ?? 0,
         'comment': _asInt(stat?.comment?.count) ?? 0,
         'forward': _asInt(stat?.forward?.count) ?? 0,
