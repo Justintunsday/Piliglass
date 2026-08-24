@@ -399,6 +399,7 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
   private var videoItemReady = false
   private var audioItemReady = true
   private var isCorrectingAudioTime = false
+  private var lastAudioCorrectionHostTime: CFTimeInterval = 0
   private var shouldAutoplay = true
   private var pendingAudioSeek: TimeInterval?
   private var itemBuildGeneration = UUID()
@@ -721,9 +722,15 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
   private func loadSegment(index segmentIndex: Int, localTime: TimeInterval, autoplay: Bool) {
     guard segments.indices.contains(segmentIndex) else { return }
     loadTask?.cancel()
+    // A cancelled quality request can still be inside AVAsset async probing.
+    // Tear its resource loaders down before the replacement starts so two
+    // nine-CDN audio searches cannot compete for bandwidth.
+    invalidateAssetLoaders()
     pausePlayback()
     audioPlayer.removeAllItems()
     audioItemStatusObservation?.invalidate()
+    isCorrectingAudioTime = false
+    lastAudioCorrectionHostTime = 0
     videoItemReady = false
     audioItemReady = true
     pendingAudioSeek = localTime
@@ -751,10 +758,8 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
     localTime: TimeInterval,
     generation: UUID
   ) async {
+    var videoLoaded = false
     do {
-      let audioItem = try await makeAudioItem(for: segment)
-      guard !Task.isCancelled, itemBuildGeneration == generation else { return }
-
       var lastError: Error = PiliNativePlayerBuildError.noPlayableCandidate
       isTryingVideoCandidates = true
       defer { isTryingVideoCandidates = false }
@@ -789,7 +794,15 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
           lastError = error
         }
       }
+      isTryingVideoCandidates = false
       guard loaded else { throw lastError }
+      videoLoaded = true
+      guard !Task.isCancelled, itemBuildGeneration == generation else { return }
+
+      // Probe audio only after the selected video representation has opened.
+      // An audio-CDN failure must not be misdiagnosed as an Aether/Dolby video
+      // failure before the dvh1 candidate was even attempted.
+      let audioItem = try await makeAudioItem(for: segment)
       guard !Task.isCancelled, itemBuildGeneration == generation else { return }
 
       videoItemReady = true
@@ -804,7 +817,11 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
       finishPreparingIfReady()
     } catch {
       guard !Task.isCancelled, itemBuildGeneration == generation else { return }
-      fail("Aether 4K/HDR 轨道载入失败：\(error.localizedDescription)")
+      if videoLoaded {
+        fail("音轨载入失败：\(error.localizedDescription)")
+      } else {
+        fail("Aether 视频轨道载入失败：\(error.localizedDescription)")
+      }
     }
   }
 
@@ -821,7 +838,53 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
     mediaType: AVMediaType
   ) async throws -> AVURLAsset {
     var lastError: Error = PiliNativePlayerBuildError.noPlayableCandidate
+
+    // Audio m4s files are small enough that AVFoundation usually keeps the
+    // supplied headers for the whole request. Prefer its native URL loading
+    // path because it has substantially better buffering than a custom
+    // resource-loader stream. Keep the loader path below as the compatibility
+    // fallback for CDNs that drop Referer/User-Agent on range requests.
+    for (candidateIndex, url) in urls.prefix(4).enumerated() {
+      guard !Task.isCancelled else { throw CancellationError() }
+      let asset = AVURLAsset(
+        url: url,
+        options: ["AVURLAssetHTTPHeaderFieldsKey": requestHeaders]
+      )
+      do {
+        PiliNativeDiagnosticLog.shared.append(
+          "Checking direct \(mediaType.rawValue) candidate=\(candidateIndex + 1)/\(min(4, urls.count)) "
+            + "host=\(url.host ?? "unknown")"
+        )
+        guard try await asset.load(.isPlayable) else {
+          lastError = PiliNativePlayerBuildError.noPlayableCandidate
+          continue
+        }
+        guard !Task.isCancelled else { throw CancellationError() }
+        let tracks = try await asset.loadTracks(withMediaType: mediaType)
+        guard !tracks.isEmpty else {
+          lastError = PiliNativePlayerBuildError.missingDashTrack
+          continue
+        }
+        PiliNativeDiagnosticLog.shared.append(
+          "Playable direct \(mediaType.rawValue) candidate host=\(url.host ?? "unknown")"
+        )
+        return asset
+      } catch is CancellationError {
+        throw CancellationError()
+      } catch {
+        PiliNativeDiagnosticLog.shared.append(
+          "Rejected direct \(mediaType.rawValue) candidate host=\(url.host ?? "unknown") "
+            + "error=\(error.localizedDescription)"
+        )
+        lastError = error
+      }
+    }
+
+    PiliNativeDiagnosticLog.shared.append(
+      "Direct \(mediaType.rawValue) candidates unavailable; using resource-loader fallback"
+    )
     for (candidateIndex, url) in urls.enumerated() {
+      guard !Task.isCancelled else { throw CancellationError() }
       let asset = makeAsset(url: url)
       do {
         PiliNativeDiagnosticLog.shared.append(
@@ -832,6 +895,7 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
           lastError = PiliNativePlayerBuildError.noPlayableCandidate
           continue
         }
+        guard !Task.isCancelled else { throw CancellationError() }
         let tracks = try await asset.loadTracks(withMediaType: mediaType)
         guard !tracks.isEmpty else {
           lastError = PiliNativePlayerBuildError.missingDashTrack
@@ -841,6 +905,8 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
           "Playable \(mediaType.rawValue) candidate host=\(url.host ?? "unknown")"
         )
         return asset
+      } catch is CancellationError {
+        throw CancellationError()
       } catch {
         PiliNativeDiagnosticLog.shared.append(
           "Rejected \(mediaType.rawValue) candidate host=\(url.host ?? "unknown") "
@@ -903,10 +969,9 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
     PiliNativeDiagnosticLog.shared.append("Playback start requested rate=\(playbackRate)")
     engine.setRate(playbackRate)
     engine.play()
-    if audioPlayer.currentItem?.status == .readyToPlay {
-      activateAudioSessionIfNeeded()
-      audioPlayer.playImmediately(atRate: playbackRate)
-    }
+    // Audio starts from the engine's actual non-buffering transition. Starting
+    // it here made it run ahead while AVPlayer was still evaluating the first
+    // video buffer, followed by an audible corrective seek.
   }
 
   private func resumeAudioIfPossible() {
@@ -951,15 +1016,30 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
           let audioItem = audioPlayer.currentItem,
           audioItem.status == .readyToPlay else { return }
     let audioTime = audioItem.currentTime().seconds
-    guard audioTime.isFinite, abs(audioTime - videoTime) > 0.22 else { return }
+    let drift = audioTime - videoTime
+    let hostTime = CACurrentMediaTime()
+    // Small AVPlayer clock differences (especially on Bluetooth routes) are
+    // normal. Hard-seeking for every 220 ms discrepancy repeatedly discarded
+    // the audio buffer and was heard as stutter. Correct only gross, sustained
+    // drift and throttle corrections so the new buffer has time to settle.
+    guard audioTime.isFinite,
+          abs(drift) > 0.85,
+          hostTime - lastAudioCorrectionHostTime > 3 else { return }
     isCorrectingAudioTime = true
+    lastAudioCorrectionHostTime = hostTime
+    PiliNativeDiagnosticLog.shared.append(
+      String(format: "Audio sync correction drift=%+.3fs video=%.3f audio=%.3f", drift, videoTime, audioTime)
+    )
+    audioPlayer.pause()
     audioItem.seek(
       to: CMTime(seconds: videoTime, preferredTimescale: 600),
-      toleranceBefore: CMTime(seconds: 0.04, preferredTimescale: 600),
-      toleranceAfter: CMTime(seconds: 0.04, preferredTimescale: 600)
+      toleranceBefore: CMTime(seconds: 0.10, preferredTimescale: 600),
+      toleranceAfter: CMTime(seconds: 0.10, preferredTimescale: 600)
     ) { [weak self] _ in
       DispatchQueue.main.async {
-        self?.isCorrectingAudioTime = false
+        guard let self else { return }
+        self.isCorrectingAudioTime = false
+        self.resumeAudioIfPossible()
       }
     }
   }
