@@ -94,7 +94,6 @@ class _VideoDetailPageVState extends State<VideoDetailPageV>
   );
   Worker? _nativeFullscreenWorker;
   Worker? _nativeVideoStateWorker;
-  Worker? _nativeQualityWorker;
   Future<void>? _nativePlayerReadyFuture;
   bool _nativePlayerReadySent = false;
 
@@ -198,13 +197,8 @@ class _VideoDetailPageVState extends State<VideoDetailPageV>
           if (ready) _scheduleNativePlayerReady();
         },
       );
-      _nativeQualityWorker = ever(
-        videoDetailController.currentVideoQa,
-        (_) => _syncNativeHDRState(),
-      );
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
-        _syncNativeHDRState();
         if (videoDetailController.videoState.value) {
           _scheduleNativePlayerReady();
         }
@@ -233,7 +227,6 @@ class _VideoDetailPageVState extends State<VideoDetailPageV>
         await controller.waitUntilFirstFrameRendered;
         if (!mounted || _nativePlayerReadySent) return;
         _nativePlayerReadySent = true;
-        _syncNativeHDRState();
         await _nativeChannel.invokeMethod<void>('nativePlayerReady', {
           'heroTag': heroTag,
           'bvid': videoDetailController.bvid,
@@ -247,16 +240,6 @@ class _VideoDetailPageVState extends State<VideoDetailPageV>
         );
       }
     }();
-  }
-
-  void _syncNativeHDRState() {
-    if (!isNativeShell || !mounted) return;
-    final quality = videoDetailController.currentVideoQa.value?.code;
-    final isHDR = quality == 125 || quality == 126 || quality == 129;
-    _nativeChannel.invokeMethod<void>('nativePlayerHDR', {
-      'active': _nativePlayerReadySent && isHDR,
-      'quality': quality ?? 0,
-    });
   }
 
   // 获取视频资源，初始化播放器
@@ -418,12 +401,7 @@ class _VideoDetailPageVState extends State<VideoDetailPageV>
   void dispose() {
     _nativeFullscreenWorker?.dispose();
     _nativeVideoStateWorker?.dispose();
-    _nativeQualityWorker?.dispose();
     if (isNativeShell) {
-      _nativeChannel.invokeMethod<void>('nativePlayerHDR', {
-        'active': false,
-        'quality': 0,
-      });
       _nativeChannel.invokeMethod<void>('nativePlayerClosed');
     }
     plPlayerController

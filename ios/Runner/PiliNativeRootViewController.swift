@@ -157,84 +157,6 @@ private final class PiliNativeFlutterPlayerContainerController: UIViewController
   }
 }
 
-private final class PiliNativeHDRBrightnessController {
-  private var requested = false
-  private var brightnessBeforeHDR: CGFloat?
-  private var rampGeneration = UUID()
-  private var observers: [NSObjectProtocol] = []
-
-  init() {
-    let center = NotificationCenter.default
-    observers.append(
-      center.addObserver(
-        forName: UIApplication.willResignActiveNotification,
-        object: nil,
-        queue: .main
-      ) { [weak self] _ in
-        self?.restore(immediately: true)
-      }
-    )
-    observers.append(
-      center.addObserver(
-        forName: UIApplication.didBecomeActiveNotification,
-        object: nil,
-        queue: .main
-      ) { [weak self] _ in
-        guard self?.requested == true else { return }
-        self?.activate()
-      }
-    )
-  }
-
-  deinit {
-    observers.forEach { NotificationCenter.default.removeObserver($0) }
-    restore(immediately: true)
-  }
-
-  func setHDRActive(_ active: Bool) {
-    requested = active
-    active ? activate() : restore()
-  }
-
-  private func activate() {
-    guard requested, UIApplication.shared.applicationState == .active else { return }
-    guard #available(iOS 16.0, *) else { return }
-    let screen = UIScreen.main
-    guard screen.potentialEDRHeadroom > 1.05 else { return }
-    let constrained = ProcessInfo.processInfo.isLowPowerModeEnabled ||
-      ProcessInfo.processInfo.thermalState == .serious ||
-      ProcessInfo.processInfo.thermalState == .critical
-    guard !constrained else { return }
-    if brightnessBeforeHDR == nil { brightnessBeforeHDR = screen.brightness }
-    ramp(to: 1)
-  }
-
-  private func restore(immediately: Bool = false) {
-    guard let original = brightnessBeforeHDR else { return }
-    brightnessBeforeHDR = nil
-    if immediately {
-      rampGeneration = UUID()
-      UIScreen.main.brightness = original
-    } else {
-      ramp(to: original)
-    }
-  }
-
-  private func ramp(to target: CGFloat) {
-    let generation = UUID()
-    rampGeneration = generation
-    let start = UIScreen.main.brightness
-    let steps = 10
-    for step in 1...steps {
-      DispatchQueue.main.asyncAfter(deadline: .now() + Double(step) * 0.035) { [weak self] in
-        guard let self = self, self.rampGeneration == generation else { return }
-        let progress = CGFloat(step) / CGFloat(steps)
-        UIScreen.main.brightness = start + (target - start) * progress
-      }
-    }
-  }
-}
-
 private struct PiliNativeOriginalPlayerView: UIViewControllerRepresentable {
   let surface: PiliNativeFlutterPlayerSurface
 
@@ -377,9 +299,6 @@ final class PiliNativeRootViewController: UIViewController {
       case "nativePlayerReady":
         model.originalPlayerDidBecomeReady(piliDictionary(call.arguments))
         result(nil)
-      case "nativePlayerHDR":
-        model.setOriginalPlayerHDR(piliBool(piliDictionary(call.arguments)["active"]))
-        result(nil)
       case "nativePlayerFullscreen":
         model.originalPlayerFullscreen = piliBool(call.arguments)
         setNeedsStatusBarAppearanceUpdate()
@@ -507,7 +426,6 @@ private final class PiliNativeViewModel: ObservableObject {
   private let channel: FlutterMethodChannel
   let flutterPlayerSurface: PiliNativeFlutterPlayerSurface
   let nativePlayerSession = PiliNativePlayerSession()
-  private let hdrBrightnessController = PiliNativeHDRBrightnessController()
   private var snapshotInFlight = false
   @Published private(set) var pendingVideo: PiliNativeVideo?
   private var libraryPage = 1
@@ -691,7 +609,6 @@ private final class PiliNativeViewModel: ObservableObject {
   func openVideo(_ video: PiliNativeVideo) {
     nativePlaybackGeneration = UUID()
     nativePlayerSession.stop()
-    hdrBrightnessController.setHDRActive(false)
     flutterPlayerSurface.prepareForPlayback()
     pendingVideo = video
     videoDetail = nil
@@ -912,7 +829,6 @@ private final class PiliNativeViewModel: ObservableObject {
   func originalPlayerDidClose() {
     originalPlayerReady = false
     originalPlayerFullscreen = false
-    hdrBrightnessController.setHDRActive(false)
     flutterPlayerSurface.restore(hidden: true)
     if isVideoDetailPresented {
       isVideoDetailPresented = false
@@ -923,12 +839,7 @@ private final class PiliNativeViewModel: ObservableObject {
     originalPlayerReady = false
     originalPlayerFullscreen = false
     originalPlayerError = message
-    hdrBrightnessController.setHDRActive(false)
     flutterPlayerSurface.restore(hidden: true)
-  }
-
-  func setOriginalPlayerHDR(_ active: Bool) {
-    hdrBrightnessController.setHDRActive(active)
   }
 
   func closeVideoDetail() {
@@ -938,7 +849,6 @@ private final class PiliNativeViewModel: ObservableObject {
     nativePlayerSession.isFullscreen = false
     nativePlayerSession.stop()
     nativePlayerCID = nil
-    hdrBrightnessController.setHDRActive(false)
     flutterPlayerSurface.restore(hidden: true)
     isVideoDetailPresented = false
     channel.invokeMethod("closeNativeVideoPlayer", arguments: nil)
@@ -973,7 +883,6 @@ private final class PiliNativeViewModel: ObservableObject {
     guard let video = pendingVideo else { return }
     originalPlayerReady = false
     originalPlayerError = nil
-    hdrBrightnessController.setHDRActive(false)
     flutterPlayerSurface.prepareForPlayback()
     var arguments: [String: Any] = ["title": video.title]
     if let bvid = video.bvid { arguments["bvid"] = bvid }
