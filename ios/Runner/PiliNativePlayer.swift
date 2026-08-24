@@ -4,7 +4,6 @@ import AetherEngine
 import Combine
 import SwiftUI
 import UIKit
-import UniformTypeIdentifiers
 
 final class PiliNativeDiagnosticLog: @unchecked Sendable {
   static let shared = PiliNativeDiagnosticLog()
@@ -70,237 +69,258 @@ final class PiliNativeDiagnosticLog: @unchecked Sendable {
   }
 }
 
-// AVFoundation does not consistently attach Bilibili's required request
-// headers to every byte-range request. Present the signed CDN URL through a
-// custom scheme and service AVPlayer's requests with URLSession so DASH video
-// and audio tracks keep their Range, Referer and User-Agent headers.
-private final class PiliNativeAssetResourceLoader: NSObject,
-  AVAssetResourceLoaderDelegate,
-  URLSessionDataDelegate,
-  @unchecked Sendable
-{
-  private final class LoadingContext {
-    let request: AVAssetResourceLoadingRequest
-    let rangeHeader: String
-
-    init(request: AVAssetResourceLoadingRequest, rangeHeader: String) {
-      self.request = request
-      self.rangeHeader = rangeHeader
-    }
+// Bilibili's DASH audio is a normal fragmented MP4, but AVPlayer can reject
+// the signed CDN URL before decoding it. Feeding Aether a custom seekable byte
+// source forces its FFmpeg + AVSampleBufferAudioRenderer path and keeps Range,
+// Referer and User-Agent under our control.
+private final class PiliNativeHTTPRangeReader: IOReader, @unchecked Sendable {
+  private struct FetchResult {
+    let data: Data
+    let dataStart: Int64
+    let contentLength: Int64?
+    let statusCode: Int
+    let responseHost: String
   }
 
-  private let originalURL: URL
+  private let url: URL
   private let headers: [String: String]
-  private let resourceQueue = DispatchQueue(label: "piliglass.asset-resource-loader")
-  private let sessionQueue: OperationQueue = {
-    let queue = OperationQueue()
-    queue.name = "piliglass.asset-url-session"
-    queue.maxConcurrentOperationCount = 1
-    return queue
-  }()
   private let lock = NSLock()
-  private var loadingContexts: [Int: LoadingContext] = [:]
-  private var invalidated = false
-  private lazy var session: URLSession = {
-    let configuration = URLSessionConfiguration.ephemeral
-    configuration.timeoutIntervalForRequest = 30
-    configuration.timeoutIntervalForResource = 180
-    configuration.waitsForConnectivity = true
-    configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
-    configuration.httpMaximumConnectionsPerHost = 4
-    return URLSession(
-      configuration: configuration,
-      delegate: self,
-      delegateQueue: sessionQueue
-    )
-  }()
+  private let session: URLSession
+  private var position: Int64 = 0
+  private var contentLength: Int64?
+  private var cacheStart: Int64 = 0
+  private var cache = Data()
+  private var activeTask: URLSessionDataTask?
+  private var closed = false
 
   init(url: URL, headers: [String: String]) {
-    originalURL = url
+    self.url = url
     self.headers = headers
-    super.init()
+    let configuration = URLSessionConfiguration.ephemeral
+    configuration.timeoutIntervalForRequest = 15
+    configuration.timeoutIntervalForResource = 45
+    configuration.waitsForConnectivity = false
+    configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
+    configuration.httpMaximumConnectionsPerHost = 2
+    session = URLSession(configuration: configuration)
   }
 
   deinit {
-    invalidate()
+    close()
   }
 
-  func makeAsset() -> AVURLAsset {
-    var components = URLComponents(url: originalURL, resolvingAgainstBaseURL: false)
-    let sourceScheme = components?.scheme ?? "https"
-    components?.scheme = "piliglass-\(sourceScheme)"
-    let asset = AVURLAsset(url: components?.url ?? originalURL)
-    asset.resourceLoader.setDelegate(self, queue: resourceQueue)
-    return asset
-  }
+  func read(_ buffer: UnsafeMutablePointer<UInt8>?, size: Int32) -> Int32 {
+    guard let buffer, size > 0 else { return 0 }
+    let requestedCount = Int(size)
 
-  func invalidate() {
-    let shouldInvalidate: Bool = locked {
-      guard !invalidated else { return false }
-      invalidated = true
-      loadingContexts.removeAll()
-      return true
-    }
-    if shouldInvalidate { session.invalidateAndCancel() }
-  }
-
-  func resourceLoader(
-    _ resourceLoader: AVAssetResourceLoader,
-    shouldWaitForLoadingOfRequestedResource loadingRequest: AVAssetResourceLoadingRequest
-  ) -> Bool {
-    guard !locked({ invalidated }) else { return false }
-
-    let dataRequest = loadingRequest.dataRequest
-    let offset: Int64
-    if let dataRequest = dataRequest {
-      offset = dataRequest.currentOffset > 0
-        ? dataRequest.currentOffset
-        : dataRequest.requestedOffset
-    } else {
-      offset = 0
-    }
-    let rangeHeader: String
-    if let dataRequest = dataRequest, dataRequest.requestsAllDataToEndOfResource {
-      rangeHeader = "bytes=\(offset)-"
-    } else if let dataRequest = dataRequest, dataRequest.requestedLength > 0 {
-      let end = offset + Int64(dataRequest.requestedLength) - 1
-      rangeHeader = "bytes=\(offset)-\(end)"
-    } else {
-      rangeHeader = "bytes=0-1"
-    }
-
-    var request = URLRequest(url: originalURL)
-    request.httpMethod = "GET"
-    applyHeaders(to: &request, rangeHeader: rangeHeader)
-    let task = session.dataTask(with: request)
-    locked {
-      loadingContexts[task.taskIdentifier] = LoadingContext(
-        request: loadingRequest,
-        rangeHeader: rangeHeader
-      )
-    }
-    task.resume()
-    return true
-  }
-
-  func resourceLoader(
-    _ resourceLoader: AVAssetResourceLoader,
-    didCancel loadingRequest: AVAssetResourceLoadingRequest
-  ) {
-    let taskID: Int? = locked {
-      guard let entry = loadingContexts.first(where: { $0.value.request === loadingRequest }) else {
-        return nil
+    while true {
+      if let copied = copyCachedBytes(into: buffer, maximumCount: requestedCount) {
+        return Int32(copied)
       }
-      loadingContexts.removeValue(forKey: entry.key)
-      return entry.key
-    }
-    if let taskID = taskID {
-      session.getAllTasks { tasks in
-        tasks.first(where: { $0.taskIdentifier == taskID })?.cancel()
+
+      let offset: Int64? = locked {
+        guard !closed else { return nil }
+        if let contentLength, position >= contentLength { return nil }
+        return position
       }
-    }
-  }
+      guard let offset else { return locked { closed ? -1 : 0 } }
 
-  func urlSession(
-    _ session: URLSession,
-    task: URLSessionTask,
-    willPerformHTTPRedirection response: HTTPURLResponse,
-    newRequest request: URLRequest,
-    completionHandler: @escaping (URLRequest?) -> Void
-  ) {
-    guard let context = locked({ loadingContexts[task.taskIdentifier] }) else {
-      completionHandler(nil)
-      return
-    }
-    var redirected = request
-    applyHeaders(to: &redirected, rangeHeader: context.rangeHeader)
-    completionHandler(redirected)
-  }
-
-  func urlSession(
-    _ session: URLSession,
-    dataTask: URLSessionDataTask,
-    didReceive response: URLResponse,
-    completionHandler: @escaping (URLSession.ResponseDisposition) -> Void
-  ) {
-    guard let context = locked({ loadingContexts[dataTask.taskIdentifier] }) else {
-      completionHandler(.cancel)
-      return
-    }
-    guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
-      PiliNativeDiagnosticLog.shared.append(
-        "CDN request rejected status=\((response as? HTTPURLResponse)?.statusCode ?? -1) "
-          + "host=\(originalURL.host ?? "unknown") range=\(context.rangeHeader)"
-      )
-      finish(
-        taskID: dataTask.taskIdentifier,
-        error: NSError(
-          domain: "PiliNativeAssetResourceLoader",
-          code: (response as? HTTPURLResponse)?.statusCode ?? -1,
-          userInfo: [NSLocalizedDescriptionKey: "视频 CDN 拒绝了分段请求"]
+      do {
+        let result = try fetchRange(
+          start: offset,
+          count: max(requestedCount, 1_024 * 1_024)
         )
-      )
-      completionHandler(.cancel)
-      return
-    }
-
-    if let information = context.request.contentInformationRequest {
-      let mimeType = response.mimeType ?? "video/mp4"
-      information.contentType = UTType(mimeType: mimeType)?.identifier
-        ?? UTType.mpeg4Movie.identifier
-      information.isByteRangeAccessSupported = http.statusCode == 206
-        || (http.value(forHTTPHeaderField: "Accept-Ranges")?.lowercased().contains("bytes") == true)
-      if let total = totalContentLength(http: http) {
-        information.contentLength = total
-      } else if response.expectedContentLength > 0 {
-        information.contentLength = response.expectedContentLength
+        locked {
+          if let length = result.contentLength { contentLength = length }
+          cacheStart = result.dataStart
+          cache = result.data
+        }
+        PiliNativeDiagnosticLog.shared.append(
+          "Audio range received status=\(result.statusCode) "
+            + "host=\(result.responseHost) offset=\(offset) bytes=\(result.data.count)"
+        )
+        if result.data.isEmpty { return 0 }
+      } catch {
+        PiliNativeDiagnosticLog.shared.append(
+          "Audio range failed host=\(url.host ?? "unknown") offset=\(offset) "
+            + "error=\(error.localizedDescription)"
+        )
+        return -1
       }
     }
-    completionHandler(.allow)
   }
 
-  func urlSession(
-    _ session: URLSession,
-    dataTask: URLSessionDataTask,
-    didReceive data: Data
-  ) {
-    locked({ loadingContexts[dataTask.taskIdentifier] })?
-      .request.dataRequest?.respond(with: data)
-  }
-
-  func urlSession(
-    _ session: URLSession,
-    task: URLSessionTask,
-    didCompleteWithError error: Error?
-  ) {
-    if let error {
-      PiliNativeDiagnosticLog.shared.append(
-        "CDN request failed host=\(originalURL.host ?? "unknown") error=\(error.localizedDescription)"
-      )
+  func seek(offset: Int64, whence: Int32) -> Int64 {
+    let operation = whence & ~Int32(0x20000) // Strip FFmpeg's AVSEEK_FORCE.
+    if operation == 0x10000 { // AVSEEK_SIZE
+      if let known = locked({ contentLength }) { return known }
+      guard resolveMetadata() else { return -1 }
+      return locked { contentLength ?? -1 }
     }
-    finish(taskID: task.taskIdentifier, error: error)
+
+    var base: Int64
+    switch operation {
+    case 0: base = 0 // SEEK_SET
+    case 1: base = locked { position } // SEEK_CUR
+    case 2: // SEEK_END
+      if locked({ contentLength }) == nil, !resolveMetadata() { return -1 }
+      guard let length = locked({ contentLength }) else { return -1 }
+      base = length
+    default:
+      return -1
+    }
+
+    let (target, overflow) = base.addingReportingOverflow(offset)
+    guard !overflow, target >= 0 else { return -1 }
+    return locked {
+      guard !closed else { return -1 }
+      position = min(target, contentLength ?? target)
+      return position
+    }
   }
 
-  private func applyHeaders(to request: inout URLRequest, rangeHeader: String) {
+  func cancel() {
+    locked { activeTask }?.cancel()
+  }
+
+  func close() {
+    let task: URLSessionDataTask? = locked {
+      guard !closed else { return nil }
+      closed = true
+      cache.removeAll(keepingCapacity: false)
+      let task = activeTask
+      activeTask = nil
+      return task
+    }
+    task?.cancel()
+    session.invalidateAndCancel()
+  }
+
+  var discImageProbeEnabled: Bool { false }
+
+  private func copyCachedBytes(
+    into buffer: UnsafeMutablePointer<UInt8>,
+    maximumCount: Int
+  ) -> Int? {
+    locked {
+      guard !closed else { return -1 }
+      let relative = position - cacheStart
+      guard relative >= 0, relative < Int64(cache.count) else { return nil }
+      let available = cache.count - Int(relative)
+      let count = min(maximumCount, available)
+      cache.copyBytes(
+        to: buffer,
+        from: Int(relative)..<(Int(relative) + count)
+      )
+      position += Int64(count)
+      return count
+    }
+  }
+
+  private func resolveMetadata() -> Bool {
+    do {
+      let result = try fetchRange(start: 0, count: 1)
+      locked {
+        if let length = result.contentLength { contentLength = length }
+        if cache.isEmpty {
+          cacheStart = result.dataStart
+          cache = result.data
+        }
+      }
+      return locked { contentLength != nil }
+    } catch {
+      PiliNativeDiagnosticLog.shared.append(
+        "Audio metadata failed host=\(url.host ?? "unknown") error=\(error.localizedDescription)"
+      )
+      return false
+    }
+  }
+
+  private func fetchRange(start: Int64, count: Int) throws -> FetchResult {
+    let end = start + Int64(max(1, count)) - 1
+    let rangeHeader = "bytes=\(start)-\(end)"
+    var request = URLRequest(url: url)
+    request.httpMethod = "GET"
+    request.timeoutInterval = 15
     for (key, value) in headers { request.setValue(value, forHTTPHeaderField: key) }
     request.setValue(rangeHeader, forHTTPHeaderField: "Range")
+
+    let semaphore = DispatchSemaphore(value: 0)
+    let resultLock = NSLock()
+    var responseData: Data?
+    var response: HTTPURLResponse?
+    var responseError: Error?
+    let task = session.dataTask(with: request) { data, urlResponse, error in
+      resultLock.lock()
+      responseData = data
+      response = urlResponse as? HTTPURLResponse
+      responseError = error
+      resultLock.unlock()
+      semaphore.signal()
+    }
+    let canStart: Bool = locked {
+      guard !closed else { return false }
+      activeTask = task
+      return true
+    }
+    guard canStart else { throw CancellationError() }
+    task.resume()
+    semaphore.wait()
+    locked {
+      if activeTask === task { activeTask = nil }
+    }
+
+    resultLock.lock()
+    let data = responseData
+    let http = response
+    let error = responseError
+    resultLock.unlock()
+    if let error { throw error }
+    guard let http else {
+      throw NSError(
+        domain: "PiliNativeHTTPRangeReader",
+        code: -1,
+        userInfo: [NSLocalizedDescriptionKey: "CDN 未返回 HTTP 响应"]
+      )
+    }
+
+    let total = Self.totalContentLength(http)
+      ?? (http.statusCode == 200 && http.expectedContentLength > 0
+        ? http.expectedContentLength
+        : nil)
+    if http.statusCode == 416 {
+      return FetchResult(
+        data: Data(),
+        dataStart: start,
+        contentLength: total,
+        statusCode: http.statusCode,
+        responseHost: http.url?.host ?? url.host ?? "unknown"
+      )
+    }
+    guard (200...299).contains(http.statusCode) else {
+      throw NSError(
+        domain: "PiliNativeHTTPRangeReader",
+        code: http.statusCode,
+        userInfo: [NSLocalizedDescriptionKey: "CDN 拒绝音轨请求（HTTP \(http.statusCode)）"]
+      )
+    }
+
+    return FetchResult(
+      data: data ?? Data(),
+      // A 200 response ignored Range and therefore starts at byte zero.
+      dataStart: http.statusCode == 200 ? 0 : start,
+      contentLength: total,
+      statusCode: http.statusCode,
+      responseHost: http.url?.host ?? url.host ?? "unknown"
+    )
   }
 
-  private func totalContentLength(http: HTTPURLResponse) -> Int64? {
-    guard let value = http.value(forHTTPHeaderField: "Content-Range"),
+  private static func totalContentLength(_ response: HTTPURLResponse) -> Int64? {
+    guard let value = response.value(forHTTPHeaderField: "Content-Range"),
           let totalText = value.split(separator: "/").last,
           totalText != "*"
     else { return nil }
     return Int64(totalText)
-  }
-
-  private func finish(taskID: Int, error: Error?) {
-    guard let context = locked({ loadingContexts.removeValue(forKey: taskID) }) else { return }
-    if let error = error {
-      context.request.finishLoading(with: error)
-    } else {
-      context.request.finishLoading()
-    }
   }
 
   private func locked<T>(_ block: () -> T) -> T {
@@ -386,7 +406,7 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
   @Published private(set) var pictureInPicturePlayer: AVPlayer?
 
   let engine: AetherEngine
-  private let audioPlayer = AVQueuePlayer()
+  private let audioEngine: AetherEngine
   var onDanmakuSegmentNeeded: ((Int) -> Void)?
   var onQualityRequested: ((Int, TimeInterval) -> Void)?
 
@@ -394,10 +414,11 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
   private var segments: [PiliNativePlayerSegment] = []
   private var segmentOffsets: [TimeInterval] = []
   private var requestedDanmakuSegments = Set<Int>()
-  private var audioItemStatusObservation: NSKeyValueObservation?
   private var engineCancellables = Set<AnyCancellable>()
+  private var audioEngineCancellables = Set<AnyCancellable>()
   private var videoItemReady = false
   private var audioItemReady = true
+  private var hasAudioTrack = false
   private var isCorrectingAudioTime = false
   private var lastAudioCorrectionHostTime: CFTimeInterval = 0
   private var shouldAutoplay = true
@@ -406,8 +427,6 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
   private var loadTask: Task<Void, Never>?
   private var activeSegmentIndex = 0
   private var isTryingVideoCandidates = false
-  private let assetLoaderLock = NSLock()
-  private var assetLoaders: [PiliNativeAssetResourceLoader] = []
   private weak var videoSurface: AetherPlayerView?
 
   private let requestHeaders = [
@@ -421,28 +440,18 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
     PiliNativeDiagnosticLog.shared.installAetherCapture()
     do {
       engine = try AetherEngine()
+      audioEngine = try AetherEngine()
     } catch {
       fatalError("AetherEngine 初始化失败：\(error.localizedDescription)")
     }
     super.init()
     engine.videoGravity = .resizeAspect
-    audioPlayer.actionAtItemEnd = .advance
-    // The Aether video clock owns buffering. Letting AVPlayer independently
-    // wait to minimise stalls can leave the separate DASH audio track paused
-    // after the video has already resumed.
-    audioPlayer.automaticallyWaitsToMinimizeStalling = false
-    audioPlayer.isMuted = false
-    audioPlayer.volume = 1
     PiliNativeDiagnosticLog.shared.append("Native player session initialised")
     installObservers()
   }
 
   deinit {
-    audioItemStatusObservation?.invalidate()
     loadTask?.cancel()
-    let loaders = assetLoaders
-    assetLoaders.removeAll()
-    loaders.forEach { $0.invalidate() }
   }
 
   func bindVideoSurface(_ surface: AetherPlayerView) {
@@ -549,7 +558,7 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
 
   func pausePlayback() {
     engine.pause()
-    audioPlayer.pause()
+    audioEngine.pause()
   }
 
   func seek(to target: TimeInterval, autoplay: Bool? = nil) {
@@ -585,7 +594,7 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
     let current = values.firstIndex(where: { abs($0 - playbackRate) < 0.01 }) ?? 0
     playbackRate = values[(current + 1) % values.count]
     engine.setRate(playbackRate)
-    if isPlaying { audioPlayer.rate = playbackRate }
+    if isPlaying, hasAudioTrack { audioEngine.setRate(playbackRate) }
   }
 
   func selectQuality(_ value: Int) {
@@ -598,9 +607,8 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
     loadTask = nil
     pausePlayback()
     engine.stop()
-    audioPlayer.removeAllItems()
-    audioItemStatusObservation?.invalidate()
-    audioItemStatusObservation = nil
+    hasAudioTrack = false
+    audioEngine.stop()
     segments.removeAll()
     segmentOffsets.removeAll()
     requestedDanmakuSegments.removeAll()
@@ -616,7 +624,6 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
     hdrBrightnessActive = false
     pictureInPicturePlayer = nil
     isTryingVideoCandidates = false
-    invalidateAssetLoaders()
   }
 
   func fail(_ message: String) {
@@ -645,12 +652,34 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
         PiliNativeDiagnosticLog.shared.append("Engine buffering=\(buffering)")
         self.isBuffering = buffering || self.engine.state == .loading
         if buffering {
-          self.audioPlayer.pause()
+          self.audioEngine.pause()
         } else {
           self.resumeAudioIfPossible()
         }
       }
       .store(in: &engineCancellables)
+    audioEngine.$state
+      .receive(on: DispatchQueue.main)
+      .sink { [weak self] state in
+        PiliNativeDiagnosticLog.shared.append(
+          "Audio engine state=\(String(describing: state))"
+        )
+        guard let self else { return }
+        if case .error(let message) = state,
+           self.hasAudioTrack,
+           !self.isTryingVideoCandidates {
+          self.fail("音轨播放失败：\(message)")
+        }
+      }
+      .store(in: &audioEngineCancellables)
+    audioEngine.$isBuffering
+      .removeDuplicates()
+      .receive(on: DispatchQueue.main)
+      .sink { [weak self] buffering in
+        PiliNativeDiagnosticLog.shared.append("Audio engine buffering=\(buffering)")
+        if !buffering { self?.resumeAudioIfPossible() }
+      }
+      .store(in: &audioEngineCancellables)
     engine.clock.$currentTime
       .receive(on: DispatchQueue.main)
       .sink { [weak self] time in self?.updatePlaybackTime(localTime: time) }
@@ -696,13 +725,13 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
       resumeAudioIfPossible()
     case .paused:
       isPlaying = false
-      audioPlayer.pause()
+      audioEngine.pause()
     case .seeking:
       isBuffering = true
-      audioPlayer.pause()
+      audioEngine.pause()
     case .ended:
       isPlaying = false
-      audioPlayer.pause()
+      audioEngine.pause()
       let next = activeSegmentIndex + 1
       if next < segments.count {
         loadSegment(index: next, localTime: 0, autoplay: shouldAutoplay)
@@ -722,13 +751,9 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
   private func loadSegment(index segmentIndex: Int, localTime: TimeInterval, autoplay: Bool) {
     guard segments.indices.contains(segmentIndex) else { return }
     loadTask?.cancel()
-    // A cancelled quality request can still be inside AVAsset async probing.
-    // Tear its resource loaders down before the replacement starts so two
-    // nine-CDN audio searches cannot compete for bandwidth.
-    invalidateAssetLoaders()
     pausePlayback()
-    audioPlayer.removeAllItems()
-    audioItemStatusObservation?.invalidate()
+    hasAudioTrack = false
+    audioEngine.stop()
     isCorrectingAudioTime = false
     lastAudioCorrectionHostTime = 0
     videoItemReady = false
@@ -799,21 +824,14 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
       videoLoaded = true
       guard !Task.isCancelled, itemBuildGeneration == generation else { return }
 
-      // Probe audio only after the selected video representation has opened.
-      // An audio-CDN failure must not be misdiagnosed as an Aether/Dolby video
-      // failure before the dvh1 candidate was even attempted.
-      let audioItem = try await makeAudioItem(for: segment)
+      // Open the separate DASH audio representation through Aether's dedicated
+      // audio-only decoder and our seekable HTTP reader. This keeps the entire
+      // audio path away from AVPlayer's rejected remote-asset probe.
+      try await loadAudioTrack(for: segment, localTime: localTime)
       guard !Task.isCancelled, itemBuildGeneration == generation else { return }
 
       videoItemReady = true
-      if let audioItem {
-        audioItemStatusObservation?.invalidate()
-        audioItemReady = audioItem.status == .readyToPlay
-        audioPlayer.insert(audioItem, after: nil)
-        observeAudioStatus(audioItem)
-      } else {
-        audioItemReady = true
-      }
+      audioItemReady = true
       finishPreparingIfReady()
     } catch {
       guard !Task.isCancelled, itemBuildGeneration == generation else { return }
@@ -825,130 +843,57 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
     }
   }
 
-  private func makeAsset(url: URL) -> AVURLAsset {
-    let loader = PiliNativeAssetResourceLoader(url: url, headers: requestHeaders)
-    assetLoaderLock.lock()
-    assetLoaders.append(loader)
-    assetLoaderLock.unlock()
-    return loader.makeAsset()
-  }
-
-  private func playableAsset(
-    urls: [URL],
-    mediaType: AVMediaType
-  ) async throws -> AVURLAsset {
-    var lastError: Error = PiliNativePlayerBuildError.noPlayableCandidate
-
-    // Audio m4s files are small enough that AVFoundation usually keeps the
-    // supplied headers for the whole request. Prefer its native URL loading
-    // path because it has substantially better buffering than a custom
-    // resource-loader stream. Keep the loader path below as the compatibility
-    // fallback for CDNs that drop Referer/User-Agent on range requests.
-    for (candidateIndex, url) in urls.prefix(4).enumerated() {
-      guard !Task.isCancelled else { throw CancellationError() }
-      let asset = AVURLAsset(
-        url: url,
-        options: ["AVURLAssetHTTPHeaderFieldsKey": requestHeaders]
-      )
-      do {
-        PiliNativeDiagnosticLog.shared.append(
-          "Checking direct \(mediaType.rawValue) candidate=\(candidateIndex + 1)/\(min(4, urls.count)) "
-            + "host=\(url.host ?? "unknown")"
-        )
-        guard try await asset.load(.isPlayable) else {
-          lastError = PiliNativePlayerBuildError.noPlayableCandidate
-          continue
-        }
-        guard !Task.isCancelled else { throw CancellationError() }
-        let tracks = try await asset.loadTracks(withMediaType: mediaType)
-        guard !tracks.isEmpty else {
-          lastError = PiliNativePlayerBuildError.missingDashTrack
-          continue
-        }
-        PiliNativeDiagnosticLog.shared.append(
-          "Playable direct \(mediaType.rawValue) candidate host=\(url.host ?? "unknown")"
-        )
-        return asset
-      } catch is CancellationError {
-        throw CancellationError()
-      } catch {
-        PiliNativeDiagnosticLog.shared.append(
-          "Rejected direct \(mediaType.rawValue) candidate host=\(url.host ?? "unknown") "
-            + "error=\(error.localizedDescription)"
-        )
-        lastError = error
-      }
+  private func loadAudioTrack(
+    for segment: PiliNativePlayerSegment,
+    localTime: TimeInterval
+  ) async throws {
+    guard !segment.audioURLs.isEmpty else {
+      hasAudioTrack = false
+      PiliNativeDiagnosticLog.shared.append("No separate audio track in playback response")
+      return
     }
 
-    PiliNativeDiagnosticLog.shared.append(
-      "Direct \(mediaType.rawValue) candidates unavailable; using resource-loader fallback"
-    )
-    for (candidateIndex, url) in urls.enumerated() {
+    var lastError: Error = PiliNativePlayerBuildError.noPlayableCandidate
+    hasAudioTrack = false
+    for (candidateIndex, url) in segment.audioURLs.enumerated() {
       guard !Task.isCancelled else { throw CancellationError() }
-      let asset = makeAsset(url: url)
       do {
         PiliNativeDiagnosticLog.shared.append(
-          "Checking \(mediaType.rawValue) candidate=\(candidateIndex + 1)/\(urls.count) "
+          "Opening Aether audio candidate=\(candidateIndex + 1)/\(segment.audioURLs.count) "
             + "host=\(url.host ?? "unknown")"
         )
-        guard try await asset.load(.isPlayable) else {
-          lastError = PiliNativePlayerBuildError.noPlayableCandidate
-          continue
-        }
-        guard !Task.isCancelled else { throw CancellationError() }
-        let tracks = try await asset.loadTracks(withMediaType: mediaType)
-        guard !tracks.isEmpty else {
-          lastError = PiliNativePlayerBuildError.missingDashTrack
-          continue
-        }
-        PiliNativeDiagnosticLog.shared.append(
-          "Playable \(mediaType.rawValue) candidate host=\(url.host ?? "unknown")"
+        audioEngine.stop(resetDisplayCriteria: false)
+        let reader = PiliNativeHTTPRangeReader(url: url, headers: requestHeaders)
+        let options = LoadOptions(
+          suppressDisplayCriteria: true,
+          audioOnly: true,
+          declaredDurationSeconds: segment.duration > 0 ? segment.duration : nil,
+          autoplay: false
         )
-        return asset
+        try await audioEngine.load(
+          source: .custom(reader, formatHint: "mp4"),
+          startPosition: localTime,
+          options: options
+        )
+        guard !Task.isCancelled else { throw CancellationError() }
+        hasAudioTrack = true
+        PiliNativeDiagnosticLog.shared.append(
+          "Aether audio candidate opened host=\(url.host ?? "unknown") "
+            + "backend=\(audioEngine.playbackBackend.rawValue) "
+            + "decoder=\(audioEngine.activeAudioDecoder ?? "unknown")"
+        )
+        return
       } catch is CancellationError {
         throw CancellationError()
       } catch {
         PiliNativeDiagnosticLog.shared.append(
-          "Rejected \(mediaType.rawValue) candidate host=\(url.host ?? "unknown") "
+          "Aether audio candidate failed host=\(url.host ?? "unknown") "
             + "error=\(error.localizedDescription)"
         )
         lastError = error
       }
     }
     throw lastError
-  }
-
-  private func makeAudioItem(
-    for segment: PiliNativePlayerSegment
-  ) async throws -> AVPlayerItem? {
-    guard !segment.audioURLs.isEmpty else { return nil }
-    let audioAsset = try await playableAsset(urls: segment.audioURLs, mediaType: .audio)
-    let audioItem = AVPlayerItem(asset: audioAsset)
-    audioItem.preferredForwardBufferDuration = segment.qualityValue >= 120 ? 16 : 8
-    return audioItem
-  }
-
-  private func observeAudioStatus(_ audioItem: AVPlayerItem) {
-    audioItemStatusObservation = audioItem.observe(\.status, options: [.initial, .new]) {
-      [weak self, weak audioItem] _, _ in
-      DispatchQueue.main.async {
-        guard let self, let audioItem else { return }
-        switch audioItem.status {
-        case .readyToPlay:
-          PiliNativeDiagnosticLog.shared.append("Audio item ready")
-          self.audioItemReady = true
-          self.finishPreparingIfReady()
-          self.resumeAudioIfPossible()
-        case .failed:
-          PiliNativeDiagnosticLog.shared.append(
-            "Audio item failed: \(audioItem.error?.localizedDescription ?? "unknown")"
-          )
-          self.fail(audioItem.error?.localizedDescription ?? "音频载入失败")
-        default:
-          break
-        }
-      }
-    }
   }
 
   private func finishPreparingIfReady() {
@@ -978,33 +923,15 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
     guard isReady,
           engine.state == .playing,
           !engine.isBuffering,
-          let audioItem = audioPlayer.currentItem,
-          audioItem.status == .readyToPlay else { return }
-    activateAudioSessionIfNeeded()
-    audioPlayer.playImmediately(atRate: playbackRate)
+          hasAudioTrack,
+          audioEngine.state == .paused || audioEngine.state == .playing else { return }
+    audioEngine.setRate(playbackRate)
+    audioEngine.play()
     PiliNativeDiagnosticLog.shared.append("Audio resumed rate=\(playbackRate)")
-  }
-
-  private func activateAudioSessionIfNeeded() {
-    audioPlayer.isMuted = false
-    audioPlayer.volume = 1
-    do {
-      try AVAudioSession.sharedInstance().setActive(true)
-    } catch {
-      PiliNativeDiagnosticLog.shared.append(
-        "AVAudioSession activation failed: \(error.localizedDescription)"
-      )
-      // AVKit may already own the active playback session. In that case the
-      // queue player can still use the existing route.
-    }
   }
 
   private func updatePlaybackTime(localTime local: TimeInterval) {
     guard isReady, segments.indices.contains(activeSegmentIndex), local.isFinite else { return }
-    if let audioItem = audioPlayer.currentItem, audioItem.status == .failed {
-      fail(audioItem.error?.localizedDescription ?? "音频播放失败")
-      return
-    }
     synchronizeAudio(to: local)
     currentTime = min(max(0, segmentOffsets[activeSegmentIndex] + local), max(duration, 0))
     requestDanmaku(near: currentTime)
@@ -1013,9 +940,9 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
   private func synchronizeAudio(to videoTime: TimeInterval) {
     guard !isCorrectingAudioTime,
           isPlaying,
-          let audioItem = audioPlayer.currentItem,
-          audioItem.status == .readyToPlay else { return }
-    let audioTime = audioItem.currentTime().seconds
+          hasAudioTrack,
+          audioEngine.state == .playing else { return }
+    let audioTime = audioEngine.currentTime
     let drift = audioTime - videoTime
     let hostTime = CACurrentMediaTime()
     // Small AVPlayer clock differences (especially on Bluetooth routes) are
@@ -1030,28 +957,18 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
     PiliNativeDiagnosticLog.shared.append(
       String(format: "Audio sync correction drift=%+.3fs video=%.3f audio=%.3f", drift, videoTime, audioTime)
     )
-    audioPlayer.pause()
-    audioItem.seek(
-      to: CMTime(seconds: videoTime, preferredTimescale: 600),
-      toleranceBefore: CMTime(seconds: 0.10, preferredTimescale: 600),
-      toleranceAfter: CMTime(seconds: 0.10, preferredTimescale: 600)
-    ) { [weak self] _ in
-      DispatchQueue.main.async {
-        guard let self else { return }
-        self.isCorrectingAudioTime = false
-        self.resumeAudioIfPossible()
-      }
+    audioEngine.pause()
+    Task { [weak self] in
+      guard let self else { return }
+      await self.audioEngine.seek(to: videoTime)
+      self.isCorrectingAudioTime = false
+      self.resumeAudioIfPossible()
     }
   }
 
   private func seekAudio(to time: TimeInterval) async {
-    guard let audioItem = audioPlayer.currentItem else { return }
-    let target = CMTime(seconds: max(0, time), preferredTimescale: 600)
-    await withCheckedContinuation { continuation in
-      audioItem.seek(to: target, toleranceBefore: .zero, toleranceAfter: .zero) { _ in
-        continuation.resume()
-      }
-    }
+    guard hasAudioTrack else { return }
+    await audioEngine.seek(to: max(0, time))
   }
 
   private func requestDanmaku(near time: TimeInterval) {
@@ -1077,13 +994,6 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
     return 0
   }
 
-  private func invalidateAssetLoaders() {
-    assetLoaderLock.lock()
-    let loaders = assetLoaders
-    assetLoaders.removeAll()
-    assetLoaderLock.unlock()
-    loaders.forEach { $0.invalidate() }
-  }
 }
 
 private enum PiliNativePlayerBuildError: LocalizedError {
