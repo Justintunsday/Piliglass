@@ -2075,8 +2075,7 @@ private struct PiliNativeProfileView: View {
 
       HStack {
         Label(profile.vip ? "大会员" : "PiliGlass 用户", systemImage: profile.vip ? "crown.fill" : "person.fill")
-          .font(.caption)
-          .fontWeight(.semibold)
+          .font(.system(size: 12, weight: .semibold))
           .foregroundColor(.white)
           .padding(.horizontal, 10)
           .padding(.vertical, 6)
@@ -2141,8 +2140,7 @@ private struct PiliNativeProfileView: View {
       if profile.isSelf {
         Button(action: model.loadProfile) {
           Label("刷新个人资料", systemImage: "arrow.clockwise")
-            .font(.subheadline)
-            .fontWeight(.semibold)
+            .font(.system(size: 15, weight: .semibold))
             .foregroundColor(.primary)
             .frame(maxWidth: .infinity)
             .padding(.vertical, 11)
@@ -2156,8 +2154,7 @@ private struct PiliNativeProfileView: View {
             profile.isFollowing ? "已关注" : "关注",
             systemImage: profile.isFollowing ? "checkmark" : "plus"
           )
-          .font(.subheadline)
-          .fontWeight(.semibold)
+          .font(.system(size: 15, weight: .semibold))
           .foregroundColor(profile.isFollowing ? .primary : .white)
           .frame(maxWidth: .infinity)
           .padding(.vertical, 11)
@@ -2584,8 +2581,7 @@ private struct PiliNativeVideoDetailView: View {
       HStack(spacing: 10) {
         Button(action: { model.performVideoAction("triple", video: video) }) {
           Label("一键三连", systemImage: "hand.thumbsup.fill")
-            .font(.subheadline)
-            .fontWeight(.semibold)
+            .font(.system(size: 15, weight: .semibold))
             .foregroundColor(.white)
             .frame(maxWidth: .infinity)
             .padding(.vertical, 11)
