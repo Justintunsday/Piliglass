@@ -358,7 +358,9 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
   deinit {
     audioItemStatusObservation?.invalidate()
     loadTask?.cancel()
-    invalidateAssetLoaders()
+    let loaders = assetLoaders
+    assetLoaders.removeAll()
+    loaders.forEach { $0.invalidate() }
   }
 
   func bindVideoSurface(_ surface: AetherPlayerView) {
