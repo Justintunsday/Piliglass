@@ -195,6 +195,12 @@ abstract final class Api {
   //https://api.bilibili.com/x/emote/user/panel/web?business=reply
   static const String myEmote = '/x/emote/user/panel/web';
 
+  // 用户已添加的表情包；当 user/panel/web 返回空数据时用于恢复列表
+  static const String emoteSettingPanel = '/x/emote/setting/panel';
+
+  // 获取指定表情包详情；未登录或用户面板为空时至少恢复默认小黄脸
+  static const String emotePackage = '/x/emote/package';
+
   // 获取用户信息
   static const String userInfo = '/x/web-interface/nav';
 

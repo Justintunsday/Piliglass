@@ -140,18 +140,63 @@ abstract final class ReplyHttp {
   static Future<LoadingState<List<Package>?>> getEmoteList({
     String? business,
   }) async {
+    final scene = business ?? 'reply';
     final res = await Request().get(
       Api.myEmote,
       queryParameters: {
-        'business': business ?? 'reply',
+        'business': scene,
         'web_location': '333.1245',
       },
     );
     if (res.data['code'] == 0) {
-      return Success(EmoteModelData.fromJson(res.data['data']).packages);
-    } else {
-      return Error(res.data['message']);
+      final packages = _parseEmotePackages(res.data['data']);
+      if (packages?.isNotEmpty == true) {
+        return Success(packages);
+      }
     }
+
+    // Bilibili may return code=0 with packages=null. The settings endpoint
+    // still contains the packages added by the signed-in user.
+    final settingRes = await Request().get(
+      Api.emoteSettingPanel,
+      queryParameters: {'business': scene},
+    );
+    if (settingRes.data['code'] == 0) {
+      final data = settingRes.data['data'];
+      final packages = data is Map
+          ? _parseEmotePackages({
+              'packages': data['user_panel_packages'],
+            })
+          : null;
+      if (packages?.isNotEmpty == true) {
+        return Success(packages);
+      }
+    }
+
+    // Keep the original Bilibili face package available even if the account
+    // panel is temporarily empty or the session cookie is being refreshed.
+    final defaultRes = await Request().get(
+      Api.emotePackage,
+      queryParameters: {'business': scene, 'ids': 1},
+    );
+    if (defaultRes.data['code'] == 0) {
+      final packages = _parseEmotePackages(defaultRes.data['data']);
+      if (packages?.isNotEmpty == true) {
+        return Success(packages);
+      }
+    }
+
+    return Error(
+      res.data['message'] ??
+          settingRes.data['message'] ??
+          defaultRes.data['message'] ??
+          '表情包加载失败',
+    );
+  }
+
+  static List<Package>? _parseEmotePackages(Object? data) {
+    if (data is! Map) return null;
+    return EmoteModelData.fromJson(Map<String, dynamic>.from(data)).packages;
   }
 
   static Future<LoadingState<void>> replyTop({

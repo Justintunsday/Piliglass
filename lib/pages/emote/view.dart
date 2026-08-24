@@ -25,12 +25,29 @@ class EmotePanel extends StatefulWidget {
 
 class _EmotePanelState extends State<EmotePanel>
     with AutomaticKeepAliveClientMixin {
-  final EmotePanelController _emotePanelController = Get.put(
-    EmotePanelController(),
-  );
+  late final String _controllerTag;
+  late final EmotePanelController _emotePanelController;
+
+  @override
+  void initState() {
+    super.initState();
+    _controllerTag = 'emote-panel-${identityHashCode(this)}';
+    _emotePanelController = Get.put(
+      EmotePanelController(),
+      tag: _controllerTag,
+    );
+  }
 
   @override
   bool get wantKeepAlive => true;
+
+  @override
+  void dispose() {
+    if (Get.isRegistered<EmotePanelController>(tag: _controllerTag)) {
+      Get.delete<EmotePanelController>(tag: _controllerTag, force: true);
+    }
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {

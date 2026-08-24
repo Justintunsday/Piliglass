@@ -7,6 +7,7 @@ import 'package:PiliPlus/grpc/bilibili/im/type.pb.dart' show Msg, MsgType;
 import 'package:PiliPlus/grpc/im.dart';
 import 'package:PiliPlus/http/loading_state.dart';
 import 'package:PiliPlus/http/msg.dart';
+import 'package:PiliPlus/http/reply.dart';
 import 'package:PiliPlus/pages/common/common_list_controller.dart';
 import 'package:PiliPlus/utils/accounts.dart';
 import 'package:PiliPlus/utils/extension/scroll_controller_ext.dart';
@@ -27,8 +28,10 @@ class WhisperDetailController extends CommonListController<RspSessionMsg, Msg> {
 
   Int64? msgSeqno;
 
-  //表情转换图片规则
-  List<EmotionInfo>? eInfos;
+  // 表情转换图片规则。IM 返回的规则优先，用户表情包作为后备。
+  final Map<String, EmotionInfo> eInfos = {};
+  bool _isLoadingEmoteCatalog = false;
+  bool _hasLoadedEmoteCatalog = false;
 
   @override
   void onInit() {
@@ -39,7 +42,41 @@ class WhisperDetailController extends CommonListController<RspSessionMsg, Msg> {
     face = args['face'];
     mid = args['mid'];
     isLive = args['isLive'] ?? false;
+    unawaited(_loadEmoteCatalog());
     queryData();
+  }
+
+  Future<void> _loadEmoteCatalog() async {
+    if (_isLoadingEmoteCatalog || _hasLoadedEmoteCatalog) return;
+    _isLoadingEmoteCatalog = true;
+    try {
+      final result = await ReplyHttp.getEmoteList(business: 'reply');
+      if (result case Success(:final response)) {
+        for (final package in response ?? const []) {
+          for (final emote in package.emote ?? const []) {
+            final text = emote.text;
+            final url = emote.url;
+            if (text == null || text.isEmpty || url == null || url.isEmpty) {
+              continue;
+            }
+            eInfos.putIfAbsent(
+              text,
+              () => EmotionInfo(
+                text: text,
+                url: url,
+                size: emote.meta?.size ?? 1,
+              ),
+            );
+          }
+        }
+        _hasLoadedEmoteCatalog = eInfos.isNotEmpty;
+        if (loadingState.value is Success) {
+          loadingState.refresh();
+        }
+      }
+    } finally {
+      _isLoadingEmoteCatalog = false;
+    }
   }
 
   @override
@@ -55,8 +92,11 @@ class WhisperDetailController extends CommonListController<RspSessionMsg, Msg> {
         ackSessionMsg(msgs.last.msgSeqno.toInt());
       }
       msgs.removeWhere((e) => e.msgType == MsgType.EN_MSG_TYPE_DRAW_BACK.value);
-      eInfos ??= <EmotionInfo>[];
-      eInfos!.addAll(response.response.eInfos);
+      for (final info in response.response.eInfos) {
+        if (info.text.isNotEmpty) {
+          eInfos[info.text] = info;
+        }
+      }
     }
     return false;
   }
@@ -150,7 +190,9 @@ class WhisperDetailController extends CommonListController<RspSessionMsg, Msg> {
   @override
   Future<void> onRefresh() {
     msgSeqno = null;
-    eInfos = null;
+    if (!_hasLoadedEmoteCatalog) {
+      unawaited(_loadEmoteCatalog());
+    }
     scrollController.jumpToTop();
     return super.onRefresh();
   }

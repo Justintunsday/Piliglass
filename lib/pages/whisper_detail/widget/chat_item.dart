@@ -41,7 +41,7 @@ class ChatItem extends StatelessWidget {
   });
 
   final Msg item;
-  final List<EmotionInfo>? eInfos;
+  final Map<String, EmotionInfo> eInfos;
   final VoidCallback onLongPress;
   final GestureTapUpCallback? onSecondaryTapUp;
   final bool isOwner;
@@ -667,18 +667,18 @@ class ChatItem extends StatelessWidget {
   }) {
     final style = TextStyle(color: textColor, letterSpacing: 0.6, height: 1.5);
     final List<InlineSpan> children = [];
-    late final Map<String, Map> emojiMap = {};
-    final List<String> patterns = [Constants.urlRegex.pattern];
-    if (eInfos != null) {
-      for (final e in eInfos!) {
-        emojiMap[e.text] ??= {
-          'url': e.hasGifUrl() ? e.gifUrl : e.url,
-          'size': e.size * 22.0,
-        };
-      }
-      patterns.addAll(emojiMap.keys.map(RegExp.escape));
+    final Map<String, Map<String, Object>> emojiMap = {};
+    for (final e in eInfos.values) {
+      final url = e.hasGifUrl() && e.gifUrl.isNotEmpty ? e.gifUrl : e.url;
+      if (e.text.isEmpty || url.isEmpty) continue;
+      emojiMap[e.text] = {
+        'url': url,
+        'size': (e.size > 0 ? e.size : 1) * 22.0,
+      };
     }
-    final regex = RegExp(patterns.join('|'));
+    // Match bracketed emote codes without building a huge regular expression
+    // from every owned package. Unknown codes remain ordinary text.
+    final regex = RegExp('${Constants.urlRegex.pattern}|\\[[^\\]\\r\\n]{1,80}\\]');
     content['content'].splitMapJoin(
       regex,
       onMatch: (Match match) {
@@ -686,14 +686,14 @@ class ChatItem extends StatelessWidget {
         if (matchStr.startsWith('[')) {
           final emoji = emojiMap[matchStr];
           if (emoji != null) {
-            final size = emoji['size'];
+            final size = emoji['size']! as double;
             children.add(
               WidgetSpan(
                 rawText: matchStr,
                 child: NetworkImgLayer(
                   width: size,
                   height: size,
-                  src: emoji['url'],
+                  src: emoji['url']! as String,
                   type: ImageType.emote,
                 ),
               ),
