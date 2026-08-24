@@ -61,6 +61,16 @@ jobs:
           restore-keys: |
             cocoapods-${{ runner.os }}-${{ runner.arch }}-
 
+      - name: Cache Swift packages
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/Library/Developer/Xcode/DerivedData/**/SourcePackages
+            ~/Library/Caches/org.swift.swiftpm
+          key: swiftpm-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('ios/Runner.xcodeproj/project.pbxproj', 'ios/Runner.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
+          restore-keys: |
+            swiftpm-${{ runner.os }}-${{ runner.arch }}-
+
       - name: Set and Extract version
         shell: pwsh
         run: lib/scripts/build.ps1

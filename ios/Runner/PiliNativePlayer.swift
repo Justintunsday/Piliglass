@@ -1,5 +1,6 @@
 import AVFoundation
 import AVKit
+import AetherEngine
 import Combine
 import SwiftUI
 import UIKit
@@ -292,6 +293,7 @@ struct PiliNativeDanmakuItem: Identifiable {
   let weight: Int
 }
 
+@MainActor
 final class PiliNativePlayerSession: NSObject, ObservableObject {
   @Published private(set) var isReady = false
   @Published private(set) var isPlaying = false
@@ -308,7 +310,9 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
   @Published private(set) var isHDR = false
   @Published private(set) var hdrBrightnessActive = false
 
-  let player = AVQueuePlayer()
+  @Published private(set) var pictureInPicturePlayer: AVPlayer?
+
+  let engine: AetherEngine
   private let audioPlayer = AVQueuePlayer()
   var onDanmakuSegmentNeeded: ((Int) -> Void)?
   var onQualityRequested: ((Int, TimeInterval) -> Void)?
@@ -316,43 +320,49 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
   private(set) var danmakuItems: [PiliNativeDanmakuItem] = []
   private var segments: [PiliNativePlayerSegment] = []
   private var segmentOffsets: [TimeInterval] = []
-  private var itemIndices: [ObjectIdentifier: Int] = [:]
-  private var audioItemIndices: [ObjectIdentifier: Int] = [:]
   private var requestedDanmakuSegments = Set<Int>()
-  private var timeObserver: Any?
-  private var timeControlObservation: NSKeyValueObservation?
-  private var itemStatusObservation: NSKeyValueObservation?
   private var audioItemStatusObservation: NSKeyValueObservation?
+  private var engineCancellables = Set<AnyCancellable>()
   private var videoItemReady = false
   private var audioItemReady = true
   private var isCorrectingAudioTime = false
   private var shouldAutoplay = true
-  private var pendingSeek: TimeInterval?
+  private var pendingAudioSeek: TimeInterval?
   private var itemBuildGeneration = UUID()
-  private var applicationObservers: [NSObjectProtocol] = []
+  private var loadTask: Task<Void, Never>?
+  private var activeSegmentIndex = 0
+  private var isTryingVideoCandidates = false
   private let assetLoaderLock = NSLock()
   private var assetLoaders: [PiliNativeAssetResourceLoader] = []
 
+  private let requestHeaders = [
+    "Accept": "*/*",
+    "Accept-Encoding": "identity",
+    "Referer": "https://www.bilibili.com/",
+    "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15",
+  ]
+
   override init() {
+    do {
+      engine = try AetherEngine()
+    } catch {
+      fatalError("AetherEngine 初始化失败：\(error.localizedDescription)")
+    }
     super.init()
-    player.actionAtItemEnd = .advance
-    player.automaticallyWaitsToMinimizeStalling = true
-    player.preventsDisplaySleepDuringVideoPlayback = true
+    engine.videoGravity = .resizeAspect
     audioPlayer.actionAtItemEnd = .advance
     audioPlayer.automaticallyWaitsToMinimizeStalling = true
     installObservers()
-    installApplicationObservers()
   }
 
   deinit {
-    if let timeObserver = timeObserver {
-      player.removeTimeObserver(timeObserver)
-    }
-    timeControlObservation?.invalidate()
-    itemStatusObservation?.invalidate()
     audioItemStatusObservation?.invalidate()
-    applicationObservers.forEach { NotificationCenter.default.removeObserver($0) }
+    loadTask?.cancel()
     invalidateAssetLoaders()
+  }
+
+  func bindVideoSurface(_ surface: AetherPlayerView) {
+    engine.bind(view: surface)
   }
 
   func configure(
@@ -391,7 +401,7 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
     }
     let declaredDuration = Double(durationMilliseconds) / 1000
     duration = declaredDuration > 0 ? declaredDuration : offset
-    rebuildQueue(at: max(0, resumeAt), autoplay: autoplay)
+    loadSegment(at: max(0, resumeAt), autoplay: autoplay)
   }
 
   func prepareDanmaku() {
@@ -428,13 +438,32 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
   }
 
   func pausePlayback() {
-    player.pause()
+    engine.pause()
     audioPlayer.pause()
   }
 
   func seek(to target: TimeInterval, autoplay: Bool? = nil) {
     let bounded = min(max(0, target), max(duration, 0))
-    rebuildQueue(at: bounded, autoplay: autoplay ?? isPlaying)
+    let targetIndex = index(for: bounded)
+    let shouldResume = autoplay ?? isPlaying
+    if targetIndex != activeSegmentIndex || !isReady {
+      loadSegment(at: bounded, autoplay: shouldResume)
+      return
+    }
+    let localTime = max(0, bounded - segmentOffsets[targetIndex])
+    pausePlayback()
+    isBuffering = true
+    let generation = UUID()
+    itemBuildGeneration = generation
+    Task { [weak self] in
+      guard let self else { return }
+      await self.engine.seek(to: localTime)
+      await self.seekAudio(to: localTime)
+      guard self.itemBuildGeneration == generation else { return }
+      self.currentTime = bounded
+      self.isBuffering = false
+      if shouldResume { self.startPlayback() }
+    }
   }
 
   func skip(by interval: TimeInterval) {
@@ -445,10 +474,8 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
     let values: [Float] = [1, 1.25, 1.5, 2, 0.75]
     let current = values.firstIndex(where: { abs($0 - playbackRate) < 0.01 }) ?? 0
     playbackRate = values[(current + 1) % values.count]
-    if isPlaying {
-      player.rate = playbackRate
-      audioPlayer.rate = playbackRate
-    }
+    engine.setRate(playbackRate)
+    if isPlaying { audioPlayer.rate = playbackRate }
   }
 
   func selectQuality(_ value: Int) {
@@ -457,15 +484,13 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
   }
 
   func stop() {
+    loadTask?.cancel()
+    loadTask = nil
     pausePlayback()
-    player.removeAllItems()
+    engine.stop()
     audioPlayer.removeAllItems()
-    itemStatusObservation?.invalidate()
-    itemStatusObservation = nil
     audioItemStatusObservation?.invalidate()
     audioItemStatusObservation = nil
-    itemIndices.removeAll()
-    audioItemIndices.removeAll()
     segments.removeAll()
     segmentOffsets.removeAll()
     requestedDanmakuSegments.removeAll()
@@ -479,6 +504,8 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
     errorMessage = nil
     isHDR = false
     hdrBrightnessActive = false
+    pictureInPicturePlayer = nil
+    isTryingVideoCandidates = false
     invalidateAssetLoaders()
   }
 
@@ -492,115 +519,155 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
   }
 
   private func installObservers() {
-    let interval = CMTime(seconds: 0.1, preferredTimescale: 600)
-    timeObserver = player.addPeriodicTimeObserver(
-      forInterval: interval,
-      queue: .main
-    ) { [weak self] _ in
-      self?.updatePlaybackTime()
-    }
-    timeControlObservation = player.observe(
-      \.timeControlStatus,
-      options: [.initial, .new]
-    ) { [weak self] player, _ in
-      DispatchQueue.main.async {
-        guard let self = self else { return }
-        self.isPlaying = player.timeControlStatus == .playing
-        self.isBuffering = player.timeControlStatus == .waitingToPlayAtSpecifiedRate
-        if player.timeControlStatus == .waitingToPlayAtSpecifiedRate {
-          self.audioPlayer.pause()
-        } else if player.timeControlStatus == .playing,
-                  self.audioPlayer.currentItem?.status == .readyToPlay,
-                  self.audioPlayer.rate == 0 {
-          self.audioPlayer.playImmediately(atRate: self.playbackRate)
-        }
+    engine.$state
+      .receive(on: DispatchQueue.main)
+      .sink { [weak self] state in self?.handleEngineState(state) }
+      .store(in: &engineCancellables)
+    engine.$isBuffering
+      .receive(on: DispatchQueue.main)
+      .sink { [weak self] buffering in
+        guard let self else { return }
+        self.isBuffering = buffering || self.engine.state == .loading
+        if buffering { self.audioPlayer.pause() }
       }
+      .store(in: &engineCancellables)
+    engine.clock.$currentTime
+      .receive(on: DispatchQueue.main)
+      .sink { [weak self] time in self?.updatePlaybackTime(localTime: time) }
+      .store(in: &engineCancellables)
+    engine.$videoFormat
+      .receive(on: DispatchQueue.main)
+      .sink { [weak self] format in
+        guard let self else { return }
+        let nativeHDR = format != .sdr
+        self.isHDR = nativeHDR || self.segments.contains(where: { $0.isHDR })
+        self.hdrBrightnessActive = nativeHDR && self.isReady
+      }
+      .store(in: &engineCancellables)
+    engine.$currentAVPlayer
+      .receive(on: DispatchQueue.main)
+      .sink { [weak self] player in self?.pictureInPicturePlayer = player }
+      .store(in: &engineCancellables)
+  }
+
+  private func handleEngineState(_ state: PlaybackState) {
+    switch state {
+    case .idle:
+      isPlaying = false
+    case .loading:
+      isPlaying = false
+      isBuffering = true
+    case .playing:
+      isPlaying = true
+      isBuffering = false
+      if audioPlayer.currentItem?.status == .readyToPlay, audioPlayer.rate == 0 {
+        audioPlayer.playImmediately(atRate: playbackRate)
+      }
+    case .paused:
+      isPlaying = false
+      audioPlayer.pause()
+    case .seeking:
+      isBuffering = true
+      audioPlayer.pause()
+    case .ended:
+      isPlaying = false
+      audioPlayer.pause()
+      let next = activeSegmentIndex + 1
+      if next < segments.count {
+        loadSegment(index: next, localTime: 0, autoplay: shouldAutoplay)
+      }
+    case .error(let message):
+      if !isTryingVideoCandidates { fail(message) }
     }
   }
 
-  private func installApplicationObservers() {
-    let center = NotificationCenter.default
-    applicationObservers.append(
-      center.addObserver(
-        forName: UIApplication.willResignActiveNotification,
-        object: nil,
-        queue: .main
-      ) { [weak self] _ in
-        self?.hdrBrightnessActive = false
-      }
-    )
-    applicationObservers.append(
-      center.addObserver(
-        forName: UIApplication.didBecomeActiveNotification,
-        object: nil,
-        queue: .main
-      ) { [weak self] _ in
-        guard let self = self, self.isReady, self.isHDR else { return }
-        self.hdrBrightnessActive = true
-      }
-    )
-  }
-
-  private func rebuildQueue(at globalTime: TimeInterval, autoplay: Bool) {
+  private func loadSegment(at globalTime: TimeInterval, autoplay: Bool) {
     guard !segments.isEmpty else { return }
     let segmentIndex = index(for: globalTime)
     let localTime = max(0, globalTime - segmentOffsets[segmentIndex])
+    loadSegment(index: segmentIndex, localTime: localTime, autoplay: autoplay)
+  }
+
+  private func loadSegment(index segmentIndex: Int, localTime: TimeInterval, autoplay: Bool) {
+    guard segments.indices.contains(segmentIndex) else { return }
+    loadTask?.cancel()
     pausePlayback()
-    player.removeAllItems()
     audioPlayer.removeAllItems()
-    itemIndices.removeAll()
-    audioItemIndices.removeAll()
-    itemStatusObservation?.invalidate()
     audioItemStatusObservation?.invalidate()
     videoItemReady = false
     audioItemReady = true
-    pendingSeek = localTime
+    pendingAudioSeek = localTime
     shouldAutoplay = autoplay
+    activeSegmentIndex = segmentIndex
     isBuffering = true
+    isReady = false
+    errorMessage = nil
+    hdrBrightnessActive = false
     let generation = UUID()
     itemBuildGeneration = generation
-    let sourceSegments = segments
-    Task { [weak self] in
-      guard let self = self else { return }
-      do {
-        var builtItems: [(video: AVPlayerItem, audio: AVPlayerItem?, index: Int)] = []
-        for index in segmentIndex..<sourceSegments.count {
-          let items = try await self.makeItems(for: sourceSegments[index])
-          builtItems.append((items.video, items.audio, index))
-        }
-        await MainActor.run {
-          guard self.itemBuildGeneration == generation else { return }
-          for items in builtItems {
-            self.itemIndices[ObjectIdentifier(items.video)] = items.index
-            self.player.insert(items.video, after: nil)
-            if let audio = items.audio {
-              self.audioItemIndices[ObjectIdentifier(audio)] = items.index
-              self.audioPlayer.insert(audio, after: nil)
-            }
-          }
-          guard let first = self.player.currentItem else {
-            self.fail("播放器初始化失败")
-            return
-          }
-          self.observeStatus(of: first, audioItem: self.audioPlayer.currentItem)
-        }
-      } catch {
-        await MainActor.run {
-          guard self.itemBuildGeneration == generation else { return }
-          self.fail("4K/HDR 可用轨道载入失败：\(error.localizedDescription)")
+    let segment = segments[segmentIndex]
+    loadTask = Task { [weak self] in
+      guard let self else { return }
+      await self.performLoad(
+        segment: segment,
+        localTime: localTime,
+        generation: generation
+      )
+    }
+  }
+
+  private func performLoad(
+    segment: PiliNativePlayerSegment,
+    localTime: TimeInterval,
+    generation: UUID
+  ) async {
+    do {
+      let audioItem = try await makeAudioItem(for: segment)
+      guard !Task.isCancelled, itemBuildGeneration == generation else { return }
+
+      var lastError: Error = PiliNativePlayerBuildError.noPlayableCandidate
+      isTryingVideoCandidates = true
+      defer { isTryingVideoCandidates = false }
+      var loaded = false
+      for url in segment.videoURLs {
+        guard !Task.isCancelled, itemBuildGeneration == generation else { return }
+        do {
+          engine.stop(resetDisplayCriteria: false)
+          let options = LoadOptions(
+            httpHeaders: requestHeaders,
+            maxConcurrentSourceRequests: segment.qualityValue >= 120 ? 6 : 4,
+            declaredDurationSeconds: segment.duration > 0 ? segment.duration : nil,
+            forwardBufferSegments: segment.qualityValue >= 120 ? 12 : 8,
+            autoplay: false
+          )
+          try await engine.load(url: url, startPosition: localTime, options: options)
+          loaded = true
+          break
+        } catch {
+          lastError = error
         }
       }
+      guard loaded else { throw lastError }
+      guard !Task.isCancelled, itemBuildGeneration == generation else { return }
+
+      videoItemReady = true
+      if let audioItem {
+        audioItemStatusObservation?.invalidate()
+        audioItemReady = audioItem.status == .readyToPlay
+        audioPlayer.insert(audioItem, after: nil)
+        observeAudioStatus(audioItem)
+      } else {
+        audioItemReady = true
+      }
+      finishPreparingIfReady()
+    } catch {
+      guard !Task.isCancelled, itemBuildGeneration == generation else { return }
+      fail("Aether 4K/HDR 轨道载入失败：\(error.localizedDescription)")
     }
   }
 
   private func makeAsset(url: URL) -> AVURLAsset {
-    let headers = [
-      "Accept": "*/*",
-      "Accept-Encoding": "identity",
-      "Referer": "https://www.bilibili.com/",
-      "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15",
-    ]
-    let loader = PiliNativeAssetResourceLoader(url: url, headers: headers)
+    let loader = PiliNativeAssetResourceLoader(url: url, headers: requestHeaders)
     assetLoaderLock.lock()
     assetLoaders.append(loader)
     assetLoaderLock.unlock()
@@ -632,47 +699,25 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
     throw lastError
   }
 
-  private func makeItems(
+  private func makeAudioItem(
     for segment: PiliNativePlayerSegment
-  ) async throws -> (video: AVPlayerItem, audio: AVPlayerItem?) {
-    let videoAsset = try await playableAsset(urls: segment.videoURLs, mediaType: .video)
-    let videoItem = AVPlayerItem(asset: videoAsset)
-    videoItem.preferredForwardBufferDuration = segment.qualityValue >= 120 ? 16 : 8
-    videoItem.appliesPerFrameHDRDisplayMetadata = segment.isHDR
-
-    guard !segment.audioURLs.isEmpty else { return (videoItem, nil) }
+  ) async throws -> AVPlayerItem? {
+    guard !segment.audioURLs.isEmpty else { return nil }
     let audioAsset = try await playableAsset(urls: segment.audioURLs, mediaType: .audio)
     let audioItem = AVPlayerItem(asset: audioAsset)
     audioItem.preferredForwardBufferDuration = segment.qualityValue >= 120 ? 16 : 8
-    return (videoItem, audioItem)
+    return audioItem
   }
 
-  private func observeStatus(of item: AVPlayerItem, audioItem: AVPlayerItem?) {
-    videoItemReady = false
-    audioItemReady = audioItem == nil
-    itemStatusObservation = item.observe(\.status, options: [.initial, .new]) {
-      [weak self, weak item] _, _ in
+  private func observeAudioStatus(_ audioItem: AVPlayerItem) {
+    audioItemStatusObservation = audioItem.observe(\.status, options: [.initial, .new]) {
+      [weak self, weak audioItem] _, _ in
       DispatchQueue.main.async {
-        guard let self = self, let item = item else { return }
-        switch item.status {
-        case .readyToPlay:
-          self.videoItemReady = true
-          self.finishPreparingIfReady(videoItem: item, audioItem: audioItem)
-        case .failed:
-          self.fail(item.error?.localizedDescription ?? "视频载入失败")
-        default:
-          break
-        }
-      }
-    }
-    audioItemStatusObservation = audioItem?.observe(\.status, options: [.initial, .new]) {
-      [weak self, weak audioItem, weak item] _, _ in
-      DispatchQueue.main.async {
-        guard let self = self, let audioItem = audioItem, let item = item else { return }
+        guard let self, let audioItem else { return }
         switch audioItem.status {
         case .readyToPlay:
           self.audioItemReady = true
-          self.finishPreparingIfReady(videoItem: item, audioItem: audioItem)
+          self.finishPreparingIfReady()
         case .failed:
           self.fail(audioItem.error?.localizedDescription ?? "音频载入失败")
         default:
@@ -682,66 +727,44 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
     }
   }
 
-  private func finishPreparingIfReady(
-    videoItem: AVPlayerItem,
-    audioItem: AVPlayerItem?
-  ) {
-    guard videoItemReady, audioItemReady, pendingSeek != nil else { return }
-    let localTime = pendingSeek ?? 0
-    pendingSeek = nil
-    let target = CMTime(seconds: localTime, preferredTimescale: 600)
-    let group = DispatchGroup()
-    group.enter()
-    videoItem.seek(to: target, toleranceBefore: .zero, toleranceAfter: .zero) { _ in
-      group.leave()
-    }
-    if let audioItem = audioItem {
-      group.enter()
-      audioItem.seek(to: target, toleranceBefore: .zero, toleranceAfter: .zero) { _ in
-        group.leave()
-      }
-    }
-    group.notify(queue: .main) { [weak self] in
-      guard let self = self else { return }
+  private func finishPreparingIfReady() {
+    guard videoItemReady, audioItemReady, let localTime = pendingAudioSeek else { return }
+    pendingAudioSeek = nil
+    Task { [weak self] in
+      guard let self else { return }
+      await self.seekAudio(to: localTime)
       self.isReady = true
       self.isBuffering = false
       self.errorMessage = nil
-      self.hdrBrightnessActive = self.isHDR
+      self.hdrBrightnessActive = self.engine.videoFormat != .sdr
       if self.shouldAutoplay { self.startPlayback() }
     }
   }
 
   private func startPlayback() {
-    player.playImmediately(atRate: playbackRate)
+    engine.setRate(playbackRate)
+    engine.play()
     if audioPlayer.currentItem?.status == .readyToPlay {
       audioPlayer.playImmediately(atRate: playbackRate)
     }
   }
 
-  private func updatePlaybackTime() {
-    guard let currentItem = player.currentItem,
-          let segmentIndex = itemIndices[ObjectIdentifier(currentItem)] else { return }
-    if currentItem.status == .failed {
-      fail(currentItem.error?.localizedDescription ?? "视频播放失败")
-      return
-    }
+  private func updatePlaybackTime(localTime local: TimeInterval) {
+    guard isReady, segments.indices.contains(activeSegmentIndex), local.isFinite else { return }
     if let audioItem = audioPlayer.currentItem, audioItem.status == .failed {
       fail(audioItem.error?.localizedDescription ?? "音频播放失败")
       return
     }
-    let local = currentItem.currentTime().seconds
-    guard local.isFinite else { return }
-    synchronizeAudio(to: local, segmentIndex: segmentIndex)
-    currentTime = min(max(0, segmentOffsets[segmentIndex] + local), max(duration, 0))
+    synchronizeAudio(to: local)
+    currentTime = min(max(0, segmentOffsets[activeSegmentIndex] + local), max(duration, 0))
     requestDanmaku(near: currentTime)
   }
 
-  private func synchronizeAudio(to videoTime: TimeInterval, segmentIndex: Int) {
+  private func synchronizeAudio(to videoTime: TimeInterval) {
     guard !isCorrectingAudioTime,
-          player.timeControlStatus == .playing,
+          isPlaying,
           let audioItem = audioPlayer.currentItem,
-          audioItem.status == .readyToPlay,
-          audioItemIndices[ObjectIdentifier(audioItem)] == segmentIndex else { return }
+          audioItem.status == .readyToPlay else { return }
     let audioTime = audioItem.currentTime().seconds
     guard audioTime.isFinite, abs(audioTime - videoTime) > 0.22 else { return }
     isCorrectingAudioTime = true
@@ -752,6 +775,16 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
     ) { [weak self] _ in
       DispatchQueue.main.async {
         self?.isCorrectingAudioTime = false
+      }
+    }
+  }
+
+  private func seekAudio(to time: TimeInterval) async {
+    guard let audioItem = audioPlayer.currentItem else { return }
+    let target = CMTime(seconds: max(0, time), preferredTimescale: 600)
+    await withCheckedContinuation { continuation in
+      audioItem.seek(to: target, toleranceBefore: .zero, toleranceAfter: .zero) { _ in
+        continuation.resume()
       }
     }
   }
@@ -801,11 +834,6 @@ private enum PiliNativePlayerBuildError: LocalizedError {
 }
 
 // MARK: - UIKit video surface and customizable controls
-
-private final class PiliNativePlayerCanvasView: UIView {
-  override class var layerClass: AnyClass { AVPlayerLayer.self }
-  var playerLayer: AVPlayerLayer { layer as! AVPlayerLayer }
-}
 
 private final class PiliNativeDanmakuView: UIView {
   private var cursor = 0
@@ -936,7 +964,7 @@ private extension Array {
 final class PiliNativePlayerViewController: UIViewController {
   private let session: PiliNativePlayerSession
   private let fullscreenPresentation: Bool
-  private let canvas = PiliNativePlayerCanvasView()
+  private let canvas = AetherPlayerView()
   private let danmakuView = PiliNativeDanmakuView()
   private let controls = UIView()
   private let topBar = UIStackView()
@@ -953,6 +981,7 @@ final class PiliNativePlayerViewController: UIViewController {
   private let spinner = UIActivityIndicatorView(style: .large)
   private let errorLabel = UILabel()
   private var pictureInPictureController: AVPictureInPictureController?
+  private var pictureInPictureLayer: AVPlayerLayer?
   private var cancellables = Set<AnyCancellable>()
   private var controlsHideTask: DispatchWorkItem?
   private var wasPlayingBeforeScrub = false
@@ -978,17 +1007,13 @@ final class PiliNativePlayerViewController: UIViewController {
     super.viewDidLoad()
     buildInterface()
     bindSession()
-    canvas.playerLayer.player = session.player
-    canvas.playerLayer.videoGravity = .resizeAspect
-    if AVPictureInPictureController.isPictureInPictureSupported() {
-      pictureInPictureController = AVPictureInPictureController(playerLayer: canvas.playerLayer)
-    } else {
-      pipButton.isHidden = true
-    }
+    session.bindVideoSurface(canvas)
+    pipButton.isHidden = !AVPictureInPictureController.isPictureInPictureSupported()
   }
 
   override func viewDidAppear(_ animated: Bool) {
     super.viewDidAppear(animated)
+    session.bindVideoSurface(canvas)
     if fullscreenPresentation { requestOrientation(.landscape) }
     scheduleControlsHide()
   }
@@ -1142,6 +1167,26 @@ final class PiliNativePlayerViewController: UIViewController {
     session.$playbackRate.receive(on: DispatchQueue.main).sink { [weak self] rate in
       self?.speedButton.setTitle(rate == 1 ? "1.0x" : "\(rate)x", for: .normal)
     }.store(in: &cancellables)
+    session.$pictureInPicturePlayer.receive(on: DispatchQueue.main).sink { [weak self] player in
+      self?.configurePictureInPicture(player: player)
+    }.store(in: &cancellables)
+  }
+
+  private func configurePictureInPicture(player: AVPlayer?) {
+    pictureInPictureController?.stopPictureInPicture()
+    pictureInPictureController = nil
+    pictureInPictureLayer?.removeFromSuperlayer()
+    pictureInPictureLayer = nil
+    guard AVPictureInPictureController.isPictureInPictureSupported(), let player else {
+      pipButton.isHidden = true
+      return
+    }
+    let layer = AVPlayerLayer(player: player)
+    layer.frame = CGRect(x: -2, y: -2, width: 1, height: 1)
+    canvas.layer.addSublayer(layer)
+    pictureInPictureLayer = layer
+    pictureInPictureController = AVPictureInPictureController(playerLayer: layer)
+    pipButton.isHidden = false
   }
 
   private func updateQualityMenu(_ qualities: [PiliNativePlayerQuality]) {

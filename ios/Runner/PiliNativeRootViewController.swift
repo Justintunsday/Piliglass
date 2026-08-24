@@ -330,6 +330,7 @@ final class PiliNativeRootViewController: UIViewController {
 
 // MARK: - View model and channel models
 
+@MainActor
 private final class PiliNativeViewModel: ObservableObject {
   @Published private(set) var tabTitles = ["首页", "动态", "我的"]
   @Published private(set) var selectedIndex = 0
