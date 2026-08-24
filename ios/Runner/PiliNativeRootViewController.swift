@@ -1580,7 +1580,10 @@ private struct PiliNativeRootView: View {
 
 private struct PiliNativeHomeView: View {
   @ObservedObject var model: PiliNativeViewModel
-  private let columns = [GridItem(.adaptive(minimum: 155), spacing: 12)]
+  private let columns = [
+    GridItem(.flexible(minimum: 0), spacing: 12, alignment: .top),
+    GridItem(.flexible(minimum: 0), spacing: 12, alignment: .top),
+  ]
 
   var body: some View {
     NavigationView {
@@ -1686,22 +1689,37 @@ private struct PiliNativeVideoCard: View {
           .fontWeight(.medium)
           .foregroundColor(.primary)
           .lineLimit(2)
+          .multilineTextAlignment(.leading)
+          .fixedSize(horizontal: false, vertical: true)
+          .frame(height: 40, alignment: .topLeading)
           .frame(maxWidth: .infinity, alignment: .leading)
 
         HStack(spacing: 4) {
           Image(systemName: "person")
           Text(video.owner)
             .lineLimit(1)
-          Spacer(minLength: 4)
+            .truncationMode(.tail)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+
+        HStack(spacing: 4) {
           if !video.viewText.isEmpty {
             Image(systemName: "play.rectangle")
-            Text(video.viewText)
+            Text(video.viewText).lineLimit(1)
+          }
+          if !video.danmakuText.isEmpty {
+            Image(systemName: "text.bubble")
+            Text(video.danmakuText).lineLimit(1)
           }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .font(.caption2)
         .foregroundColor(.secondary)
       }
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .clipped()
     }
+    .frame(maxWidth: .infinity, alignment: .leading)
     .buttonStyle(PlainButtonStyle())
     .accessibilityLabel("\(video.title)，\(video.owner)")
   }
@@ -2016,7 +2034,10 @@ private struct PiliNativeProfileView: View {
   @ObservedObject var model: PiliNativeViewModel
   @Environment(\.presentationMode) private var presentationMode
   @State private var selectedSection = 0
-  private let columns = [GridItem(.adaptive(minimum: 158), spacing: 12)]
+  private let columns = [
+    GridItem(.flexible(minimum: 0), spacing: 12, alignment: .top),
+    GridItem(.flexible(minimum: 0), spacing: 12, alignment: .top),
+  ]
 
   var body: some View {
     NavigationView {
@@ -2082,7 +2103,7 @@ private struct PiliNativeProfileView: View {
           .background(Color.black.opacity(0.38))
           .clipShape(Capsule())
         Spacer()
-        Text("UID \(profile.mid)")
+        Text("UID " + String(profile.mid))
           .font(.caption)
           .foregroundColor(.white.opacity(0.9))
       }
@@ -2353,6 +2374,9 @@ private struct PiliNativeProfileVideoCard: View {
           .fontWeight(.medium)
           .foregroundColor(.primary)
           .lineLimit(2)
+          .multilineTextAlignment(.leading)
+          .fixedSize(horizontal: false, vertical: true)
+          .frame(height: 40, alignment: .topLeading)
           .frame(maxWidth: .infinity, alignment: .leading)
 
         HStack(spacing: 5) {
@@ -2366,7 +2390,10 @@ private struct PiliNativeProfileVideoCard: View {
         .font(.caption2)
         .foregroundColor(.secondary)
       }
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .clipped()
     }
+    .frame(maxWidth: .infinity, alignment: .leading)
     .buttonStyle(PlainButtonStyle())
   }
 }
@@ -2636,25 +2663,48 @@ private struct PiliNativeVideoDetailView: View {
 
   private func descriptionCard(_ video: PiliNativeVideoDetail) -> some View {
     VStack(alignment: .leading, spacing: 10) {
-      HStack {
-        Label("简介", systemImage: "text.alignleft")
-          .font(.headline)
-        Spacer()
-        Button(descriptionExpanded ? "收起" : "展开") { descriptionExpanded.toggle() }
-          .font(.caption)
-          .foregroundColor(piliAccent)
+      Label("简介", systemImage: "text.alignleft")
+        .font(.headline)
+
+      Group {
+        if descriptionExpanded {
+          Text(video.description)
+            .fixedSize(horizontal: false, vertical: true)
+        } else {
+          Text(video.description)
+            .lineLimit(5)
+            .truncationMode(.tail)
+            .fixedSize(horizontal: false, vertical: true)
+        }
       }
-      Text(video.description)
+      .font(.subheadline)
+      .foregroundColor(.secondary)
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .id(descriptionExpanded)
+
+      Button(action: toggleDescription) {
+        HStack(spacing: 5) {
+          Text(descriptionExpanded ? "收起简介" : "展开完整简介")
+          Image(systemName: descriptionExpanded ? "chevron.up" : "chevron.down")
+          Spacer(minLength: 0)
+        }
         .font(.subheadline)
-        .foregroundColor(.secondary)
-        .lineLimit(descriptionExpanded ? nil : 5)
-        .fixedSize(horizontal: false, vertical: true)
-        .textSelection(.enabled)
+        .foregroundColor(piliAccent)
+        .frame(maxWidth: .infinity, minHeight: 32, alignment: .leading)
+        .contentShape(Rectangle())
+      }
+      .buttonStyle(PlainButtonStyle())
     }
     .padding(16)
     .background(Color(UIColor.systemBackground))
     .cornerRadius(16)
     .padding(.horizontal, 12)
+  }
+
+  private func toggleDescription() {
+    withAnimation(.easeInOut(duration: 0.2)) {
+      descriptionExpanded.toggle()
+    }
   }
 
   private func partsCard(_ video: PiliNativeVideoDetail) -> some View {
