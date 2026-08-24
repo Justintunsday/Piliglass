@@ -2173,7 +2173,7 @@ private struct PiliNativeComment: Identifiable {
   var liked: Bool
   let replyCount: Int
   let level: Int
-  let pictures: [String]
+  let pictures: [PiliNativeCommentPicture]
   let emotes: [String: PiliNativeCommentEmote]
 
   init(map: [String: Any], index: Int) {
@@ -2189,7 +2189,9 @@ private struct PiliNativeComment: Identifiable {
     liked = piliBool(map["liked"])
     replyCount = piliInt(map["replyCount"])
     level = piliInt(map["level"])
-    pictures = (map["pictures"] as? [Any])?.compactMap { piliString($0) } ?? []
+    pictures = (map["pictures"] as? [Any])?.compactMap {
+      PiliNativeCommentPicture(value: $0)
+    } ?? []
     let emoteRows = map["emotes"] as? [Any] ?? []
     let emotePairs: [(String, PiliNativeCommentEmote)] = emoteRows.compactMap {
       row -> (String, PiliNativeCommentEmote)? in
@@ -2208,6 +2210,26 @@ private struct PiliNativeComment: Identifiable {
       )
     }
     emotes = Dictionary(uniqueKeysWithValues: emotePairs)
+  }
+}
+
+private struct PiliNativeCommentPicture: Hashable {
+  let url: String
+  let width: CGFloat
+  let height: CGFloat
+
+  init?(value: Any) {
+    if let url = piliString(value) {
+      self.url = url
+      width = 0
+      height = 0
+      return
+    }
+    let map = piliDictionary(value)
+    guard let url = piliString(map["url"]) else { return nil }
+    self.url = url
+    width = CGFloat(max(piliDouble(map["width"]), 0))
+    height = CGFloat(max(piliDouble(map["height"]), 0))
   }
 }
 
@@ -4260,10 +4282,7 @@ private struct PiliNativeCommentRow: View {
           ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
               ForEach(comment.pictures, id: \.self) { picture in
-                PiliRemoteImage(urlString: picture)
-                  .frame(width: 108, height: 108)
-                  .clipped()
-                  .cornerRadius(8)
+                PiliNativeCommentPictureView(picture: picture)
               }
             }
           }
@@ -4285,6 +4304,52 @@ private struct PiliNativeCommentRow: View {
       }
     }
     .padding(.vertical, 4)
+  }
+}
+
+private struct PiliNativeCommentPictureView: View {
+  let picture: PiliNativeCommentPicture
+  @StateObject private var loader: PiliImageLoader
+
+  init(picture: PiliNativeCommentPicture) {
+    self.picture = picture
+    _loader = StateObject(wrappedValue: PiliImageLoader(urlString: picture.url))
+  }
+
+  private var displaySize: CGSize {
+    let sourceSize: CGSize
+    if picture.width > 0, picture.height > 0 {
+      sourceSize = CGSize(width: picture.width, height: picture.height)
+    } else if let image = loader.image, image.size.width > 0, image.size.height > 0 {
+      sourceSize = image.size
+    } else {
+      return CGSize(width: 140, height: 140)
+    }
+
+    let scale = min(min(220 / sourceSize.width, 180 / sourceSize.height), 1)
+    return CGSize(
+      width: max(sourceSize.width * scale, 1),
+      height: max(sourceSize.height * scale, 1)
+    )
+  }
+
+  var body: some View {
+    Group {
+      if let image = loader.image {
+        Image(uiImage: image)
+          .resizable()
+          .aspectRatio(contentMode: .fit)
+      } else {
+        ZStack {
+          Color(UIColor.tertiarySystemFill)
+          Image(systemName: "photo")
+            .foregroundColor(Color(UIColor.tertiaryLabel))
+        }
+      }
+    }
+    .frame(width: displaySize.width, height: displaySize.height)
+    .background(Color(UIColor.tertiarySystemFill))
+    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
   }
 }
 

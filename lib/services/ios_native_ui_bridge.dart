@@ -1830,8 +1830,14 @@ final class IOSNativeUIBridge {
               'replyCount': item.rcount ?? item.replies?.length ?? 0,
               'level': item.member?.levelInfo?.currentLevel ?? 0,
               'pictures': (item.content?.pictures ?? const [])
-                  .map((picture) => _normalizeURL(picture.imgSrc))
-                  .whereType<String>()
+                  .map(
+                    (picture) => {
+                      'url': _normalizeURL(picture.imgSrc),
+                      'width': picture.imgWidth ?? 0,
+                      'height': picture.imgHeight ?? 0,
+                    },
+                  )
+                  .where((picture) => picture['url'] != null)
                   .toList(),
             };
           }).toList(),
@@ -1957,8 +1963,14 @@ final class IOSNativeUIBridge {
       'replyCount': item.count.toInt(),
       'level': member.level.toInt(),
       'pictures': content.pictures
-          .map((picture) => _normalizeURL(picture.imgSrc))
-          .whereType<String>()
+          .map(
+            (picture) => {
+              'url': _normalizeURL(picture.imgSrc),
+              'width': picture.imgWidth,
+              'height': picture.imgHeight,
+            },
+          )
+          .where((picture) => picture['url'] != null)
           .toList(),
       'emotes': content.emotes.entries.map((entry) {
         final emote = entry.value;
