@@ -137,6 +137,11 @@ switch ($platform.ToLower()) {
         git reset --hard HEAD
     }
     "ios" {
+        # The iOS build patches Flutter framework sources. A restored SDK cache
+        # may contain the previous run's changes, so always start from the
+        # pinned release before applying them again.
+        git reset --hard HEAD
+        git clean -fd
         $patches += $ScrollViewPatch
         $patches += $BottomSheetIOSFlutterPatch
         $patches += $NavigatorPatch
@@ -230,13 +235,12 @@ switch ($platform.ToLower()) {
 }
 
 try {
-    $MaterialUiDir = Get-ChildItem "$PubCacheDir/hosted/pub.dev" -Directory |
-        Where-Object { $_.Name -like "material_ui-*" } |
-        Select-Object -Last 1
-
-    if ($MaterialUiDir) {
-        Remove-Item -Path $MaterialUiDir.FullName -Recurse -Force
-    }
+    Get-ChildItem "$PubCacheDir/hosted/pub.dev" -Directory |
+        Where-Object {
+            $_.Name -like "material_ui-*" -or
+            $_.Name -like "cupertino_ui-*"
+        } |
+        Remove-Item -Recurse -Force
 } catch {
 }
 

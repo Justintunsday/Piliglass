@@ -43,10 +43,23 @@ jobs:
           fetch-depth: 0
 
       - name: Setup flutter
+        id: flutter-action
         uses: subosito/flutter-action@v2
         with:
           channel: stable
           flutter-version-file: pubspec.yaml
+          cache: true
+          pub-cache: true
+
+      - name: Cache CocoaPods downloads
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/Library/Caches/CocoaPods
+            ~/.cocoapods/repos
+          key: cocoapods-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('ios/Podfile.lock', 'pubspec.lock') }}
+          restore-keys: |
+            cocoapods-${{ runner.os }}-${{ runner.arch }}-
 
       - name: Set and Extract version
         shell: pwsh
@@ -63,6 +76,21 @@ jobs:
           # make AltSign happy...
           find Payload/Runner.app/Frameworks -type d -name "*.framework" -exec codesign --force --sign - --preserve-metadata=identifier,entitlements {} \;
           zip -r9 PiliPlus_ios_${{env.version}}.ipa Payload/Runner.app
+
+      - name: Restore cache-safe Flutter dependencies
+        if: always()
+        shell: pwsh
+        run: |
+          git -C $env:FLUTTER_ROOT reset --hard HEAD
+          git -C $env:FLUTTER_ROOT clean -fd
+          if ($env:PUB_CACHE) {
+            $pubHosted = Join-Path $env:PUB_CACHE 'hosted/pub.dev'
+            if (Test-Path -LiteralPath $pubHosted) {
+              Get-ChildItem -LiteralPath $pubHosted -Directory |
+                Where-Object { $_.Name -like 'material_ui-*' -or $_.Name -like 'cupertino_ui-*' } |
+                Remove-Item -Recurse -Force
+            }
+          }
 
       - name: Release
         if: ${{ github.event.inputs.tag != '' }}
