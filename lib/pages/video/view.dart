@@ -1240,7 +1240,6 @@ class _VideoDetailPageVState extends State<VideoDetailPageV>
                     ),
               showEpisodes: showEpisodes,
               showViewPoints: showViewPoints,
-              useIOSNativeControls: Platform.isIOS && !isPipMode,
             ),
     ),
   );
