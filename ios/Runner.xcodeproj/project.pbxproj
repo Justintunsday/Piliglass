@@ -409,6 +409,27 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
+				OTHER_LDFLAGS = (
+					"-framework",
+					Libavcodec,
+					"-framework",
+					Libavformat,
+					"-framework",
+					Libavutil,
+					"-framework",
+					Libswresample,
+					"-framework",
+					Libswscale,
+					"-framework",
+					Libavfilter,
+					"-framework",
+					Libdav1d,
+					"-framework",
+					Libzimg,
+					"-framework",
+					Libzvbi,
+					"$(inherited)",
+				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.example.piliplus;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_OBJC_BRIDGING_HEADER = "Runner/Runner-Bridging-Header.h";
@@ -538,6 +559,27 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
+				OTHER_LDFLAGS = (
+					"-framework",
+					Libavcodec,
+					"-framework",
+					Libavformat,
+					"-framework",
+					Libavutil,
+					"-framework",
+					Libswresample,
+					"-framework",
+					Libswscale,
+					"-framework",
+					Libavfilter,
+					"-framework",
+					Libdav1d,
+					"-framework",
+					Libzimg,
+					"-framework",
+					Libzvbi,
+					"$(inherited)",
+				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.example.piliplus;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_OBJC_BRIDGING_HEADER = "Runner/Runner-Bridging-Header.h";
@@ -560,6 +602,27 @@
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
+				);
+				OTHER_LDFLAGS = (
+					"-framework",
+					Libavcodec,
+					"-framework",
+					Libavformat,
+					"-framework",
+					Libavutil,
+					"-framework",
+					Libswresample,
+					"-framework",
+					Libswscale,
+					"-framework",
+					Libavfilter,
+					"-framework",
+					Libdav1d,
+					"-framework",
+					Libzimg,
+					"-framework",
+					Libzvbi,
+					"$(inherited)",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = com.example.piliplus;
 				PRODUCT_NAME = "$(TARGET_NAME)";

@@ -82,6 +82,19 @@ jobs:
       - name: Build iOS
         run: |
           flutter build ios --verbose --release --no-codesign --dart-define-from-file=pili_release.json --no-pub
+          runner_binary="build/ios/iphoneos/Runner.app/Runner"
+          aether_ffmpeg_order="$(otool -L "$runner_binary" | grep -n '/Libavcodec.framework/' | head -1 | cut -d: -f1)"
+          legacy_ffmpeg_order="$(otool -L "$runner_binary" | grep -n '/Avcodec.framework/' | head -1 | cut -d: -f1)"
+          if [ -z "$aether_ffmpeg_order" ] || [ -z "$legacy_ffmpeg_order" ]; then
+            echo "Unable to verify the two FFmpeg runtimes in Runner"
+            exit 1
+          fi
+          if [ "$aether_ffmpeg_order" -ge "$legacy_ffmpeg_order" ]; then
+            echo "Aether FFmpeg is linked after media-kit FFmpeg; refusing a CoreMedia-unsafe IPA"
+            otool -L "$runner_binary" | grep -E '/(Lib)?Avcodec.framework/'
+            exit 1
+          fi
+          echo "Verified Aether FFmpeg precedes media-kit FFmpeg in Mach-O load order"
           ln -sf ./build/ios/iphoneos Payload
           # make AltSign happy...
           find Payload/Runner.app/Frameworks -type d -name "*.framework" -exec codesign --force --sign - --preserve-metadata=identifier,entitlements {} \;
