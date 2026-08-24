@@ -65,7 +65,9 @@ dependencies:
       path: packages/chat_bottom_container
       ref: dev
   collection: ^1.19.1
-  connectivity_plus: ^7.1.1
+  # 7.1+ references the iOS 26-only NWPath.isUltraConstrained API and cannot
+  # be compiled by Xcode 16 / the iOS 18 SDK used for the compatibility UI.
+  connectivity_plus: 7.0.0
   cookie_jar: ^4.0.8
   crypto: ^3.0.6
   cupertino_ui: ^1.0.0
