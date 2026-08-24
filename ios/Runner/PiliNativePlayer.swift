@@ -672,13 +672,16 @@ private final class PiliNativeDanmakuView: UIView {
     guard bounds.width > 0, bounds.height > 0 else { return }
     let label = UILabel()
     label.numberOfLines = 1
+    let shadow = NSShadow()
+    shadow.shadowColor = UIColor.black.withAlphaComponent(0.95)
+    shadow.shadowOffset = .zero
+    shadow.shadowBlurRadius = 2
     label.attributedText = NSAttributedString(
       string: item.content,
       attributes: [
         .font: UIFont.systemFont(ofSize: min(max(item.fontSize * 0.72, 13), 25), weight: .semibold),
         .foregroundColor: item.color,
-        .strokeColor: UIColor.black.withAlphaComponent(0.9),
-        .strokeWidth: -2.2,
+        .shadow: shadow,
       ]
     )
     label.sizeToFit()

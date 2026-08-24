@@ -835,8 +835,63 @@ private final class PiliNativeViewModel: ObservableObject {
         }
         if action == "share", let rawURL = piliString(result["shareURL"]), let url = URL(string: rawURL) {
           self.presentShareSheet(title: video.title, url: url)
+        } else {
+          self.applyVideoActionResult(action, result: result)
+          DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
+            self?.refreshCurrentVideoDetail()
+          }
         }
         self.videoActionMessage = result["message"] as? String ?? "操作成功"
+      }
+    }
+  }
+
+  private func applyVideoActionResult(_ action: String, result: [String: Any]) {
+    guard var current = videoDetail else { return }
+    switch action {
+    case "like":
+      let liked = piliBool(result["liked"])
+      if current.liked != liked {
+        current.like = max(0, current.like + (liked ? 1 : -1))
+      }
+      current.liked = liked
+    case "coin":
+      current.coin += 1
+      current.coinCount += 1
+    case "favorite":
+      let favorited = piliBool(result["favorite"])
+      if current.favorited != favorited {
+        current.favorite = max(0, current.favorite + (favorited ? 1 : -1))
+      }
+      current.favorited = favorited
+    default:
+      break
+    }
+    videoDetail = current
+  }
+
+  func refreshCurrentVideoDetail() {
+    guard let current = videoDetail else { return }
+    var arguments: [String: Any] = [
+      "bvid": current.bvid,
+      "title": current.title,
+    ]
+    if let aid = current.aid { arguments["aid"] = aid }
+    if let cover = current.cover { arguments["cover"] = cover }
+    channel.invokeMethod("loadVideoDetail", arguments: arguments) { [weak self] response in
+      DispatchQueue.main.async {
+        guard let self = self,
+              let active = self.videoDetail,
+              active.bvid == current.bvid else { return }
+        let result = piliDictionary(response)
+        guard result["state"] as? String == "success" else { return }
+        var refreshed = PiliNativeVideoDetail(map: piliDictionary(result["video"]))
+        if !refreshed.relationLoaded {
+          refreshed.liked = active.liked
+          refreshed.coinCount = active.coinCount
+          refreshed.favorited = active.favorited
+        }
+        self.videoDetail = refreshed
       }
     }
   }
@@ -854,11 +909,6 @@ private final class PiliNativeViewModel: ObservableObject {
       popover.sourceRect = CGRect(x: presenter.view.bounds.midX, y: presenter.view.bounds.maxY - 40, width: 1, height: 1)
     }
     presenter.present(controller, animated: true)
-  }
-
-  func copyVideoID(_ video: PiliNativeVideoDetail) {
-    UIPasteboard.general.string = video.bvid
-    videoActionMessage = "已复制 \(video.bvid)"
   }
 
   func presentSettings() {
@@ -1155,12 +1205,12 @@ private final class PiliNativeViewModel: ObservableObject {
     }
   }
 
-  func loadComments(oid: Int, type: Int) {
+  func loadComments(oid: Int, type: Int, preserveExisting: Bool = false) {
     commentOID = oid
     commentType = type
-    comments = []
+    if !preserveExisting { comments = [] }
     commentsError = nil
-    commentsTotal = 0
+    if !preserveExisting { commentsTotal = 0 }
     commentsLoading = true
     channel.invokeMethod(
       "loadNativeComments",
@@ -1207,14 +1257,17 @@ private final class PiliNativeViewModel: ObservableObject {
           self.commentsError = result["error"] as? String ?? "评论点赞失败"
           return
         }
-        guard let currentIndex = self.comments.firstIndex(where: { $0.id == comment.id }) else { return }
         let nowLiked = piliBool(result["liked"])
-        self.comments[currentIndex].liked = nowLiked
-        self.comments[currentIndex].like = max(0, self.comments[currentIndex].like + (nowLiked ? 1 : -1))
-        if self.commentThreadRoot?.id == comment.id {
-          self.commentThreadRoot?.liked = nowLiked
-          self.commentThreadRoot?.like = self.comments[currentIndex].like
+        if let currentIndex = self.comments.firstIndex(where: { $0.id == comment.id }) {
+          self.comments[currentIndex].liked = nowLiked
+          self.comments[currentIndex].like = max(0, self.comments[currentIndex].like + (nowLiked ? 1 : -1))
+          if self.commentThreadRoot?.id == comment.id {
+            self.commentThreadRoot?.liked = nowLiked
+            self.commentThreadRoot?.like = self.comments[currentIndex].like
+          }
         }
+        self.loadComments(oid: oid, type: self.commentType, preserveExisting: true)
+        if self.isCommentThreadPresented { self.loadCommentThread() }
       }
     }
   }
@@ -1309,6 +1362,7 @@ private final class PiliNativeViewModel: ObservableObject {
         self.selectedDynamic?.like = max(0, item.like + (nowLiked ? 1 : -1))
         self.syncSelectedDynamicToList()
         self.dynamicMessage = nowLiked ? "点赞成功" : "已取消点赞"
+        self.loadDynamicDetail()
       }
     }
   }
@@ -1386,6 +1440,7 @@ private final class PiliNativeViewModel: ObservableObject {
           self.syncSelectedDynamicToList()
           self.dynamicMessage = result["message"] as? String ?? "转发成功"
           self.isDynamicComposerPresented = false
+          self.loadDynamicDetail()
         }
       }
       return
@@ -1416,9 +1471,13 @@ private final class PiliNativeViewModel: ObservableObject {
         }
         self.dynamicMessage = result["message"] as? String ?? "发布成功"
         self.isDynamicComposerPresented = false
+        if self.isVideoDetailPresented { self.refreshCurrentVideoDetail() }
+        if self.isDynamicDetailPresented { self.loadDynamicDetail() }
         if root == nil {
-          self.selectedDynamic?.comment += 1
-          self.syncSelectedDynamicToList()
+          if self.isDynamicDetailPresented {
+            self.selectedDynamic?.comment += 1
+            self.syncSelectedDynamicToList()
+          }
           self.loadComments(oid: oid, type: self.commentType)
         } else {
           self.loadComments(oid: oid, type: self.commentType)
@@ -1482,13 +1541,16 @@ private final class PiliNativeViewModel: ObservableObject {
           self.commentThreadError = result["error"] as? String ?? "评论点赞失败"
           return
         }
-        guard let index = self.commentThreadItems.firstIndex(where: { $0.id == comment.id }) else { return }
         let nowLiked = piliBool(result["liked"])
-        self.commentThreadItems[index].liked = nowLiked
-        self.commentThreadItems[index].like = max(
-          0,
-          self.commentThreadItems[index].like + (nowLiked ? 1 : -1)
-        )
+        if let index = self.commentThreadItems.firstIndex(where: { $0.id == comment.id }) {
+          self.commentThreadItems[index].liked = nowLiked
+          self.commentThreadItems[index].like = max(
+            0,
+            self.commentThreadItems[index].like + (nowLiked ? 1 : -1)
+          )
+        }
+        self.loadCommentThread()
+        self.loadComments(oid: oid, type: self.commentType, preserveExisting: true)
       }
     }
   }
@@ -1799,11 +1861,15 @@ private struct PiliNativeVideoDetail {
   let pubdateText: String
   let viewText: String
   let danmakuText: String
-  let reply: Int
-  let like: Int
-  let coin: Int
-  let favorite: Int
+  var reply: Int
+  var like: Int
+  var coin: Int
+  var favorite: Int
   let share: Int
+  var liked: Bool
+  var coinCount: Int
+  var favorited: Bool
+  let relationLoaded: Bool
   let copyrightText: String
   let isVertical: Bool
   let argueMessage: String
@@ -1832,6 +1898,10 @@ private struct PiliNativeVideoDetail {
     coin = piliInt(map["coin"])
     favorite = piliInt(map["favorite"])
     share = piliInt(map["share"])
+    liked = piliBool(map["liked"])
+    coinCount = piliInt(map["coinCount"])
+    favorited = piliBool(map["favorited"])
+    relationLoaded = piliBool(map["relationLoaded"])
     copyrightText = piliString(map["copyrightText"]) ?? ""
     isVertical = piliBool(map["isVertical"])
     argueMessage = piliString(map["argueMessage"]) ?? ""
@@ -3220,49 +3290,34 @@ private struct PiliNativeVideoDetailView: View {
 
       HStack(spacing: 0) {
         Button(action: { model.performVideoAction("like", video: video) }) {
-          PiliNativeVideoMetric(icon: "hand.thumbsup", value: video.like, title: "点赞")
+          PiliNativeVideoMetric(
+            icon: video.liked ? "hand.thumbsup.fill" : "hand.thumbsup",
+            value: video.like,
+            title: "点赞",
+            color: video.liked ? piliAccent : .secondary
+          )
         }
         Button(action: { model.performVideoAction("coin", video: video) }) {
-          PiliNativeVideoMetric(icon: "circle.hexagongrid", value: video.coin, title: "投币")
+          PiliNativeVideoMetric(
+            icon: video.coinCount > 0 ? "circle.hexagongrid.fill" : "circle.hexagongrid",
+            value: video.coin,
+            title: "投币",
+            color: video.coinCount > 0 ? piliAccent : .secondary
+          )
         }
         Button(action: { model.performVideoAction("favorite", video: video) }) {
-          PiliNativeVideoMetric(icon: "star", value: video.favorite, title: "收藏")
+          PiliNativeVideoMetric(
+            icon: video.favorited ? "star.fill" : "star",
+            value: video.favorite,
+            title: "收藏",
+            color: video.favorited ? piliAccent : .secondary
+          )
         }
         Button(action: model.beginDynamicComment) {
           PiliNativeVideoMetric(icon: "bubble.left", value: video.reply, title: "评论")
         }
         Button(action: { model.performVideoAction("share", video: video) }) {
           PiliNativeVideoMetric(icon: "square.and.arrow.up", value: video.share, title: "分享")
-        }
-      }
-      .buttonStyle(PlainButtonStyle())
-      .disabled(model.videoActionLoading)
-
-      HStack(spacing: 10) {
-        Button(action: { model.performVideoAction("triple", video: video) }) {
-          Label("一键三连", systemImage: "hand.thumbsup.fill")
-            .font(.system(size: 15, weight: .semibold))
-            .foregroundColor(.white)
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 11)
-            .background(piliAccent)
-            .cornerRadius(11)
-        }
-        Button(action: { model.performVideoAction("later", video: video) }) {
-          Label("稍后再看", systemImage: "clock")
-            .font(.subheadline)
-            .foregroundColor(.primary)
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 11)
-            .background(Color(UIColor.secondarySystemGroupedBackground))
-            .cornerRadius(11)
-        }
-        Button(action: { model.copyVideoID(video) }) {
-          Image(systemName: "doc.on.doc")
-            .foregroundColor(.primary)
-            .frame(width: 44, height: 40)
-            .background(Color(UIColor.secondarySystemGroupedBackground))
-            .cornerRadius(11)
         }
       }
       .buttonStyle(PlainButtonStyle())
@@ -4537,8 +4592,6 @@ private final class PiliNativeInlineVideoIntroModel: ObservableObject {
   @Published private(set) var threadLoading = false
   @Published private(set) var threadError: String?
   @Published private(set) var threadTotal = 0
-  @Published private(set) var videoLiked = false
-  @Published private(set) var likeDelta = 0
 
   private let channel: FlutterMethodChannel
   private let bvid: String
@@ -4563,14 +4616,18 @@ private final class PiliNativeInlineVideoIntroModel: ObservableObject {
   func load() {
     guard !hasLoaded else { return }
     hasLoaded = true
-    loading = true
+    requestDetail(showLoading: true, refreshComments: true)
+  }
+
+  private func requestDetail(showLoading: Bool, refreshComments: Bool) {
+    if showLoading { loading = true }
     var arguments: [String: Any] = ["bvid": bvid, "title": fallbackTitle]
     if let aid = aid { arguments["aid"] = aid }
     if let fallbackCover = fallbackCover { arguments["cover"] = fallbackCover }
     channel.invokeMethod("loadVideoDetail", arguments: arguments) { [weak self] response in
       DispatchQueue.main.async {
         guard let self = self else { return }
-        self.loading = false
+        if showLoading { self.loading = false }
         if let flutterError = response as? FlutterError {
           self.error = flutterError.message ?? "视频简介加载失败"
           return
@@ -4580,14 +4637,24 @@ private final class PiliNativeInlineVideoIntroModel: ObservableObject {
           self.error = result["error"] as? String ?? "视频简介加载失败"
           return
         }
-        self.detail = PiliNativeVideoDetail(map: piliDictionary(result["video"]))
+        var refreshed = PiliNativeVideoDetail(map: piliDictionary(result["video"]))
+        if let active = self.detail, !refreshed.relationLoaded {
+          refreshed.liked = active.liked
+          refreshed.coinCount = active.coinCount
+          refreshed.favorited = active.favorited
+        }
+        self.detail = refreshed
         if self.currentCID == nil { self.currentCID = self.detail?.cid }
         self.error = nil
-        if let aid = self.detail?.aid {
+        if refreshComments, let aid = self.detail?.aid {
           self.loadComments(oid: aid)
         }
       }
     }
+  }
+
+  private func refreshDetail() {
+    requestDetail(showLoading: false, refreshComments: false)
   }
 
   func retry() {
@@ -4614,15 +4681,30 @@ private final class PiliNativeInlineVideoIntroModel: ObservableObject {
         let result = piliDictionary(response)
         if result["state"] as? String == "success" {
           self.message = result["message"] as? String ?? "操作成功"
-          if action == "like" {
-            let nowLiked = piliBool(result["liked"])
-            if nowLiked != self.videoLiked {
-              self.likeDelta += nowLiked ? 1 : -1
+          if var current = self.detail {
+            switch action {
+            case "like":
+              let liked = piliBool(result["liked"])
+              if current.liked != liked {
+                current.like = max(0, current.like + (liked ? 1 : -1))
+              }
+              current.liked = liked
+            case "coin":
+              current.coin += 1
+              current.coinCount += 1
+            case "favorite":
+              let favorited = piliBool(result["favorite"])
+              if current.favorited != favorited {
+                current.favorite = max(0, current.favorite + (favorited ? 1 : -1))
+              }
+              current.favorited = favorited
+            default:
+              break
             }
-            self.videoLiked = nowLiked
-          } else if action == "triple", piliBool(result["like"]), !self.videoLiked {
-            self.videoLiked = true
-            self.likeDelta += 1
+            self.detail = current
+          }
+          DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
+            self?.refreshDetail()
           }
         } else {
           self.message = result["error"] as? String ?? "操作失败"
@@ -4658,13 +4740,11 @@ private final class PiliNativeInlineVideoIntroModel: ObservableObject {
     }
   }
 
-  func copyVideoID() {
-    guard let detail = detail else { return }
-    UIPasteboard.general.string = detail.bvid
-    message = "已复制 \(detail.bvid)"
-  }
-
-  func loadComments(oid: Int) {
+  func loadComments(oid: Int, preserveExisting: Bool = false) {
+    if !preserveExisting {
+      comments = []
+      commentsTotal = 0
+    }
     commentsLoading = true
     commentsError = nil
     channel.invokeMethod(
@@ -4704,20 +4784,23 @@ private final class PiliNativeInlineVideoIntroModel: ObservableObject {
       ]
     ) { [weak self] response in
       DispatchQueue.main.async {
-        guard let self = self,
-              let index = self.comments.firstIndex(where: { $0.id == comment.id }) else { return }
+        guard let self = self else { return }
         let result = piliDictionary(response)
         guard result["state"] as? String == "success" else {
           self.commentsError = result["error"] as? String ?? "评论点赞失败"
           return
         }
         let nowLiked = piliBool(result["liked"])
-        self.comments[index].liked = nowLiked
-        self.comments[index].like = max(0, self.comments[index].like + (nowLiked ? 1 : -1))
-        if self.threadRoot?.id == comment.id {
-          self.threadRoot?.liked = nowLiked
-          self.threadRoot?.like = self.comments[index].like
+        if let index = self.comments.firstIndex(where: { $0.id == comment.id }) {
+          self.comments[index].liked = nowLiked
+          self.comments[index].like = max(0, self.comments[index].like + (nowLiked ? 1 : -1))
+          if self.threadRoot?.id == comment.id {
+            self.threadRoot?.liked = nowLiked
+            self.threadRoot?.like = self.comments[index].like
+          }
         }
+        self.loadComments(oid: aid, preserveExisting: true)
+        if self.isThreadPresented { self.loadThread() }
       }
     }
   }
@@ -4785,6 +4868,7 @@ private final class PiliNativeInlineVideoIntroModel: ObservableObject {
         self.message = result["message"] as? String ?? "发布成功"
         self.isComposerPresented = false
         self.loadComments(oid: oid)
+        self.refreshDetail()
         if root != nil, self.isThreadPresented {
           self.loadThread()
         }
@@ -4844,13 +4928,16 @@ private final class PiliNativeInlineVideoIntroModel: ObservableObject {
           self.threadError = result["error"] as? String ?? "评论点赞失败"
           return
         }
-        guard let index = self.threadItems.firstIndex(where: { $0.id == comment.id }) else { return }
         let nowLiked = piliBool(result["liked"])
-        self.threadItems[index].liked = nowLiked
-        self.threadItems[index].like = max(
-          0,
-          self.threadItems[index].like + (nowLiked ? 1 : -1)
-        )
+        if let index = self.threadItems.firstIndex(where: { $0.id == comment.id }) {
+          self.threadItems[index].liked = nowLiked
+          self.threadItems[index].like = max(
+            0,
+            self.threadItems[index].like + (nowLiked ? 1 : -1)
+          )
+        }
+        self.loadThread()
+        self.loadComments(oid: oid, preserveExisting: true)
       }
     }
   }
@@ -4894,7 +4981,6 @@ private struct PiliNativeInlineVideoIntroView: View {
             }
 
             metrics(video)
-            actions(video)
 
             if let message = model.message {
               Text(message)
@@ -4980,17 +5066,27 @@ private struct PiliNativeInlineVideoIntroView: View {
     HStack(spacing: 0) {
       Button(action: { model.perform("like") }) {
         PiliNativeVideoMetric(
-          icon: model.videoLiked ? "hand.thumbsup.fill" : "hand.thumbsup",
-          value: max(0, video.like + model.likeDelta),
+          icon: video.liked ? "hand.thumbsup.fill" : "hand.thumbsup",
+          value: video.like,
           title: "点赞",
-          color: model.videoLiked ? piliAccent : .secondary
+          color: video.liked ? piliAccent : .secondary
         )
       }
       Button(action: { model.perform("coin") }) {
-        PiliNativeVideoMetric(icon: "circle.hexagongrid", value: video.coin, title: "投币")
+        PiliNativeVideoMetric(
+          icon: video.coinCount > 0 ? "circle.hexagongrid.fill" : "circle.hexagongrid",
+          value: video.coin,
+          title: "投币",
+          color: video.coinCount > 0 ? piliAccent : .secondary
+        )
       }
       Button(action: { model.perform("favorite") }) {
-        PiliNativeVideoMetric(icon: "star", value: video.favorite, title: "收藏")
+        PiliNativeVideoMetric(
+          icon: video.favorited ? "star.fill" : "star",
+          value: video.favorite,
+          title: "收藏",
+          color: video.favorited ? piliAccent : .secondary
+        )
       }
       Button(action: model.beginComment) {
         PiliNativeVideoMetric(icon: "bubble.left", value: video.reply, title: "评论")
@@ -5002,29 +5098,6 @@ private struct PiliNativeInlineVideoIntroView: View {
     .buttonStyle(PlainButtonStyle())
     .disabled(model.actionLoading)
     .padding(.vertical, 4)
-  }
-
-  private func actions(_ video: PiliNativeVideoDetail) -> some View {
-    HStack(spacing: 10) {
-      Button(action: { model.perform("triple") }) {
-        Label("一键三连", systemImage: "hand.thumbsup.fill")
-          .frame(maxWidth: .infinity)
-      }
-      .buttonStyle(.borderedProminent)
-      .tint(piliAccent)
-
-      Button(action: { model.perform("later") }) {
-        Label("稍后再看", systemImage: "clock")
-          .frame(maxWidth: .infinity)
-      }
-      .buttonStyle(.bordered)
-
-      Button(action: model.copyVideoID) {
-        Image(systemName: "doc.on.doc")
-      }
-      .buttonStyle(.bordered)
-    }
-    .disabled(model.actionLoading)
   }
 
   private var inlineComments: some View {

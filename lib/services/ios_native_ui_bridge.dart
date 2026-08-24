@@ -292,12 +292,23 @@ final class IOSNativeUIBridge {
     }
 
     final tagRequest = UserHttp.videoTags(bvid: bvid);
+    final relationRequest = Accounts.main.isLogin
+        ? VideoHttp.videoRelation(bvid: bvid)
+        : null;
     final result = await VideoHttp.videoIntro(bvid: bvid);
     var tags = const [];
     try {
       tags = (await tagRequest).dataOrNull ?? const [];
     } catch (_) {
       // Tags are optional; a tag endpoint failure must not hide the intro.
+    }
+    dynamic relation;
+    try {
+      relation = relationRequest == null
+          ? null
+          : (await relationRequest).dataOrNull;
+    } catch (_) {
+      // Relationship state is optional; keep the detail usable offline.
     }
     return switch (result) {
       Loading() => const {'state': 'loading'},
@@ -333,6 +344,10 @@ final class IOSNativeUIBridge {
           'coin': response.stat?.coin.toInt() ?? 0,
           'favorite': response.stat?.favorite ?? 0,
           'share': response.stat?.share ?? 0,
+          'liked': relation?.like ?? false,
+          'coinCount': relation?.coin?.toInt() ?? 0,
+          'favorited': relation?.favorite ?? false,
+          'relationLoaded': relation != null,
           'copyrightText': response.copyright == 1 ? '自制' : '转载',
           'isVertical': response.dimension?.isVertical ?? false,
           'argueMessage': response.argueInfo?.argueMsg ?? '',
