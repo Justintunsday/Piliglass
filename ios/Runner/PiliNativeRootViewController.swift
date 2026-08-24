@@ -2113,92 +2113,100 @@ private struct PiliNativeProfileView: View {
   }
 
   private func profileIdentityCard(_ profile: PiliNativeProfile) -> some View {
-    VStack(spacing: 13) {
+    ZStack(alignment: .top) {
+      RoundedRectangle(cornerRadius: 22, style: .continuous)
+        .fill(Color(UIColor.systemBackground))
+        .padding(.top, 48)
+        .shadow(color: .black.opacity(0.07), radius: 18, y: 7)
+
+      VStack(spacing: 13) {
+        // Reserve the avatar's full height inside the card's layout bounds.
+        // This keeps it visible when the container overlaps the cover image.
+        Color.clear.frame(height: 96)
+
+        HStack(spacing: 7) {
+          Text(profile.name)
+            .font(.title2)
+            .fontWeight(.bold)
+            .foregroundColor(profile.vip ? piliAccent : .primary)
+          Text("LV\(profile.level)")
+            .font(.caption2)
+            .fontWeight(.bold)
+            .foregroundColor(.white)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 3)
+            .background(
+              LinearGradient(
+                colors: [piliAccent, Color.purple.opacity(0.8)],
+                startPoint: .leading,
+                endPoint: .trailing
+              )
+            )
+            .clipShape(Capsule())
+        }
+
+        if !profile.official.isEmpty {
+          Label(profile.official, systemImage: "checkmark.seal.fill")
+            .font(.caption)
+            .foregroundColor(piliAccent)
+        }
+
+        HStack(spacing: 0) {
+          profileStat(profile.following, "关注")
+          Divider().frame(height: 34)
+          profileStat(profile.followers, "粉丝")
+          Divider().frame(height: 34)
+          profileStat(profile.likes, "获赞")
+        }
+        .padding(.vertical, 4)
+
+        if profile.isSelf {
+          Button(action: model.loadProfile) {
+            Label("刷新个人资料", systemImage: "arrow.clockwise")
+              .font(.system(size: 15, weight: .semibold))
+              .foregroundColor(.primary)
+              .frame(maxWidth: .infinity)
+              .padding(.vertical, 11)
+              .background(Color(UIColor.secondarySystemGroupedBackground))
+              .cornerRadius(12)
+          }
+          .buttonStyle(PlainButtonStyle())
+        } else {
+          Button(action: model.toggleProfileFollow) {
+            Label(
+              profile.isFollowing ? "已关注" : "关注",
+              systemImage: profile.isFollowing ? "checkmark" : "plus"
+            )
+            .font(.system(size: 15, weight: .semibold))
+            .foregroundColor(profile.isFollowing ? .primary : .white)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 11)
+            .background(profile.isFollowing ? Color(UIColor.secondarySystemGroupedBackground) : piliAccent)
+            .cornerRadius(12)
+          }
+          .buttonStyle(PlainButtonStyle())
+          .disabled(model.profileActionLoading)
+        }
+
+        if let message = model.profileMessage {
+          Text(message)
+            .font(.caption)
+            .foregroundColor(.secondary)
+        }
+      }
+      .padding(.horizontal, 16)
+      .padding(.bottom, 16)
+
       PiliRemoteImage(urlString: profile.face)
         .frame(width: 96, height: 96)
         .clipShape(Circle())
         .overlay(Circle().stroke(Color(UIColor.systemBackground), lineWidth: 5))
         .shadow(color: .black.opacity(0.18), radius: 12, y: 4)
-        .offset(y: -49)
-        .padding(.bottom, -49)
-
-      HStack(spacing: 7) {
-        Text(profile.name)
-          .font(.title2)
-          .fontWeight(.bold)
-          .foregroundColor(profile.vip ? piliAccent : .primary)
-        Text("LV\(profile.level)")
-          .font(.caption2)
-          .fontWeight(.bold)
-          .foregroundColor(.white)
-          .padding(.horizontal, 7)
-          .padding(.vertical, 3)
-          .background(
-            LinearGradient(
-              colors: [piliAccent, Color.purple.opacity(0.8)],
-              startPoint: .leading,
-              endPoint: .trailing
-            )
-          )
-          .clipShape(Capsule())
-      }
-
-      if !profile.official.isEmpty {
-        Label(profile.official, systemImage: "checkmark.seal.fill")
-          .font(.caption)
-          .foregroundColor(piliAccent)
-      }
-
-      HStack(spacing: 0) {
-        profileStat(profile.following, "关注")
-        Divider().frame(height: 34)
-        profileStat(profile.followers, "粉丝")
-        Divider().frame(height: 34)
-        profileStat(profile.likes, "获赞")
-      }
-      .padding(.vertical, 4)
-
-      if profile.isSelf {
-        Button(action: model.loadProfile) {
-          Label("刷新个人资料", systemImage: "arrow.clockwise")
-            .font(.system(size: 15, weight: .semibold))
-            .foregroundColor(.primary)
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 11)
-            .background(Color(UIColor.secondarySystemGroupedBackground))
-            .cornerRadius(12)
-        }
-        .buttonStyle(PlainButtonStyle())
-      } else {
-        Button(action: model.toggleProfileFollow) {
-          Label(
-            profile.isFollowing ? "已关注" : "关注",
-            systemImage: profile.isFollowing ? "checkmark" : "plus"
-          )
-          .font(.system(size: 15, weight: .semibold))
-          .foregroundColor(profile.isFollowing ? .primary : .white)
-          .frame(maxWidth: .infinity)
-          .padding(.vertical, 11)
-          .background(profile.isFollowing ? Color(UIColor.secondarySystemGroupedBackground) : piliAccent)
-          .cornerRadius(12)
-        }
-        .buttonStyle(PlainButtonStyle())
-        .disabled(model.profileActionLoading)
-      }
-
-      if let message = model.profileMessage {
-        Text(message)
-          .font(.caption)
-          .foregroundColor(.secondary)
-      }
+        .zIndex(1)
     }
-    .padding(16)
-    .background(Color(UIColor.systemBackground))
-    .cornerRadius(22)
-    .shadow(color: .black.opacity(0.07), radius: 18, y: 7)
     .padding(.horizontal, 14)
-    .offset(y: -47)
-    .padding(.bottom, -37)
+    .offset(y: -48)
+    .padding(.bottom, -38)
   }
 
   private func profileStat(_ value: Int, _ title: String) -> some View {
