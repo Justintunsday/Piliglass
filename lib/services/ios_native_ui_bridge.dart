@@ -1,6 +1,8 @@
 import 'dart:async';
 
 import 'package:PiliPlus/http/fav.dart';
+import 'package:PiliPlus/http/fan.dart';
+import 'package:PiliPlus/http/follow.dart';
 import 'package:PiliPlus/http/loading_state.dart';
 import 'package:PiliPlus/http/search.dart';
 import 'package:PiliPlus/http/user.dart';
@@ -881,6 +883,13 @@ final class IOSNativeUIBridge {
         'later' => await _loadNativeLater(page),
         'favorites' => await _loadNativeFavoriteFolders(page),
         'favoriteDetail' => await _loadNativeFavoriteDetail(arguments, page),
+        'following' => await _loadNativeRelations(page, followers: false),
+        'followers' => await _loadNativeRelations(page, followers: true),
+        'subscriptions' => await _loadNativeSubscriptions(page),
+        'subscriptionDetail' => await _loadNativeSubscriptionDetail(
+          arguments,
+          page,
+        ),
         _ => const {'state': 'error', 'error': '暂不支持的原生列表'},
       };
     } catch (error) {
@@ -1066,6 +1075,135 @@ final class IOSNativeUIBridge {
             'danmakuText': _compactNumber(item.cntInfo?.danmaku),
             'fallbackRoute': '/favDetail',
             'fallbackParameters': {'mediaId': mediaId.toString()},
+          };
+        }).toList(),
+      },
+    };
+  }
+
+  Future<Map<String, dynamic>> _loadNativeRelations(
+    int page, {
+    required bool followers,
+  }) async {
+    final result = followers
+        ? await FanHttp.fans(
+            vmid: Accounts.main.mid,
+            pn: page,
+            orderType: 'attention',
+          )
+        : await FollowHttp.followings(
+            vmid: Accounts.main.mid,
+            pn: page,
+          );
+    final pageTitle = followers ? '粉丝' : '关注';
+    return switch (result) {
+      Loading() => const {'state': 'loading'},
+      Error(:final errMsg, :final code) => {
+        'state': 'error',
+        'error': errMsg ?? '$pageTitle列表加载失败',
+        'code': ?code,
+      },
+      Success(:final response) => {
+        'state': 'success',
+        'title': pageTitle,
+        'subtitle': '共 ${response.total ?? 0} 人',
+        'hasMore': (response.list?.isNotEmpty ?? false) &&
+            page * 20 < (response.total ?? 0),
+        'items': (response.list ?? const []).asMap().entries.map((entry) {
+          final item = entry.value;
+          return {
+            'id': '${followers ? 'follower' : 'following'}-${item.mid}',
+            'kind': 'member',
+            'title': item.uname ?? '用户 ${item.mid}',
+            'subtitle': item.sign ?? '',
+            'cover': _normalizeURL(item.face),
+            'memberId': item.mid,
+            'badge': item.officialVerify?.desc ?? '',
+            'fallbackRoute': '/member',
+            'fallbackParameters': {'mid': item.mid.toString()},
+          };
+        }).toList(),
+      },
+    };
+  }
+
+  Future<Map<String, dynamic>> _loadNativeSubscriptions(int page) async {
+    final result = await UserHttp.userSubFolder(
+      mid: Accounts.main.mid,
+      pn: page,
+      ps: 20,
+    );
+    return switch (result) {
+      Loading() => const {'state': 'loading'},
+      Error(:final errMsg, :final code) => {
+        'state': 'error',
+        'error': errMsg ?? '订阅加载失败',
+        'code': ?code,
+      },
+      Success(:final response) => {
+        'state': 'success',
+        'title': '我的订阅',
+        'hasMore': response.hasMore ?? false,
+        'items': (response.list ?? const []).asMap().entries.map((entry) {
+          final item = entry.value;
+          final typeText = switch (item.type) {
+            11 => '收藏夹',
+            21 => '合集',
+            _ => '订阅',
+          };
+          return {
+            'id': 'subscription-${item.id ?? entry.key}',
+            'kind': 'subscription',
+            'title': item.title ?? '未命名订阅',
+            'subtitle': item.upper?.name ?? item.intro ?? '',
+            'cover': _normalizeURL(item.cover),
+            'folderId': item.id,
+            'folderType': item.type,
+            'trailingText': '${item.mediaCount ?? 0} 个视频',
+            'badge': item.state == 1 ? '已失效' : typeText,
+            'fallbackRoute': '/subscription',
+          };
+        }).toList(),
+      },
+    };
+  }
+
+  Future<Map<String, dynamic>> _loadNativeSubscriptionDetail(
+    Map<dynamic, dynamic> arguments,
+    int page,
+  ) async {
+    final id = _asInt(arguments['mediaId']);
+    if (id == null) {
+      return const {'state': 'error', 'error': '订阅参数无效'};
+    }
+    final result = await FavHttp.favSeasonList(id: id, ps: 20, pn: page);
+    return switch (result) {
+      Loading() => const {'state': 'loading'},
+      Error(:final errMsg, :final code) => {
+        'state': 'error',
+        'error': errMsg ?? '订阅内容加载失败',
+        'code': ?code,
+      },
+      Success(:final response) => {
+        'state': 'success',
+        'title': response.info?.title ?? '订阅内容',
+        'subtitle': response.info?.intro ?? '',
+        'hasMore': (response.medias?.isNotEmpty ?? false) &&
+            page * 20 < (response.info?.mediaCount ?? 0),
+        'items': (response.medias ?? const []).asMap().entries.map((entry) {
+          final item = entry.value;
+          return {
+            'id': 'subscription-video-${item.id ?? entry.key}',
+            'kind': 'video',
+            'title': item.title ?? '未命名视频',
+            'subtitle': '',
+            'cover': _normalizeURL(item.cover),
+            'aid': item.id,
+            'bvid': _nonEmpty(item.bvid),
+            'durationText': _durationText(item.duration ?? 0),
+            'viewText': _compactNumber(item.cntInfo?.play),
+            'danmakuText': _compactNumber(item.cntInfo?.danmaku),
+            'fallbackRoute': '/subscription',
           };
         }).toList(),
       },

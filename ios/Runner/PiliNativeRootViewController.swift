@@ -179,6 +179,8 @@ private final class PiliNativeViewModel: ObservableObject {
   private var libraryMediaID: Int?
   private var libraryNextMax: Int?
   private var libraryNextViewAt: Int?
+  private var libraryParentKind: String?
+  private var libraryParentTitle: String?
 
   init(channel: FlutterMethodChannel) {
     self.channel = channel
@@ -510,7 +512,10 @@ private final class PiliNativeViewModel: ObservableObject {
     libraryKind = kind
     libraryTitle = title
     librarySubtitle = ""
+    libraryItems = []
     libraryMediaID = nil
+    libraryParentKind = nil
+    libraryParentTitle = nil
     isLibraryPresented = true
     loadLibrary(refresh: true)
   }
@@ -575,12 +580,34 @@ private final class PiliNativeViewModel: ObservableObject {
 
   func openLibraryItem(_ item: PiliNativeLibraryItem) {
     if item.kind == "folder", let folderID = item.folderID {
+      libraryParentKind = libraryKind
+      libraryParentTitle = libraryTitle
       libraryKind = "favoriteDetail"
       libraryTitle = item.title
       librarySubtitle = item.subtitle
       libraryMediaID = folderID
       libraryItems = []
       loadLibrary(refresh: true)
+      return
+    }
+
+    if item.kind == "subscription", let folderID = item.folderID {
+      libraryParentKind = libraryKind
+      libraryParentTitle = libraryTitle
+      libraryKind = item.folderType == 11 ? "favoriteDetail" : "subscriptionDetail"
+      libraryTitle = item.title
+      librarySubtitle = item.subtitle
+      libraryMediaID = folderID
+      libraryItems = []
+      loadLibrary(refresh: true)
+      return
+    }
+
+    if item.kind == "member", let memberID = item.memberID {
+      isLibraryPresented = false
+      DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) { [weak self] in
+        self?.openRoute("/member", parameters: ["mid": String(memberID)])
+      }
       return
     }
 
@@ -610,11 +637,17 @@ private final class PiliNativeViewModel: ObservableObject {
     openLibraryFallback(item: item)
   }
 
-  func returnToFavoriteFolders() {
-    libraryKind = "favorites"
-    libraryTitle = "我的收藏"
+  var libraryCanGoBack: Bool {
+    libraryParentKind != nil
+  }
+
+  func returnToLibraryRoot() {
+    libraryKind = libraryParentKind ?? "favorites"
+    libraryTitle = libraryParentTitle ?? "我的收藏"
     librarySubtitle = ""
     libraryMediaID = nil
+    libraryParentKind = nil
+    libraryParentTitle = nil
     libraryItems = []
     loadLibrary(refresh: true)
   }
@@ -625,9 +658,16 @@ private final class PiliNativeViewModel: ObservableObject {
     switch libraryKind {
     case "history": route = "/history"
     case "later": route = "/later"
+    case "following": route = "/follow"
+    case "followers": route = "/fan"
+    case "subscriptions", "subscriptionDetail": route = "/subscription"
     case "favoriteDetail":
-      route = "/favDetail"
-      if let mediaID = libraryMediaID { parameters["mediaId"] = String(mediaID) }
+      if libraryParentKind == "subscriptions" {
+        route = "/subscription"
+      } else {
+        route = "/favDetail"
+        if let mediaID = libraryMediaID { parameters["mediaId"] = String(mediaID) }
+      }
     default: route = "/fav"
     }
     isLibraryPresented = false
@@ -816,6 +856,8 @@ private struct PiliNativeLibraryItem: Identifiable {
   let aid: Int?
   let bvid: String?
   let folderID: Int?
+  let folderType: Int?
+  let memberID: Int?
   let durationText: String
   let progressText: String
   let progress: Double
@@ -836,6 +878,8 @@ private struct PiliNativeLibraryItem: Identifiable {
     aid = piliOptionalInt(map["aid"])
     bvid = piliString(map["bvid"])
     folderID = piliOptionalInt(map["folderId"])
+    folderType = piliOptionalInt(map["folderType"])
+    memberID = piliOptionalInt(map["memberId"])
     durationText = piliString(map["durationText"]) ?? ""
     progressText = piliString(map["progressText"]) ?? ""
     progress = min(max(piliDouble(map["progress"]), 0), 1)
@@ -1285,11 +1329,11 @@ private struct PiliNativeMineView: View {
             }
             Spacer()
             PiliNativeAccountStat(value: model.account.following, title: "关注") {
-              openProtected("/follow")
+              openService("/follow", protected: true)
             }
             Spacer()
             PiliNativeAccountStat(value: model.account.followers, title: "粉丝") {
-              openProtected("/fan")
+              openService("/fan", protected: true)
             }
           }
           .padding(.horizontal, 18)
@@ -1371,6 +1415,12 @@ private struct PiliNativeMineView: View {
       model.presentLibrary("later", title: "稍后再看")
     case "/fav":
       model.presentLibrary("favorites", title: "我的收藏")
+    case "/follow":
+      model.presentLibrary("following", title: "关注")
+    case "/fan":
+      model.presentLibrary("followers", title: "粉丝")
+    case "/subscription":
+      model.presentLibrary("subscriptions", title: "我的订阅")
     default:
       if protected {
         openProtected(route)
@@ -1871,9 +1921,9 @@ private struct PiliNativeLibraryView: View {
 
   private var leadingButton: some View {
     Group {
-      if model.libraryKind == "favoriteDetail" {
-        Button(action: model.returnToFavoriteFolders) {
-          Label("收藏夹", systemImage: "chevron.left")
+      if model.libraryCanGoBack {
+        Button(action: model.returnToLibraryRoot) {
+          Label("返回", systemImage: "chevron.left")
         }
       } else {
         Button("关闭") { presentationMode.wrappedValue.dismiss() }
@@ -1885,6 +1935,8 @@ private struct PiliNativeLibraryView: View {
     switch model.libraryKind {
     case "history": return "clock.arrow.circlepath"
     case "later": return "clock"
+    case "following", "followers": return "person.2"
+    case "subscriptions", "subscriptionDetail": return "rectangle.stack"
     default: return "star"
     }
   }
@@ -1896,89 +1948,131 @@ private struct PiliNativeLibraryRow: View {
 
   var body: some View {
     Button(action: action) {
-      HStack(alignment: .top, spacing: 12) {
-        ZStack(alignment: .bottomLeading) {
-          PiliRemoteImage(urlString: item.cover)
-            .frame(width: 128, height: 72)
-            .clipped()
-            .cornerRadius(8)
-
-          if item.progress > 0 {
-            GeometryReader { proxy in
-              VStack {
-                Spacer()
-                Rectangle()
-                  .fill(piliAccent)
-                  .frame(width: proxy.size.width * item.progress, height: 3)
-              }
-            }
-            .frame(width: 128, height: 72)
-            .clipShape(RoundedRectangle(cornerRadius: 8))
-          }
-
-          if !item.durationText.isEmpty {
-            Text(item.durationText)
-              .font(.caption2)
-              .foregroundColor(.white)
-              .padding(.horizontal, 5)
-              .padding(.vertical, 2)
-              .background(Color.black.opacity(0.68))
-              .cornerRadius(4)
-              .padding(5)
-          }
+      Group {
+        if item.kind == "member" {
+          memberContent
+        } else {
+          mediaContent
         }
-
-        VStack(alignment: .leading, spacing: 5) {
-          HStack(alignment: .top, spacing: 5) {
-            Text(item.title)
-              .font(.subheadline)
-              .fontWeight(.medium)
-              .foregroundColor(.primary)
-              .lineLimit(2)
-            Spacer(minLength: 0)
-            if item.kind == "folder" {
-              Image(systemName: "chevron.right")
-                .font(.caption)
-                .foregroundColor(Color(UIColor.tertiaryLabel))
-            }
-          }
-
-          if !item.subtitle.isEmpty {
-            Text(item.subtitle)
-              .font(.caption)
-              .foregroundColor(.secondary)
-              .lineLimit(1)
-          }
-
-          HStack(spacing: 8) {
-            if !item.progressText.isEmpty {
-              Text(item.progressText).foregroundColor(piliAccent)
-            } else if !item.trailingText.isEmpty {
-              Text(item.trailingText)
-            } else {
-              if !item.viewText.isEmpty {
-                Label(item.viewText, systemImage: "play.rectangle")
-              }
-              if !item.danmakuText.isEmpty {
-                Label(item.danmakuText, systemImage: "text.bubble")
-              }
-            }
-            Spacer(minLength: 0)
-            if !item.badge.isEmpty {
-              Text(item.badge)
-                .foregroundColor(piliAccent)
-            }
-          }
-          .font(.caption2)
-          .foregroundColor(.secondary)
-        }
-        .frame(minHeight: 72, alignment: .top)
       }
-      .padding(.horizontal, 14)
-      .padding(.vertical, 10)
-      .contentShape(Rectangle())
     }
     .buttonStyle(PlainButtonStyle())
+  }
+
+  private var memberContent: some View {
+    HStack(spacing: 13) {
+      PiliRemoteImage(urlString: item.cover)
+        .frame(width: 52, height: 52)
+        .clipShape(Circle())
+        .overlay(Circle().stroke(Color(UIColor.separator).opacity(0.18)))
+      VStack(alignment: .leading, spacing: 5) {
+        HStack(spacing: 6) {
+          Text(item.title)
+            .font(.subheadline)
+            .fontWeight(.semibold)
+            .foregroundColor(.primary)
+          if !item.badge.isEmpty {
+            Image(systemName: "checkmark.seal.fill")
+              .font(.caption)
+              .foregroundColor(piliAccent)
+          }
+        }
+        Text(item.subtitle.isEmpty ? "这个人很神秘，什么都没有写" : item.subtitle)
+          .font(.caption)
+          .foregroundColor(.secondary)
+          .lineLimit(2)
+      }
+      Spacer(minLength: 0)
+      Image(systemName: "chevron.right")
+        .font(.caption)
+        .foregroundColor(Color(UIColor.tertiaryLabel))
+    }
+    .padding(.horizontal, 14)
+    .padding(.vertical, 9)
+    .contentShape(Rectangle())
+  }
+
+  private var mediaContent: some View {
+    HStack(alignment: .top, spacing: 12) {
+      ZStack(alignment: .bottomLeading) {
+        PiliRemoteImage(urlString: item.cover)
+          .frame(width: 128, height: 72)
+          .clipped()
+          .cornerRadius(8)
+
+        if item.progress > 0 {
+          GeometryReader { proxy in
+            VStack {
+              Spacer()
+              Rectangle()
+                .fill(piliAccent)
+                .frame(width: proxy.size.width * item.progress, height: 3)
+            }
+          }
+          .frame(width: 128, height: 72)
+          .clipShape(RoundedRectangle(cornerRadius: 8))
+        }
+
+        if !item.durationText.isEmpty {
+          Text(item.durationText)
+            .font(.caption2)
+            .foregroundColor(.white)
+            .padding(.horizontal, 5)
+            .padding(.vertical, 2)
+            .background(Color.black.opacity(0.68))
+            .cornerRadius(4)
+            .padding(5)
+        }
+      }
+
+      VStack(alignment: .leading, spacing: 5) {
+        HStack(alignment: .top, spacing: 5) {
+          Text(item.title)
+            .font(.subheadline)
+            .fontWeight(.medium)
+            .foregroundColor(.primary)
+            .lineLimit(2)
+          Spacer(minLength: 0)
+          if item.kind == "folder" || item.kind == "subscription" {
+            Image(systemName: "chevron.right")
+              .font(.caption)
+              .foregroundColor(Color(UIColor.tertiaryLabel))
+          }
+        }
+
+        if !item.subtitle.isEmpty {
+          Text(item.subtitle)
+            .font(.caption)
+            .foregroundColor(.secondary)
+            .lineLimit(1)
+        }
+
+        HStack(spacing: 8) {
+          if !item.progressText.isEmpty {
+            Text(item.progressText).foregroundColor(piliAccent)
+          } else if !item.trailingText.isEmpty {
+            Text(item.trailingText)
+          } else {
+            if !item.viewText.isEmpty {
+              Label(item.viewText, systemImage: "play.rectangle")
+            }
+            if !item.danmakuText.isEmpty {
+              Label(item.danmakuText, systemImage: "text.bubble")
+            }
+          }
+          Spacer(minLength: 0)
+          if !item.badge.isEmpty {
+            Text(item.badge).foregroundColor(piliAccent)
+          }
+        }
+        .font(.caption2)
+        .foregroundColor(.secondary)
+      }
+      .frame(minHeight: 72, alignment: .top)
+    }
+    .padding(.horizontal, 14)
+    .padding(.vertical, 10)
+    .contentShape(Rectangle())
   }
 }
 
