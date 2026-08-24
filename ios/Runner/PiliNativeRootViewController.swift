@@ -16,8 +16,8 @@ private extension Notification.Name {
 
 private final class PiliNativeFlutterPlayerSurface {
   private let flutterViewController: FlutterViewController
-  private weak var homeView: UIView?
-  private weak var activeContainer: UIView?
+  private weak var homeController: UIViewController?
+  private weak var activeContainer: PiliNativeFlutterPlayerContainerController?
   private var homeConstraints: [NSLayoutConstraint] = []
   private var playerConstraints: [NSLayoutConstraint] = []
 
@@ -25,43 +25,47 @@ private final class PiliNativeFlutterPlayerSurface {
     self.flutterViewController = flutterViewController
   }
 
-  func install(in homeView: UIView) {
-    self.homeView = homeView
+  func install(in homeController: UIViewController) {
+    self.homeController = homeController
     let flutterView = flutterViewController.view!
     flutterView.translatesAutoresizingMaskIntoConstraints = false
-    homeView.addSubview(flutterView)
+    homeController.addChild(flutterViewController)
+    homeController.view.addSubview(flutterView)
     homeConstraints = [
-      flutterView.topAnchor.constraint(equalTo: homeView.topAnchor),
-      flutterView.leadingAnchor.constraint(equalTo: homeView.leadingAnchor),
-      flutterView.trailingAnchor.constraint(equalTo: homeView.trailingAnchor),
-      flutterView.bottomAnchor.constraint(equalTo: homeView.bottomAnchor),
+      flutterView.topAnchor.constraint(equalTo: homeController.view.topAnchor),
+      flutterView.leadingAnchor.constraint(equalTo: homeController.view.leadingAnchor),
+      flutterView.trailingAnchor.constraint(equalTo: homeController.view.trailingAnchor),
+      flutterView.bottomAnchor.constraint(equalTo: homeController.view.bottomAnchor),
     ]
     NSLayoutConstraint.activate(homeConstraints)
+    flutterViewController.didMove(toParent: homeController)
   }
 
-  func mount(in container: UIView) {
+  func mount(in container: PiliNativeFlutterPlayerContainerController) {
     guard activeContainer !== container else {
       flutterViewController.view.isHidden = false
       return
     }
     NSLayoutConstraint.deactivate(homeConstraints)
     NSLayoutConstraint.deactivate(playerConstraints)
+    detachFlutterController()
+    container.addChild(flutterViewController)
     let flutterView = flutterViewController.view!
-    flutterView.removeFromSuperview()
     flutterView.translatesAutoresizingMaskIntoConstraints = false
-    container.addSubview(flutterView)
+    container.view.addSubview(flutterView)
     playerConstraints = [
-      flutterView.topAnchor.constraint(equalTo: container.topAnchor),
-      flutterView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-      flutterView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-      flutterView.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+      flutterView.topAnchor.constraint(equalTo: container.view.topAnchor),
+      flutterView.leadingAnchor.constraint(equalTo: container.view.leadingAnchor),
+      flutterView.trailingAnchor.constraint(equalTo: container.view.trailingAnchor),
+      flutterView.bottomAnchor.constraint(equalTo: container.view.bottomAnchor),
     ]
     NSLayoutConstraint.activate(playerConstraints)
+    flutterViewController.didMove(toParent: container)
     activeContainer = container
     flutterView.isHidden = false
   }
 
-  func unmount(from container: UIView) {
+  func unmount(from container: PiliNativeFlutterPlayerContainerController) {
     guard activeContainer === container else { return }
     restore(hidden: true)
   }
@@ -70,19 +74,38 @@ private final class PiliNativeFlutterPlayerSurface {
     NSLayoutConstraint.deactivate(playerConstraints)
     NSLayoutConstraint.deactivate(homeConstraints)
     playerConstraints = []
-    let flutterView = flutterViewController.view!
-    flutterView.removeFromSuperview()
-    if let homeView = homeView {
+    detachFlutterController()
+    if let homeController = homeController {
+      homeController.addChild(flutterViewController)
+      let flutterView = flutterViewController.view!
       flutterView.translatesAutoresizingMaskIntoConstraints = false
-      homeView.insertSubview(flutterView, at: 0)
+      homeController.view.insertSubview(flutterView, at: 0)
       NSLayoutConstraint.activate(homeConstraints)
+      flutterViewController.didMove(toParent: homeController)
     }
     activeContainer = nil
-    flutterView.isHidden = hidden
+    flutterViewController.view.isHidden = hidden
+  }
+
+  private func detachFlutterController() {
+    guard flutterViewController.parent != nil else {
+      flutterViewController.view.removeFromSuperview()
+      return
+    }
+    flutterViewController.willMove(toParent: nil)
+    flutterViewController.view.removeFromSuperview()
+    flutterViewController.removeFromParent()
   }
 }
 
-private struct PiliNativeOriginalPlayerView: UIViewRepresentable {
+private final class PiliNativeFlutterPlayerContainerController: UIViewController {
+  override func viewDidLoad() {
+    super.viewDidLoad()
+    view.backgroundColor = .black
+  }
+}
+
+private struct PiliNativeOriginalPlayerView: UIViewControllerRepresentable {
   let surface: PiliNativeFlutterPlayerSurface
 
   final class Coordinator {
@@ -97,21 +120,25 @@ private struct PiliNativeOriginalPlayerView: UIViewRepresentable {
     Coordinator(surface: surface)
   }
 
-  func makeUIView(context: Context) -> UIView {
-    let view = UIView()
-    view.backgroundColor = .black
-    return view
+  func makeUIViewController(context: Context) -> PiliNativeFlutterPlayerContainerController {
+    PiliNativeFlutterPlayerContainerController()
   }
 
-  func updateUIView(_ uiView: UIView, context: Context) {
-    surface.mount(in: uiView)
+  func updateUIViewController(
+    _ uiViewController: PiliNativeFlutterPlayerContainerController,
+    context: Context
+  ) {
+    surface.mount(in: uiViewController)
   }
 
-  static func dismantleUIView(_ uiView: UIView, coordinator: Coordinator) {
+  static func dismantleUIViewController(
+    _ uiViewController: PiliNativeFlutterPlayerContainerController,
+    coordinator: Coordinator
+  ) {
     // Only the currently active mount may restore the Flutter surface. This
     // keeps the inline and full-screen SwiftUI hosts from stealing it from
     // each other during a transition.
-    coordinator.surface.unmount(from: uiView)
+    coordinator.surface.unmount(from: uiViewController)
   }
 }
 
@@ -155,21 +182,15 @@ final class PiliNativeRootViewController: UIViewController {
   }
 
   override var childForStatusBarStyle: UIViewController? {
-    isNativeRootVisible && !model.originalPlayerFullscreen
-      ? hostingController
-      : flutterViewController
+    isNativeRootVisible ? hostingController : flutterViewController
   }
 
   override var childForStatusBarHidden: UIViewController? {
-    isNativeRootVisible && !model.originalPlayerFullscreen
-      ? hostingController
-      : flutterViewController
+    isNativeRootVisible ? hostingController : flutterViewController
   }
 
   private func installFlutterSurface() {
-    addChild(flutterViewController)
-    flutterPlayerSurface.install(in: view)
-    flutterViewController.didMove(toParent: self)
+    flutterPlayerSurface.install(in: self)
   }
 
   private func installNativeSurface() {
