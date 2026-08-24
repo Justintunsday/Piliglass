@@ -609,7 +609,7 @@ private final class PiliNativeViewModel: ObservableObject {
   func openVideo(_ video: PiliNativeVideo) {
     nativePlaybackGeneration = UUID()
     nativePlayerSession.stop()
-    flutterPlayerSurface.prepareForPlayback()
+    flutterPlayerSurface.restore(hidden: true)
     pendingVideo = video
     videoDetail = nil
     videoDetailError = nil
@@ -629,7 +629,6 @@ private final class PiliNativeViewModel: ObservableObject {
     arguments["title"] = video.title
     if let cover = video.cover { arguments["cover"] = cover }
     requestVideoDetail(arguments)
-    launchOriginalPlayer(arguments)
   }
 
   private func launchOriginalPlayer(_ arguments: [String: Any]) {
@@ -678,6 +677,11 @@ private final class PiliNativeViewModel: ObservableObject {
         self.videoDetail = detail
         self.videoDetailError = nil
         self.nativePlayerCID = detail.cid ?? detail.pages.first?.cid
+        if let cid = self.nativePlayerCID {
+          self.loadNativePlayback(video: detail, cid: cid)
+        } else {
+          self.originalPlayerError = "视频没有可播放的分P"
+        }
         if let aid = detail.aid {
           self.loadComments(oid: aid, type: 1)
         }
@@ -694,9 +698,8 @@ private final class PiliNativeViewModel: ObservableObject {
     let generation = UUID()
     nativePlaybackGeneration = generation
     originalPlayerError = nil
-    if !originalPlayerReady {
-      nativePlayerSession.fail("正在获取播放地址")
-    }
+    originalPlayerReady = true
+    nativePlayerSession.beginLoading()
     var arguments: [String: Any] = [
       "bvid": video.bvid,
       "cid": cid,
@@ -855,49 +858,24 @@ private final class PiliNativeViewModel: ObservableObject {
   }
 
   func selectOriginalPlayerPart(_ part: PiliNativeVideoPart) {
-    guard let cid = part.cid, !originalPlayerHeroTag.isEmpty else {
-      videoActionMessage = "原版播放器尚未就绪"
+    guard let cid = part.cid, let video = videoDetail else {
+      videoActionMessage = "播放器尚未就绪"
       return
     }
     nativePlayerCID = cid
     videoActionMessage = "正在切换到 P\(part.index)"
-    channel.invokeMethod(
-      "changeNativeVideoPart",
-      arguments: ["heroTag": originalPlayerHeroTag, "cid": cid]
-    ) { [weak self] response in
-      DispatchQueue.main.async {
-        guard let self = self else { return }
-        if let error = response as? FlutterError {
-          self.videoActionMessage = error.message ?? "切换分P失败"
-          return
-        }
-        let result = piliDictionary(response)
-        self.videoActionMessage = result["state"] as? String == "success"
-          ? "已切换到 P\(part.index)"
-          : result["error"] as? String ?? "切换分P失败"
-      }
-    }
+    loadNativePlayback(video: video, cid: cid)
   }
 
   func retryNativePlayback() {
-    guard let video = pendingVideo else { return }
-    originalPlayerReady = false
+    guard let video = videoDetail, let cid = nativePlayerCID else { return }
     originalPlayerError = nil
-    flutterPlayerSurface.prepareForPlayback()
-    var arguments: [String: Any] = ["title": video.title]
-    if let bvid = video.bvid { arguments["bvid"] = bvid }
-    if let aid = video.aid { arguments["aid"] = aid }
-    if let cover = video.cover { arguments["cover"] = cover }
-    launchOriginalPlayer(arguments)
+    loadNativePlayback(video: video, cid: cid, resumeAt: nativePlayerSession.currentTime)
   }
 
   func exitOriginalPlayerFullscreen() {
     originalPlayerFullscreen = false
-    guard !originalPlayerHeroTag.isEmpty else { return }
-    channel.invokeMethod(
-      "setNativePlayerFullscreen",
-      arguments: ["heroTag": originalPlayerHeroTag, "fullscreen": false]
-    )
+    nativePlayerSession.isFullscreen = false
   }
 
   func openVideoOwner(_ video: PiliNativeVideoDetail) {
@@ -3344,7 +3322,7 @@ private struct PiliNativeVideoDetailView: View {
         .overlay(Color.black.opacity(0.32))
 
       if model.originalPlayerReady && !model.originalPlayerFullscreen {
-        PiliNativeOriginalPlayerView(surface: model.flutterPlayerSurface)
+        PiliNativePlayerView(session: model.nativePlayerSession)
       }
 
       if !model.originalPlayerReady && model.originalPlayerError == nil {
@@ -3660,7 +3638,7 @@ private struct PiliNativeOriginalPlayerFullscreenView: View {
   var body: some View {
     ZStack(alignment: .topTrailing) {
       Color.black.ignoresSafeArea()
-      PiliNativeOriginalPlayerView(surface: model.flutterPlayerSurface)
+      PiliNativePlayerView(session: model.nativePlayerSession, fullscreen: true)
         .ignoresSafeArea()
       Button(action: model.exitOriginalPlayerFullscreen) {
         Image(systemName: "xmark")

@@ -721,11 +721,6 @@ class VideoDetailController extends GetxController
     Duration? seek = defaultST ?? playedTime;
     if (seek == .zero) seek = null;
     seek ??= getFirstSegment();
-    // Apply HDR/Dolby Vision colour conversion before opening the selected
-    // representation. This also reapplies the mapping when quality changes.
-    plPlayerController.configureIOSVideoColor(
-      currentVideoQa.value?.code,
-    );
     await plPlayerController.setDataSource(
       isFileSource
           ? FileSource(

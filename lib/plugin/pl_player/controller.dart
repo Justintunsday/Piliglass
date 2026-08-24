@@ -181,67 +181,6 @@ class PlPlayerController with BlockConfigMixin {
   final RxBool isBuffering = true.obs;
   final RxInt videoTextureRevision = 0.obs;
 
-  int? _iosVideoQuality;
-
-  /// The iOS media-kit renderer currently presents an 8-bit BGRA Flutter
-  /// texture. Convert HDR/Dolby Vision into that SDR output inside libmpv so
-  /// only video pixels are tone-mapped; never raise UIScreen brightness.
-  void configureIOSVideoColor(int? quality) {
-    if (!Platform.isIOS) return;
-    _iosVideoQuality = quality;
-    final player = _videoPlayerController;
-    if (player != null) {
-      _applyIOSVideoColor(player);
-    }
-  }
-
-  void _applyIOSVideoColor(Player player) {
-    if (!Platform.isIOS) return;
-    final quality = _iosVideoQuality;
-    final isHDR = quality == 125 || quality == 126 || quality == 129;
-    final properties = isHDR
-        ? <String, String>{
-            // The Flutter texture has no HDR/EDR metadata, so force a
-            // predictable BT.709 SDR target instead of displaying PQ/BT.2020
-            // values directly (the source of the Dolby Vision colour cast).
-            'target-trc': 'gamma2.2',
-            'target-prim': 'bt.709',
-            'target-peak': '203',
-            'tone-mapping': 'bt.2390',
-            'tone-mapping-param': 'default',
-            'hdr-compute-peak': 'auto',
-            'gamut-mapping-mode': 'desaturate',
-            // Brighten the mapped video itself without changing the rest of
-            // the screen. Unsupported properties are ignored below for
-            // compatibility with older bundled libmpv builds.
-            'tone-mapping-max-boost': '1.35',
-            'video-output-levels': 'auto',
-          }
-        : <String, String>{
-            'target-trc': 'auto',
-            'target-prim': 'auto',
-            'target-peak': 'auto',
-            'tone-mapping': 'auto',
-            'tone-mapping-param': 'default',
-            'hdr-compute-peak': 'auto',
-            'gamut-mapping-mode': 'auto',
-            'tone-mapping-max-boost': '1.0',
-            'video-output-levels': 'auto',
-          };
-
-    for (final property in properties.entries) {
-      try {
-        player.setProperty(property.key, property.value);
-      } catch (error) {
-        if (kDebugMode) {
-          debugPrint(
-            'iOS video colour property ${property.key} is unavailable: $error',
-          );
-        }
-      }
-    }
-  }
-
   void refreshVideoTexture() {
     videoTextureRevision.value++;
   }
@@ -813,8 +752,6 @@ class PlPlayerController with BlockConfigMixin {
         options: opt,
       ),
     );
-
-    _applyIOSVideoColor(player);
 
     assert(_videoController == null);
 

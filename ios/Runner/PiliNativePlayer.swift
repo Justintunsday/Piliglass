@@ -3,6 +3,238 @@ import AVKit
 import Combine
 import SwiftUI
 import UIKit
+import UniformTypeIdentifiers
+
+// AVFoundation does not consistently attach Bilibili's required request
+// headers to every byte-range request. Present the signed CDN URL through a
+// custom scheme and service AVPlayer's requests with URLSession so DASH video
+// and audio tracks keep their Range, Referer and User-Agent headers.
+private final class PiliNativeAssetResourceLoader: NSObject,
+  AVAssetResourceLoaderDelegate,
+  URLSessionDataDelegate,
+  @unchecked Sendable
+{
+  private final class LoadingContext {
+    let request: AVAssetResourceLoadingRequest
+    let rangeHeader: String
+
+    init(request: AVAssetResourceLoadingRequest, rangeHeader: String) {
+      self.request = request
+      self.rangeHeader = rangeHeader
+    }
+  }
+
+  private let originalURL: URL
+  private let headers: [String: String]
+  private let resourceQueue = DispatchQueue(label: "piliglass.asset-resource-loader")
+  private let sessionQueue: OperationQueue = {
+    let queue = OperationQueue()
+    queue.name = "piliglass.asset-url-session"
+    queue.maxConcurrentOperationCount = 1
+    return queue
+  }()
+  private let lock = NSLock()
+  private var loadingContexts: [Int: LoadingContext] = [:]
+  private var invalidated = false
+  private lazy var session: URLSession = {
+    let configuration = URLSessionConfiguration.ephemeral
+    configuration.timeoutIntervalForRequest = 30
+    configuration.timeoutIntervalForResource = 180
+    configuration.waitsForConnectivity = true
+    configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
+    configuration.httpMaximumConnectionsPerHost = 4
+    return URLSession(
+      configuration: configuration,
+      delegate: self,
+      delegateQueue: sessionQueue
+    )
+  }()
+
+  init(url: URL, headers: [String: String]) {
+    originalURL = url
+    self.headers = headers
+    super.init()
+  }
+
+  deinit {
+    invalidate()
+  }
+
+  func makeAsset() -> AVURLAsset {
+    var components = URLComponents(url: originalURL, resolvingAgainstBaseURL: false)
+    let sourceScheme = components?.scheme ?? "https"
+    components?.scheme = "piliglass-\(sourceScheme)"
+    let asset = AVURLAsset(url: components?.url ?? originalURL)
+    asset.resourceLoader.setDelegate(self, queue: resourceQueue)
+    return asset
+  }
+
+  func invalidate() {
+    let shouldInvalidate: Bool = locked {
+      guard !invalidated else { return false }
+      invalidated = true
+      loadingContexts.removeAll()
+      return true
+    }
+    if shouldInvalidate { session.invalidateAndCancel() }
+  }
+
+  func resourceLoader(
+    _ resourceLoader: AVAssetResourceLoader,
+    shouldWaitForLoadingOfRequestedResource loadingRequest: AVAssetResourceLoadingRequest
+  ) -> Bool {
+    guard !locked({ invalidated }) else { return false }
+
+    let dataRequest = loadingRequest.dataRequest
+    let offset: Int64
+    if let dataRequest = dataRequest {
+      offset = dataRequest.currentOffset > 0
+        ? dataRequest.currentOffset
+        : dataRequest.requestedOffset
+    } else {
+      offset = 0
+    }
+    let rangeHeader: String
+    if let dataRequest = dataRequest, dataRequest.requestsAllDataToEndOfResource {
+      rangeHeader = "bytes=\(offset)-"
+    } else if let dataRequest = dataRequest, dataRequest.requestedLength > 0 {
+      let end = offset + Int64(dataRequest.requestedLength) - 1
+      rangeHeader = "bytes=\(offset)-\(end)"
+    } else {
+      rangeHeader = "bytes=0-1"
+    }
+
+    var request = URLRequest(url: originalURL)
+    request.httpMethod = "GET"
+    applyHeaders(to: &request, rangeHeader: rangeHeader)
+    let task = session.dataTask(with: request)
+    locked {
+      loadingContexts[task.taskIdentifier] = LoadingContext(
+        request: loadingRequest,
+        rangeHeader: rangeHeader
+      )
+    }
+    task.resume()
+    return true
+  }
+
+  func resourceLoader(
+    _ resourceLoader: AVAssetResourceLoader,
+    didCancel loadingRequest: AVAssetResourceLoadingRequest
+  ) {
+    let taskID: Int? = locked {
+      guard let entry = loadingContexts.first(where: { $0.value.request === loadingRequest }) else {
+        return nil
+      }
+      loadingContexts.removeValue(forKey: entry.key)
+      return entry.key
+    }
+    if let taskID = taskID {
+      session.getAllTasks { tasks in
+        tasks.first(where: { $0.taskIdentifier == taskID })?.cancel()
+      }
+    }
+  }
+
+  func urlSession(
+    _ session: URLSession,
+    task: URLSessionTask,
+    willPerformHTTPRedirection response: HTTPURLResponse,
+    newRequest request: URLRequest,
+    completionHandler: @escaping (URLRequest?) -> Void
+  ) {
+    guard let context = locked({ loadingContexts[task.taskIdentifier] }) else {
+      completionHandler(nil)
+      return
+    }
+    var redirected = request
+    applyHeaders(to: &redirected, rangeHeader: context.rangeHeader)
+    completionHandler(redirected)
+  }
+
+  func urlSession(
+    _ session: URLSession,
+    dataTask: URLSessionDataTask,
+    didReceive response: URLResponse,
+    completionHandler: @escaping (URLSession.ResponseDisposition) -> Void
+  ) {
+    guard let context = locked({ loadingContexts[dataTask.taskIdentifier] }) else {
+      completionHandler(.cancel)
+      return
+    }
+    guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
+      finish(
+        taskID: dataTask.taskIdentifier,
+        error: NSError(
+          domain: "PiliNativeAssetResourceLoader",
+          code: (response as? HTTPURLResponse)?.statusCode ?? -1,
+          userInfo: [NSLocalizedDescriptionKey: "视频 CDN 拒绝了分段请求"]
+        )
+      )
+      completionHandler(.cancel)
+      return
+    }
+
+    if let information = context.request.contentInformationRequest {
+      let mimeType = response.mimeType ?? "video/mp4"
+      information.contentType = UTType(mimeType: mimeType)?.identifier
+        ?? UTType.mpeg4Movie.identifier
+      information.isByteRangeAccessSupported = http.statusCode == 206
+        || (http.value(forHTTPHeaderField: "Accept-Ranges")?.lowercased().contains("bytes") == true)
+      if let total = totalContentLength(http: http) {
+        information.contentLength = total
+      } else if response.expectedContentLength > 0 {
+        information.contentLength = response.expectedContentLength
+      }
+    }
+    completionHandler(.allow)
+  }
+
+  func urlSession(
+    _ session: URLSession,
+    dataTask: URLSessionDataTask,
+    didReceive data: Data
+  ) {
+    locked({ loadingContexts[dataTask.taskIdentifier] })?
+      .request.dataRequest?.respond(with: data)
+  }
+
+  func urlSession(
+    _ session: URLSession,
+    task: URLSessionTask,
+    didCompleteWithError error: Error?
+  ) {
+    finish(taskID: task.taskIdentifier, error: error)
+  }
+
+  private func applyHeaders(to request: inout URLRequest, rangeHeader: String) {
+    for (key, value) in headers { request.setValue(value, forHTTPHeaderField: key) }
+    request.setValue(rangeHeader, forHTTPHeaderField: "Range")
+  }
+
+  private func totalContentLength(http: HTTPURLResponse) -> Int64? {
+    guard let value = http.value(forHTTPHeaderField: "Content-Range"),
+          let totalText = value.split(separator: "/").last,
+          totalText != "*"
+    else { return nil }
+    return Int64(totalText)
+  }
+
+  private func finish(taskID: Int, error: Error?) {
+    guard let context = locked({ loadingContexts.removeValue(forKey: taskID) }) else { return }
+    if let error = error {
+      context.request.finishLoading(with: error)
+    } else {
+      context.request.finishLoading()
+    }
+  }
+
+  private func locked<T>(_ block: () -> T) -> T {
+    lock.lock()
+    defer { lock.unlock() }
+    return block()
+  }
+}
 
 // MARK: - Custom native playback engine
 
@@ -97,9 +329,9 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
   private var shouldAutoplay = true
   private var pendingSeek: TimeInterval?
   private var itemBuildGeneration = UUID()
-  private var brightnessGeneration = UUID()
-  private var brightnessBeforeHDR: CGFloat?
   private var applicationObservers: [NSObjectProtocol] = []
+  private let assetLoaderLock = NSLock()
+  private var assetLoaders: [PiliNativeAssetResourceLoader] = []
 
   override init() {
     super.init()
@@ -120,7 +352,7 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
     itemStatusObservation?.invalidate()
     audioItemStatusObservation?.invalidate()
     applicationObservers.forEach { NotificationCenter.default.removeObserver($0) }
-    restoreBrightness(immediately: true)
+    invalidateAssetLoaders()
   }
 
   func configure(
@@ -146,7 +378,7 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
     self.qualityLabel = quality
     self.qualities = qualities
     isHDR = segments.contains(where: { $0.isHDR })
-    if !isHDR { restoreBrightness() }
+    hdrBrightnessActive = false
     shouldAutoplay = autoplay
     errorMessage = nil
     isReady = false
@@ -185,6 +417,14 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
     } else {
       startPlayback()
     }
+  }
+
+  func beginLoading() {
+    pausePlayback()
+    isReady = false
+    isBuffering = true
+    errorMessage = nil
+    hdrBrightnessActive = false
   }
 
   func pausePlayback() {
@@ -238,7 +478,8 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
     duration = 0
     errorMessage = nil
     isHDR = false
-    restoreBrightness()
+    hdrBrightnessActive = false
+    invalidateAssetLoaders()
   }
 
   func fail(_ message: String) {
@@ -247,7 +488,7 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
     isBuffering = false
     isPlaying = false
     errorMessage = message
-    restoreBrightness()
+    hdrBrightnessActive = false
   }
 
   private func installObservers() {
@@ -285,7 +526,7 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
         object: nil,
         queue: .main
       ) { [weak self] _ in
-        self?.restoreBrightness(immediately: true)
+        self?.hdrBrightnessActive = false
       }
     )
     applicationObservers.append(
@@ -295,7 +536,7 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
         queue: .main
       ) { [weak self] _ in
         guard let self = self, self.isReady, self.isHDR else { return }
-        self.activateHDRBrightnessIfSupported()
+        self.hdrBrightnessActive = true
       }
     )
   }
@@ -359,13 +600,11 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
       "Referer": "https://www.bilibili.com/",
       "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15",
     ]
-    return AVURLAsset(
-      url: url,
-      options: [
-        "AVURLAssetHTTPHeaderFieldsKey": headers,
-        AVURLAssetPreferPreciseDurationAndTimingKey: false,
-      ]
-    )
+    let loader = PiliNativeAssetResourceLoader(url: url, headers: headers)
+    assetLoaderLock.lock()
+    assetLoaders.append(loader)
+    assetLoaderLock.unlock()
+    return loader.makeAsset()
   }
 
   private func playableAsset(
@@ -467,7 +706,7 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
       self.isReady = true
       self.isBuffering = false
       self.errorMessage = nil
-      if self.isHDR { self.activateHDRBrightnessIfSupported() }
+      self.hdrBrightnessActive = self.isHDR
       if self.shouldAutoplay { self.startPlayback() }
     }
   }
@@ -540,65 +779,12 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
     return 0
   }
 
-  private func activateHDRBrightnessIfSupported() {
-    guard UIApplication.shared.applicationState == .active, isHDR else { return }
-    guard #available(iOS 16.0, *) else {
-      // AVPlayerLayer still performs system HDR tone mapping on iOS 15. The
-      // public EDR headroom signal used for a safe brightness ramp is newer.
-      hdrBrightnessActive = false
-      return
-    }
-    let screen = UIScreen.main
-    guard screen.potentialEDRHeadroom > 1.05 else {
-      hdrBrightnessActive = false
-      return
-    }
-    if brightnessBeforeHDR == nil { brightnessBeforeHDR = screen.brightness }
-    let original = brightnessBeforeHDR ?? screen.brightness
-    let constrained = ProcessInfo.processInfo.isLowPowerModeEnabled ||
-      ProcessInfo.processInfo.thermalState == .serious ||
-      ProcessInfo.processInfo.thermalState == .critical
-    guard !constrained else {
-      hdrBrightnessActive = false
-      return
-    }
-    let floor: CGFloat
-    if screen.potentialEDRHeadroom >= 2 {
-      floor = 0.86
-    } else {
-      floor = 0.80
-    }
-    rampBrightness(to: min(1, max(original, floor)))
-    hdrBrightnessActive = true
-  }
-
-  private func restoreBrightness(immediately: Bool = false) {
-    guard let original = brightnessBeforeHDR else {
-      hdrBrightnessActive = false
-      return
-    }
-    brightnessBeforeHDR = nil
-    hdrBrightnessActive = false
-    if immediately {
-      brightnessGeneration = UUID()
-      UIScreen.main.brightness = original
-    } else {
-      rampBrightness(to: original)
-    }
-  }
-
-  private func rampBrightness(to target: CGFloat) {
-    let generation = UUID()
-    brightnessGeneration = generation
-    let start = UIScreen.main.brightness
-    let steps = 8
-    for step in 1...steps {
-      DispatchQueue.main.asyncAfter(deadline: .now() + Double(step) * 0.035) { [weak self] in
-        guard let self = self, self.brightnessGeneration == generation else { return }
-        let progress = CGFloat(step) / CGFloat(steps)
-        UIScreen.main.brightness = start + (target - start) * progress
-      }
-    }
+  private func invalidateAssetLoaders() {
+    assetLoaderLock.lock()
+    let loaders = assetLoaders
+    assetLoaders.removeAll()
+    assetLoaderLock.unlock()
+    loaders.forEach { $0.invalidate() }
   }
 }
 
