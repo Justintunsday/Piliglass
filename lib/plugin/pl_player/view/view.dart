@@ -50,6 +50,7 @@ import 'package:PiliPlus/plugin/pl_player/widgets/common_btn.dart';
 import 'package:PiliPlus/plugin/pl_player/widgets/forward_seek.dart';
 import 'package:PiliPlus/plugin/pl_player/widgets/mpv_convert_webp.dart';
 import 'package:PiliPlus/plugin/pl_player/widgets/play_pause_btn.dart';
+import 'package:PiliPlus/services/ios_native_player_controls.dart';
 import 'package:PiliPlus/utils/android/bindings.g.dart';
 import 'package:PiliPlus/utils/cache_manager.dart';
 import 'package:PiliPlus/utils/connectivity_utils.dart';
@@ -97,6 +98,7 @@ class PLVideoPlayer extends StatefulWidget {
     this.danmuWidget,
     this.showEpisodes,
     this.showViewPoints,
+    this.useIOSNativeControls = false,
     this.fill = Colors.black,
     this.alignment = Alignment.center,
     super.key,
@@ -120,6 +122,7 @@ class PLVideoPlayer extends StatefulWidget {
   ])?
   showEpisodes;
   final VoidCallback? showViewPoints;
+  final bool useIOSNativeControls;
   final Color fill;
   final Alignment alignment;
 
@@ -206,8 +209,9 @@ class _PLVideoPlayerState extends State<PLVideoPlayer>
   void _onControlChanged(bool val) {
     final visible = val && !plPlayerController.controlsLock.value;
 
-    if ((widget.headerControl.key as GlobalKey<TimeBatteryMixin>).currentState
-        case final state?) {
+    final headerKey = widget.headerControl.key;
+    if (headerKey is GlobalKey<TimeBatteryMixin> &&
+        headerKey.currentState case final state?) {
       if (state.mounted) {
         state.getBatteryLevelIfNeeded();
         state.provider
@@ -1600,6 +1604,25 @@ class _PLVideoPlayerState extends State<PLVideoPlayer>
                             onPanStart: (_) => windowManager.startDragging(),
                             child: widget.headerControl,
                           )
+                        : widget.useIOSNativeControls && Platform.isIOS
+                        ? IOSNativePlayerControlBar(
+                            kind: IOSNativePlayerControlKind.header,
+                            controller: plPlayerController,
+                            title:
+                                introController.videoDetail.value.title ?? '',
+                            onBack: () => plPlayerController
+                                .onPopInvokedWithResult(false, null),
+                            onHome: plPlayerController.onCloseAll,
+                            onShowSettings: () {
+                              final key = widget.headerControl.key;
+                              if (key is GlobalKey<TimeBatteryMixin> &&
+                                  key.currentState
+                                      case final HeaderControlState state) {
+                                state.showSettingSheet();
+                              }
+                            },
+                            fallback: widget.headerControl,
+                          )
                         : widget.headerControl,
                   ),
                   AppBarAni(
@@ -1607,18 +1630,30 @@ class _PLVideoPlayerState extends State<PLVideoPlayer>
                     controller: _animationController,
                     isFullScreen: isFullScreen,
                     removeSafeArea: plPlayerController.removeSafeArea,
-                    child:
-                        widget.bottomControl ??
-                        BottomControl(
-                          maxWidth: maxWidth,
-                          isFullScreen: isFullScreen,
-                          controller: plPlayerController,
-                          videoDetailController: videoDetailController,
-                          buildBottomControl: () => buildBottomControl(
-                            videoDetailController,
-                            maxWidth > maxHeight,
-                          ),
-                        ),
+                    child: Builder(
+                      builder: (context) {
+                        final fallback =
+                            widget.bottomControl ??
+                            BottomControl(
+                              maxWidth: maxWidth,
+                              isFullScreen: isFullScreen,
+                              controller: plPlayerController,
+                              videoDetailController: videoDetailController,
+                              buildBottomControl: () => buildBottomControl(
+                                videoDetailController,
+                                maxWidth > maxHeight,
+                              ),
+                            );
+                        if (widget.useIOSNativeControls && Platform.isIOS) {
+                          return IOSNativePlayerControlBar(
+                            kind: IOSNativePlayerControlKind.bottom,
+                            controller: plPlayerController,
+                            fallback: fallback,
+                          );
+                        }
+                        return fallback;
+                      },
+                    ),
                   ),
                 ],
               ),
