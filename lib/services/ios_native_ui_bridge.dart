@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:PiliPlus/grpc/bilibili/main/community/reply/v1.pb.dart'
     show Mode, ReplyInfo;
+import 'package:PiliPlus/grpc/dm.dart';
 import 'package:PiliPlus/grpc/reply.dart';
 import 'package:PiliPlus/http/fav.dart';
 import 'package:PiliPlus/http/fan.dart';
@@ -142,6 +143,8 @@ final class IOSNativeUIBridge {
         return _loadVideoDetail(_arguments(call));
       case 'loadNativePlayback':
         return _loadNativePlayback(_arguments(call));
+      case 'loadNativeDanmaku':
+        return _loadNativeDanmaku(_arguments(call));
       case 'playVideo':
         return _playVideo(_arguments(call));
       case 'performVideoAction':
@@ -417,29 +420,98 @@ final class IOSNativeUIBridge {
         'code': ?code,
       },
       Success(:final response) => () {
-        final segments = response.durl ?? const [];
-        final urls = segments
+        final sourceSegments = response.durl ?? const [];
+        final segments = sourceSegments
             .where((segment) => segment.playUrls.isNotEmpty)
-            .map((segment) => VideoUtils.getCdnUrl(segment.playUrls))
-            .where((url) => url.isNotEmpty)
+            .map((segment) {
+              final url = VideoUtils.getCdnUrl(segment.playUrls);
+              return {
+                'url': url,
+                'duration': segment.length ?? 0,
+                'size': segment.size ?? 0,
+              };
+            })
+            .where((segment) => (segment['url'] as String).isNotEmpty)
             .toList();
-        if (urls.isEmpty) {
+        if (segments.isEmpty) {
           return const {
             'state': 'error',
             'error': '原生播放器暂时无法解析该视频格式',
           };
         }
+        final qualityValues = response.acceptQuality ?? const <int>[];
+        final qualityDescriptions = response.acceptDesc ?? const [];
+        final qualities = <Map<String, dynamic>>[];
+        for (var index = 0; index < qualityValues.length; index++) {
+          qualities.add({
+            'value': qualityValues[index],
+            'label': index < qualityDescriptions.length
+                ? qualityDescriptions[index].toString()
+                : '${qualityValues[index]}P',
+          });
+        }
+        final currentQuality = response.quality ?? quality;
+        final currentQualityIndex = qualityValues.indexOf(currentQuality);
         return {
           'state': 'success',
-          'urls': urls,
-          'quality': response.quality ?? quality,
-          'qualityText': response.acceptDesc?.isNotEmpty == true
-              ? response.acceptDesc!.first.toString()
-              : '${response.quality ?? quality}P',
+          'segments': segments,
+          // Kept for one release so older native shells still understand this
+          // response while the custom UIKit player consumes `segments`.
+          'urls': segments.map((segment) => segment['url']).toList(),
+          'quality': currentQuality,
+          'qualityText': currentQualityIndex >= 0 &&
+                  currentQualityIndex < qualityDescriptions.length
+              ? qualityDescriptions[currentQualityIndex].toString()
+              : '${currentQuality}P',
+          'qualities': qualities,
           'duration': response.timeLength ?? 0,
-          'segmentCount': urls.length,
+          'segmentCount': segments.length,
         };
       }(),
+    };
+  }
+
+  Future<Map<String, dynamic>> _loadNativeDanmaku(
+    Map<dynamic, dynamic> arguments,
+  ) async {
+    final cid = _asInt(arguments['cid']);
+    final segmentIndex = _asInt(arguments['segmentIndex']) ?? 0;
+    if (cid == null || cid <= 0 || segmentIndex < 0) {
+      return const {'state': 'error', 'error': '弹幕参数不完整'};
+    }
+
+    final result = await DmGrpc.dmSegMobile(
+      cid: cid,
+      segmentIndex: segmentIndex + 1,
+    );
+    return switch (result) {
+      Loading() => const {'state': 'loading'},
+      Error(:final errMsg, :final code) => {
+        'state': 'error',
+        'error': errMsg ?? '弹幕加载失败',
+        'code': ?code,
+      },
+      Success(:final response) => {
+        'state': 'success',
+        'segmentIndex': segmentIndex,
+        'closed': response.state == 1,
+        'items': response.elems
+            .where((item) => item.content.isNotEmpty)
+            .map(
+              (item) => {
+                'id': item.idStr.isNotEmpty ? item.idStr : item.id.toString(),
+                'progress': item.progress,
+                'mode': item.mode,
+                'fontSize': item.fontsize,
+                'color': item.color,
+                'content': item.content,
+                'weight': item.weight,
+                'pool': item.pool,
+                'isSelf': item.isSelf,
+              },
+            )
+            .toList(),
+      },
     };
   }
 
@@ -448,7 +520,6 @@ final class IOSNativeUIBridge {
   ) async {
     final bvid = _nonEmpty(arguments['bvid']?.toString());
     final action = arguments['action']?.toString();
-    final heroTag = _nonEmpty(arguments['heroTag']?.toString());
     if (bvid == null || action == null) {
       return const {'state': 'error', 'error': '缺少视频操作参数'};
     }
@@ -480,46 +551,53 @@ final class IOSNativeUIBridge {
         }
         return const {'state': 'error', 'error': '点赞状态获取失败'};
       case 'coin':
-        try {
-          final controller = Get.find<UgcIntroController>(tag: heroTag);
-          controller.actionCoinVideo();
-          return const {
-            'state': 'success',
-            'message': '请在原版投币面板中选择数量',
-          };
-        } catch (_) {
-          return const {'state': 'error', 'error': '原版投币面板尚未就绪'};
-        }
+        final result = await VideoHttp.coinVideo(bvid: bvid, multiply: 1);
+        return switch (result) {
+          Success() => const {'state': 'success', 'message': '投币成功'},
+          Error(:final errMsg) => {
+            'state': 'error',
+            'error': errMsg ?? '投币失败',
+          },
+          _ => const {'state': 'error', 'error': '投币失败'},
+        };
       case 'favorite':
-        try {
-          final controller = Get.find<UgcIntroController>(tag: heroTag);
-          final context = Get.context;
-          if (context == null) {
-            return const {'state': 'error', 'error': '收藏面板暂时无法打开'};
-          }
-          controller.showFavBottomSheet(context);
-          return const {
-            'state': 'success',
-            'message': '已打开原版收藏面板',
+        final aid = IdUtils.bv2av(bvid);
+        final folders = await FavHttp.videoInFolder(
+          mid: Accounts.main.mid,
+          rid: aid,
+          type: 2,
+        );
+        if (folders case Success(:final response)) {
+          final list = response.list ?? const [];
+          final selected = list.where((item) => item.favState == 1).toList();
+          final result = selected.isNotEmpty
+              ? await FavHttp.unfavAll(rid: aid, type: 2)
+              : list.isEmpty
+              ? const Error('没有可用的收藏夹')
+              : await FavHttp.favVideo(
+                  resources: '$aid:2',
+                  addIds: list.first.id.toString(),
+                );
+          return switch (result) {
+            Success() => {
+              'state': 'success',
+              'message': selected.isNotEmpty ? '已取消收藏' : '已收藏到默认收藏夹',
+              'favorite': selected.isEmpty,
+            },
+            Error(:final errMsg) => {
+              'state': 'error',
+              'error': errMsg ?? '收藏失败',
+            },
+            _ => const {'state': 'error', 'error': '收藏失败'},
           };
-        } catch (_) {
-          return const {'state': 'error', 'error': '原版收藏面板尚未就绪'};
         }
+        return const {'state': 'error', 'error': '收藏夹加载失败'};
       case 'share':
-        try {
-          final controller = Get.find<UgcIntroController>(tag: heroTag);
-          final context = Get.context;
-          if (context == null) {
-            return const {'state': 'error', 'error': '分享面板暂时无法打开'};
-          }
-          controller.actionShareVideo(context);
-          return const {
-            'state': 'success',
-            'message': '已打开原版分享面板',
-          };
-        } catch (_) {
-          return const {'state': 'error', 'error': '原版分享面板尚未就绪'};
-        }
+        return {
+          'state': 'success',
+          'message': '分享链接已准备',
+          'shareURL': 'https://www.bilibili.com/video/$bvid',
+        };
       case 'triple':
         final result = await VideoHttp.ugcTriple(bvid: bvid);
         return switch (result) {
