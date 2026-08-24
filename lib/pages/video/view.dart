@@ -93,6 +93,10 @@ class _VideoDetailPageVState extends State<VideoDetailPageV>
     'piliglass/native_ui',
   );
   Worker? _nativeFullscreenWorker;
+  Worker? _nativeVideoStateWorker;
+  Worker? _nativeQualityWorker;
+  Future<void>? _nativePlayerReadyFuture;
+  bool _nativePlayerReadySent = false;
 
   late final VideoDetailController videoDetailController;
   late final VideoReplyController _videoReplyController;
@@ -172,6 +176,12 @@ class _VideoDetailPageVState extends State<VideoDetailPageV>
       pgcIntroController = Get.put(PgcIntroController(), tag: heroTag);
     }
 
+    // The native shell has no Flutter detail page from which the user can
+    // manually start playback. Always initialize playback immediately so the
+    // SwiftUI cover can be replaced as soon as the first frame is available.
+    if (isNativeShell) {
+      videoDetailController.autoPlay = true;
+    }
     videoSourceInit();
 
     if (isNativeShell) {
@@ -182,16 +192,71 @@ class _VideoDetailPageVState extends State<VideoDetailPageV>
           fullscreen,
         ),
       );
+      _nativeVideoStateWorker = ever<bool>(
+        videoDetailController.videoState,
+        (ready) {
+          if (ready) _scheduleNativePlayerReady();
+        },
+      );
+      _nativeQualityWorker = ever(
+        videoDetailController.currentVideoQa,
+        (_) => _syncNativeHDRState(),
+      );
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
-        _nativeChannel.invokeMethod<void>('nativePlayerReady', {
-          'heroTag': heroTag,
-          'bvid': videoDetailController.bvid,
-        });
+        _syncNativeHDRState();
+        if (videoDetailController.videoState.value) {
+          _scheduleNativePlayerReady();
+        }
       });
     }
 
     addObserverMobile(this);
+  }
+
+  void _scheduleNativePlayerReady() {
+    if (!isNativeShell ||
+        !mounted ||
+        _nativePlayerReadySent ||
+        _nativePlayerReadyFuture != null) {
+      return;
+    }
+    final controller = videoDetailController.plPlayerController.videoController;
+    if (controller == null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _scheduleNativePlayerReady();
+      });
+      return;
+    }
+    _nativePlayerReadyFuture = () async {
+      try {
+        await controller.waitUntilFirstFrameRendered;
+        if (!mounted || _nativePlayerReadySent) return;
+        _nativePlayerReadySent = true;
+        _syncNativeHDRState();
+        await _nativeChannel.invokeMethod<void>('nativePlayerReady', {
+          'heroTag': heroTag,
+          'bvid': videoDetailController.bvid,
+        });
+      } catch (_) {
+        if (!mounted || _nativePlayerReadySent) return;
+        _nativePlayerReadyFuture = null;
+        await _nativeChannel.invokeMethod<void>(
+          'nativePlayerFailed',
+          '视频首帧渲染失败，请重试',
+        );
+      }
+    }();
+  }
+
+  void _syncNativeHDRState() {
+    if (!isNativeShell || !mounted) return;
+    final quality = videoDetailController.currentVideoQa.value?.code;
+    final isHDR = quality == 125 || quality == 126 || quality == 129;
+    _nativeChannel.invokeMethod<void>('nativePlayerHDR', {
+      'active': _nativePlayerReadySent && isHDR,
+      'quality': quality ?? 0,
+    });
   }
 
   // 获取视频资源，初始化播放器
@@ -352,7 +417,13 @@ class _VideoDetailPageVState extends State<VideoDetailPageV>
   @override
   void dispose() {
     _nativeFullscreenWorker?.dispose();
+    _nativeVideoStateWorker?.dispose();
+    _nativeQualityWorker?.dispose();
     if (isNativeShell) {
+      _nativeChannel.invokeMethod<void>('nativePlayerHDR', {
+        'active': false,
+        'quality': 0,
+      });
       _nativeChannel.invokeMethod<void>('nativePlayerClosed');
     }
     plPlayerController

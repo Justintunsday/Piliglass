@@ -20,6 +20,7 @@ private final class PiliNativeFlutterPlayerSurface {
   private weak var activeContainer: PiliNativeFlutterPlayerContainerController?
   private var homeConstraints: [NSLayoutConstraint] = []
   private var playerConstraints: [NSLayoutConstraint] = []
+  private var hasPresentedFirstFrame = false
 
   init(flutterViewController: FlutterViewController) {
     self.flutterViewController = flutterViewController
@@ -51,6 +52,9 @@ private final class PiliNativeFlutterPlayerSurface {
     detachFlutterController()
     container.addChild(flutterViewController)
     let flutterView = flutterViewController.view!
+    let shouldFadeIn = !hasPresentedFirstFrame
+    flutterView.alpha = shouldFadeIn ? 0 : 1
+    flutterView.frame = container.view.bounds
     flutterView.translatesAutoresizingMaskIntoConstraints = false
     container.view.addSubview(flutterView)
     playerConstraints = [
@@ -63,6 +67,32 @@ private final class PiliNativeFlutterPlayerSurface {
     flutterViewController.didMove(toParent: container)
     activeContainer = container
     flutterView.isHidden = false
+    container.view.setNeedsLayout()
+    container.view.layoutIfNeeded()
+
+    guard shouldFadeIn else { return }
+    // The Flutter view was previously laid out at the hidden root size. Give
+    // Flutter two layout passes at the final 16:9 bounds before revealing the
+    // texture so the stale centered preview can never flash on screen.
+    DispatchQueue.main.async { [weak self, weak container] in
+      guard let self = self, let container = container, self.activeContainer === container else { return }
+      container.view.setNeedsLayout()
+      container.view.layoutIfNeeded()
+      self.flutterViewController.view.setNeedsLayout()
+      self.flutterViewController.view.layoutIfNeeded()
+      DispatchQueue.main.async { [weak self, weak container] in
+        guard let self = self, let container = container, self.activeContainer === container else { return }
+        container.view.layoutIfNeeded()
+        self.hasPresentedFirstFrame = true
+        UIView.animate(
+          withDuration: 0.18,
+          delay: 0,
+          options: [.beginFromCurrentState, .curveEaseOut]
+        ) {
+          self.flutterViewController.view.alpha = 1
+        }
+      }
+    }
   }
 
   func unmount(from container: PiliNativeFlutterPlayerContainerController) {
@@ -87,6 +117,11 @@ private final class PiliNativeFlutterPlayerSurface {
     flutterViewController.view.isHidden = hidden
   }
 
+  func prepareForPlayback() {
+    hasPresentedFirstFrame = false
+    restore(hidden: true)
+  }
+
   private func detachFlutterController() {
     guard flutterViewController.parent != nil else {
       flutterViewController.view.removeFromSuperview()
@@ -101,7 +136,86 @@ private final class PiliNativeFlutterPlayerSurface {
 private final class PiliNativeFlutterPlayerContainerController: UIViewController {
   override func viewDidLoad() {
     super.viewDidLoad()
-    view.backgroundColor = .black
+    view.backgroundColor = .clear
+    view.clipsToBounds = true
+  }
+}
+
+private final class PiliNativeHDRBrightnessController {
+  private var requested = false
+  private var brightnessBeforeHDR: CGFloat?
+  private var rampGeneration = UUID()
+  private var observers: [NSObjectProtocol] = []
+
+  init() {
+    let center = NotificationCenter.default
+    observers.append(
+      center.addObserver(
+        forName: UIApplication.willResignActiveNotification,
+        object: nil,
+        queue: .main
+      ) { [weak self] _ in
+        self?.restore(immediately: true)
+      }
+    )
+    observers.append(
+      center.addObserver(
+        forName: UIApplication.didBecomeActiveNotification,
+        object: nil,
+        queue: .main
+      ) { [weak self] _ in
+        guard self?.requested == true else { return }
+        self?.activate()
+      }
+    )
+  }
+
+  deinit {
+    observers.forEach { NotificationCenter.default.removeObserver($0) }
+    restore(immediately: true)
+  }
+
+  func setHDRActive(_ active: Bool) {
+    requested = active
+    active ? activate() : restore()
+  }
+
+  private func activate() {
+    guard requested, UIApplication.shared.applicationState == .active else { return }
+    guard #available(iOS 16.0, *) else { return }
+    let screen = UIScreen.main
+    guard screen.potentialEDRHeadroom > 1.05 else { return }
+    let constrained = ProcessInfo.processInfo.isLowPowerModeEnabled ||
+      ProcessInfo.processInfo.thermalState == .serious ||
+      ProcessInfo.processInfo.thermalState == .critical
+    guard !constrained else { return }
+    if brightnessBeforeHDR == nil { brightnessBeforeHDR = screen.brightness }
+    ramp(to: 1)
+  }
+
+  private func restore(immediately: Bool = false) {
+    guard let original = brightnessBeforeHDR else { return }
+    brightnessBeforeHDR = nil
+    if immediately {
+      rampGeneration = UUID()
+      UIScreen.main.brightness = original
+    } else {
+      ramp(to: original)
+    }
+  }
+
+  private func ramp(to target: CGFloat) {
+    let generation = UUID()
+    rampGeneration = generation
+    let start = UIScreen.main.brightness
+    let steps = 10
+    for step in 1...steps {
+      DispatchQueue.main.asyncAfter(deadline: .now() + Double(step) * 0.035) { [weak self] in
+        guard let self = self, self.rampGeneration == generation else { return }
+        let progress = CGFloat(step) / CGFloat(steps)
+        UIScreen.main.brightness = start + (target - start) * progress
+      }
+    }
   }
 }
 
@@ -247,6 +361,9 @@ final class PiliNativeRootViewController: UIViewController {
       case "nativePlayerReady":
         model.originalPlayerDidBecomeReady(piliDictionary(call.arguments))
         result(nil)
+      case "nativePlayerHDR":
+        model.setOriginalPlayerHDR(piliBool(piliDictionary(call.arguments)["active"]))
+        result(nil)
       case "nativePlayerFullscreen":
         model.originalPlayerFullscreen = piliBool(call.arguments)
         setNeedsStatusBarAppearanceUpdate()
@@ -374,8 +491,9 @@ private final class PiliNativeViewModel: ObservableObject {
   private let channel: FlutterMethodChannel
   let flutterPlayerSurface: PiliNativeFlutterPlayerSurface
   let nativePlayerSession = PiliNativePlayerSession()
+  private let hdrBrightnessController = PiliNativeHDRBrightnessController()
   private var snapshotInFlight = false
-  private var pendingVideo: PiliNativeVideo?
+  @Published private(set) var pendingVideo: PiliNativeVideo?
   private var libraryPage = 1
   private var libraryMediaID: Int?
   private var libraryNextMax: Int?
@@ -546,7 +664,8 @@ private final class PiliNativeViewModel: ObservableObject {
   func openVideo(_ video: PiliNativeVideo) {
     nativePlaybackGeneration = UUID()
     nativePlayerSession.stop()
-    flutterPlayerSurface.restore(hidden: true)
+    hdrBrightnessController.setHDRActive(false)
+    flutterPlayerSurface.prepareForPlayback()
     pendingVideo = video
     videoDetail = nil
     videoDetailError = nil
@@ -766,6 +885,7 @@ private final class PiliNativeViewModel: ObservableObject {
   func originalPlayerDidClose() {
     originalPlayerReady = false
     originalPlayerFullscreen = false
+    hdrBrightnessController.setHDRActive(false)
     flutterPlayerSurface.restore(hidden: true)
     if isVideoDetailPresented {
       isVideoDetailPresented = false
@@ -776,7 +896,12 @@ private final class PiliNativeViewModel: ObservableObject {
     originalPlayerReady = false
     originalPlayerFullscreen = false
     originalPlayerError = message
+    hdrBrightnessController.setHDRActive(false)
     flutterPlayerSurface.restore(hidden: true)
+  }
+
+  func setOriginalPlayerHDR(_ active: Bool) {
+    hdrBrightnessController.setHDRActive(active)
   }
 
   func closeVideoDetail() {
@@ -786,6 +911,7 @@ private final class PiliNativeViewModel: ObservableObject {
     nativePlayerSession.isFullscreen = false
     nativePlayerSession.stop()
     nativePlayerCID = nil
+    hdrBrightnessController.setHDRActive(false)
     flutterPlayerSurface.restore(hidden: true)
     isVideoDetailPresented = false
     channel.invokeMethod("closeNativeVideoPlayer", arguments: nil)
@@ -820,7 +946,8 @@ private final class PiliNativeViewModel: ObservableObject {
     guard let video = pendingVideo else { return }
     originalPlayerReady = false
     originalPlayerError = nil
-    flutterPlayerSurface.restore(hidden: true)
+    hdrBrightnessController.setHDRActive(false)
+    flutterPlayerSurface.prepareForPlayback()
     var arguments: [String: Any] = ["title": video.title]
     if let bvid = video.bvid { arguments["bvid"] = bvid }
     if let aid = video.aid { arguments["aid"] = aid }
@@ -3197,31 +3324,34 @@ private struct PiliNativeVideoDetailView: View {
 
   var body: some View {
     NavigationView {
-      Group {
-        if model.videoDetailLoading && model.videoDetail == nil {
-          PiliNativeLoadingView(title: "正在加载视频")
-        } else if let error = model.videoDetailError, model.videoDetail == nil {
-          PiliNativeErrorView(message: error, retry: model.retryVideoDetail)
-        } else if let video = model.videoDetail {
-          ScrollView {
-            LazyVStack(alignment: .leading, spacing: 12) {
-              playerHeader(video)
-              summaryCard(video)
-              if !video.argueMessage.isEmpty { warningCard(video) }
-              if !video.description.isEmpty { descriptionCard(video) }
-              if video.pages.count > 1 { partsCard(video) }
-              if !video.collectionTitle.isEmpty { collectionCard(video) }
-              if !video.staff.isEmpty { staffCard(video) }
-              if !video.tags.isEmpty { tagsCard(video) }
-              commentsCard
+      VStack(spacing: 0) {
+        playerHeader(model.videoDetail)
+        Group {
+          if model.videoDetailLoading && model.videoDetail == nil {
+            PiliNativeLoadingView(title: "正在加载视频详情")
+          } else if let error = model.videoDetailError, model.videoDetail == nil {
+            PiliNativeErrorView(message: error, retry: model.retryVideoDetail)
+          } else if let video = model.videoDetail {
+            ScrollView {
+              LazyVStack(alignment: .leading, spacing: 12) {
+                summaryCard(video)
+                if !video.argueMessage.isEmpty { warningCard(video) }
+                if !video.description.isEmpty { descriptionCard(video) }
+                if video.pages.count > 1 { partsCard(video) }
+                if !video.collectionTitle.isEmpty { collectionCard(video) }
+                if !video.staff.isEmpty { staffCard(video) }
+                if !video.tags.isEmpty { tagsCard(video) }
+                commentsCard
+              }
+              .padding(.top, 12)
+              .padding(.bottom, 30)
             }
-            .padding(.bottom, 30)
+          } else {
+            PiliNativeErrorView(message: "没有可显示的视频信息", retry: model.retryVideoDetail)
           }
-          .background(Color(UIColor.systemGroupedBackground))
-        } else {
-          PiliNativeErrorView(message: "没有可显示的视频信息", retry: model.retryVideoDetail)
         }
       }
+      .background(Color(UIColor.systemGroupedBackground))
       .navigationBarTitle("播放与详情", displayMode: .inline)
       .navigationBarItems(
         leading: Button("关闭", action: close)
@@ -3244,24 +3374,25 @@ private struct PiliNativeVideoDetailView: View {
     presentationMode.wrappedValue.dismiss()
   }
 
-  private func playerHeader(_ video: PiliNativeVideoDetail) -> some View {
-    let currentPart = video.pages.first(where: { $0.index == selectedPart })
+  private func playerHeader(_ video: PiliNativeVideoDetail?) -> some View {
+    let currentPart = video?.pages.first(where: { $0.index == selectedPart })
+    let cover = currentPart?.cover ?? video?.cover ?? model.pendingVideo?.cover
     return ZStack {
       Color.black
+      PiliRemoteImage(urlString: cover)
+        .aspectRatio(16 / 9, contentMode: .fill)
+        .frame(maxWidth: .infinity)
+        .clipped()
+        .overlay(Color.black.opacity(0.32))
+
       if model.originalPlayerReady && !model.originalPlayerFullscreen {
         PiliNativeOriginalPlayerView(surface: model.flutterPlayerSurface)
-      } else {
-        PiliRemoteImage(urlString: currentPart?.cover ?? video.cover)
-          .aspectRatio(16 / 9, contentMode: .fill)
-          .frame(maxWidth: .infinity)
-          .clipped()
-          .overlay(Color.black.opacity(0.42))
       }
 
-      if !model.originalPlayerReady {
+      if !model.originalPlayerReady && model.originalPlayerError == nil {
         VStack(spacing: 10) {
           ProgressView().tint(.white)
-          Text("正在挂载原版播放器")
+          Text("正在加载视频首帧")
             .font(.caption)
             .foregroundColor(.white)
         }
