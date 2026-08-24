@@ -1,3 +1,4 @@
+import AVKit
 import Combine
 import CoreImage.CIFilterBuiltins
 import Flutter
@@ -161,6 +162,11 @@ private final class PiliNativeViewModel: ObservableObject {
   @Published private(set) var videoDetailError: String?
   @Published private(set) var videoActionLoading = false
   @Published private(set) var videoActionMessage: String?
+  @Published private(set) var nativePlayer: AVQueuePlayer?
+  @Published private(set) var nativePlaybackLoading = false
+  @Published private(set) var nativePlaybackError: String?
+  @Published private(set) var nativePlaybackQuality = ""
+  @Published private(set) var nativePlaybackPart = 1
 
   @Published var isSettingsPresented = false
   @Published private(set) var settings: [PiliNativeSetting] = []
@@ -358,6 +364,7 @@ private final class PiliNativeViewModel: ObservableObject {
   }
 
   func openVideo(_ video: PiliNativeVideo) {
+    stopNativePlayback()
     pendingVideo = video
     videoDetail = nil
     videoDetailError = nil
@@ -399,13 +406,64 @@ private final class PiliNativeViewModel: ObservableObject {
   }
 
   func playVideo(_ video: PiliNativeVideoDetail, part: Int? = nil) {
-    isVideoDetailPresented = false
-    var arguments: [String: Any] = ["bvid": video.bvid]
-    if let aid = video.aid { arguments["aid"] = aid }
-    if let part = part { arguments["part"] = part }
-    DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) { [channel = self.channel] in
-      channel.invokeMethod("playVideo", arguments: arguments)
+    let partIndex = part ?? 1
+    let selected = video.pages.first(where: { $0.index == partIndex })
+    guard let cid = selected?.cid ?? video.cid else {
+      nativePlaybackError = "当前视频缺少 CID，无法播放"
+      return
     }
+    stopNativePlayback()
+    nativePlaybackPart = partIndex
+    nativePlaybackLoading = true
+    nativePlaybackError = nil
+    nativePlaybackQuality = ""
+    var arguments: [String: Any] = ["bvid": video.bvid, "cid": cid]
+    if let aid = video.aid { arguments["aid"] = aid }
+    channel.invokeMethod("loadNativePlayback", arguments: arguments) { [weak self] response in
+      DispatchQueue.main.async {
+        guard let self = self else { return }
+        self.nativePlaybackLoading = false
+        if let flutterError = response as? FlutterError {
+          self.nativePlaybackError = flutterError.message ?? "播放地址获取失败"
+          return
+        }
+        let result = piliDictionary(response)
+        guard result["state"] as? String == "success" else {
+          self.nativePlaybackError = result["error"] as? String ?? "播放地址获取失败"
+          return
+        }
+        let urlStrings = (result["urls"] as? [Any])?.compactMap { piliString($0) } ?? []
+        let headers = [
+          "Referer": "https://www.bilibili.com/",
+          "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15",
+        ]
+        let items = urlStrings.compactMap { value -> AVPlayerItem? in
+          guard let url = URL(string: value) else { return nil }
+          let asset = AVURLAsset(
+            url: url,
+            options: ["AVURLAssetHTTPHeaderFieldsKey": headers]
+          )
+          return AVPlayerItem(asset: asset)
+        }
+        guard !items.isEmpty else {
+          self.nativePlaybackError = "播放地址不可用"
+          return
+        }
+        let player = AVQueuePlayer(items: items)
+        player.actionAtItemEnd = .advance
+        player.automaticallyWaitsToMinimizeStalling = true
+        self.nativePlaybackQuality = piliString(result["qualityText"]) ?? "原画"
+        self.nativePlayer = player
+        player.play()
+      }
+    }
+  }
+
+  func stopNativePlayback() {
+    nativePlayer?.pause()
+    nativePlayer?.removeAllItems()
+    nativePlayer = nil
+    nativePlaybackLoading = false
   }
 
   func openVideoOwner(_ video: PiliNativeVideoDetail) {
@@ -414,6 +472,7 @@ private final class PiliNativeViewModel: ObservableObject {
   }
 
   func openVideoMember(_ memberID: Int) {
+    stopNativePlayback()
     isVideoDetailPresented = false
     DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) { [weak self] in
       self?.presentProfile(memberID)
@@ -792,7 +851,10 @@ private final class PiliNativeViewModel: ObservableObject {
   func openCommentMember(_ comment: PiliNativeComment) {
     guard let memberID = comment.memberID else { return }
     if isDynamicDetailPresented { isDynamicDetailPresented = false }
-    if isVideoDetailPresented { isVideoDetailPresented = false }
+    if isVideoDetailPresented {
+      stopNativePlayback()
+      isVideoDetailPresented = false
+    }
     DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) { [weak self] in
       self?.presentProfile(memberID)
     }
@@ -1953,7 +2015,8 @@ private struct PiliNativeAccountStat: View {
 private struct PiliNativeProfileView: View {
   @ObservedObject var model: PiliNativeViewModel
   @Environment(\.presentationMode) private var presentationMode
-  private let columns = [GridItem(.adaptive(minimum: 155), spacing: 12)]
+  @State private var selectedSection = 0
+  private let columns = [GridItem(.adaptive(minimum: 158), spacing: 12)]
 
   var body: some View {
     NavigationView {
@@ -1964,20 +2027,25 @@ private struct PiliNativeProfileView: View {
           PiliNativeErrorView(message: error, retry: model.loadProfile)
         } else if let profile = model.profile {
           ScrollView {
-            VStack(alignment: .leading, spacing: 0) {
-              profileHeader(profile)
-              profileInformation(profile)
-              profileVideos(profile)
+            VStack(spacing: 0) {
+              profileHero(profile)
+              profileIdentityCard(profile)
+              profileSectionPicker
+              profileContent(profile)
             }
+            .padding(.bottom, 32)
           }
           .background(Color(UIColor.systemGroupedBackground))
         } else {
           PiliNativeErrorView(message: "暂无个人资料", retry: model.loadProfile)
         }
       }
-      .navigationBarTitle(model.profile?.name ?? "个人空间", displayMode: .inline)
+      .navigationBarTitle("个人主页", displayMode: .inline)
       .navigationBarItems(
-        leading: Button("关闭") { presentationMode.wrappedValue.dismiss() },
+        leading: Button("关闭") {
+          model.isProfilePresented = false
+          presentationMode.wrappedValue.dismiss()
+        },
         trailing: Menu {
           Button(action: model.loadProfile) {
             Label("刷新", systemImage: "arrow.clockwise")
@@ -1990,79 +2058,69 @@ private struct PiliNativeProfileView: View {
     .navigationViewStyle(StackNavigationViewStyle())
   }
 
-  private func profileHeader(_ profile: PiliNativeProfile) -> some View {
-    ZStack(alignment: .bottomLeading) {
+  private func profileHero(_ profile: PiliNativeProfile) -> some View {
+    ZStack(alignment: .bottom) {
       PiliRemoteImage(urlString: profile.topImage)
-        .aspectRatio(3 / 1, contentMode: .fill)
+        .aspectRatio(16 / 8.5, contentMode: .fill)
         .frame(maxWidth: .infinity)
-        .frame(minHeight: 126, maxHeight: 170)
+        .frame(height: 210)
         .clipped()
         .overlay(
           LinearGradient(
-            colors: [.clear, .black.opacity(0.28)],
+            colors: [.black.opacity(0.03), .black.opacity(0.58)],
             startPoint: .top,
             endPoint: .bottom
           )
         )
-      PiliRemoteImage(urlString: profile.face)
-        .frame(width: 78, height: 78)
-        .clipShape(Circle())
-        .overlay(Circle().stroke(Color(UIColor.systemBackground), lineWidth: 4))
-        .padding(.leading, 16)
-        .offset(y: 33)
-    }
-    .padding(.bottom, 38)
-  }
-
-  private func profileInformation(_ profile: PiliNativeProfile) -> some View {
-    VStack(alignment: .leading, spacing: 13) {
-      HStack(alignment: .top) {
-        VStack(alignment: .leading, spacing: 5) {
-          HStack(spacing: 7) {
-            Text(profile.name)
-              .font(.title3)
-              .fontWeight(.bold)
-              .foregroundColor(profile.vip ? piliAccent : .primary)
-            Text("LV\(profile.level)")
-              .font(.caption2)
-              .foregroundColor(.white)
-              .padding(.horizontal, 5)
-              .padding(.vertical, 2)
-              .background(piliAccent)
-              .cornerRadius(4)
-          }
-          Text("UID \(profile.mid)")
-            .font(.caption)
-            .foregroundColor(.secondary)
-        }
-        Spacer()
-        if profile.isSelf {
-          Button("刷新资料", action: model.loadProfile)
-            .buttonStyle(.bordered)
-        } else {
-          Button(
-            profile.isFollowing ? "已关注" : "关注",
-            action: model.toggleProfileFollow
-          )
-          .buttonStyle(.borderedProminent)
-          .tint(profile.isFollowing ? Color.secondary : piliAccent)
-          .disabled(model.profileActionLoading)
-        }
-      }
 
       HStack {
-        PiliNativeAccountStat(value: profile.following, title: "关注", action: {})
-        Spacer()
-        PiliNativeAccountStat(value: profile.followers, title: "粉丝", action: {})
-        Spacer()
-        PiliNativeAccountStat(value: profile.likes, title: "获赞", action: {})
-      }
-      .padding(.horizontal, 18)
-
-      if let message = model.profileMessage {
-        Text(message)
+        Label(profile.vip ? "大会员" : "PiliGlass 用户", systemImage: profile.vip ? "crown.fill" : "person.fill")
           .font(.caption)
-          .foregroundColor(.secondary)
+          .fontWeight(.semibold)
+          .foregroundColor(.white)
+          .padding(.horizontal, 10)
+          .padding(.vertical, 6)
+          .background(Color.black.opacity(0.38))
+          .clipShape(Capsule())
+        Spacer()
+        Text("UID \(profile.mid)")
+          .font(.caption)
+          .foregroundColor(.white.opacity(0.9))
+      }
+      .padding(.horizontal, 16)
+      .padding(.bottom, 58)
+    }
+  }
+
+  private func profileIdentityCard(_ profile: PiliNativeProfile) -> some View {
+    VStack(spacing: 13) {
+      PiliRemoteImage(urlString: profile.face)
+        .frame(width: 96, height: 96)
+        .clipShape(Circle())
+        .overlay(Circle().stroke(Color(UIColor.systemBackground), lineWidth: 5))
+        .shadow(color: .black.opacity(0.18), radius: 12, y: 4)
+        .offset(y: -49)
+        .padding(.bottom, -49)
+
+      HStack(spacing: 7) {
+        Text(profile.name)
+          .font(.title2)
+          .fontWeight(.bold)
+          .foregroundColor(profile.vip ? piliAccent : .primary)
+        Text("LV\(profile.level)")
+          .font(.caption2)
+          .fontWeight(.bold)
+          .foregroundColor(.white)
+          .padding(.horizontal, 7)
+          .padding(.vertical, 3)
+          .background(
+            LinearGradient(
+              colors: [piliAccent, Color.purple.opacity(0.8)],
+              startPoint: .leading,
+              endPoint: .trailing
+            )
+          )
+          .clipShape(Capsule())
       }
 
       if !profile.official.isEmpty {
@@ -2071,9 +2129,108 @@ private struct PiliNativeProfileView: View {
           .foregroundColor(piliAccent)
       }
 
-      Text(profile.sign.isEmpty ? "这个人很神秘，什么都没有写" : profile.sign)
+      HStack(spacing: 0) {
+        profileStat(profile.following, "关注")
+        Divider().frame(height: 34)
+        profileStat(profile.followers, "粉丝")
+        Divider().frame(height: 34)
+        profileStat(profile.likes, "获赞")
+      }
+      .padding(.vertical, 4)
+
+      if profile.isSelf {
+        Button(action: model.loadProfile) {
+          Label("刷新个人资料", systemImage: "arrow.clockwise")
+            .font(.subheadline)
+            .fontWeight(.semibold)
+            .foregroundColor(.primary)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 11)
+            .background(Color(UIColor.secondarySystemGroupedBackground))
+            .cornerRadius(12)
+        }
+        .buttonStyle(PlainButtonStyle())
+      } else {
+        Button(action: model.toggleProfileFollow) {
+          Label(
+            profile.isFollowing ? "已关注" : "关注",
+            systemImage: profile.isFollowing ? "checkmark" : "plus"
+          )
+          .font(.subheadline)
+          .fontWeight(.semibold)
+          .foregroundColor(profile.isFollowing ? .primary : .white)
+          .frame(maxWidth: .infinity)
+          .padding(.vertical, 11)
+          .background(profile.isFollowing ? Color(UIColor.secondarySystemGroupedBackground) : piliAccent)
+          .cornerRadius(12)
+        }
+        .buttonStyle(PlainButtonStyle())
+        .disabled(model.profileActionLoading)
+      }
+
+      if let message = model.profileMessage {
+        Text(message)
+          .font(.caption)
+          .foregroundColor(.secondary)
+      }
+    }
+    .padding(16)
+    .background(Color(UIColor.systemBackground))
+    .cornerRadius(22)
+    .shadow(color: .black.opacity(0.07), radius: 18, y: 7)
+    .padding(.horizontal, 14)
+    .offset(y: -47)
+    .padding(.bottom, -37)
+  }
+
+  private func profileStat(_ value: Int, _ title: String) -> some View {
+    VStack(spacing: 4) {
+      Text(piliCompactNumber(value))
+        .font(.headline)
+        .fontWeight(.bold)
+      Text(title)
+        .font(.caption)
+        .foregroundColor(.secondary)
+    }
+    .frame(maxWidth: .infinity)
+  }
+
+  private var profileSectionPicker: some View {
+    Picker("主页内容", selection: $selectedSection) {
+      Text("主页").tag(0)
+      Text("视频").tag(1)
+      Text("资料").tag(2)
+    }
+    .pickerStyle(SegmentedPickerStyle())
+    .padding(5)
+    .background(Color(UIColor.systemBackground))
+    .cornerRadius(12)
+    .padding(.horizontal, 14)
+    .padding(.vertical, 10)
+  }
+
+  @ViewBuilder
+  private func profileContent(_ profile: PiliNativeProfile) -> some View {
+    if selectedSection == 0 {
+      VStack(spacing: 12) {
+        profileAboutCard(profile)
+        profileVideoGrid(profile, limit: 4, title: "最新投稿")
+      }
+    } else if selectedSection == 1 {
+      profileVideoGrid(profile, limit: nil, title: "全部投稿 · \(profile.videoCount)")
+    } else {
+      profileDetailsCard(profile)
+    }
+  }
+
+  private func profileAboutCard(_ profile: PiliNativeProfile) -> some View {
+    VStack(alignment: .leading, spacing: 12) {
+      Label("个人简介", systemImage: "quote.bubble")
+        .font(.headline)
+      Text(profile.sign.isEmpty ? "这个人很神秘，什么都没有写。" : profile.sign)
         .font(.subheadline)
         .foregroundColor(.secondary)
+        .fixedSize(horizontal: false, vertical: true)
         .textSelection(.enabled)
 
       if !profile.tags.isEmpty {
@@ -2082,50 +2239,138 @@ private struct PiliNativeProfileView: View {
             ForEach(profile.tags, id: \.self) { tag in
               Text(tag)
                 .font(.caption)
-                .padding(.horizontal, 9)
-                .padding(.vertical, 5)
-                .background(Color(UIColor.secondarySystemBackground))
+                .foregroundColor(piliAccent)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(piliAccent.opacity(0.09))
                 .clipShape(Capsule())
             }
           }
         }
       }
     }
-    .padding(.horizontal, 16)
-    .padding(.bottom, 16)
+    .padding(16)
     .background(Color(UIColor.systemBackground))
+    .cornerRadius(16)
+    .padding(.horizontal, 14)
   }
 
-  private func profileVideos(_ profile: PiliNativeProfile) -> some View {
-    VStack(alignment: .leading, spacing: 12) {
+  private func profileVideoGrid(_ profile: PiliNativeProfile, limit: Int?, title: String) -> some View {
+    VStack(alignment: .leading, spacing: 13) {
       HStack {
-        Text("投稿视频")
+        Label(title, systemImage: "play.rectangle")
           .font(.headline)
-        Text("\(profile.videoCount)")
-          .font(.caption)
-          .foregroundColor(.secondary)
         Spacer()
-        Button("刷新", action: model.loadProfile)
-          .font(.caption)
+        if selectedSection == 0 && profile.videos.count > 4 {
+          Button("查看全部") { selectedSection = 1 }
+            .font(.caption)
+            .foregroundColor(piliAccent)
+        }
       }
-
       if profile.videos.isEmpty {
-        Text("暂无公开视频")
-          .font(.subheadline)
-          .foregroundColor(.secondary)
-          .frame(maxWidth: .infinity, minHeight: 90)
+        PiliNativeEmptyView(
+          icon: "video.slash",
+          title: "暂无公开视频",
+          subtitle: "该用户还没有发布视频"
+        )
+        .frame(height: 150)
       } else {
         LazyVGrid(columns: columns, spacing: 14) {
-          ForEach(profile.videos) { video in
-            PiliNativeVideoCard(video: video) {
+          ForEach(Array(profile.videos.prefix(limit ?? profile.videos.count))) { video in
+            PiliNativeProfileVideoCard(video: video) {
               model.openProfileVideo(video)
             }
           }
         }
       }
     }
-    .padding(14)
-    .padding(.bottom, 24)
+    .padding(16)
+    .background(Color(UIColor.systemBackground))
+    .cornerRadius(16)
+    .padding(.horizontal, 14)
+  }
+
+  private func profileDetailsCard(_ profile: PiliNativeProfile) -> some View {
+    VStack(alignment: .leading, spacing: 0) {
+      profileDetailRow("UID", String(profile.mid), "number")
+      Divider().padding(.leading, 38)
+      profileDetailRow("等级", "LV\(profile.level)", "chart.bar.fill")
+      Divider().padding(.leading, 38)
+      profileDetailRow("会员", profile.vip ? "大会员" : "普通用户", "crown")
+      if !profile.official.isEmpty {
+        Divider().padding(.leading, 38)
+        profileDetailRow("认证", profile.official, "checkmark.seal")
+      }
+      Divider().padding(.leading, 38)
+      profileDetailRow("投稿", "\(profile.videoCount) 个视频", "play.rectangle")
+    }
+    .padding(16)
+    .background(Color(UIColor.systemBackground))
+    .cornerRadius(16)
+    .padding(.horizontal, 14)
+  }
+
+  private func profileDetailRow(_ title: String, _ value: String, _ icon: String) -> some View {
+    HStack(spacing: 12) {
+      Image(systemName: icon)
+        .foregroundColor(piliAccent)
+        .frame(width: 26)
+      Text(title)
+        .foregroundColor(.secondary)
+      Spacer()
+      Text(value)
+        .multilineTextAlignment(.trailing)
+    }
+    .font(.subheadline)
+    .padding(.vertical, 11)
+  }
+}
+
+private struct PiliNativeProfileVideoCard: View {
+  let video: PiliNativeVideo
+  let action: () -> Void
+
+  var body: some View {
+    Button(action: action) {
+      VStack(alignment: .leading, spacing: 8) {
+        ZStack(alignment: .bottomTrailing) {
+          PiliRemoteImage(urlString: video.cover)
+            .aspectRatio(16 / 9, contentMode: .fill)
+            .frame(maxWidth: .infinity)
+            .clipped()
+          if !video.durationText.isEmpty {
+            Text(video.durationText)
+              .font(.caption2)
+              .foregroundColor(.white)
+              .padding(.horizontal, 6)
+              .padding(.vertical, 3)
+              .background(Color.black.opacity(0.68))
+              .cornerRadius(5)
+              .padding(6)
+          }
+        }
+        .cornerRadius(11)
+
+        Text(video.title)
+          .font(.subheadline)
+          .fontWeight(.medium)
+          .foregroundColor(.primary)
+          .lineLimit(2)
+          .frame(maxWidth: .infinity, alignment: .leading)
+
+        HStack(spacing: 5) {
+          if !video.viewText.isEmpty {
+            Label(video.viewText, systemImage: "play.fill")
+          }
+          if !video.danmakuText.isEmpty {
+            Label(video.danmakuText, systemImage: "text.bubble")
+          }
+        }
+        .font(.caption2)
+        .foregroundColor(.secondary)
+      }
+    }
+    .buttonStyle(PlainButtonStyle())
   }
 }
 
@@ -2136,138 +2381,186 @@ private struct PiliNativeVideoDetailView: View {
   @Environment(\.presentationMode) private var presentationMode
   @State private var selectedPart = 1
   @State private var descriptionExpanded = false
+  @State private var fullScreenPlayer = false
 
   var body: some View {
     NavigationView {
       Group {
         if model.videoDetailLoading && model.videoDetail == nil {
-          PiliNativeLoadingView(title: "正在加载视频简介")
+          PiliNativeLoadingView(title: "正在加载视频")
         } else if let error = model.videoDetailError, model.videoDetail == nil {
           PiliNativeErrorView(message: error, retry: model.retryVideoDetail)
         } else if let video = model.videoDetail {
           ScrollView {
-            VStack(alignment: .leading, spacing: 0) {
-              videoHeader(video)
-              videoInformation(video)
+            LazyVStack(alignment: .leading, spacing: 12) {
+              playerHeader(video)
+              summaryCard(video)
+              if !video.argueMessage.isEmpty { warningCard(video) }
+              if !video.description.isEmpty { descriptionCard(video) }
+              if video.pages.count > 1 { partsCard(video) }
+              if !video.collectionTitle.isEmpty { collectionCard(video) }
+              if !video.staff.isEmpty { staffCard(video) }
+              if !video.tags.isEmpty { tagsCard(video) }
+              commentsCard
             }
+            .padding(.bottom, 30)
           }
           .background(Color(UIColor.systemGroupedBackground))
         } else {
           PiliNativeErrorView(message: "没有可显示的视频信息", retry: model.retryVideoDetail)
         }
       }
-      .navigationBarTitle("视频详情", displayMode: .inline)
+      .navigationBarTitle("播放与详情", displayMode: .inline)
       .navigationBarItems(
-        leading: Button("关闭") {
-          model.isVideoDetailPresented = false
-          presentationMode.wrappedValue.dismiss()
+        leading: Button("关闭", action: close),
+        trailing: Button(action: { fullScreenPlayer = true }) {
+          Image(systemName: "arrow.up.left.and.arrow.down.right")
         }
+        .disabled(model.nativePlayer == nil)
+        .opacity(model.nativePlayer == nil ? 0 : 1)
       )
     }
     .navigationViewStyle(StackNavigationViewStyle())
+    .fullScreenCover(isPresented: $fullScreenPlayer) {
+      PiliNativeFullScreenPlayerView(
+        player: model.nativePlayer,
+        isPresented: $fullScreenPlayer
+      )
+    }
   }
 
-  private func videoHeader(_ video: PiliNativeVideoDetail) -> some View {
+  private func close() {
+    model.stopNativePlayback()
+    model.isVideoDetailPresented = false
+    presentationMode.wrappedValue.dismiss()
+  }
+
+  private func playerHeader(_ video: PiliNativeVideoDetail) -> some View {
     let currentPart = video.pages.first(where: { $0.index == selectedPart })
     return ZStack {
       Color.black
-      PiliRemoteImage(urlString: currentPart?.cover ?? video.cover)
-        .aspectRatio(16 / 9, contentMode: .fit)
-        .frame(maxWidth: .infinity)
-
-      Button(action: { model.playVideo(video, part: selectedPart) }) {
-        ZStack {
-          Circle()
-            .fill(Color.black.opacity(0.58))
-            .frame(width: 68, height: 68)
-          Image(systemName: "play.fill")
-            .font(.system(size: 28, weight: .semibold))
-            .foregroundColor(.white)
-            .offset(x: 2)
-        }
+      if let player = model.nativePlayer {
+        VideoPlayer(player: player)
+      } else {
+        PiliRemoteImage(urlString: currentPart?.cover ?? video.cover)
+          .aspectRatio(16 / 9, contentMode: .fill)
+          .frame(maxWidth: .infinity)
+          .clipped()
+          .overlay(Color.black.opacity(0.16))
       }
-      .accessibilityLabel("播放视频")
 
-      if !(currentPart?.durationText ?? video.durationText).isEmpty {
-        VStack {
+      if model.nativePlaybackLoading {
+        VStack(spacing: 10) {
+          ProgressView().tint(.white)
+          Text("正在准备原生播放")
+            .font(.caption)
+            .foregroundColor(.white)
+        }
+      } else if model.nativePlayer == nil {
+        Button(action: { model.playVideo(video, part: selectedPart) }) {
+          ZStack {
+            Circle()
+              .fill(.ultraThinMaterial)
+              .frame(width: 72, height: 72)
+            Image(systemName: "play.fill")
+              .font(.system(size: 29, weight: .bold))
+              .foregroundColor(.white)
+              .offset(x: 2)
+          }
+        }
+        .accessibilityLabel("播放视频")
+      }
+
+      VStack {
+        HStack {
+          if !model.nativePlaybackQuality.isEmpty {
+            Text(model.nativePlaybackQuality)
+              .font(.caption2)
+              .fontWeight(.semibold)
+              .foregroundColor(.white)
+              .padding(.horizontal, 8)
+              .padding(.vertical, 5)
+              .background(Color.black.opacity(0.6))
+              .clipShape(Capsule())
+          }
           Spacer()
+          if model.nativePlayer != nil {
+            Button(action: { fullScreenPlayer = true }) {
+              Image(systemName: "arrow.up.left.and.arrow.down.right")
+                .font(.subheadline)
+                .foregroundColor(.white)
+                .padding(9)
+                .background(Color.black.opacity(0.58))
+                .clipShape(Circle())
+            }
+          }
+        }
+        .padding(10)
+        Spacer()
+        if let error = model.nativePlaybackError {
+          HStack(spacing: 8) {
+            Image(systemName: "exclamationmark.triangle")
+            Text(error).lineLimit(2)
+            Spacer()
+            Button("重试") { model.playVideo(video, part: selectedPart) }
+          }
+          .font(.caption)
+          .foregroundColor(.white)
+          .padding(10)
+          .background(Color.black.opacity(0.72))
+        } else if model.nativePlayer == nil {
           HStack {
+            Text(currentPart?.title ?? video.title)
+              .lineLimit(1)
             Spacer()
             Text(currentPart?.durationText ?? video.durationText)
-              .font(.caption)
-              .foregroundColor(.white)
-              .padding(.horizontal, 7)
-              .padding(.vertical, 4)
-              .background(Color.black.opacity(0.68))
-              .cornerRadius(5)
-              .padding(10)
           }
+          .font(.caption)
+          .foregroundColor(.white)
+          .padding(10)
+          .background(
+            LinearGradient(
+              colors: [.clear, .black.opacity(0.72)],
+              startPoint: .top,
+              endPoint: .bottom
+            )
+          )
         }
       }
     }
     .aspectRatio(16 / 9, contentMode: .fit)
   }
 
-  private func videoInformation(_ video: PiliNativeVideoDetail) -> some View {
-    VStack(alignment: .leading, spacing: 14) {
+  private func summaryCard(_ video: PiliNativeVideoDetail) -> some View {
+    VStack(alignment: .leading, spacing: 15) {
       Text(video.title)
         .font(.title3)
-        .fontWeight(.semibold)
+        .fontWeight(.bold)
         .fixedSize(horizontal: false, vertical: true)
-
-      HStack(spacing: 8) {
-        if !video.copyrightText.isEmpty {
-          Label(video.copyrightText, systemImage: "checkmark.seal")
-        }
-        if video.isVertical {
-          Label("竖屏", systemImage: "rectangle.portrait")
-        }
-        if video.pages.count > 1 {
-          Label("\(video.pages.count)P", systemImage: "list.number")
-        }
-      }
-      .font(.caption)
-      .foregroundColor(piliAccent)
 
       HStack(spacing: 12) {
         if !video.viewText.isEmpty {
-          Label("\(video.viewText) 播放", systemImage: "play.rectangle")
+          Label(video.viewText, systemImage: "play.rectangle")
         }
         if !video.danmakuText.isEmpty {
-          Label("\(video.danmakuText) 弹幕", systemImage: "text.bubble")
+          Label(video.danmakuText, systemImage: "text.bubble")
         }
-        Spacer(minLength: 0)
+        if !video.pubdateText.isEmpty { Text(video.pubdateText) }
       }
       .font(.caption)
       .foregroundColor(.secondary)
 
-      if !video.pubdateText.isEmpty || !video.bvid.isEmpty {
-        Text([video.pubdateText, video.bvid].filter { !$0.isEmpty }.joined(separator: "  "))
-          .font(.caption)
-          .foregroundColor(.secondary)
-      }
-
-      if !video.argueMessage.isEmpty {
-        Label(video.argueMessage, systemImage: "exclamationmark.triangle.fill")
-          .font(.subheadline)
-          .foregroundColor(.orange)
-          .padding(11)
-          .frame(maxWidth: .infinity, alignment: .leading)
-          .background(Color.orange.opacity(0.12))
-          .cornerRadius(10)
-      }
-
       Button(action: { model.openVideoOwner(video) }) {
-        HStack(spacing: 11) {
+        HStack(spacing: 12) {
           PiliRemoteImage(urlString: video.ownerFace)
-            .frame(width: 42, height: 42)
+            .frame(width: 48, height: 48)
             .clipShape(Circle())
+            .overlay(Circle().stroke(piliAccent.opacity(0.25), lineWidth: 2))
           VStack(alignment: .leading, spacing: 3) {
             Text(video.owner.isEmpty ? "UP 主" : video.owner)
-              .font(.subheadline)
-              .fontWeight(.semibold)
+              .font(.headline)
               .foregroundColor(.primary)
-            Text("查看主页")
+            Text([video.copyrightText, video.bvid].filter { !$0.isEmpty }.joined(separator: " · "))
               .font(.caption)
               .foregroundColor(.secondary)
           }
@@ -2280,202 +2573,247 @@ private struct PiliNativeVideoDetailView: View {
       .buttonStyle(PlainButtonStyle())
       .disabled(video.ownerID == nil)
 
-      if !video.staff.isEmpty {
-        VStack(alignment: .leading, spacing: 9) {
-          Text("联合创作")
-            .font(.headline)
-          ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 10) {
-              ForEach(video.staff) { member in
-                Button(action: {
-                  if let memberID = member.memberID {
-                    model.openVideoMember(memberID)
-                  }
-                }) {
-                  HStack(spacing: 8) {
-                    PiliRemoteImage(urlString: member.face)
-                      .frame(width: 34, height: 34)
-                      .clipShape(Circle())
-                    VStack(alignment: .leading, spacing: 2) {
-                      Text(member.name)
-                        .font(.subheadline)
-                        .foregroundColor(.primary)
-                      if !member.title.isEmpty {
-                        Text(member.title)
-                          .font(.caption2)
-                          .foregroundColor(.secondary)
-                      }
-                    }
-                  }
-                  .padding(.horizontal, 10)
-                  .padding(.vertical, 7)
-                  .background(Color(UIColor.secondarySystemGroupedBackground))
-                  .cornerRadius(10)
-                }
-                .buttonStyle(PlainButtonStyle())
-              }
-            }
-          }
-        }
-      }
-
       HStack(spacing: 0) {
         PiliNativeVideoMetric(icon: "hand.thumbsup", value: video.like, title: "点赞")
-        PiliNativeVideoMetric(icon: "dollarsign.circle", value: video.coin, title: "投币")
+        PiliNativeVideoMetric(icon: "circle.hexagongrid", value: video.coin, title: "投币")
         PiliNativeVideoMetric(icon: "star", value: video.favorite, title: "收藏")
         PiliNativeVideoMetric(icon: "bubble.left", value: video.reply, title: "评论")
         PiliNativeVideoMetric(icon: "square.and.arrow.up", value: video.share, title: "分享")
       }
-      .padding(.vertical, 4)
 
-      LazyVGrid(
-        columns: Array(repeating: GridItem(.flexible(), spacing: 9), count: 2),
-        spacing: 9
-      ) {
-        PiliNativeVideoActionButton(
-          title: "一键三连",
-          icon: "hand.thumbsup.fill",
-          action: { model.performVideoAction("triple", video: video) }
-        )
-        PiliNativeVideoActionButton(
-          title: "稍后再看",
-          icon: "clock.badge.plus",
-          action: { model.performVideoAction("later", video: video) }
-        )
-        PiliNativeVideoActionButton(
-          title: "复制 BV 号",
-          icon: "doc.on.doc",
-          action: { model.copyVideoID(video) }
-        )
-        PiliNativeVideoActionButton(
-          title: "完整详情",
-          icon: "arrow.up.right.square",
-          action: { model.playVideo(video, part: selectedPart) }
-        )
+      HStack(spacing: 10) {
+        Button(action: { model.performVideoAction("triple", video: video) }) {
+          Label("一键三连", systemImage: "hand.thumbsup.fill")
+            .font(.subheadline)
+            .fontWeight(.semibold)
+            .foregroundColor(.white)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 11)
+            .background(piliAccent)
+            .cornerRadius(11)
+        }
+        Button(action: { model.performVideoAction("later", video: video) }) {
+          Label("稍后再看", systemImage: "clock")
+            .font(.subheadline)
+            .foregroundColor(.primary)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 11)
+            .background(Color(UIColor.secondarySystemGroupedBackground))
+            .cornerRadius(11)
+        }
+        Button(action: { model.copyVideoID(video) }) {
+          Image(systemName: "doc.on.doc")
+            .foregroundColor(.primary)
+            .frame(width: 44, height: 40)
+            .background(Color(UIColor.secondarySystemGroupedBackground))
+            .cornerRadius(11)
+        }
       }
+      .buttonStyle(PlainButtonStyle())
       .disabled(model.videoActionLoading)
 
       if model.videoActionLoading {
-        HStack(spacing: 8) {
-          ProgressView()
-          Text("正在处理…")
-        }
-        .font(.caption)
-        .foregroundColor(.secondary)
+        ProgressView().frame(maxWidth: .infinity)
       } else if let message = model.videoActionMessage {
         Text(message)
           .font(.caption)
           .foregroundColor(message.contains("失败") || message.contains("登录") ? .red : piliAccent)
+          .frame(maxWidth: .infinity, alignment: .center)
       }
-
-      Divider()
-
-      if !video.description.isEmpty {
-        VStack(alignment: .leading, spacing: 7) {
-          HStack {
-            Text("简介").font(.headline)
-            Spacer()
-            Button(descriptionExpanded ? "收起" : "展开") {
-              descriptionExpanded.toggle()
-            }
-            .font(.caption)
-            .foregroundColor(piliAccent)
-          }
-          Text(video.description)
-            .font(.subheadline)
-            .foregroundColor(.secondary)
-            .lineLimit(descriptionExpanded ? nil : 4)
-            .fixedSize(horizontal: false, vertical: true)
-        }
-      }
-
-      if video.pages.count > 1 {
-        Divider()
-        Text("分集与分 P")
-          .font(.headline)
-        ScrollView(.horizontal, showsIndicators: false) {
-          HStack(spacing: 9) {
-            ForEach(video.pages) { part in
-              Button(action: { selectedPart = part.index }) {
-                VStack(alignment: .leading, spacing: 4) {
-                  Text("P\(part.index)  \(part.title)")
-                    .font(.subheadline)
-                    .lineLimit(1)
-                  if !part.durationText.isEmpty {
-                    Text(part.durationText).font(.caption2)
-                  }
-                }
-                .foregroundColor(selectedPart == part.index ? .white : .primary)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 9)
-                .frame(width: 176, alignment: .leading)
-                .background(selectedPart == part.index ? piliAccent : Color(UIColor.secondarySystemGroupedBackground))
-                .cornerRadius(9)
-              }
-              .buttonStyle(PlainButtonStyle())
-            }
-          }
-        }
-      }
-
-      if !video.collectionTitle.isEmpty {
-        Divider()
-        HStack(spacing: 11) {
-          Image(systemName: "rectangle.stack.fill")
-            .font(.title2)
-            .foregroundColor(piliAccent)
-          VStack(alignment: .leading, spacing: 3) {
-            Text(video.collectionTitle)
-              .font(.headline)
-            if video.collectionCount > 0 {
-              Text("合集共 \(video.collectionCount) 个视频")
-                .font(.caption)
-                .foregroundColor(.secondary)
-            }
-          }
-          Spacer()
-        }
-        .padding(12)
-        .background(Color(UIColor.secondarySystemGroupedBackground))
-        .cornerRadius(11)
-      }
-
-      if !video.tags.isEmpty {
-        Divider()
-        Text("标签")
-          .font(.headline)
-        ScrollView(.horizontal, showsIndicators: false) {
-          HStack(spacing: 8) {
-            ForEach(video.tags) { tag in
-              Text("# \(tag.name)")
-                .font(.subheadline)
-                .foregroundColor(piliAccent)
-                .padding(.horizontal, 11)
-                .padding(.vertical, 7)
-                .background(piliAccent.opacity(0.1))
-                .cornerRadius(16)
-            }
-          }
-        }
-      }
-
-      Divider()
-      PiliNativeCommentsSection(model: model)
-
-      Button(action: { model.playVideo(video, part: selectedPart) }) {
-        Label("使用完整播放器播放", systemImage: "play.fill")
-          .font(.headline)
-          .foregroundColor(.white)
-          .frame(maxWidth: .infinity)
-          .padding(.vertical, 13)
-          .background(piliAccent)
-          .cornerRadius(11)
-      }
-      .buttonStyle(PlainButtonStyle())
-
     }
     .padding(16)
     .background(Color(UIColor.systemBackground))
+    .cornerRadius(16)
+    .padding(.horizontal, 12)
+  }
+
+  private func warningCard(_ video: PiliNativeVideoDetail) -> some View {
+    Label(video.argueMessage, systemImage: "exclamationmark.triangle.fill")
+      .font(.subheadline)
+      .foregroundColor(.orange)
+      .padding(14)
+      .frame(maxWidth: .infinity, alignment: .leading)
+      .background(Color.orange.opacity(0.11))
+      .cornerRadius(14)
+      .padding(.horizontal, 12)
+  }
+
+  private func descriptionCard(_ video: PiliNativeVideoDetail) -> some View {
+    VStack(alignment: .leading, spacing: 10) {
+      HStack {
+        Label("简介", systemImage: "text.alignleft")
+          .font(.headline)
+        Spacer()
+        Button(descriptionExpanded ? "收起" : "展开") { descriptionExpanded.toggle() }
+          .font(.caption)
+          .foregroundColor(piliAccent)
+      }
+      Text(video.description)
+        .font(.subheadline)
+        .foregroundColor(.secondary)
+        .lineLimit(descriptionExpanded ? nil : 5)
+        .fixedSize(horizontal: false, vertical: true)
+        .textSelection(.enabled)
+    }
+    .padding(16)
+    .background(Color(UIColor.systemBackground))
+    .cornerRadius(16)
+    .padding(.horizontal, 12)
+  }
+
+  private func partsCard(_ video: PiliNativeVideoDetail) -> some View {
+    VStack(alignment: .leading, spacing: 11) {
+      HStack {
+        Label("选集", systemImage: "list.number")
+          .font(.headline)
+        Spacer()
+        Text("\(video.pages.count) 个视频")
+          .font(.caption)
+          .foregroundColor(.secondary)
+      }
+      ScrollView(.horizontal, showsIndicators: false) {
+        HStack(spacing: 9) {
+          ForEach(video.pages) { part in
+            Button(action: {
+              selectedPart = part.index
+              if model.nativePlayer != nil {
+                model.playVideo(video, part: part.index)
+              }
+            }) {
+              VStack(alignment: .leading, spacing: 5) {
+                Text("P\(part.index) · \(part.title)")
+                  .font(.subheadline)
+                  .fontWeight(selectedPart == part.index ? .semibold : .regular)
+                  .lineLimit(2)
+                Text(part.durationText)
+                  .font(.caption2)
+                  .opacity(part.durationText.isEmpty ? 0 : 1)
+              }
+              .foregroundColor(selectedPart == part.index ? .white : .primary)
+              .padding(11)
+              .frame(width: 178, height: 72, alignment: .leading)
+              .background(selectedPart == part.index ? piliAccent : Color(UIColor.secondarySystemGroupedBackground))
+              .cornerRadius(11)
+            }
+            .buttonStyle(PlainButtonStyle())
+          }
+        }
+      }
+    }
+    .padding(16)
+    .background(Color(UIColor.systemBackground))
+    .cornerRadius(16)
+    .padding(.horizontal, 12)
+  }
+
+  private func collectionCard(_ video: PiliNativeVideoDetail) -> some View {
+    HStack(spacing: 13) {
+      Image(systemName: "rectangle.stack.fill")
+        .font(.title2)
+        .foregroundColor(piliAccent)
+        .frame(width: 48, height: 48)
+        .background(piliAccent.opacity(0.1))
+        .cornerRadius(12)
+      VStack(alignment: .leading, spacing: 4) {
+        Text(video.collectionTitle).font(.headline)
+        Text("合集共 \(video.collectionCount) 个视频")
+          .font(.caption)
+          .foregroundColor(.secondary)
+      }
+      Spacer()
+    }
+    .padding(16)
+    .background(Color(UIColor.systemBackground))
+    .cornerRadius(16)
+    .padding(.horizontal, 12)
+  }
+
+  private func staffCard(_ video: PiliNativeVideoDetail) -> some View {
+    VStack(alignment: .leading, spacing: 11) {
+      Text("联合创作").font(.headline)
+      ScrollView(.horizontal, showsIndicators: false) {
+        HStack(spacing: 10) {
+          ForEach(video.staff) { member in
+            Button(action: {
+              if let memberID = member.memberID { model.openVideoMember(memberID) }
+            }) {
+              HStack(spacing: 9) {
+                PiliRemoteImage(urlString: member.face)
+                  .frame(width: 40, height: 40)
+                  .clipShape(Circle())
+                VStack(alignment: .leading, spacing: 2) {
+                  Text(member.name).font(.subheadline).foregroundColor(.primary)
+                  Text(member.title).font(.caption2).foregroundColor(.secondary)
+                }
+              }
+              .padding(10)
+              .background(Color(UIColor.secondarySystemGroupedBackground))
+              .cornerRadius(12)
+            }
+            .buttonStyle(PlainButtonStyle())
+          }
+        }
+      }
+    }
+    .padding(16)
+    .background(Color(UIColor.systemBackground))
+    .cornerRadius(16)
+    .padding(.horizontal, 12)
+  }
+
+  private func tagsCard(_ video: PiliNativeVideoDetail) -> some View {
+    VStack(alignment: .leading, spacing: 11) {
+      Text("标签").font(.headline)
+      ScrollView(.horizontal, showsIndicators: false) {
+        HStack(spacing: 8) {
+          ForEach(video.tags) { tag in
+            Text("# \(tag.name)")
+              .font(.subheadline)
+              .foregroundColor(piliAccent)
+              .padding(.horizontal, 12)
+              .padding(.vertical, 7)
+              .background(piliAccent.opacity(0.09))
+              .clipShape(Capsule())
+          }
+        }
+      }
+    }
+    .padding(16)
+    .background(Color(UIColor.systemBackground))
+    .cornerRadius(16)
+    .padding(.horizontal, 12)
+  }
+
+  private var commentsCard: some View {
+    PiliNativeCommentsSection(model: model)
+      .padding(16)
+      .background(Color(UIColor.systemBackground))
+      .cornerRadius(16)
+      .padding(.horizontal, 12)
+  }
+}
+
+private struct PiliNativeFullScreenPlayerView: View {
+  let player: AVQueuePlayer?
+  @Binding var isPresented: Bool
+
+  var body: some View {
+    ZStack(alignment: .topTrailing) {
+      Color.black.ignoresSafeArea()
+      if let player = player {
+        VideoPlayer(player: player)
+          .ignoresSafeArea()
+      }
+      Button(action: { isPresented = false }) {
+        Image(systemName: "xmark")
+          .font(.headline)
+          .foregroundColor(.white)
+          .padding(11)
+          .background(Color.black.opacity(0.6))
+          .clipShape(Circle())
+      }
+      .padding()
+    }
   }
 }
 

@@ -37,6 +37,7 @@ import 'package:PiliPlus/utils/id_utils.dart';
 import 'package:PiliPlus/utils/page_utils.dart';
 import 'package:PiliPlus/utils/storage.dart';
 import 'package:PiliPlus/utils/storage_key.dart';
+import 'package:PiliPlus/utils/video_utils.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:get/get.dart';
@@ -130,6 +131,8 @@ final class IOSNativeUIBridge {
         return _openVideo(_arguments(call));
       case 'loadVideoDetail':
         return _loadVideoDetail(_arguments(call));
+      case 'loadNativePlayback':
+        return _loadNativePlayback(_arguments(call));
       case 'playVideo':
         return _playVideo(_arguments(call));
       case 'performVideoAction':
@@ -324,6 +327,58 @@ final class IOSNativeUIBridge {
       bvid,
       part: part?.toString(),
     );
+  }
+
+  Future<Map<String, dynamic>> _loadNativePlayback(
+    Map<dynamic, dynamic> arguments,
+  ) async {
+    final cid = _asInt(arguments['cid']);
+    var aid = _asInt(arguments['aid']);
+    final bvid = _nonEmpty(arguments['bvid']?.toString());
+    if (aid == null && bvid != null) aid = IdUtils.bv2av(bvid);
+    final quality = _asInt(arguments['quality']) ?? 80;
+    if (cid == null || cid <= 0 || aid == null || aid <= 0) {
+      return const {'state': 'error', 'error': '播放参数不完整'};
+    }
+
+    final result = await VideoHttp.tvPlayUrl(
+      cid: cid,
+      objectId: aid,
+      playurlType: 1,
+      qn: quality,
+    );
+    return switch (result) {
+      Loading() => const {'state': 'loading'},
+      Error(:final errMsg, :final code) => {
+        'state': 'error',
+        'error': errMsg ?? '播放地址获取失败',
+        'code': ?code,
+      },
+      Success(:final response) => () {
+        final segments = response.durl ?? const [];
+        final urls = segments
+            .where((segment) => segment.playUrls.isNotEmpty)
+            .map((segment) => VideoUtils.getCdnUrl(segment.playUrls))
+            .where((url) => url.isNotEmpty)
+            .toList();
+        if (urls.isEmpty) {
+          return const {
+            'state': 'error',
+            'error': '原生播放器暂时无法解析该视频格式',
+          };
+        }
+        return {
+          'state': 'success',
+          'urls': urls,
+          'quality': response.quality ?? quality,
+          'qualityText': response.acceptDesc?.isNotEmpty == true
+              ? response.acceptDesc!.first.toString()
+              : '${response.quality ?? quality}P',
+          'duration': response.timeLength ?? 0,
+          'segmentCount': urls.length,
+        };
+      }(),
+    };
   }
 
   Future<Map<String, dynamic>> _performVideoAction(
