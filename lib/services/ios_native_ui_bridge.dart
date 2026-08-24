@@ -61,6 +61,7 @@ final class IOSNativeUIBridge {
   Timer? _snapshotTimer;
   bool _disposed = false;
   String? _nativeLoginAuthCode;
+  bool _nativePlayerShellActive = false;
 
   late final RcmdController _homeController =
       Get.putOrFind<RcmdController>(RcmdController.new);
@@ -133,6 +134,10 @@ final class IOSNativeUIBridge {
         return _loadMore(_arguments(call)['section']?.toString());
       case 'openVideo':
         return _openVideo(_arguments(call));
+      case 'closeNativeVideoPlayer':
+        return _closeNativeVideoPlayer();
+      case 'setNativePlayerFullscreen':
+        return _setNativePlayerFullscreen(_arguments(call));
       case 'loadVideoDetail':
         return _loadVideoDetail(_arguments(call));
       case 'loadNativePlayback':
@@ -222,11 +227,54 @@ final class IOSNativeUIBridge {
     return _snapshot();
   }
 
-  Future<void> _openVideo(Map<dynamic, dynamic> arguments) async {
+  Future<Map<String, dynamic>> _openVideo(
+    Map<dynamic, dynamic> arguments,
+  ) async {
     final bvid = _nonEmpty(arguments['bvid']?.toString());
     final aid = _asInt(arguments['aid']);
-    if (bvid == null && aid == null) return;
-    await PiliScheme.videoPush(aid, bvid);
+    if (bvid == null && aid == null) {
+      return const {'state': 'error', 'error': '缺少视频编号'};
+    }
+    _nativePlayerShellActive = true;
+    unawaited(() async {
+      await PiliScheme.videoPush(
+        aid,
+        bvid,
+        extraArguments: const {'nativeShell': true},
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 350));
+      if (_disposed || !_nativePlayerShellActive) return;
+      if (Get.currentRoute != '/videoV') {
+        _nativePlayerShellActive = false;
+        _channel.invokeMethod<void>('nativePlayerFailed', '原版播放器启动失败');
+      }
+    }());
+    return const {'state': 'starting'};
+  }
+
+  Future<Map<String, dynamic>> _closeNativeVideoPlayer() async {
+    _nativePlayerShellActive = false;
+    if (Get.currentRoute == '/videoV') {
+      Get.back();
+      return const {'state': 'success'};
+    }
+    return const {'state': 'success', 'message': '播放器已经关闭'};
+  }
+
+  Future<Map<String, dynamic>> _setNativePlayerFullscreen(
+    Map<dynamic, dynamic> arguments,
+  ) async {
+    final heroTag = _nonEmpty(arguments['heroTag']?.toString());
+    final fullscreen = arguments['fullscreen'] == true;
+    try {
+      final controller = Get.find<UgcIntroController>(tag: heroTag);
+      controller.videoDetailCtr.plPlayerController.triggerFullScreen(
+        status: fullscreen,
+      );
+      return const {'state': 'success'};
+    } catch (_) {
+      return const {'state': 'error', 'error': '原版播放器尚未就绪'};
+    }
   }
 
   Future<Map<String, dynamic>> _loadVideoDetail(
@@ -2204,12 +2252,18 @@ final class IOSNativeUIBridge {
 
   void setNativeRootVisible(bool visible) {
     if (_disposed) return;
+    if (_nativePlayerShellActive) {
+      if (!visible) return;
+      _nativePlayerShellActive = false;
+      _channel.invokeMethod<void>('nativePlayerClosed');
+    }
     _channel.invokeMethod<void>('setChromeVisible', visible);
     if (visible) _scheduleSnapshot();
   }
 
   void dispose() {
     _disposed = true;
+    _nativePlayerShellActive = false;
     _snapshotTimer?.cancel();
     for (final worker in _workers) {
       worker.dispose();

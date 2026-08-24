@@ -69,11 +69,8 @@ import 'package:PiliPlus/utils/storage.dart';
 import 'package:PiliPlus/utils/storage_key.dart';
 import 'package:PiliPlus/utils/theme_utils.dart';
 import 'package:extended_nested_scroll_view/extended_nested_scroll_view.dart';
-import 'package:flutter/foundation.dart' show Factory, kDebugMode, clampDouble;
-import 'package:flutter/gestures.dart'
-    show EagerGestureRecognizer, OneSequenceGestureRecognizer;
-import 'package:flutter/services.dart' show StandardMessageCodec;
-import 'package:flutter/widgets.dart' show UiKitView;
+import 'package:flutter/foundation.dart' show kDebugMode, clampDouble;
+import 'package:flutter/services.dart' show MethodChannel;
 import 'package:material_ui/material_ui.dart';
 import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
@@ -90,6 +87,12 @@ class VideoDetailPageV extends StatefulWidget {
 class _VideoDetailPageVState extends State<VideoDetailPageV>
     with RouteAware, RouteAwareMixin, WidgetsBindingObserver {
   final heroTag = Get.arguments['heroTag'];
+  late final bool isNativeShell =
+      Platform.isIOS && Get.arguments['nativeShell'] == true;
+  static const MethodChannel _nativeChannel = MethodChannel(
+    'piliglass/native_ui',
+  );
+  Worker? _nativeFullscreenWorker;
 
   late final VideoDetailController videoDetailController;
   late final VideoReplyController _videoReplyController;
@@ -170,6 +173,23 @@ class _VideoDetailPageVState extends State<VideoDetailPageV>
     }
 
     videoSourceInit();
+
+    if (isNativeShell) {
+      _nativeFullscreenWorker = ever<bool>(
+        videoDetailController.plPlayerController.isFullScreen,
+        (fullscreen) => _nativeChannel.invokeMethod<void>(
+          'nativePlayerFullscreen',
+          fullscreen,
+        ),
+      );
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        _nativeChannel.invokeMethod<void>('nativePlayerReady', {
+          'heroTag': heroTag,
+          'bvid': videoDetailController.bvid,
+        });
+      });
+    }
 
     addObserverMobile(this);
   }
@@ -331,6 +351,10 @@ class _VideoDetailPageVState extends State<VideoDetailPageV>
 
   @override
   void dispose() {
+    _nativeFullscreenWorker?.dispose();
+    if (isNativeShell) {
+      _nativeChannel.invokeMethod<void>('nativePlayerClosed');
+    }
     plPlayerController
       ?..removeStatusLister(playerListener)
       ..removePositionListener(positionListener);
@@ -1261,6 +1285,11 @@ class _VideoDetailPageVState extends State<VideoDetailPageV>
     Widget child;
     if (videoDetailController.plPlayerController.isPipMode) {
       child = plPlayer(width: maxWidth, height: maxHeight, isPipMode: true);
+    } else if (isNativeShell) {
+      child = ColoredBox(
+        color: Colors.black,
+        child: videoPlayer(width: maxWidth, height: maxHeight),
+      );
     } else if (!videoDetailController.horizontalScreen) {
       child = childWhenDisabled;
     } else if (maxWidth / maxHeight >= kScreenRatio) {
@@ -1635,26 +1664,6 @@ class _VideoDetailPageVState extends State<VideoDetailPageV>
   }) {
     if (videoDetailController.isFileSource) {
       return localIntroPanel(needCtr: needCtr);
-    }
-
-    if (Platform.isIOS && videoDetailController.isUgc) {
-      return UiKitView(
-        key: ValueKey('native-video-intro-${videoDetailController.bvid}'),
-        viewType: 'piliglass/native_video_intro',
-        layoutDirection: TextDirection.ltr,
-        creationParamsCodec: const StandardMessageCodec(),
-        gestureRecognizers: {
-          Factory<OneSequenceGestureRecognizer>(EagerGestureRecognizer.new),
-        },
-        creationParams: {
-          'bvid': videoDetailController.bvid,
-          'aid': videoDetailController.aid,
-          'cid': videoDetailController.cid.value,
-          'heroTag': heroTag,
-          'title': Get.arguments['title'] ?? '',
-          'cover': videoDetailController.cover.value,
-        },
-      );
     }
 
     Widget child = CustomScrollView(

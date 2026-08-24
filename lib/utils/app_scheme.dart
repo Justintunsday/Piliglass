@@ -886,6 +886,7 @@ abstract final class PiliScheme {
     bool off = false,
     int? progress, // milliseconds
     String? part,
+    Map<String, dynamic>? extraArguments,
   }) async {
     try {
       aid ??= IdUtils.bv2av(bvid!);
@@ -911,6 +912,7 @@ abstract final class PiliScheme {
           off: off,
           dimension: res!.dimension,
           title: res.title,
+          extraArguments: extraArguments,
         );
       }
     } catch (e) {
