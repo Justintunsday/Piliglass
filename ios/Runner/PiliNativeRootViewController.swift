@@ -1,6 +1,7 @@
 import AVKit
 import Combine
 import CoreImage.CIFilterBuiltins
+import CoreText
 import Flutter
 import SwiftUI
 import UIKit
@@ -40,6 +41,7 @@ final class PiliNativeRootViewController: UIViewController {
 
   override func viewDidLoad() {
     super.viewDidLoad()
+    PiliOriginalIconFont.registerBundledFonts()
     view.backgroundColor = .systemBackground
     installFlutterSurface()
     installNativeSurface()
@@ -578,7 +580,9 @@ private final class PiliNativeViewModel: ObservableObject {
     switch route {
     case "/loginPage":
       presentNativeLogin()
-    case "/whisper", "/myReply":
+    case "/whisper":
+      openOriginalFlutterRoute(route, parameters: parameters)
+    case "/myReply":
       presentMessages()
     case "/download":
       presentDownloads()
@@ -607,6 +611,16 @@ private final class PiliNativeViewModel: ObservableObject {
     default:
       break
     }
+  }
+
+  private func openOriginalFlutterRoute(
+    _ route: String,
+    parameters: [String: String] = [:]
+  ) {
+    channel.invokeMethod(
+      "openRoute",
+      arguments: ["route": route, "parameters": parameters]
+    )
   }
 
   func search(_ keyword: String) {
@@ -1508,7 +1522,7 @@ private struct PiliNativeRootView: View {
       ForEach(Array(model.tabTitles.enumerated()), id: \.offset) { item in
         content(for: item.element)
           .tabItem {
-            Image(systemName: symbol(for: item.element, selected: model.selectedIndex == item.offset))
+            tabIcon(for: item.element, selected: model.selectedIndex == item.offset)
             Text(tabLabel(for: item.element))
           }
           .tag(item.offset)
@@ -1562,12 +1576,30 @@ private struct PiliNativeRootView: View {
     return AnyView(PiliNativeHomeView(model: model))
   }
 
-  private func symbol(for title: String, selected: Bool) -> String {
-    if title.contains("动态") { return selected ? "sparkles" : "sparkles" }
-    if title.contains("我") || title.contains("账号") {
-      return selected ? "person.crop.circle.fill" : "person.crop.circle"
+  @ViewBuilder
+  private func tabIcon(for title: String, selected: Bool) -> some View {
+    if title.contains("动态") {
+      PiliOriginalIcon(
+        family: .custom,
+        codePoint: selected ? 0xe80a : 0xe80b,
+        fallback: "sparkles",
+        size: 21
+      )
+    } else if title.contains("我") || title.contains("账号") {
+      PiliOriginalIcon(
+        family: .material,
+        codePoint: selected ? 0xe491 : 0xe497,
+        fallback: selected ? "person.fill" : "person",
+        size: 22
+      )
+    } else {
+      PiliOriginalIcon(
+        family: .material,
+        codePoint: selected ? 0xe318 : 0xf107,
+        fallback: selected ? "house.fill" : "house",
+        size: 22
+      )
     }
-    return selected ? "house.fill" : "house"
   }
 
   private func tabLabel(for title: String) -> String {
@@ -1850,16 +1882,24 @@ private struct PiliNativeStat: View {
   }
 }
 
+private struct PiliNativeMineAction {
+  let title: String
+  let codePoint: Int
+  let fallback: String
+  let route: String
+  let protected: Bool
+}
+
 private struct PiliNativeMineView: View {
   @ObservedObject var model: PiliNativeViewModel
 
-  private let actions: [(String, String, String, Bool)] = [
-    ("离线缓存", "arrow.down.circle", "/download", false),
-    ("观看记录", "clock.arrow.circlepath", "/history", true),
-    ("我的收藏", "star", "/fav", true),
-    ("稍后再看", "clock", "/later", true),
-    ("我的订阅", "rectangle.stack", "/subscription", true),
-    ("消息中心", "bell", "/whisper", true),
+  private let actions = [
+    PiliNativeMineAction(title: "离线缓存", codePoint: 0xe806, fallback: "arrow.down.circle", route: "/download", protected: false),
+    PiliNativeMineAction(title: "观看记录", codePoint: 0xe807, fallback: "clock.arrow.circlepath", route: "/history", protected: true),
+    PiliNativeMineAction(title: "我的收藏", codePoint: 0xe81a, fallback: "star", route: "/fav", protected: true),
+    PiliNativeMineAction(title: "稍后再看", codePoint: 0xe820, fallback: "clock", route: "/later", protected: true),
+    PiliNativeMineAction(title: "我的订阅", codePoint: 0xe81c, fallback: "rectangle.stack", route: "/subscription", protected: true),
+    PiliNativeMineAction(title: "消息中心", codePoint: 0xe802, fallback: "bell", route: "/whisper", protected: true),
   ]
 
   var body: some View {
@@ -1877,13 +1917,7 @@ private struct PiliNativeMineView: View {
                     .font(.headline)
                     .foregroundColor(.primary)
                   if model.account.isLogin {
-                    Text("LV\(model.account.level)")
-                      .font(.caption2)
-                      .foregroundColor(.white)
-                      .padding(.horizontal, 5)
-                      .padding(.vertical, 2)
-                      .background(piliAccent)
-                      .cornerRadius(4)
+                    PiliOriginalLevelBadge(level: model.account.level, height: 13)
                   }
                 }
                 Text(
@@ -1923,12 +1957,17 @@ private struct PiliNativeMineView: View {
         Section(header: Text("我的服务")) {
           ForEach(actions.indices, id: \.self) { index in
             let item = actions[index]
-            Button(action: { openService(item.2, protected: item.3) }) {
+            Button(action: { openService(item.route, protected: item.protected) }) {
               HStack(spacing: 14) {
-                Image(systemName: item.1)
+                PiliOriginalIcon(
+                  family: .custom,
+                  codePoint: item.codePoint,
+                  fallback: item.fallback,
+                  size: 20
+                )
                   .frame(width: 24)
                   .foregroundColor(piliAccent)
-                Text(item.0).foregroundColor(.primary)
+                Text(item.title).foregroundColor(.primary)
                 Spacer()
                 Image(systemName: "chevron.right")
                   .font(.caption)
@@ -2129,20 +2168,7 @@ private struct PiliNativeProfileView: View {
             .font(.title2)
             .fontWeight(.bold)
             .foregroundColor(profile.vip ? piliAccent : .primary)
-          Text("LV\(profile.level)")
-            .font(.caption2)
-            .fontWeight(.bold)
-            .foregroundColor(.white)
-            .padding(.horizontal, 7)
-            .padding(.vertical, 3)
-            .background(
-              LinearGradient(
-                colors: [piliAccent, Color.purple.opacity(0.8)],
-                startPoint: .leading,
-                endPoint: .trailing
-              )
-            )
-            .clipShape(Capsule())
+          PiliOriginalLevelBadge(level: profile.level, height: 14)
         }
 
         if !profile.official.isEmpty {
@@ -2320,7 +2346,7 @@ private struct PiliNativeProfileView: View {
     VStack(alignment: .leading, spacing: 0) {
       profileDetailRow("UID", String(profile.mid), "number")
       Divider().padding(.leading, 38)
-      profileDetailRow("等级", "LV\(profile.level)", "chart.bar.fill")
+      profileLevelDetailRow(profile.level)
       Divider().padding(.leading, 38)
       profileDetailRow("会员", profile.vip ? "大会员" : "普通用户", "crown")
       if !profile.official.isEmpty {
@@ -2346,6 +2372,20 @@ private struct PiliNativeProfileView: View {
       Spacer()
       Text(value)
         .multilineTextAlignment(.trailing)
+    }
+    .font(.subheadline)
+    .padding(.vertical, 11)
+  }
+
+  private func profileLevelDetailRow(_ level: Int) -> some View {
+    HStack(spacing: 12) {
+      Image(systemName: "chart.bar.fill")
+        .foregroundColor(piliAccent)
+        .frame(width: 26)
+      Text("等级")
+        .foregroundColor(.secondary)
+      Spacer()
+      PiliOriginalLevelBadge(level: level, height: 13)
     }
     .font(.subheadline)
     .padding(.vertical, 11)
@@ -3080,9 +3120,7 @@ private struct PiliNativeCommentRow: View {
             .font(.subheadline)
             .fontWeight(.semibold)
           if comment.level > 0 {
-            Text("LV\(comment.level)")
-              .font(.caption2)
-              .foregroundColor(piliAccent)
+            PiliOriginalLevelBadge(level: comment.level, height: 11)
           }
           Spacer()
           Button(action: toggleLike) {
@@ -4519,6 +4557,236 @@ private struct PiliNativeLoggedOutView: View {
         .cornerRadius(9)
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity)
+  }
+}
+
+// MARK: - Original PiliPlus badges and icons
+
+private enum PiliOriginalIconFamily {
+  case material
+  case custom
+
+  var name: String {
+    switch self {
+    case .material: return "MaterialIcons"
+    case .custom: return "custom_icon"
+    }
+  }
+}
+
+private enum PiliOriginalIconFont {
+  private static let registration: Void = {
+    register(asset: "fonts/MaterialIcons-Regular.otf")
+    register(asset: "assets/fonts/custom_icon.ttf")
+  }()
+
+  static func registerBundledFonts() {
+    _ = registration
+  }
+
+  private static func register(asset: String) {
+    let key = FlutterDartProject.lookupKey(forAsset: asset)
+    var candidates = [
+      Bundle.main.bundleURL.appendingPathComponent(key),
+      Bundle.main.bundleURL.appendingPathComponent("Frameworks/App.framework/\(key)"),
+      Bundle.main.bundleURL.appendingPathComponent("Frameworks/App.framework/flutter_assets/\(asset)"),
+    ]
+    if let path = Bundle.main.path(forResource: key, ofType: nil) {
+      candidates.insert(URL(fileURLWithPath: path), at: 0)
+    }
+    guard let url = candidates.first(where: { FileManager.default.fileExists(atPath: $0.path) }) else {
+      return
+    }
+    CTFontManagerRegisterFontsForURL(url as CFURL, .process, nil)
+  }
+
+  static func image(
+    family: PiliOriginalIconFamily,
+    codePoint: Int,
+    size: CGFloat
+  ) -> UIImage? {
+    guard
+      let scalar = UnicodeScalar(codePoint),
+      let font = UIFont(name: family.name, size: size)
+    else { return nil }
+
+    let value = String(scalar) as NSString
+    let attributes: [NSAttributedString.Key: Any] = [
+      .font: font,
+      .foregroundColor: UIColor.black,
+    ]
+    let bounds = value.boundingRect(
+      with: CGSize(width: size * 2, height: size * 2),
+      options: [.usesLineFragmentOrigin, .usesFontLeading],
+      attributes: attributes,
+      context: nil
+    )
+    let canvasSize = CGSize(
+      width: max(ceil(bounds.width), size),
+      height: max(ceil(bounds.height), size)
+    )
+    let renderer = UIGraphicsImageRenderer(size: canvasSize)
+    let image = renderer.image { _ in
+      value.draw(
+        at: CGPoint(
+          x: (canvasSize.width - bounds.width) / 2 - bounds.minX,
+          y: (canvasSize.height - bounds.height) / 2 - bounds.minY
+        ),
+        withAttributes: attributes
+      )
+    }
+    return image.withRenderingMode(.alwaysTemplate)
+  }
+}
+
+private struct PiliOriginalIcon: View {
+  let family: PiliOriginalIconFamily
+  let codePoint: Int
+  let fallback: String
+  let size: CGFloat
+
+  var body: some View {
+    Group {
+      if let image = PiliOriginalIconFont.image(
+        family: family,
+        codePoint: codePoint,
+        size: size
+      ) {
+        Image(uiImage: image)
+          .renderingMode(.template)
+          .resizable()
+          .aspectRatio(contentMode: .fit)
+      } else {
+        Image(systemName: fallback)
+          .resizable()
+          .aspectRatio(contentMode: .fit)
+      }
+    }
+    .frame(width: size, height: size)
+    .accessibilityHidden(true)
+  }
+}
+
+private struct PiliOriginalLevelBadge: View {
+  let level: Int
+  var height: CGFloat = 11
+
+  private let sourceWidth: CGFloat = 930
+  private let sourceHeight: CGFloat = 466
+
+  var body: some View {
+    Canvas { context, size in
+      let scale = size.height / sourceHeight
+      let transform = CGAffineTransform(scaleX: scale, y: scale)
+      let background = levelBackgroundPath().applying(transform)
+      context.fill(background, with: .color(levelColor))
+      let foreground = levelForegroundPath().applying(transform)
+      context.fill(foreground, with: .color(.white))
+    }
+    .frame(width: sourceWidth * height / sourceHeight, height: height)
+    .accessibilityLabel(Text("\(level)级"))
+  }
+
+  private var levelColor: Color {
+    switch level {
+    case 0, 1: return Color(red: 0.753, green: 0.753, blue: 0.753)
+    case 2: return Color(red: 0.545, green: 0.824, blue: 0.608)
+    case 3: return Color(red: 0.482, green: 0.804, blue: 0.937)
+    case 4: return Color(red: 0.996, green: 0.733, blue: 0.545)
+    case 5: return Color(red: 0.933, green: 0.404, blue: 0.165)
+    default: return Color(red: 0.941, green: 0.298, blue: 0.286)
+    }
+  }
+
+  private func levelBackgroundPath() -> Path {
+    var path = Path()
+    path.addPath(
+      roundedPath(
+        CGRect(x: 0, y: 48, width: 930, height: 418),
+        corners: [.topLeft, .bottomLeft, .bottomRight],
+        radius: 27
+      )
+    )
+    path.addPath(
+      roundedPath(
+        CGRect(x: 576, y: 0, width: 354, height: 49),
+        corners: [.topLeft, .topRight],
+        radius: 27
+      )
+    )
+    return path
+  }
+
+  private func levelForegroundPath() -> Path {
+    var path = Path()
+    let radius: CGFloat = 20
+
+    // Original PiliPlus "LV" outline.
+    path.addPath(roundedPath(CGRect(x: 56, y: 106, width: 67, height: 309), corners: [.topLeft, .topRight, .bottomLeft], radius: radius))
+    path.addPath(roundedPath(CGRect(x: 122, y: 347, width: 134, height: 68), corners: [.topRight, .bottomRight], radius: radius))
+    path.addPath(roundedPath(CGRect(x: 296, y: 106, width: 67, height: 177), corners: [.topLeft, .topRight], radius: radius))
+    path.addPath(roundedPath(CGRect(x: 476, y: 106, width: 67, height: 177), corners: [.topLeft, .topRight], radius: radius))
+    var vee = Path()
+    vee.move(to: CGPoint(x: 296, y: 282))
+    vee.addLine(to: CGPoint(x: 296, y: 292))
+    vee.addQuadCurve(to: CGPoint(x: 300, y: 313), control: CGPoint(x: 296, y: 305))
+    vee.addLine(to: CGPoint(x: 395, y: 408))
+    vee.addQuadCurve(to: CGPoint(x: 444, y: 408), control: CGPoint(x: 420, y: 432))
+    vee.addLine(to: CGPoint(x: 539, y: 313))
+    vee.addQuadCurve(to: CGPoint(x: 543, y: 292), control: CGPoint(x: 543, y: 305))
+    vee.addLine(to: CGPoint(x: 543, y: 282))
+    vee.addLine(to: CGPoint(x: 476, y: 282))
+    vee.addLine(to: CGPoint(x: 419.5, y: 340))
+    vee.addLine(to: CGPoint(x: 363, y: 282))
+    vee.closeSubpath()
+    path.addPath(vee)
+
+    addDigit(to: &path, digit: level)
+    return path
+  }
+
+  private func addDigit(to path: inout Path, digit: Int) {
+    if digit == 1 {
+      path.addPath(roundedPath(CGRect(x: 673, y: 347, width: 160, height: 68), radius: 20))
+      path.addPath(roundedPath(CGRect(x: 673, y: 55, width: 114, height: 68), radius: 20))
+      path.addRect(CGRect(x: 719, y: 123, width: 68, height: 224))
+      return
+    }
+
+    let bits: Int
+    switch digit {
+    case 0: bits = 0x7E
+    case 2: bits = 0x6D
+    case 3: bits = 0x79
+    case 4: bits = 0x33
+    case 5: bits = 0x5B
+    case 6: bits = 0x5F
+    case 7: bits = 0x70
+    case 8: bits = 0x7F
+    case 9: bits = 0x7B
+    default: bits = 0x4F
+    }
+    if bits & 0x40 != 0 { path.addPath(roundedPath(CGRect(x: 629, y: 55, width: 248, height: 68), radius: 20)) }
+    if bits & 0x20 != 0 { path.addPath(roundedPath(CGRect(x: 629, y: 55, width: 68, height: 214), radius: 20)) }
+    if bits & 0x10 != 0 { path.addPath(roundedPath(CGRect(x: 810, y: 55, width: 67, height: 214), radius: 20)) }
+    if bits & 0x08 != 0 { path.addPath(roundedPath(CGRect(x: 629, y: 347, width: 248, height: 68), radius: 20)) }
+    if bits & 0x04 != 0 { path.addPath(roundedPath(CGRect(x: 629, y: 201, width: 68, height: 214), radius: 20)) }
+    if bits & 0x02 != 0 { path.addPath(roundedPath(CGRect(x: 810, y: 201, width: 67, height: 214), radius: 20)) }
+    if bits & 0x01 != 0 { path.addPath(roundedPath(CGRect(x: 629, y: 201, width: 248, height: 68), radius: 20)) }
+  }
+
+  private func roundedPath(
+    _ rect: CGRect,
+    corners: UIRectCorner = .allCorners,
+    radius: CGFloat
+  ) -> Path {
+    Path(
+      UIBezierPath(
+        roundedRect: rect,
+        byRoundingCorners: corners,
+        cornerRadii: CGSize(width: radius, height: radius)
+      ).cgPath
+    )
   }
 }
 
