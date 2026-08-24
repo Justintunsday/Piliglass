@@ -5,14 +5,15 @@
 
 
 <div align="center">
-    <h1>PiliPlus</h1>
+    <h1>PiliGlass</h1>
 <div align="center">
-    
-![GitHub repo size](https://img.shields.io/github/repo-size/bggRGjQaUbCoE/PiliPlus) 
-![GitHub Repo stars](https://img.shields.io/github/stars/bggRGjQaUbCoE/PiliPlus) 
-![GitHub all releases](https://img.shields.io/github/downloads/bggRGjQaUbCoE/PiliPlus/total) 
+
+[![Build iOS Native UI](https://github.com/Justintunsday/Piliglass/actions/workflows/ios.yml/badge.svg)](https://github.com/Justintunsday/Piliglass/actions/workflows/ios.yml)
+![GitHub repo size](https://img.shields.io/github/repo-size/Justintunsday/Piliglass)
+![GitHub Repo stars](https://img.shields.io/github/stars/Justintunsday/Piliglass)
+![GitHub all releases](https://img.shields.io/github/downloads/Justintunsday/Piliglass/total)
 </div>
-    <p>使用Flutter开发的BiliBili第三方客户端</p>
+    <p>基于 PiliPlus 的第三方 BiliBili 客户端，提供 SwiftUI/UIKit iOS 原生界面</p>
     
 <img src="assets/screenshots/510shots_so.png" width="32%" alt="home" />
 <img src="assets/screenshots/174shots_so.png" width="32%" alt="home" />
@@ -24,6 +25,18 @@
 
 
 <br/>
+
+## PiliGlass iOS 原生版
+
+PiliGlass 在保留 PiliPlus 网络协议、登录状态和功能实现的基础上，为 iOS 提供 SwiftUI/UIKit 原生前端。目前支持 iOS 15 及以上版本。
+
+- 首页、动态、我的、用户主页、设置、视频详情和评论等界面由 SwiftUI/UIKit 呈现。
+- 播放详情页保持原生外层界面，只在播放器区域嵌入原版 Flutter 播放表面。
+- 播放内核沿用 `media-kit/libmpv`，保留原版画质选择、分 P、弹幕、字幕、手势和全屏控制。
+- 4K/HDR 轨道由原版播放器处理 DASH 视频和音频，不再交给 AVPlayer 直接解析；实际可用画质仍取决于账号权限、视频来源、设备解码能力和网络状况。
+- 登录、点赞、投币、收藏、评论、回复与动态互动继续复用原有请求层。
+
+> 本项目仍在持续原生化和修复中。若遇到播放器或交互问题，请在 Issue 中附上设备型号、iOS 版本、视频 BV 号和复现步骤。
 
 ## 适配平台
 
@@ -213,13 +226,21 @@
 
 ## 下载
 
-可以通过右侧release进行下载或拉取代码到本地进行编译
+推荐从 [GitHub Actions 的 iOS 工作流](https://github.com/Justintunsday/Piliglass/actions/workflows/ios.yml) 下载最新成功构建：
+
+1. 打开最新的成功运行记录。
+2. 在页面底部找到 `Artifacts`。
+3. 下载 `PiliPlus_ios_*.ipa` 构建产物。
+
+已发布的稳定版本也可以从仓库右侧的 Releases 下载。IPA 未包含正式签名，安装前需要使用你自己的证书签名。
+
+仓库的 `.github/workflows/ios.yml` 使用 GitHub Actions 自动完成 Flutter 依赖准备、iOS Release 编译、IPA 打包和产物上传。
 
 <br/>
 
 ## 声明
 
-此项目（PiliPlus）是个人为了兴趣而开发，仅用于学习和测试，请于下载后24小时内删除。
+此项目（PiliGlass）是个人为了兴趣而开发，仅用于学习和测试，请于下载后24小时内删除。
 所用API皆从官方网站收集，不提供任何破解内容。
 在此致敬原作者：[guozhigq/pilipala](https://github.com/guozhigq/pilipala)
 在此致敬上游作者：[orz12/PiliPalaX](https://github.com/orz12/PiliPalaX)
@@ -244,10 +265,10 @@
 
 ## Star History
 
-<a href="https://star-history.dera.page/#bggRGjQaUbCoE/PiliPlus&Date">
+<a href="https://star-history.dera.page/#Justintunsday/Piliglass&Date">
  <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://star-history.dera.page/svg?repos=bggRGjQaUbCoE/PiliPlus&type=Date&theme=dark" />
-   <source media="(prefers-color-scheme: light)" srcset="https://star-history.dera.page/svg?repos=bggRGjQaUbCoE/PiliPlus&type=Date" />
-   <img alt="Star History Chart" src="https://star-history.dera.page/svg?repos=bggRGjQaUbCoE/PiliPlus&type=Date" />
+   <source media="(prefers-color-scheme: dark)" srcset="https://star-history.dera.page/svg?repos=Justintunsday/Piliglass&type=Date&theme=dark" />
+   <source media="(prefers-color-scheme: light)" srcset="https://star-history.dera.page/svg?repos=Justintunsday/Piliglass&type=Date" />
+   <img alt="Star History Chart" src="https://star-history.dera.page/svg?repos=Justintunsday/Piliglass&type=Date" />
  </picture>
 </a>
