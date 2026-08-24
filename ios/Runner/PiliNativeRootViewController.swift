@@ -162,9 +162,23 @@ private final class PiliNativeViewModel: ObservableObject {
   @Published private(set) var settingsLoading = false
   @Published private(set) var settingsError: String?
 
+  @Published var isLibraryPresented = false
+  @Published private(set) var libraryKind = ""
+  @Published private(set) var libraryTitle = ""
+  @Published private(set) var librarySubtitle = ""
+  @Published private(set) var libraryItems: [PiliNativeLibraryItem] = []
+  @Published private(set) var libraryLoading = false
+  @Published private(set) var libraryLoadingMore = false
+  @Published private(set) var libraryError: String?
+  @Published private(set) var libraryHasMore = false
+
   private let channel: FlutterMethodChannel
   private var snapshotInFlight = false
   private var pendingVideo: PiliNativeVideo?
+  private var libraryPage = 1
+  private var libraryMediaID: Int?
+  private var libraryNextMax: Int?
+  private var libraryNextViewAt: Int?
 
   init(channel: FlutterMethodChannel) {
     self.channel = channel
@@ -491,6 +505,144 @@ private final class PiliNativeViewModel: ObservableObject {
       }
     }
   }
+
+  func presentLibrary(_ kind: String, title: String) {
+    libraryKind = kind
+    libraryTitle = title
+    librarySubtitle = ""
+    libraryMediaID = nil
+    isLibraryPresented = true
+    loadLibrary(refresh: true)
+  }
+
+  func loadLibrary(refresh: Bool) {
+    guard !libraryKind.isEmpty else { return }
+    if refresh {
+      libraryPage = 1
+      libraryNextMax = nil
+      libraryNextViewAt = nil
+      libraryLoading = true
+      libraryError = nil
+      libraryHasMore = false
+    } else {
+      guard libraryHasMore && !libraryLoading && !libraryLoadingMore else { return }
+      libraryLoadingMore = true
+    }
+
+    var arguments: [String: Any] = [
+      "kind": libraryKind,
+      "page": libraryPage,
+    ]
+    if let mediaID = libraryMediaID { arguments["mediaId"] = mediaID }
+    if let nextMax = libraryNextMax { arguments["max"] = nextMax }
+    if let nextViewAt = libraryNextViewAt { arguments["viewAt"] = nextViewAt }
+
+    channel.invokeMethod("loadNativeLibrary", arguments: arguments) { [weak self] response in
+      DispatchQueue.main.async {
+        guard let self = self else { return }
+        let wasLoadingMore = self.libraryLoadingMore
+        self.libraryLoading = false
+        self.libraryLoadingMore = false
+        if let error = response as? FlutterError {
+          self.libraryError = error.message ?? "列表加载失败"
+          return
+        }
+        let result = piliDictionary(response)
+        guard result["state"] as? String == "success" else {
+          self.libraryError = result["error"] as? String ?? "列表加载失败"
+          return
+        }
+        let rows = result["items"] as? [Any] ?? []
+        let newItems = rows.enumerated().map {
+          PiliNativeLibraryItem(map: piliDictionary($0.element), index: $0.offset)
+        }
+        if wasLoadingMore {
+          let existingIDs = Set(self.libraryItems.map(\.id))
+          self.libraryItems.append(contentsOf: newItems.filter { !existingIDs.contains($0.id) })
+        } else {
+          self.libraryItems = newItems
+        }
+        self.libraryTitle = piliString(result["title"]) ?? self.libraryTitle
+        self.librarySubtitle = piliString(result["subtitle"]) ?? ""
+        self.libraryHasMore = piliBool(result["hasMore"])
+        self.libraryNextMax = piliOptionalInt(result["nextMax"])
+        self.libraryNextViewAt = piliOptionalInt(result["nextViewAt"])
+        self.libraryError = nil
+        self.libraryPage += 1
+      }
+    }
+  }
+
+  func openLibraryItem(_ item: PiliNativeLibraryItem) {
+    if item.kind == "folder", let folderID = item.folderID {
+      libraryKind = "favoriteDetail"
+      libraryTitle = item.title
+      librarySubtitle = item.subtitle
+      libraryMediaID = folderID
+      libraryItems = []
+      loadLibrary(refresh: true)
+      return
+    }
+
+    if let bvid = item.bvid, !bvid.isEmpty {
+      var videoMap: [String: Any] = [
+        "id": item.sourceID,
+        "bvid": bvid,
+        "title": item.title,
+        "owner": item.subtitle,
+        "viewText": item.viewText,
+        "danmakuText": item.danmakuText,
+        "durationText": item.durationText,
+      ]
+      if let aid = item.aid { videoMap["aid"] = aid }
+      if let cover = item.cover { videoMap["cover"] = cover }
+      let video = PiliNativeVideo(
+        map: videoMap,
+        index: 0
+      )
+      isLibraryPresented = false
+      DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) { [weak self] in
+        self?.openVideo(video)
+      }
+      return
+    }
+
+    openLibraryFallback(item: item)
+  }
+
+  func returnToFavoriteFolders() {
+    libraryKind = "favorites"
+    libraryTitle = "我的收藏"
+    librarySubtitle = ""
+    libraryMediaID = nil
+    libraryItems = []
+    loadLibrary(refresh: true)
+  }
+
+  func openCurrentLibraryInFlutter() {
+    let route: String
+    var parameters: [String: String] = [:]
+    switch libraryKind {
+    case "history": route = "/history"
+    case "later": route = "/later"
+    case "favoriteDetail":
+      route = "/favDetail"
+      if let mediaID = libraryMediaID { parameters["mediaId"] = String(mediaID) }
+    default: route = "/fav"
+    }
+    isLibraryPresented = false
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) { [weak self] in
+      self?.openRoute(route, parameters: parameters)
+    }
+  }
+
+  private func openLibraryFallback(item: PiliNativeLibraryItem) {
+    guard !item.fallbackRoute.isEmpty else { return }
+    isLibraryPresented = false
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) { [weak self] in
+      self?.openRoute(item.fallbackRoute, parameters: item.fallbackParameters)
+    }
+  }
 }
 
 private struct PiliNativeVideo: Identifiable {
@@ -654,6 +806,51 @@ private struct PiliNativeSetting: Identifiable {
   }
 }
 
+private struct PiliNativeLibraryItem: Identifiable {
+  let id: String
+  let sourceID: String
+  let kind: String
+  let title: String
+  let subtitle: String
+  let cover: String?
+  let aid: Int?
+  let bvid: String?
+  let folderID: Int?
+  let durationText: String
+  let progressText: String
+  let progress: Double
+  let badge: String
+  let trailingText: String
+  let viewText: String
+  let danmakuText: String
+  let fallbackRoute: String
+  let fallbackParameters: [String: String]
+
+  init(map: [String: Any], index: Int) {
+    sourceID = piliString(map["id"]) ?? "library-\(index)"
+    id = sourceID
+    kind = piliString(map["kind"]) ?? "video"
+    title = piliString(map["title"]) ?? "未命名内容"
+    subtitle = piliString(map["subtitle"]) ?? ""
+    cover = piliString(map["cover"])
+    aid = piliOptionalInt(map["aid"])
+    bvid = piliString(map["bvid"])
+    folderID = piliOptionalInt(map["folderId"])
+    durationText = piliString(map["durationText"]) ?? ""
+    progressText = piliString(map["progressText"]) ?? ""
+    progress = min(max(piliDouble(map["progress"]), 0), 1)
+    badge = piliString(map["badge"]) ?? ""
+    trailingText = piliString(map["trailingText"]) ?? ""
+    viewText = piliString(map["viewText"]) ?? ""
+    danmakuText = piliString(map["danmakuText"]) ?? ""
+    fallbackRoute = piliString(map["fallbackRoute"]) ?? ""
+    let rawParameters = piliDictionary(map["fallbackParameters"])
+    fallbackParameters = rawParameters.reduce(into: [String: String]()) { result, pair in
+      if let value = piliString(pair.value) { result[pair.key] = value }
+    }
+  }
+}
+
 private struct PiliNativeDynamic: Identifiable {
   let id: String
   let sourceID: String
@@ -737,6 +934,9 @@ private struct PiliNativeRootView: View {
     }
     .sheet(isPresented: $model.isSettingsPresented) {
       PiliNativeSettingsView(model: model)
+    }
+    .sheet(isPresented: $model.isLibraryPresented) {
+      PiliNativeLibraryView(model: model)
     }
     .fullScreenCover(isPresented: $model.isVideoDetailPresented) {
       PiliNativeVideoDetailView(model: model)
@@ -1099,7 +1299,7 @@ private struct PiliNativeMineView: View {
         Section(header: Text("我的服务")) {
           ForEach(actions.indices, id: \.self) { index in
             let item = actions[index]
-            Button(action: { item.3 ? openProtected(item.2) : model.openRoute(item.2) }) {
+            Button(action: { openService(item.2, protected: item.3) }) {
               HStack(spacing: 14) {
                 Image(systemName: item.1)
                   .frame(width: 24)
@@ -1157,6 +1357,27 @@ private struct PiliNativeMineView: View {
       parameters["mid"] = String(mid)
     }
     model.openRoute(route, parameters: parameters)
+  }
+
+  private func openService(_ route: String, protected: Bool) {
+    if protected && !model.account.isLogin {
+      model.openRoute("/loginPage")
+      return
+    }
+    switch route {
+    case "/history":
+      model.presentLibrary("history", title: "观看记录")
+    case "/later":
+      model.presentLibrary("later", title: "稍后再看")
+    case "/fav":
+      model.presentLibrary("favorites", title: "我的收藏")
+    default:
+      if protected {
+        openProtected(route)
+      } else {
+        model.openRoute(route)
+      }
+    }
   }
 }
 
@@ -1559,6 +1780,203 @@ private struct PiliNativeVideoActionButton: View {
         .padding(.vertical, 10)
         .background(Color(UIColor.secondarySystemGroupedBackground))
         .cornerRadius(10)
+    }
+    .buttonStyle(PlainButtonStyle())
+  }
+}
+
+// MARK: - Native account libraries
+
+private struct PiliNativeLibraryView: View {
+  @ObservedObject var model: PiliNativeViewModel
+  @Environment(\.presentationMode) private var presentationMode
+
+  var body: some View {
+    NavigationView {
+      Group {
+        if model.libraryLoading && model.libraryItems.isEmpty {
+          PiliNativeLoadingView(title: "正在加载\(model.libraryTitle)")
+        } else if let error = model.libraryError, model.libraryItems.isEmpty {
+          PiliNativeErrorView(message: error) { model.loadLibrary(refresh: true) }
+        } else if model.libraryItems.isEmpty {
+          VStack(spacing: 12) {
+            Image(systemName: emptySymbol)
+              .font(.system(size: 38))
+              .foregroundColor(.secondary)
+            Text("这里还没有内容")
+              .font(.headline)
+            Text("可以下拉刷新，或使用右上角菜单打开完整功能。")
+              .font(.caption)
+              .foregroundColor(.secondary)
+              .multilineTextAlignment(.center)
+          }
+          .padding(.horizontal, 30)
+          .frame(maxWidth: .infinity, maxHeight: .infinity)
+          .background(Color(UIColor.systemGroupedBackground))
+        } else {
+          ScrollView {
+            LazyVStack(spacing: 0) {
+              if !model.librarySubtitle.isEmpty {
+                Text(model.librarySubtitle)
+                  .font(.subheadline)
+                  .foregroundColor(.secondary)
+                  .frame(maxWidth: .infinity, alignment: .leading)
+                  .padding(.horizontal, 14)
+                  .padding(.vertical, 10)
+              }
+
+              ForEach(model.libraryItems) { item in
+                PiliNativeLibraryRow(item: item) {
+                  model.openLibraryItem(item)
+                }
+                .onAppear {
+                  if item.id == model.libraryItems.last?.id {
+                    model.loadLibrary(refresh: false)
+                  }
+                }
+                Divider().padding(.leading, 154)
+              }
+
+              if model.libraryLoadingMore {
+                ProgressView().padding(.vertical, 20)
+              } else if !model.libraryHasMore {
+                Text("没有更多了")
+                  .font(.caption)
+                  .foregroundColor(.secondary)
+                  .padding(.vertical, 18)
+              }
+            }
+          }
+          .background(Color(UIColor.systemBackground))
+          .refreshable { model.loadLibrary(refresh: true) }
+        }
+      }
+      .navigationBarTitle(model.libraryTitle, displayMode: .inline)
+      .navigationBarItems(
+        leading: leadingButton,
+        trailing: Menu {
+          Button(action: { model.loadLibrary(refresh: true) }) {
+            Label("刷新", systemImage: "arrow.clockwise")
+          }
+          Button(action: model.openCurrentLibraryInFlutter) {
+            Label("打开完整功能", systemImage: "rectangle.on.rectangle")
+          }
+        } label: {
+          Image(systemName: "ellipsis.circle")
+        }
+      )
+    }
+    .navigationViewStyle(StackNavigationViewStyle())
+  }
+
+  private var leadingButton: some View {
+    Group {
+      if model.libraryKind == "favoriteDetail" {
+        Button(action: model.returnToFavoriteFolders) {
+          Label("收藏夹", systemImage: "chevron.left")
+        }
+      } else {
+        Button("关闭") { presentationMode.wrappedValue.dismiss() }
+      }
+    }
+  }
+
+  private var emptySymbol: String {
+    switch model.libraryKind {
+    case "history": return "clock.arrow.circlepath"
+    case "later": return "clock"
+    default: return "star"
+    }
+  }
+}
+
+private struct PiliNativeLibraryRow: View {
+  let item: PiliNativeLibraryItem
+  let action: () -> Void
+
+  var body: some View {
+    Button(action: action) {
+      HStack(alignment: .top, spacing: 12) {
+        ZStack(alignment: .bottomLeading) {
+          PiliRemoteImage(urlString: item.cover)
+            .frame(width: 128, height: 72)
+            .clipped()
+            .cornerRadius(8)
+
+          if item.progress > 0 {
+            GeometryReader { proxy in
+              VStack {
+                Spacer()
+                Rectangle()
+                  .fill(piliAccent)
+                  .frame(width: proxy.size.width * item.progress, height: 3)
+              }
+            }
+            .frame(width: 128, height: 72)
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+          }
+
+          if !item.durationText.isEmpty {
+            Text(item.durationText)
+              .font(.caption2)
+              .foregroundColor(.white)
+              .padding(.horizontal, 5)
+              .padding(.vertical, 2)
+              .background(Color.black.opacity(0.68))
+              .cornerRadius(4)
+              .padding(5)
+          }
+        }
+
+        VStack(alignment: .leading, spacing: 5) {
+          HStack(alignment: .top, spacing: 5) {
+            Text(item.title)
+              .font(.subheadline)
+              .fontWeight(.medium)
+              .foregroundColor(.primary)
+              .lineLimit(2)
+            Spacer(minLength: 0)
+            if item.kind == "folder" {
+              Image(systemName: "chevron.right")
+                .font(.caption)
+                .foregroundColor(Color(UIColor.tertiaryLabel))
+            }
+          }
+
+          if !item.subtitle.isEmpty {
+            Text(item.subtitle)
+              .font(.caption)
+              .foregroundColor(.secondary)
+              .lineLimit(1)
+          }
+
+          HStack(spacing: 8) {
+            if !item.progressText.isEmpty {
+              Text(item.progressText).foregroundColor(piliAccent)
+            } else if !item.trailingText.isEmpty {
+              Text(item.trailingText)
+            } else {
+              if !item.viewText.isEmpty {
+                Label(item.viewText, systemImage: "play.rectangle")
+              }
+              if !item.danmakuText.isEmpty {
+                Label(item.danmakuText, systemImage: "text.bubble")
+              }
+            }
+            Spacer(minLength: 0)
+            if !item.badge.isEmpty {
+              Text(item.badge)
+                .foregroundColor(piliAccent)
+            }
+          }
+          .font(.caption2)
+          .foregroundColor(.secondary)
+        }
+        .frame(minHeight: 72, alignment: .top)
+      }
+      .padding(.horizontal, 14)
+      .padding(.vertical, 10)
+      .contentShape(Rectangle())
     }
     .buttonStyle(PlainButtonStyle())
   }

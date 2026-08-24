@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:PiliPlus/http/fav.dart';
 import 'package:PiliPlus/http/loading_state.dart';
 import 'package:PiliPlus/http/search.dart';
 import 'package:PiliPlus/http/user.dart';
@@ -134,6 +135,8 @@ final class IOSNativeUIBridge {
         return _openSettingsSection(_arguments(call));
       case 'searchVideos':
         return _searchVideos(_arguments(call));
+      case 'loadNativeLibrary':
+        return _loadNativeLibrary(_arguments(call));
       // Kept for older native shells that still emit this action.
       case 'openSearch':
         return _openRoute(const {'route': '/search'});
@@ -793,6 +796,7 @@ final class IOSNativeUIBridge {
     '/download',
     '/fan',
     '/fav',
+    '/favDetail',
     '/follow',
     '/history',
     '/later',
@@ -858,6 +862,212 @@ final class IOSNativeUIBridge {
             .entries
             .map((entry) => _videoMap(entry.value, entry.key))
             .toList(),
+      },
+    };
+  }
+
+  Future<Map<String, dynamic>> _loadNativeLibrary(
+    Map<dynamic, dynamic> arguments,
+  ) async {
+    if (!Accounts.main.isLogin) {
+      return const {'state': 'error', 'error': '请先登录账号'};
+    }
+
+    final kind = arguments['kind']?.toString();
+    final page = _asInt(arguments['page']) ?? 1;
+    try {
+      return switch (kind) {
+        'history' => await _loadNativeHistory(arguments),
+        'later' => await _loadNativeLater(page),
+        'favorites' => await _loadNativeFavoriteFolders(page),
+        'favoriteDetail' => await _loadNativeFavoriteDetail(arguments, page),
+        _ => const {'state': 'error', 'error': '暂不支持的原生列表'},
+      };
+    } catch (error) {
+      return {'state': 'error', 'error': '加载失败：$error'};
+    }
+  }
+
+  Future<Map<String, dynamic>> _loadNativeHistory(
+    Map<dynamic, dynamic> arguments,
+  ) async {
+    final result = await UserHttp.historyList(
+      type: 'all',
+      max: _asInt(arguments['max']),
+      viewAt: _asInt(arguments['viewAt']),
+    );
+    return switch (result) {
+      Loading() => const {'state': 'loading'},
+      Error(:final errMsg, :final code) => {
+        'state': 'error',
+        'error': errMsg ?? '观看记录加载失败',
+        'code': ?code,
+      },
+      Success(:final response) => () {
+        final rows = response.list ?? const [];
+        return {
+          'state': 'success',
+          'title': '观看记录',
+          'hasMore': rows.isNotEmpty,
+          'nextMax': rows.isEmpty ? null : rows.last.history.oid,
+          'nextViewAt': rows.isEmpty ? null : rows.last.viewAt,
+          'items': rows.asMap().entries.map((entry) {
+            final item = entry.value;
+            final progress = item.progress;
+            final duration = item.duration ?? 0;
+            final progressText = progress == -1
+                ? '已看完'
+                : progress != null && progress > 0
+                ? '${_durationText(progress)}/${_durationText(duration)}'
+                : '';
+            return {
+              'id': 'history-${item.kid ?? entry.key}',
+              'kind': 'video',
+              'title': item.title ?? '未命名内容',
+              'subtitle': item.authorName ?? item.showTitle ?? '',
+              'cover': _normalizeURL(
+                _nonEmpty(item.cover) ??
+                    (item.covers?.isNotEmpty == true ? item.covers!.first : null),
+              ),
+              'aid': item.history.oid,
+              'bvid': _nonEmpty(item.history.bvid),
+              'durationText': _durationText(duration),
+              'progressText': progressText,
+              'progress': progress == -1 || duration <= 0
+                  ? (progress == -1 ? 1.0 : 0.0)
+                  : (progress ?? 0) / duration,
+              'badge': item.badge ?? '',
+              'viewText': '',
+              'danmakuText': '',
+              'fallbackRoute': '/history',
+            };
+          }).toList(),
+        };
+      }(),
+    };
+  }
+
+  Future<Map<String, dynamic>> _loadNativeLater(int page) async {
+    final result = await UserHttp.seeYouLater(page: page);
+    return switch (result) {
+      Loading() => const {'state': 'loading'},
+      Error(:final errMsg, :final code) => {
+        'state': 'error',
+        'error': errMsg ?? '稍后再看加载失败',
+        'code': ?code,
+      },
+      Success(:final response) => {
+        'state': 'success',
+        'title': '稍后再看',
+        'hasMore': (response.list?.isNotEmpty ?? false) &&
+            page * 20 < (response.count ?? 0),
+        'items': (response.list ?? const []).asMap().entries.map((entry) {
+          final item = entry.value;
+          final duration = item.duration ?? 0;
+          final progress = item.progress ?? 0;
+          return {
+            'id': 'later-${item.aid ?? entry.key}',
+            'kind': 'video',
+            'title': item.title ?? '未命名视频',
+            'subtitle': item.owner?.name ?? item.subtitle ?? '',
+            'cover': _normalizeURL(item.pic),
+            'aid': item.aid,
+            'bvid': _nonEmpty(item.bvid),
+            'durationText': _durationText(duration),
+            'progressText': progress > 0 && duration > 0
+                ? '${_durationText(progress)}/${_durationText(duration)}'
+                : '',
+            'progress': duration > 0 ? progress / duration : 0.0,
+            'badge': item.pgcLabel ?? '',
+            'viewText': _compactNumber(item.stat?.view),
+            'danmakuText': _compactNumber(item.stat?.danmaku),
+            'fallbackRoute': '/later',
+          };
+        }).toList(),
+      },
+    };
+  }
+
+  Future<Map<String, dynamic>> _loadNativeFavoriteFolders(int page) async {
+    final result = await FavHttp.userfavFolder(
+      pn: page,
+      ps: 20,
+      mid: Accounts.main.mid,
+    );
+    return switch (result) {
+      Loading() => const {'state': 'loading'},
+      Error(:final errMsg, :final code) => {
+        'state': 'error',
+        'error': errMsg ?? '收藏夹加载失败',
+        'code': ?code,
+      },
+      Success(:final response) => {
+        'state': 'success',
+        'title': '我的收藏',
+        'hasMore': response.hasMore ?? false,
+        'items': (response.list ?? const []).asMap().entries.map((entry) {
+          final item = entry.value;
+          return {
+            'id': 'folder-${item.id}',
+            'kind': 'folder',
+            'title': item.title,
+            'subtitle': item.intro ?? item.upper?.name ?? '',
+            'cover': _normalizeURL(item.cover),
+            'folderId': item.id,
+            'trailingText': '${item.mediaCount} 个内容',
+            'badge': item.attr == 23 ? '私密' : '',
+            'fallbackRoute': '/fav',
+          };
+        }).toList(),
+      },
+    };
+  }
+
+  Future<Map<String, dynamic>> _loadNativeFavoriteDetail(
+    Map<dynamic, dynamic> arguments,
+    int page,
+  ) async {
+    final mediaId = _asInt(arguments['mediaId']);
+    if (mediaId == null) {
+      return const {'state': 'error', 'error': '收藏夹参数无效'};
+    }
+    final result = await FavHttp.userFavFolderDetail(
+      mediaId: mediaId,
+      pn: page,
+      ps: 20,
+    );
+    return switch (result) {
+      Loading() => const {'state': 'loading'},
+      Error(:final errMsg, :final code) => {
+        'state': 'error',
+        'error': errMsg ?? '收藏夹内容加载失败',
+        'code': ?code,
+      },
+      Success(:final response) => {
+        'state': 'success',
+        'title': response.info?.title ?? '收藏夹',
+        'subtitle': response.info?.intro ?? '',
+        'hasMore': response.hasMore ?? false,
+        'items': (response.medias ?? const []).asMap().entries.map((entry) {
+          final item = entry.value;
+          return {
+            'id': 'favorite-${item.id ?? entry.key}',
+            'kind': 'video',
+            'title': item.title ?? '未命名内容',
+            'subtitle': item.upper?.name ?? item.intro ?? '',
+            'cover': _normalizeURL(item.cover),
+            'aid': item.id,
+            'bvid': _nonEmpty(item.bvid),
+            'durationText': _durationText(item.duration ?? 0),
+            'progressText': '',
+            'progress': 0.0,
+            'badge': item.attr == 9 ? '已失效' : '',
+            'viewText': _compactNumber(item.cntInfo?.play),
+            'danmakuText': _compactNumber(item.cntInfo?.danmaku),
+            'fallbackRoute': '/favDetail',
+            'fallbackParameters': {'mediaId': mediaId.toString()},
+          };
+        }).toList(),
       },
     };
   }
