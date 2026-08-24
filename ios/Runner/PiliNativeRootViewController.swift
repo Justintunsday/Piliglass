@@ -1428,7 +1428,7 @@ private struct PiliNativeComment: Identifiable {
           size: min(max(piliInt(value["size"]), 1), 2)
         )
       )
-    )
+    }
     emotes = Dictionary(uniqueKeysWithValues: emotePairs)
   }
 }
