@@ -70,8 +70,6 @@ import 'package:PiliPlus/utils/storage_key.dart';
 import 'package:PiliPlus/utils/theme_utils.dart';
 import 'package:extended_nested_scroll_view/extended_nested_scroll_view.dart';
 import 'package:flutter/foundation.dart' show kDebugMode, clampDouble;
-import 'package:flutter/services.dart' show StandardMessageCodec;
-import 'package:flutter/widgets.dart' show UiKitView;
 import 'package:material_ui/material_ui.dart';
 import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
@@ -1633,23 +1631,6 @@ class _VideoDetailPageVState extends State<VideoDetailPageV>
   }) {
     if (videoDetailController.isFileSource) {
       return localIntroPanel(needCtr: needCtr);
-    }
-
-    if (Platform.isIOS && videoDetailController.isUgc) {
-      return UiKitView(
-        key: ValueKey('native-video-intro-${videoDetailController.bvid}'),
-        viewType: 'piliglass/native_video_intro',
-        layoutDirection: TextDirection.ltr,
-        creationParamsCodec: const StandardMessageCodec(),
-        creationParams: {
-          'bvid': videoDetailController.bvid,
-          'aid': videoDetailController.aid,
-          'cid': videoDetailController.cid.value,
-          'heroTag': heroTag,
-          'title': Get.arguments['title'] ?? '',
-          'cover': videoDetailController.cover.value,
-        },
-      );
     }
 
     Widget child = CustomScrollView(

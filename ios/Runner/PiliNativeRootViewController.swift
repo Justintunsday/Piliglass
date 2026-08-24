@@ -367,39 +367,20 @@ private final class PiliNativeViewModel: ObservableObject {
 
   func openVideo(_ video: PiliNativeVideo) {
     stopNativePlayback()
-    pendingVideo = video
+    pendingVideo = nil
     videoDetail = nil
     videoDetailError = nil
-    videoDetailLoading = true
+    videoDetailLoading = false
     videoActionLoading = false
     videoActionMessage = nil
-    isVideoDetailPresented = true
+    isVideoDetailPresented = false
 
     var arguments: [String: Any] = [:]
     if let bvid = video.bvid { arguments["bvid"] = bvid }
     if let aid = video.aid { arguments["aid"] = aid }
     arguments["title"] = video.title
     if let cover = video.cover { arguments["cover"] = cover }
-    channel.invokeMethod("loadVideoDetail", arguments: arguments) { [weak self] response in
-      DispatchQueue.main.async {
-        guard let self = self else { return }
-        self.videoDetailLoading = false
-        if let error = response as? FlutterError {
-          self.videoDetailError = error.message ?? "视频简介加载失败"
-          return
-        }
-        let result = piliDictionary(response)
-        guard result["state"] as? String == "success" else {
-          self.videoDetailError = result["error"] as? String ?? "视频简介加载失败"
-          return
-        }
-        let detail = PiliNativeVideoDetail(map: piliDictionary(result["video"]))
-        self.videoDetail = detail
-        if let aid = detail.aid {
-          self.loadComments(oid: aid, type: 1)
-        }
-      }
-    }
+    channel.invokeMethod("openVideo", arguments: arguments)
   }
 
   func retryVideoDetail() {
