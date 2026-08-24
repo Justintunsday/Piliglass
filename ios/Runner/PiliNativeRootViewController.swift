@@ -6010,24 +6010,56 @@ private struct PiliOriginalIcon: View {
   }
 }
 
+private enum PiliBundledImage {
+  private static var cache: [String: UIImage] = [:]
+
+  static func image(asset: String) -> UIImage? {
+    if let cached = cache[asset] { return cached }
+    let key = FlutterDartProject.lookupKey(forAsset: asset)
+    var candidates = [
+      Bundle.main.bundleURL.appendingPathComponent(key),
+      Bundle.main.bundleURL.appendingPathComponent("Frameworks/App.framework/\(key)"),
+      Bundle.main.bundleURL.appendingPathComponent("Frameworks/App.framework/flutter_assets/\(asset)"),
+    ]
+    if let path = Bundle.main.path(forResource: key, ofType: nil) {
+      candidates.insert(URL(fileURLWithPath: path), at: 0)
+    }
+    guard let url = candidates.first(where: { FileManager.default.fileExists(atPath: $0.path) }),
+          let image = UIImage(contentsOfFile: url.path)?.withRenderingMode(.alwaysOriginal)
+    else { return nil }
+    cache[asset] = image
+    return image
+  }
+}
+
 private struct PiliOriginalLevelBadge: View {
   let level: Int
   var height: CGFloat = 11
 
-  private let sourceWidth: CGFloat = 930
-  private let sourceHeight: CGFloat = 466
-
   var body: some View {
-    Canvas { context, size in
-      let scale = size.height / sourceHeight
-      let transform = CGAffineTransform(scaleX: scale, y: scale)
-      let background = levelBackgroundPath().applying(transform)
-      context.fill(background, with: .color(levelColor))
-      let foreground = levelForegroundPath().applying(transform)
-      context.fill(foreground, with: .color(.white))
+    Group {
+      if let image = bundledImage {
+        Image(uiImage: image)
+          .resizable()
+          .interpolation(.high)
+          .aspectRatio(contentMode: .fit)
+      } else {
+        Text("LV\(normalizedLevel)")
+          .font(.system(size: height * 0.72, weight: .bold, design: .rounded))
+          .foregroundColor(.white)
+          .padding(.horizontal, 2)
+          .background(Color.gray)
+          .cornerRadius(2)
+      }
     }
-    .frame(width: sourceWidth * height / sourceHeight, height: height)
-    .accessibilityLabel(Text("\(level)级"))
+    .frame(width: height * 2, height: height)
+    .accessibilityLabel(Text("\(normalizedLevel)级"))
+  }
+
+  private var normalizedLevel: Int { min(max(level, 0), 6) }
+
+  private var bundledImage: UIImage? {
+    PiliBundledImage.image(asset: "assets/images/lv/lv\(normalizedLevel).png")
   }
 
   private var levelColor: Color {

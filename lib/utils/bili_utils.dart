@@ -1,4 +1,3 @@
-import 'package:PiliPlus/common/widgets/svg/level_icon.dart';
 import 'package:material_ui/material_ui.dart';
 
 abstract final class BiliUtils {
@@ -30,7 +29,19 @@ abstract final class BiliUtils {
     bool isSeniorMember = false,
     double height = 11,
   }) {
-    return UserLevel(level, height: height, flash: isSeniorMember);
+    final normalizedLevel = level.clamp(0, 6);
+    return Semantics(
+      label: '${isSeniorMember ? "硬核" : ""}$normalizedLevel级',
+      image: true,
+      child: Image.asset(
+        'assets/images/lv/lv$normalizedLevel.png',
+        width: height * 2,
+        height: height,
+        fit: BoxFit.contain,
+        filterQuality: FilterQuality.high,
+        gaplessPlayback: true,
+      ),
+    );
   }
 
   static const _liveGuard1 =
