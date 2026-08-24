@@ -154,6 +154,8 @@ private final class PiliNativeViewModel: ObservableObject {
   @Published private(set) var videoDetail: PiliNativeVideoDetail?
   @Published private(set) var videoDetailLoading = false
   @Published private(set) var videoDetailError: String?
+  @Published private(set) var videoActionLoading = false
+  @Published private(set) var videoActionMessage: String?
 
   @Published var isSettingsPresented = false
   @Published private(set) var settings: [PiliNativeSetting] = []
@@ -303,6 +305,8 @@ private final class PiliNativeViewModel: ObservableObject {
     videoDetail = nil
     videoDetailError = nil
     videoDetailLoading = true
+    videoActionLoading = false
+    videoActionMessage = nil
     isVideoDetailPresented = true
 
     var arguments: [String: Any] = [:]
@@ -345,13 +349,47 @@ private final class PiliNativeViewModel: ObservableObject {
 
   func openVideoOwner(_ video: PiliNativeVideoDetail) {
     guard let ownerID = video.ownerID else { return }
+    openVideoMember(ownerID)
+  }
+
+  func openVideoMember(_ memberID: Int) {
     isVideoDetailPresented = false
     DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) { [channel = self.channel] in
       channel.invokeMethod(
         "openRoute",
-        arguments: ["route": "/member", "parameters": ["mid": String(ownerID)]]
+        arguments: ["route": "/member", "parameters": ["mid": String(memberID)]]
       )
     }
+  }
+
+  func performVideoAction(_ action: String, video: PiliNativeVideoDetail) {
+    guard !videoActionLoading else { return }
+    videoActionLoading = true
+    videoActionMessage = nil
+    channel.invokeMethod(
+      "performVideoAction",
+      arguments: ["action": action, "bvid": video.bvid]
+    ) { [weak self] response in
+      DispatchQueue.main.async {
+        guard let self = self else { return }
+        self.videoActionLoading = false
+        if let error = response as? FlutterError {
+          self.videoActionMessage = error.message ?? "操作失败"
+          return
+        }
+        let result = piliDictionary(response)
+        guard result["state"] as? String == "success" else {
+          self.videoActionMessage = result["error"] as? String ?? "操作失败"
+          return
+        }
+        self.videoActionMessage = result["message"] as? String ?? "操作成功"
+      }
+    }
+  }
+
+  func copyVideoID(_ video: PiliNativeVideoDetail) {
+    UIPasteboard.general.string = video.bvid
+    videoActionMessage = "已复制 \(video.bvid)"
   }
 
   func presentSettings() {
@@ -499,6 +537,34 @@ private struct PiliNativeVideoPart: Identifiable {
   }
 }
 
+private struct PiliNativeVideoTag: Identifiable {
+  let id: String
+  let name: String
+  let type: String
+
+  init(map: [String: Any], index: Int) {
+    name = piliString(map["name"]) ?? "标签"
+    type = piliString(map["type"]) ?? ""
+    id = "\(piliOptionalInt(map["id"]) ?? index)-\(name)"
+  }
+}
+
+private struct PiliNativeVideoStaff: Identifiable {
+  let id: String
+  let memberID: Int?
+  let name: String
+  let title: String
+  let face: String?
+
+  init(map: [String: Any], index: Int) {
+    memberID = piliOptionalInt(map["id"])
+    name = piliString(map["name"]) ?? "创作成员"
+    title = piliString(map["title"]) ?? ""
+    face = piliString(map["face"])
+    id = "\(memberID ?? index)-\(name)"
+  }
+}
+
 private struct PiliNativeVideoDetail {
   let aid: Int?
   let bvid: String
@@ -518,6 +584,13 @@ private struct PiliNativeVideoDetail {
   let coin: Int
   let favorite: Int
   let share: Int
+  let copyrightText: String
+  let isVertical: Bool
+  let argueMessage: String
+  let collectionTitle: String
+  let collectionCount: Int
+  let tags: [PiliNativeVideoTag]
+  let staff: [PiliNativeVideoStaff]
   let pages: [PiliNativeVideoPart]
 
   init(map: [String: Any]) {
@@ -539,6 +612,19 @@ private struct PiliNativeVideoDetail {
     coin = piliInt(map["coin"])
     favorite = piliInt(map["favorite"])
     share = piliInt(map["share"])
+    copyrightText = piliString(map["copyrightText"]) ?? ""
+    isVertical = piliBool(map["isVertical"])
+    argueMessage = piliString(map["argueMessage"]) ?? ""
+    collectionTitle = piliString(map["collectionTitle"]) ?? ""
+    collectionCount = piliInt(map["collectionCount"])
+    let tagRows = map["tags"] as? [Any] ?? []
+    tags = tagRows.enumerated().map {
+      PiliNativeVideoTag(map: piliDictionary($0.element), index: $0.offset)
+    }
+    let staffRows = map["staff"] as? [Any] ?? []
+    staff = staffRows.enumerated().map {
+      PiliNativeVideoStaff(map: piliDictionary($0.element), index: $0.offset)
+    }
     let rows = map["pages"] as? [Any] ?? []
     pages = rows.enumerated().map {
       PiliNativeVideoPart(map: piliDictionary($0.element), fallbackIndex: $0.offset)
@@ -552,6 +638,7 @@ private struct PiliNativeSetting: Identifiable {
   let title: String
   let subtitle: String
   let group: String
+  let icon: String
   var value: Bool
   let needsRestart: Bool
 
@@ -561,6 +648,7 @@ private struct PiliNativeSetting: Identifiable {
     title = piliString(map["title"]) ?? key
     subtitle = piliString(map["subtitle"]) ?? ""
     group = piliString(map["group"]) ?? "其他"
+    icon = piliString(map["icon"]) ?? "gearshape"
     value = piliBool(map["value"])
     needsRestart = piliBool(map["needsRestart"])
   }
@@ -1128,9 +1216,10 @@ private struct PiliNativeVideoDetailView: View {
   }
 
   private func videoHeader(_ video: PiliNativeVideoDetail) -> some View {
-    ZStack {
+    let currentPart = video.pages.first(where: { $0.index == selectedPart })
+    return ZStack {
       Color.black
-      PiliRemoteImage(urlString: video.cover)
+      PiliRemoteImage(urlString: currentPart?.cover ?? video.cover)
         .aspectRatio(16 / 9, contentMode: .fit)
         .frame(maxWidth: .infinity)
 
@@ -1147,12 +1236,12 @@ private struct PiliNativeVideoDetailView: View {
       }
       .accessibilityLabel("播放视频")
 
-      if !video.durationText.isEmpty {
+      if !(currentPart?.durationText ?? video.durationText).isEmpty {
         VStack {
           Spacer()
           HStack {
             Spacer()
-            Text(video.durationText)
+            Text(currentPart?.durationText ?? video.durationText)
               .font(.caption)
               .foregroundColor(.white)
               .padding(.horizontal, 7)
@@ -1174,6 +1263,20 @@ private struct PiliNativeVideoDetailView: View {
         .fontWeight(.semibold)
         .fixedSize(horizontal: false, vertical: true)
 
+      HStack(spacing: 8) {
+        if !video.copyrightText.isEmpty {
+          Label(video.copyrightText, systemImage: "checkmark.seal")
+        }
+        if video.isVertical {
+          Label("竖屏", systemImage: "rectangle.portrait")
+        }
+        if video.pages.count > 1 {
+          Label("\(video.pages.count)P", systemImage: "list.number")
+        }
+      }
+      .font(.caption)
+      .foregroundColor(piliAccent)
+
       HStack(spacing: 12) {
         if !video.viewText.isEmpty {
           Label("\(video.viewText) 播放", systemImage: "play.rectangle")
@@ -1190,6 +1293,16 @@ private struct PiliNativeVideoDetailView: View {
         Text([video.pubdateText, video.bvid].filter { !$0.isEmpty }.joined(separator: "  "))
           .font(.caption)
           .foregroundColor(.secondary)
+      }
+
+      if !video.argueMessage.isEmpty {
+        Label(video.argueMessage, systemImage: "exclamationmark.triangle.fill")
+          .font(.subheadline)
+          .foregroundColor(.orange)
+          .padding(11)
+          .frame(maxWidth: .infinity, alignment: .leading)
+          .background(Color.orange.opacity(0.12))
+          .cornerRadius(10)
       }
 
       Button(action: { model.openVideoOwner(video) }) {
@@ -1215,13 +1328,93 @@ private struct PiliNativeVideoDetailView: View {
       .buttonStyle(PlainButtonStyle())
       .disabled(video.ownerID == nil)
 
+      if !video.staff.isEmpty {
+        VStack(alignment: .leading, spacing: 9) {
+          Text("联合创作")
+            .font(.headline)
+          ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 10) {
+              ForEach(video.staff) { member in
+                Button(action: {
+                  if let memberID = member.memberID {
+                    model.openVideoMember(memberID)
+                  }
+                }) {
+                  HStack(spacing: 8) {
+                    PiliRemoteImage(urlString: member.face)
+                      .frame(width: 34, height: 34)
+                      .clipShape(Circle())
+                    VStack(alignment: .leading, spacing: 2) {
+                      Text(member.name)
+                        .font(.subheadline)
+                        .foregroundColor(.primary)
+                      if !member.title.isEmpty {
+                        Text(member.title)
+                          .font(.caption2)
+                          .foregroundColor(.secondary)
+                      }
+                    }
+                  }
+                  .padding(.horizontal, 10)
+                  .padding(.vertical, 7)
+                  .background(Color(UIColor.secondarySystemGroupedBackground))
+                  .cornerRadius(10)
+                }
+                .buttonStyle(PlainButtonStyle())
+              }
+            }
+          }
+        }
+      }
+
       HStack(spacing: 0) {
         PiliNativeVideoMetric(icon: "hand.thumbsup", value: video.like, title: "点赞")
         PiliNativeVideoMetric(icon: "dollarsign.circle", value: video.coin, title: "投币")
         PiliNativeVideoMetric(icon: "star", value: video.favorite, title: "收藏")
+        PiliNativeVideoMetric(icon: "bubble.left", value: video.reply, title: "评论")
         PiliNativeVideoMetric(icon: "square.and.arrow.up", value: video.share, title: "分享")
       }
       .padding(.vertical, 4)
+
+      LazyVGrid(
+        columns: Array(repeating: GridItem(.flexible(), spacing: 9), count: 2),
+        spacing: 9
+      ) {
+        PiliNativeVideoActionButton(
+          title: "一键三连",
+          icon: "hand.thumbsup.fill",
+          action: { model.performVideoAction("triple", video: video) }
+        )
+        PiliNativeVideoActionButton(
+          title: "稍后再看",
+          icon: "clock.badge.plus",
+          action: { model.performVideoAction("later", video: video) }
+        )
+        PiliNativeVideoActionButton(
+          title: "复制 BV 号",
+          icon: "doc.on.doc",
+          action: { model.copyVideoID(video) }
+        )
+        PiliNativeVideoActionButton(
+          title: "完整详情",
+          icon: "arrow.up.right.square",
+          action: { model.playVideo(video, part: selectedPart) }
+        )
+      }
+      .disabled(model.videoActionLoading)
+
+      if model.videoActionLoading {
+        HStack(spacing: 8) {
+          ProgressView()
+          Text("正在处理…")
+        }
+        .font(.caption)
+        .foregroundColor(.secondary)
+      } else if let message = model.videoActionMessage {
+        Text(message)
+          .font(.caption)
+          .foregroundColor(message.contains("失败") || message.contains("登录") ? .red : piliAccent)
+      }
 
       Divider()
 
@@ -1273,6 +1466,47 @@ private struct PiliNativeVideoDetailView: View {
         }
       }
 
+      if !video.collectionTitle.isEmpty {
+        Divider()
+        HStack(spacing: 11) {
+          Image(systemName: "rectangle.stack.fill")
+            .font(.title2)
+            .foregroundColor(piliAccent)
+          VStack(alignment: .leading, spacing: 3) {
+            Text(video.collectionTitle)
+              .font(.headline)
+            if video.collectionCount > 0 {
+              Text("合集共 \(video.collectionCount) 个视频")
+                .font(.caption)
+                .foregroundColor(.secondary)
+            }
+          }
+          Spacer()
+        }
+        .padding(12)
+        .background(Color(UIColor.secondarySystemGroupedBackground))
+        .cornerRadius(11)
+      }
+
+      if !video.tags.isEmpty {
+        Divider()
+        Text("标签")
+          .font(.headline)
+        ScrollView(.horizontal, showsIndicators: false) {
+          HStack(spacing: 8) {
+            ForEach(video.tags) { tag in
+              Text("# \(tag.name)")
+                .font(.subheadline)
+                .foregroundColor(piliAccent)
+                .padding(.horizontal, 11)
+                .padding(.vertical, 7)
+                .background(piliAccent.opacity(0.1))
+                .cornerRadius(16)
+            }
+          }
+        }
+      }
+
       Button(action: { model.playVideo(video, part: selectedPart) }) {
         Label("使用完整播放器播放", systemImage: "play.fill")
           .font(.headline)
@@ -1311,13 +1545,39 @@ private struct PiliNativeVideoMetric: View {
   }
 }
 
+private struct PiliNativeVideoActionButton: View {
+  let title: String
+  let icon: String
+  let action: () -> Void
+
+  var body: some View {
+    Button(action: action) {
+      Label(title, systemImage: icon)
+        .font(.subheadline)
+        .foregroundColor(.primary)
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 10)
+        .background(Color(UIColor.secondarySystemGroupedBackground))
+        .cornerRadius(10)
+    }
+    .buttonStyle(PlainButtonStyle())
+  }
+}
+
 // MARK: - Native settings
 
 private struct PiliNativeSettingsView: View {
   @ObservedObject var model: PiliNativeViewModel
   @Environment(\.presentationMode) private var presentationMode
+  @State private var searchText = ""
 
-  private let groups = ["播放", "详情", "推荐与搜索"]
+  private let groups = [
+    "播放与弹幕",
+    "视频详情",
+    "推荐与搜索",
+    "外观与界面",
+    "通用功能",
+  ]
   private let advanced: [(String, String, String)] = [
     ("privacy", "隐私设置", "hand.raised"),
     ("recommend", "推荐流高级设置", "sparkles"),
@@ -1344,23 +1604,47 @@ private struct PiliNativeSettingsView: View {
               }
             }
 
+            Section(
+              footer: Text("这些开关直接读写原项目的同一份设置数据，Flutter 功能页会继续使用修改后的值。")
+            ) {
+              HStack(spacing: 12) {
+                Image(systemName: "iphone.gen3")
+                  .font(.title2)
+                  .foregroundColor(piliAccent)
+                VStack(alignment: .leading, spacing: 3) {
+                  Text("iOS 原生设置")
+                    .font(.headline)
+                  Text("已原生化 \(model.settings.count) 个常用开关")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                }
+              }
+              .padding(.vertical, 4)
+            }
+
             ForEach(groups, id: \.self) { group in
-              Section(header: Text(group)) {
-                ForEach(model.settings.filter { $0.group == group }) { item in
+              if !settings(in: group).isEmpty {
+                Section(header: Text(group)) {
+                  ForEach(settings(in: group)) { item in
                   Toggle(isOn: binding(for: item)) {
-                    VStack(alignment: .leading, spacing: 3) {
-                      HStack(spacing: 5) {
-                        Text(item.title)
-                        if item.needsRestart {
-                          Text("重启生效")
-                            .font(.caption2)
-                            .foregroundColor(piliAccent)
+                    HStack(alignment: .top, spacing: 11) {
+                      Image(systemName: item.icon)
+                        .frame(width: 22)
+                        .foregroundColor(piliAccent)
+                      VStack(alignment: .leading, spacing: 3) {
+                        HStack(spacing: 5) {
+                          Text(item.title)
+                          if item.needsRestart {
+                            Text("重启生效")
+                              .font(.caption2)
+                              .foregroundColor(piliAccent)
+                          }
                         }
-                      }
-                      if !item.subtitle.isEmpty {
-                        Text(item.subtitle)
-                          .font(.caption)
-                          .foregroundColor(.secondary)
+                        if !item.subtitle.isEmpty {
+                          Text(item.subtitle)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                        }
                       }
                     }
                   }
@@ -1368,23 +1652,26 @@ private struct PiliNativeSettingsView: View {
                 }
               }
             }
+            }
 
-            Section(
-              header: Text("完整设置"),
-              footer: Text("尚未迁移的复杂选择器继续打开原设置页，数值和播放器配置不会丢失。")
-            ) {
-              ForEach(advanced.indices, id: \.self) { index in
-                let item = advanced[index]
-                Button(action: { model.openSettingsSection(item.0) }) {
-                  HStack(spacing: 13) {
-                    Image(systemName: item.2)
-                      .frame(width: 24)
-                      .foregroundColor(piliAccent)
-                    Text(item.1).foregroundColor(.primary)
-                    Spacer()
-                    Image(systemName: "chevron.right")
-                      .font(.caption)
-                      .foregroundColor(Color(UIColor.tertiaryLabel))
+            if searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+              Section(
+                header: Text("高级参数"),
+                footer: Text("画质、解码器、字体尺寸等非布尔参数继续调用原设置组件，避免类型转换造成配置失效。")
+              ) {
+                ForEach(advanced.indices, id: \.self) { index in
+                  let item = advanced[index]
+                  Button(action: { model.openSettingsSection(item.0) }) {
+                    HStack(spacing: 13) {
+                      Image(systemName: item.2)
+                        .frame(width: 24)
+                        .foregroundColor(piliAccent)
+                      Text(item.1).foregroundColor(.primary)
+                      Spacer()
+                      Image(systemName: "chevron.right")
+                        .font(.caption)
+                        .foregroundColor(Color(UIColor.tertiaryLabel))
+                    }
                   }
                 }
               }
@@ -1399,9 +1686,19 @@ private struct PiliNativeSettingsView: View {
           Image(systemName: "arrow.clockwise")
         }
       )
+      .searchable(text: $searchText, prompt: "搜索设置")
     }
     .navigationViewStyle(StackNavigationViewStyle())
     .onAppear(perform: model.loadSettings)
+  }
+
+  private func settings(in group: String) -> [PiliNativeSetting] {
+    let keyword = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+    return model.settings.filter { item in
+      guard item.group == group else { return false }
+      return keyword.isEmpty || item.title.localizedCaseInsensitiveContains(keyword)
+        || item.subtitle.localizedCaseInsensitiveContains(keyword)
+    }
   }
 
   private func binding(for item: PiliNativeSetting) -> Binding<Bool> {
