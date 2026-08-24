@@ -210,9 +210,9 @@ class _PLVideoPlayerState extends State<PLVideoPlayer>
     final visible = val && !plPlayerController.controlsLock.value;
 
     final headerKey = widget.headerControl.key;
-    if (headerKey is GlobalKey<TimeBatteryMixin> &&
-        headerKey.currentState case final state?) {
-      if (state.mounted) {
+    if (headerKey is GlobalKey<TimeBatteryMixin>) {
+      final state = headerKey.currentState;
+      if (state != null && state.mounted) {
         state.getBatteryLevelIfNeeded();
         state.provider
           ?..startIfNeeded()
@@ -1615,10 +1615,11 @@ class _PLVideoPlayerState extends State<PLVideoPlayer>
                             onHome: plPlayerController.onCloseAll,
                             onShowSettings: () {
                               final key = widget.headerControl.key;
-                              if (key is GlobalKey<TimeBatteryMixin> &&
-                                  key.currentState
-                                      case final HeaderControlState state) {
-                                state.showSettingSheet();
+                              if (key is GlobalKey<TimeBatteryMixin>) {
+                                final state = key.currentState;
+                                if (state is HeaderControlState) {
+                                  state.showSettingSheet();
+                                }
                               }
                             },
                             fallback: widget.headerControl,
