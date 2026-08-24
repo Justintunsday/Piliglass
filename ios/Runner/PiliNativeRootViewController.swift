@@ -21,6 +21,7 @@ private final class PiliNativeFlutterPlayerSurface {
   private var homeConstraints: [NSLayoutConstraint] = []
   private var playerConstraints: [NSLayoutConstraint] = []
   private var hasPresentedFirstFrame = false
+  var onSurfaceMounted: (() -> Void)?
 
   init(flutterViewController: FlutterViewController) {
     self.flutterViewController = flutterViewController
@@ -69,8 +70,17 @@ private final class PiliNativeFlutterPlayerSurface {
     flutterView.isHidden = false
     container.view.setNeedsLayout()
     container.view.layoutIfNeeded()
+    flutterViewController.viewDidLayoutSubviews()
 
-    guard shouldFadeIn else { return }
+    guard shouldFadeIn else {
+      DispatchQueue.main.async { [weak self, weak container] in
+        guard let self = self, let container = container, self.activeContainer === container else { return }
+        self.flutterViewController.viewDidLayoutSubviews()
+        self.flutterViewController.view.setNeedsDisplay()
+        self.onSurfaceMounted?()
+      }
+      return
+    }
     // The Flutter view was previously laid out at the hidden root size. Give
     // Flutter two layout passes at the final 16:9 bounds before revealing the
     // texture so the stale centered preview can never flash on screen.
@@ -83,13 +93,19 @@ private final class PiliNativeFlutterPlayerSurface {
       DispatchQueue.main.async { [weak self, weak container] in
         guard let self = self, let container = container, self.activeContainer === container else { return }
         container.view.layoutIfNeeded()
+        self.flutterViewController.viewDidLayoutSubviews()
+        self.flutterViewController.view.setNeedsDisplay()
         self.hasPresentedFirstFrame = true
-        UIView.animate(
-          withDuration: 0.18,
-          delay: 0,
-          options: [.beginFromCurrentState, .curveEaseOut]
-        ) {
-          self.flutterViewController.view.alpha = 1
+        self.onSurfaceMounted?()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self, weak container] in
+          guard let self = self, let container = container, self.activeContainer === container else { return }
+          UIView.animate(
+            withDuration: 0.18,
+            delay: 0,
+            options: [.beginFromCurrentState, .curveEaseOut]
+          ) {
+            self.flutterViewController.view.alpha = 1
+          }
         }
       }
     }
@@ -516,6 +532,9 @@ private final class PiliNativeViewModel: ObservableObject {
   ) {
     self.channel = channel
     self.flutterPlayerSurface = flutterPlayerSurface
+    flutterPlayerSurface.onSurfaceMounted = { [weak self] in
+      self?.refreshOriginalPlayerSurface()
+    }
     nativePlayerSession.onDanmakuSegmentNeeded = { [weak self] segmentIndex in
       self?.loadNativeDanmaku(segmentIndex: segmentIndex)
     }
@@ -529,6 +548,14 @@ private final class PiliNativeViewModel: ObservableObject {
       .sink { [weak self] fullscreen in
         self?.originalPlayerFullscreen = fullscreen
       }
+  }
+
+  private func refreshOriginalPlayerSurface() {
+    guard !originalPlayerHeroTag.isEmpty else { return }
+    channel.invokeMethod(
+      "refreshNativePlayerSurface",
+      arguments: ["heroTag": originalPlayerHeroTag]
+    )
   }
 
   func configure(titles: [String]?, selectedIndex: Int?) {

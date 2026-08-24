@@ -2034,6 +2034,8 @@ class _PLVideoPlayerState extends State<PLVideoPlayer>
             child: Obx(
               () {
                 final videoFit = plPlayerController.videoFit.value;
+                final textureRevision =
+                    plPlayerController.videoTextureRevision.value;
                 return Transform.flip(
                   flipX: plPlayerController.flipX.value,
                   flipY: plPlayerController.flipY.value,
@@ -2041,6 +2043,7 @@ class _PLVideoPlayerState extends State<PLVideoPlayer>
                     fit: videoFit.boxFit,
                     alignment: widget.alignment,
                     child: SimpleVideo(
+                      key: ValueKey<int>(textureRevision),
                       controller: plPlayerController.videoController!,
                       fill: widget.fill,
                       aspectRatio: videoFit.aspectRatio,

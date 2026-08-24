@@ -748,6 +748,10 @@ class VideoDetailController extends GetxController
       videoType: videoType,
       onInit: () {
         videoState.value = true;
+        // Recreate the Flutter Texture element after media-kit opens a new
+        // representation. iOS may keep presenting the previous pixel buffer
+        // when DASH resolution changes while audio continues normally.
+        plPlayerController.refreshVideoTexture();
         setSubtitle(vttSubtitlesIndex.value);
       },
       width: firstVideo.width,

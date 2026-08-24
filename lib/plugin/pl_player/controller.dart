@@ -179,6 +179,11 @@ class PlPlayerController with BlockConfigMixin {
   late final RxBool flipY = false.obs;
 
   final RxBool isBuffering = true.obs;
+  final RxInt videoTextureRevision = 0.obs;
+
+  void refreshVideoTexture() {
+    videoTextureRevision.value++;
+  }
 
   /// 全屏方向
   // ignore: unnecessary_getters_setters

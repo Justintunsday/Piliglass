@@ -152,6 +152,8 @@ final class IOSNativeUIBridge {
         return _performVideoAction(_arguments(call));
       case 'changeNativeVideoPart':
         return _changeNativeVideoPart(_arguments(call));
+      case 'refreshNativePlayerSurface':
+        return _refreshNativePlayerSurface(_arguments(call));
       case 'openDynamic':
         return _openDynamic(_arguments(call));
       case 'loadNativeDynamicDetail':
@@ -810,6 +812,22 @@ final class IOSNativeUIBridge {
       return const {'state': 'error', 'error': '没有找到对应分P'};
     } catch (_) {
       return const {'state': 'error', 'error': '播放器简介尚未就绪'};
+    }
+  }
+
+  Future<Map<String, dynamic>> _refreshNativePlayerSurface(
+    Map<dynamic, dynamic> arguments,
+  ) async {
+    final heroTag = _nonEmpty(arguments['heroTag']?.toString());
+    if (heroTag == null) {
+      return const {'state': 'error', 'error': '播放器参数无效'};
+    }
+    try {
+      final controller = Get.find<UgcIntroController>(tag: heroTag);
+      controller.videoDetailCtr.plPlayerController.refreshVideoTexture();
+      return const {'state': 'success'};
+    } catch (_) {
+      return const {'state': 'error', 'error': '播放器表面尚未就绪'};
     }
   }
 
