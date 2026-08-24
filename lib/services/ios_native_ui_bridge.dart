@@ -4,6 +4,7 @@ import 'package:PiliPlus/http/fav.dart';
 import 'package:PiliPlus/http/fan.dart';
 import 'package:PiliPlus/http/follow.dart';
 import 'package:PiliPlus/http/loading_state.dart';
+import 'package:PiliPlus/http/member.dart';
 import 'package:PiliPlus/http/search.dart';
 import 'package:PiliPlus/http/user.dart';
 import 'package:PiliPlus/http/video.dart';
@@ -19,6 +20,7 @@ import 'package:PiliPlus/pages/main/controller.dart';
 import 'package:PiliPlus/pages/mine/controller.dart';
 import 'package:PiliPlus/pages/rcmd/controller.dart';
 import 'package:PiliPlus/pages/setting/common_setting.dart';
+import 'package:PiliPlus/pages/video/introduction/ugc/controller.dart';
 import 'package:PiliPlus/pages/webdav/view.dart';
 import 'package:PiliPlus/services/service_locator.dart';
 import 'package:PiliPlus/utils/app_scheme.dart';
@@ -125,6 +127,8 @@ final class IOSNativeUIBridge {
         return _playVideo(_arguments(call));
       case 'performVideoAction':
         return _performVideoAction(_arguments(call));
+      case 'changeNativeVideoPart':
+        return _changeNativeVideoPart(_arguments(call));
       case 'openDynamic':
         return _openDynamic(_arguments(call));
       case 'openRoute':
@@ -139,6 +143,10 @@ final class IOSNativeUIBridge {
         return _searchVideos(_arguments(call));
       case 'loadNativeLibrary':
         return _loadNativeLibrary(_arguments(call));
+      case 'loadNativeProfile':
+        return _loadNativeProfile(_arguments(call));
+      case 'setNativeProfileFollow':
+        return _setNativeProfileFollow(_arguments(call));
       // Kept for older native shells that still emit this action.
       case 'openSearch':
         return _openRoute(const {'route': '/search'});
@@ -339,6 +347,34 @@ final class IOSNativeUIBridge {
             : const {'state': 'error', 'error': '添加稍后再看失败'};
       default:
         return const {'state': 'error', 'error': '不支持的视频操作'};
+    }
+  }
+
+  Future<Map<String, dynamic>> _changeNativeVideoPart(
+    Map<dynamic, dynamic> arguments,
+  ) async {
+    final heroTag = _nonEmpty(arguments['heroTag']?.toString());
+    final cid = _asInt(arguments['cid']);
+    if (heroTag == null || cid == null) {
+      return const {'state': 'error', 'error': '分P参数无效'};
+    }
+    try {
+      final controller = Get.find<UgcIntroController>(tag: heroTag);
+      final pages = controller.videoDetail.value.pages;
+      if (pages == null || pages.isEmpty) {
+        return const {'state': 'error', 'error': '分P数据尚未加载'};
+      }
+      for (final page in pages) {
+        if (page.cid == cid) {
+          final changed = await controller.onChangeEpisode(page);
+          return changed
+              ? const {'state': 'success'}
+              : const {'state': 'error', 'error': '切换分P失败'};
+        }
+      }
+      return const {'state': 'error', 'error': '没有找到对应分P'};
+    } catch (_) {
+      return const {'state': 'error', 'error': '播放器简介尚未就绪'};
     }
   }
 
@@ -895,6 +931,93 @@ final class IOSNativeUIBridge {
     } catch (error) {
       return {'state': 'error', 'error': '加载失败：$error'};
     }
+  }
+
+  Future<Map<String, dynamic>> _loadNativeProfile(
+    Map<dynamic, dynamic> arguments,
+  ) async {
+    final mid = _asInt(arguments['mid']);
+    if (mid == null || mid <= 0) {
+      return const {'state': 'error', 'error': '用户参数无效'};
+    }
+    final result = await MemberHttp.space(mid: mid);
+    return switch (result) {
+      Loading() => const {'state': 'loading'},
+      Error(:final errMsg, :final code) => {
+        'state': 'error',
+        'error': errMsg ?? '个人空间加载失败',
+        'code': ?code,
+      },
+      Success(:final response) => () {
+        final card = response.card;
+        final videos = response.archive?.item ?? const [];
+        return {
+          'state': 'success',
+          'profile': {
+            'mid': mid,
+            'name': card?.name ?? '用户 $mid',
+            'face': _normalizeURL(card?.face),
+            'topImage': _normalizeURL(response.images?.imgUrl),
+            'sign': card?.sign ?? '',
+            'level': card?.levelInfo?.currentLevel ?? 0,
+            'followers': card?.fans ?? 0,
+            'following': card?.attention ?? 0,
+            'likes': card?.likes?.likeNum ?? 0,
+            'official': card?.officialVerify?.desc ?? '',
+            'vip': (card?.vip?.status ?? 0) > 0,
+            'isSelf': mid == Accounts.main.mid,
+            'isFollowing': card?.relation?.isFollow == 1,
+            'videoCount': response.archive?.count ?? videos.length,
+            'tags': (card?.spaceTag ?? const [])
+                .map((item) => item.title)
+                .whereType<String>()
+                .where((item) => item.isNotEmpty)
+                .toList(),
+            'videos': videos.asMap().entries.map((entry) {
+              final item = entry.value;
+              final bvid = _nonEmpty(item.bvid);
+              final aid = bvid == null ? null : IdUtils.bv2av(bvid);
+              return {
+                'id': bvid ?? 'profile-video-${entry.key}',
+                'aid': aid,
+                'bvid': bvid,
+                'title': item.title,
+                'cover': _normalizeURL(item.cover),
+                'owner': card?.name ?? '',
+                'viewText': _compactNumber(item.stat.view),
+                'danmakuText': _compactNumber(item.stat.danmu),
+                'durationText': _durationText(item.duration),
+              };
+            }).toList(),
+          },
+        };
+      }(),
+    };
+  }
+
+  Future<Map<String, dynamic>> _setNativeProfileFollow(
+    Map<dynamic, dynamic> arguments,
+  ) async {
+    final mid = _asInt(arguments['mid']);
+    final follow = arguments['follow'] == true;
+    if (mid == null || mid <= 0 || mid == Accounts.main.mid) {
+      return const {'state': 'error', 'error': '不能修改该用户的关注状态'};
+    }
+    if (!Accounts.main.isLogin) {
+      return const {'state': 'error', 'error': '请先登录账号'};
+    }
+    final result = await VideoHttp.relationMod(
+      mid: mid,
+      act: follow ? 1 : 2,
+      reSrc: 11,
+    );
+    return result.isSuccess
+        ? {
+            'state': 'success',
+            'isFollowing': follow,
+            'message': follow ? '关注成功' : '已取消关注',
+          }
+        : const {'state': 'error', 'error': '关注状态修改失败'};
   }
 
   Future<Map<String, dynamic>> _loadNativeHistory(
