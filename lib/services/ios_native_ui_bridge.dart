@@ -353,10 +353,10 @@ final class IOSNativeUIBridge {
     Map<dynamic, dynamic> arguments,
   ) async {
     final key = arguments['key']?.toString();
-    final definition = _nativeSettingDefinitions.firstWhereOrNull(
+    final isAllowed = _nativeSettingDefinitions.any(
       (item) => item['key'] == key,
     );
-    if (definition == null || arguments['value'] is! bool) {
+    if (!isAllowed || arguments['value'] is! bool) {
       return const {'state': 'error', 'error': '不支持的设置项'};
     }
     final value = arguments['value'] as bool;
