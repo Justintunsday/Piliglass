@@ -6,6 +6,7 @@ import 'package:PiliPlus/grpc/reply.dart';
 import 'package:PiliPlus/http/fav.dart';
 import 'package:PiliPlus/http/fan.dart';
 import 'package:PiliPlus/http/follow.dart';
+import 'package:PiliPlus/http/dynamics.dart';
 import 'package:PiliPlus/http/login.dart';
 import 'package:PiliPlus/http/loading_state.dart';
 import 'package:PiliPlus/http/member.dart';
@@ -144,6 +145,12 @@ final class IOSNativeUIBridge {
         return _changeNativeVideoPart(_arguments(call));
       case 'openDynamic':
         return _openDynamic(_arguments(call));
+      case 'loadNativeDynamicDetail':
+        return _loadNativeDynamicDetail(_arguments(call));
+      case 'setNativeDynamicLike':
+        return _setNativeDynamicLike(_arguments(call));
+      case 'repostNativeDynamic':
+        return _repostNativeDynamic(_arguments(call));
       case 'openRoute':
         return _openRoute(_arguments(call));
       case 'loadNativeSettings':
@@ -170,6 +177,10 @@ final class IOSNativeUIBridge {
         return _loadNativeComments(_arguments(call));
       case 'setNativeCommentLike':
         return _setNativeCommentLike(_arguments(call));
+      case 'publishNativeComment':
+        return _publishNativeComment(_arguments(call));
+      case 'loadNativeCommentReplies':
+        return _loadNativeCommentReplies(_arguments(call));
       case 'loadNativeDownloads':
         return _loadNativeDownloads();
       // Kept for older native shells that still emit this action.
@@ -906,6 +917,85 @@ final class IOSNativeUIBridge {
     await PageUtils.pushDynFromId(id: id);
   }
 
+  Future<Map<String, dynamic>> _loadNativeDynamicDetail(
+    Map<dynamic, dynamic> arguments,
+  ) async {
+    final id = _nonEmpty(arguments['id']?.toString());
+    if (id == null) {
+      return const {'state': 'error', 'error': '动态编号无效'};
+    }
+    final result = await DynamicsHttp.dynamicDetail(id: id);
+    return switch (result) {
+      Success(:final response) => {
+        'state': 'success',
+        'dynamic': _dynamicMap(response, 0),
+      },
+      Error(:final errMsg, :final code) => {
+        'state': 'error',
+        'error': errMsg ?? '动态详情加载失败',
+        'code': ?code,
+      },
+      Loading() => const {'state': 'loading'},
+    };
+  }
+
+  Future<Map<String, dynamic>> _setNativeDynamicLike(
+    Map<dynamic, dynamic> arguments,
+  ) async {
+    if (!Accounts.main.isLogin) {
+      return const {'state': 'error', 'error': '请先登录账号'};
+    }
+    final id = _nonEmpty(arguments['id']?.toString());
+    final liked = arguments['liked'] == true;
+    if (id == null) {
+      return const {'state': 'error', 'error': '动态编号无效'};
+    }
+    final result = await DynamicsHttp.thumbDynamic(
+      dynamicId: id,
+      up: liked ? 2 : 1,
+    );
+    return switch (result) {
+      Success() => {'state': 'success', 'liked': !liked},
+      Error(:final errMsg, :final code) => {
+        'state': 'error',
+        'error': errMsg ?? '动态点赞失败',
+        'code': ?code,
+      },
+      Loading() => const {'state': 'loading'},
+    };
+  }
+
+  Future<Map<String, dynamic>> _repostNativeDynamic(
+    Map<dynamic, dynamic> arguments,
+  ) async {
+    if (!Accounts.main.isLogin) {
+      return const {'state': 'error', 'error': '请先登录账号'};
+    }
+    final id = _nonEmpty(arguments['id']?.toString());
+    final message = arguments['message']?.toString().trim() ?? '';
+    if (id == null) {
+      return const {'state': 'error', 'error': '动态编号无效'};
+    }
+    final result = await DynamicsHttp.createDynamic(
+      mid: Accounts.main.mid,
+      dynIdStr: id,
+      rawText: message,
+    );
+    return switch (result) {
+      Success(:final response) => {
+        'state': 'success',
+        'id': response?['dyn_id']?.toString(),
+        'message': '转发成功',
+      },
+      Error(:final errMsg, :final code) => {
+        'state': 'error',
+        'error': errMsg ?? '动态转发失败',
+        'code': ?code,
+      },
+      Loading() => const {'state': 'loading'},
+    };
+  }
+
   static const Set<String> _allowedRoutes = {
     '/articleList',
     '/download',
@@ -1327,43 +1417,7 @@ final class IOSNativeUIBridge {
             : replies.length,
         'hasMore': !response.cursor.isEnd,
         'items': replies.asMap().entries.map((entry) {
-          final item = entry.value;
-          final content = item.content;
-          final control = item.replyControl;
-          final member = item.member;
-          return {
-            'id': item.id.toString(),
-            'rpid': item.id.toInt(),
-            'memberId': item.mid.toInt(),
-            'author': member.name.isEmpty ? '用户' : member.name,
-            'avatar': _normalizeURL(member.face),
-            'message': content.message,
-            'time': control.timeDesc.isNotEmpty
-                ? control.timeDesc
-                : DateFormatUtils.format(item.ctime.toInt()),
-            'location': control.location,
-            'like': item.like.toInt(),
-            'liked': control.action.toInt() == 1,
-            'replyCount': item.count.toInt(),
-            'level': member.level.toInt(),
-            'pictures': content.pictures
-                .map((picture) => _normalizeURL(picture.imgSrc))
-                .whereType<String>()
-                .toList(),
-            'emotes': content.emotes.entries.map((entry) {
-              final emote = entry.value;
-              final source = emote.hasWebpUrl() && emote.webpUrl.isNotEmpty
-                  ? emote.webpUrl
-                  : emote.hasGifUrl() && emote.gifUrl.isNotEmpty
-                  ? emote.gifUrl
-                  : emote.url;
-              return {
-                'text': entry.key,
-                'url': _normalizeURL(source),
-                'size': emote.size.toInt().clamp(1, 2),
-              };
-            }).where((emote) => emote['url'] != null).toList(),
-          };
+          return _grpcCommentMap(entry.value, entry.key);
         }).toList(),
       };
     }
@@ -1443,6 +1497,118 @@ final class IOSNativeUIBridge {
     return result.isSuccess
         ? {'state': 'success', 'liked': !liked}
         : const {'state': 'error', 'error': '评论点赞失败'};
+  }
+
+  Future<Map<String, dynamic>> _publishNativeComment(
+    Map<dynamic, dynamic> arguments,
+  ) async {
+    if (!Accounts.main.isLogin) {
+      return const {'state': 'error', 'error': '请先登录账号'};
+    }
+    final oid = _asInt(arguments['oid']);
+    final type = _asInt(arguments['type']) ?? 17;
+    final root = _asInt(arguments['root']);
+    final parent = _asInt(arguments['parent']);
+    final message = arguments['message']?.toString().trim() ?? '';
+    if (oid == null || oid <= 0 || message.isEmpty) {
+      return const {'state': 'error', 'error': '评论内容或参数无效'};
+    }
+    if (message.length > 1000) {
+      return const {'state': 'error', 'error': '评论不能超过 1000 个字符'};
+    }
+    final result = await VideoHttp.replyAdd(
+      type: type,
+      oid: oid,
+      message: message,
+      root: root,
+      parent: parent,
+    );
+    return switch (result) {
+      Success(:final response) => {
+        'state': 'success',
+        'message': root != null && root > 0 ? '回复成功' : '评论成功',
+        if (response != null) 'comment': _grpcCommentMap(response, 0),
+      },
+      Error(:final errMsg, :final code) => {
+        'state': 'error',
+        'error': errMsg ?? '评论发布失败',
+        'code': ?code,
+      },
+      Loading() => const {'state': 'loading'},
+    };
+  }
+
+  Future<Map<String, dynamic>> _loadNativeCommentReplies(
+    Map<dynamic, dynamic> arguments,
+  ) async {
+    final oid = _asInt(arguments['oid']);
+    final type = _asInt(arguments['type']) ?? 17;
+    final root = _asInt(arguments['root']);
+    if (oid == null || oid <= 0 || root == null || root <= 0) {
+      return const {'state': 'error', 'error': '二级评论参数无效'};
+    }
+    final result = await ReplyGrpc.detailList(
+      type: type,
+      oid: oid,
+      root: root,
+      rpid: 0,
+      mode: Mode.MAIN_LIST_TIME,
+      offset: null,
+    );
+    return switch (result) {
+      Success(:final response) => {
+        'state': 'success',
+        'total': response.root.count.toInt(),
+        'items': response.root.replies.asMap().entries.map((entry) {
+          return _grpcCommentMap(entry.value, entry.key);
+        }).toList(),
+      },
+      Error(:final errMsg, :final code) => {
+        'state': 'error',
+        'error': errMsg ?? '二级评论加载失败',
+        'code': ?code,
+      },
+      Loading() => const {'state': 'loading'},
+    };
+  }
+
+  Map<String, dynamic> _grpcCommentMap(ReplyInfo item, int index) {
+    final content = item.content;
+    final control = item.replyControl;
+    final member = item.member;
+    return {
+      'id': item.id.toString().isEmpty ? 'comment-$index' : item.id.toString(),
+      'rpid': item.id.toInt(),
+      'memberId': item.mid.toInt(),
+      'author': member.name.isEmpty ? '用户' : member.name,
+      'avatar': _normalizeURL(member.face),
+      'message': content.message,
+      'time': control.timeDesc.isNotEmpty
+          ? control.timeDesc
+          : DateFormatUtils.format(item.ctime.toInt()),
+      'location': control.location,
+      'like': item.like.toInt(),
+      'liked': control.action.toInt() == 1,
+      'replyCount': item.count.toInt(),
+      'level': member.level.toInt(),
+      'pictures': content.pictures
+          .map((picture) => _normalizeURL(picture.imgSrc))
+          .whereType<String>()
+          .toList(),
+      'emotes': content.emotes.entries.map((entry) {
+        final emote = entry.value;
+        final source = emote.hasWebpUrl() && emote.webpUrl.isNotEmpty
+            ? emote.webpUrl
+            : emote.hasGifUrl() && emote.gifUrl.isNotEmpty
+            ? emote.gifUrl
+            : emote.url;
+        return {
+          'text': entry.key,
+          'url': _normalizeURL(source),
+          'size': emote.size.toInt().clamp(1, 2),
+        };
+      }).where((emote) => emote['url'] != null).toList(),
+    };
   }
 
   Future<Map<String, dynamic>> _loadNativeDownloads() async {
@@ -1911,6 +2077,7 @@ final class IOSNativeUIBridge {
         'commentOid': _asInt(item.basic?.commentIdStr),
         'commentType': _asInt(item.basic?.commentType),
         'like': _asInt(stat?.like?.count) ?? 0,
+        'liked': stat?.like?.status == true,
         'comment': _asInt(stat?.comment?.count) ?? 0,
         'forward': _asInt(stat?.forward?.count) ?? 0,
       };

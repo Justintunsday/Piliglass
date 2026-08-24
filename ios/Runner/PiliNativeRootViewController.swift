@@ -194,6 +194,20 @@ private final class PiliNativeViewModel: ObservableObject {
 
   @Published var isDynamicDetailPresented = false
   @Published private(set) var selectedDynamic: PiliNativeDynamic?
+  @Published private(set) var dynamicDetailLoading = false
+  @Published private(set) var dynamicActionLoading = false
+  @Published private(set) var dynamicMessage: String?
+  @Published var isDynamicComposerPresented = false
+  @Published var dynamicComposerText = ""
+  @Published private(set) var dynamicComposerMode = "comment"
+  @Published private(set) var dynamicComposerTitle = "发表评论"
+  @Published private(set) var dynamicComposerHint = "友善地发表一条评论"
+  @Published var isCommentThreadPresented = false
+  @Published private(set) var commentThreadRoot: PiliNativeComment?
+  @Published private(set) var commentThreadItems: [PiliNativeComment] = []
+  @Published private(set) var commentThreadLoading = false
+  @Published private(set) var commentThreadError: String?
+  @Published private(set) var commentThreadTotal = 0
 
   @Published var isMessagesPresented = false
   @Published private(set) var messageKind = "reply"
@@ -230,6 +244,8 @@ private final class PiliNativeViewModel: ObservableObject {
   private var profileMID: Int?
   private var commentOID: Int?
   private var commentType = 1
+  private var composerRootRpid: Int?
+  private var composerParentRpid: Int?
 
   init(channel: FlutterMethodChannel) {
     self.channel = channel
@@ -547,6 +563,8 @@ private final class PiliNativeViewModel: ObservableObject {
 
   func openDynamic(_ item: PiliNativeDynamic) {
     selectedDynamic = item
+    dynamicMessage = nil
+    dynamicActionLoading = false
     isDynamicDetailPresented = true
     if let oid = item.commentOID {
       loadComments(oid: oid, type: item.commentType ?? 17)
@@ -555,6 +573,7 @@ private final class PiliNativeViewModel: ObservableObject {
       commentsTotal = item.comment
       commentsError = "该动态没有可用的评论编号"
     }
+    loadDynamicDetail()
   }
 
   func openRoute(_ route: String, parameters: [String: String] = [:]) {
@@ -839,13 +858,21 @@ private final class PiliNativeViewModel: ObservableObject {
         let nowLiked = piliBool(result["liked"])
         self.comments[currentIndex].liked = nowLiked
         self.comments[currentIndex].like = max(0, self.comments[currentIndex].like + (nowLiked ? 1 : -1))
+        if self.commentThreadRoot?.id == comment.id {
+          self.commentThreadRoot?.liked = nowLiked
+          self.commentThreadRoot?.like = self.comments[currentIndex].like
+        }
       }
     }
   }
 
   func openCommentMember(_ comment: PiliNativeComment) {
     guard let memberID = comment.memberID else { return }
-    if isDynamicDetailPresented { isDynamicDetailPresented = false }
+    if isDynamicDetailPresented {
+      isDynamicComposerPresented = false
+      isCommentThreadPresented = false
+      isDynamicDetailPresented = false
+    }
     if isVideoDetailPresented {
       stopNativePlayback()
       isVideoDetailPresented = false
@@ -878,6 +905,249 @@ private final class PiliNativeViewModel: ObservableObject {
     DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) { [weak self] in
       self?.presentProfile(memberID)
     }
+  }
+
+  func loadDynamicDetail() {
+    guard let sourceID = selectedDynamic?.sourceID else { return }
+    dynamicDetailLoading = true
+    channel.invokeMethod(
+      "loadNativeDynamicDetail",
+      arguments: ["id": sourceID]
+    ) { [weak self] response in
+      DispatchQueue.main.async {
+        guard let self = self, self.selectedDynamic?.sourceID == sourceID else { return }
+        self.dynamicDetailLoading = false
+        if let flutterError = response as? FlutterError {
+          self.dynamicMessage = flutterError.message ?? "动态详情加载失败"
+          return
+        }
+        let result = piliDictionary(response)
+        guard result["state"] as? String == "success" else {
+          self.dynamicMessage = result["error"] as? String ?? "动态详情加载失败"
+          return
+        }
+        let refreshed = PiliNativeDynamic(map: piliDictionary(result["dynamic"]), index: 0)
+        self.selectedDynamic = refreshed
+        if let oid = refreshed.commentOID,
+           oid != self.commentOID || (refreshed.commentType ?? 17) != self.commentType {
+          self.loadComments(oid: oid, type: refreshed.commentType ?? 17)
+        }
+      }
+    }
+  }
+
+  func toggleDynamicLike() {
+    guard let item = selectedDynamic, !dynamicActionLoading else { return }
+    dynamicActionLoading = true
+    dynamicMessage = nil
+    channel.invokeMethod(
+      "setNativeDynamicLike",
+      arguments: ["id": item.sourceID, "liked": item.liked]
+    ) { [weak self] response in
+      DispatchQueue.main.async {
+        guard let self = self else { return }
+        self.dynamicActionLoading = false
+        let result = piliDictionary(response)
+        guard result["state"] as? String == "success" else {
+          self.dynamicMessage = result["error"] as? String ?? "动态点赞失败"
+          return
+        }
+        let nowLiked = piliBool(result["liked"])
+        self.selectedDynamic?.liked = nowLiked
+        self.selectedDynamic?.like = max(0, item.like + (nowLiked ? 1 : -1))
+        self.syncSelectedDynamicToList()
+        self.dynamicMessage = nowLiked ? "点赞成功" : "已取消点赞"
+      }
+    }
+  }
+
+  func beginDynamicComment() {
+    guard commentOID != nil else {
+      dynamicMessage = "该动态暂时无法评论"
+      return
+    }
+    composerRootRpid = nil
+    composerParentRpid = nil
+    dynamicMessage = nil
+    dynamicComposerMode = "comment"
+    dynamicComposerTitle = "发表评论"
+    dynamicComposerHint = "友善地发表一条评论"
+    dynamicComposerText = ""
+    isDynamicComposerPresented = true
+  }
+
+  func beginDynamicRepost() {
+    dynamicMessage = nil
+    dynamicComposerMode = "repost"
+    dynamicComposerTitle = "转发动态"
+    dynamicComposerHint = "说点什么吧"
+    dynamicComposerText = "转发动态"
+    composerRootRpid = nil
+    composerParentRpid = nil
+    isDynamicComposerPresented = true
+  }
+
+  func beginCommentReply(_ comment: PiliNativeComment, root: PiliNativeComment? = nil) {
+    guard commentOID != nil else {
+      dynamicMessage = "该评论区暂时无法回复"
+      return
+    }
+    let rootComment = root ?? comment
+    dynamicMessage = nil
+    composerRootRpid = rootComment.rpid
+    composerParentRpid = comment.rpid
+    dynamicComposerMode = "reply"
+    dynamicComposerTitle = "回复 \(comment.author)"
+    dynamicComposerHint = "回复 @\(comment.author)"
+    dynamicComposerText = ""
+    isDynamicComposerPresented = true
+  }
+
+  func publishDynamicComposer() {
+    guard !dynamicActionLoading else { return }
+    let text = dynamicComposerText.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !text.isEmpty else {
+      dynamicMessage = "内容不能为空"
+      return
+    }
+    dynamicActionLoading = true
+    dynamicMessage = nil
+
+    if dynamicComposerMode == "repost" {
+      guard let sourceID = selectedDynamic?.sourceID else {
+        dynamicActionLoading = false
+        return
+      }
+      channel.invokeMethod(
+        "repostNativeDynamic",
+        arguments: ["id": sourceID, "message": text]
+      ) { [weak self] response in
+        DispatchQueue.main.async {
+          guard let self = self else { return }
+          self.dynamicActionLoading = false
+          let result = piliDictionary(response)
+          guard result["state"] as? String == "success" else {
+            self.dynamicMessage = result["error"] as? String ?? "动态转发失败"
+            return
+          }
+          self.selectedDynamic?.forward += 1
+          self.syncSelectedDynamicToList()
+          self.dynamicMessage = result["message"] as? String ?? "转发成功"
+          self.isDynamicComposerPresented = false
+        }
+      }
+      return
+    }
+
+    guard let oid = commentOID else {
+      dynamicActionLoading = false
+      dynamicMessage = "评论参数无效"
+      return
+    }
+    let root = composerRootRpid
+    let parent = composerParentRpid
+    var arguments: [String: Any] = [
+      "oid": oid,
+      "type": commentType,
+      "message": text,
+    ]
+    if let root = root { arguments["root"] = root }
+    if let parent = parent { arguments["parent"] = parent }
+    channel.invokeMethod("publishNativeComment", arguments: arguments) { [weak self] response in
+      DispatchQueue.main.async {
+        guard let self = self else { return }
+        self.dynamicActionLoading = false
+        let result = piliDictionary(response)
+        guard result["state"] as? String == "success" else {
+          self.dynamicMessage = result["error"] as? String ?? "评论发布失败"
+          return
+        }
+        self.dynamicMessage = result["message"] as? String ?? "发布成功"
+        self.isDynamicComposerPresented = false
+        if root == nil {
+          self.selectedDynamic?.comment += 1
+          self.syncSelectedDynamicToList()
+          self.loadComments(oid: oid, type: self.commentType)
+        } else {
+          self.loadComments(oid: oid, type: self.commentType)
+          if self.isCommentThreadPresented {
+            self.loadCommentThread()
+          }
+        }
+      }
+    }
+  }
+
+  func openCommentThread(_ comment: PiliNativeComment) {
+    commentThreadRoot = comment
+    commentThreadItems = []
+    commentThreadError = nil
+    commentThreadTotal = comment.replyCount
+    isCommentThreadPresented = true
+    loadCommentThread()
+  }
+
+  func loadCommentThread() {
+    guard let oid = commentOID, let root = commentThreadRoot else { return }
+    commentThreadLoading = true
+    commentThreadError = nil
+    channel.invokeMethod(
+      "loadNativeCommentReplies",
+      arguments: ["oid": oid, "type": commentType, "root": root.rpid]
+    ) { [weak self] response in
+      DispatchQueue.main.async {
+        guard let self = self, self.commentThreadRoot?.rpid == root.rpid else { return }
+        self.commentThreadLoading = false
+        let result = piliDictionary(response)
+        guard result["state"] as? String == "success" else {
+          self.commentThreadError = result["error"] as? String ?? "二级评论加载失败"
+          return
+        }
+        let rows = result["items"] as? [Any] ?? []
+        self.commentThreadItems = rows.enumerated().map {
+          PiliNativeComment(map: piliDictionary($0.element), index: $0.offset)
+        }
+        self.commentThreadTotal = piliInt(result["total"])
+      }
+    }
+  }
+
+  func toggleThreadCommentLike(_ comment: PiliNativeComment) {
+    guard let oid = commentOID else { return }
+    channel.invokeMethod(
+      "setNativeCommentLike",
+      arguments: [
+        "oid": oid,
+        "type": commentType,
+        "rpid": comment.rpid,
+        "liked": comment.liked,
+      ]
+    ) { [weak self] response in
+      DispatchQueue.main.async {
+        guard let self = self else { return }
+        let result = piliDictionary(response)
+        guard result["state"] as? String == "success" else {
+          self.commentThreadError = result["error"] as? String ?? "评论点赞失败"
+          return
+        }
+        guard let index = self.commentThreadItems.firstIndex(where: { $0.id == comment.id }) else { return }
+        let nowLiked = piliBool(result["liked"])
+        self.commentThreadItems[index].liked = nowLiked
+        self.commentThreadItems[index].like = max(
+          0,
+          self.commentThreadItems[index].like + (nowLiked ? 1 : -1)
+        )
+      }
+    }
+  }
+
+  private func syncSelectedDynamicToList() {
+    guard let selected = selectedDynamic,
+          let index = dynamics.firstIndex(where: { $0.sourceID == selected.sourceID }) else { return }
+    dynamics[index].like = selected.like
+    dynamics[index].liked = selected.liked
+    dynamics[index].comment = selected.comment
+    dynamics[index].forward = selected.forward
   }
 
   func presentLibrary(_ kind: String, title: String) {
@@ -1315,9 +1585,10 @@ private struct PiliNativeDynamic: Identifiable {
   let bvid: String?
   let commentOID: Int?
   let commentType: Int?
-  let like: Int
-  let comment: Int
-  let forward: Int
+  var like: Int
+  var liked: Bool
+  var comment: Int
+  var forward: Int
 
   init(map: [String: Any], index: Int) {
     sourceID = piliString(map["id"]) ?? "dynamic"
@@ -1334,6 +1605,7 @@ private struct PiliNativeDynamic: Identifiable {
     commentOID = piliOptionalInt(map["commentOid"])
     commentType = piliOptionalInt(map["commentType"])
     like = piliInt(map["like"])
+    liked = piliBool(map["liked"])
     comment = piliInt(map["comment"])
     forward = piliInt(map["forward"])
   }
@@ -1877,6 +2149,7 @@ private struct PiliNativeDynamicRow: View {
 private struct PiliNativeStat: View {
   let icon: String
   let count: Int
+  var color: Color = .secondary
 
   var body: some View {
     HStack(spacing: 4) {
@@ -1884,7 +2157,7 @@ private struct PiliNativeStat: View {
       Text(count > 0 ? String(count) : "")
     }
     .font(.caption)
-    .foregroundColor(.secondary)
+    .foregroundColor(color)
   }
 }
 
@@ -3021,17 +3294,41 @@ private struct PiliNativeDynamicDetailView: View {
                 .buttonStyle(PlainButtonStyle())
               }
 
-              HStack {
-                PiliNativeStat(icon: "arrowshape.turn.up.right", count: item.forward)
-                Spacer()
-                PiliNativeStat(icon: "bubble.left", count: item.comment)
-                Spacer()
-                PiliNativeStat(icon: "hand.thumbsup", count: item.like)
+              HStack(spacing: 0) {
+                Button(action: model.beginDynamicRepost) {
+                  PiliNativeStat(icon: "arrowshape.turn.up.right", count: item.forward)
+                    .frame(maxWidth: .infinity)
+                }
+                Button(action: model.beginDynamicComment) {
+                  PiliNativeStat(icon: "bubble.left", count: item.comment)
+                    .frame(maxWidth: .infinity)
+                }
+                Button(action: model.toggleDynamicLike) {
+                  PiliNativeStat(
+                    icon: item.liked ? "hand.thumbsup.fill" : "hand.thumbsup",
+                    count: item.like,
+                    color: item.liked ? piliAccent : .secondary
+                  )
+                  .frame(maxWidth: .infinity)
+                }
               }
+              .buttonStyle(PlainButtonStyle())
+              .disabled(model.dynamicActionLoading)
               .padding(.horizontal, 22)
               .padding(.vertical, 12)
               .background(Color(UIColor.secondarySystemGroupedBackground))
               .cornerRadius(11)
+
+              if model.dynamicDetailLoading {
+                ProgressView("正在加载完整动态")
+                  .font(.caption)
+                  .frame(maxWidth: .infinity, alignment: .center)
+              } else if let message = model.dynamicMessage {
+                Text(message)
+                  .font(.caption)
+                  .foregroundColor(.secondary)
+                  .frame(maxWidth: .infinity, alignment: .center)
+              }
 
               Divider()
               PiliNativeCommentsSection(model: model)
@@ -3052,6 +3349,12 @@ private struct PiliNativeDynamicDetailView: View {
       )
     }
     .navigationViewStyle(StackNavigationViewStyle())
+    .sheet(isPresented: $model.isDynamicComposerPresented) {
+      PiliNativeDynamicComposerView(model: model)
+    }
+    .fullScreenCover(isPresented: $model.isCommentThreadPresented) {
+      PiliNativeCommentThreadView(model: model)
+    }
   }
 }
 
@@ -3069,6 +3372,18 @@ private struct PiliNativeCommentsSection: View {
             .foregroundColor(.secondary)
         }
         Spacer()
+        Button(action: model.beginDynamicComment) {
+          Label("写评论", systemImage: "square.and.pencil")
+            .font(.caption)
+        }
+        .disabled(model.dynamicActionLoading)
+      }
+
+      if let error = model.commentsError, !model.comments.isEmpty {
+        Text(error)
+          .font(.caption)
+          .foregroundColor(.red)
+          .frame(maxWidth: .infinity, alignment: .leading)
       }
 
       if model.commentsLoading {
@@ -3094,7 +3409,9 @@ private struct PiliNativeCommentsSection: View {
           PiliNativeCommentRow(
             comment: comment,
             openMember: { model.openCommentMember(comment) },
-            toggleLike: { model.toggleCommentLike(comment) }
+            toggleLike: { model.toggleCommentLike(comment) },
+            reply: { model.beginCommentReply(comment) },
+            openReplies: { model.openCommentThread(comment) }
           )
           if comment.id != model.comments.last?.id {
             Divider().padding(.leading, 50)
@@ -3105,8 +3422,168 @@ private struct PiliNativeCommentsSection: View {
   }
 }
 
+private struct PiliNativeDynamicComposerView: View {
+  @ObservedObject var model: PiliNativeViewModel
+  @Environment(\.presentationMode) private var presentationMode
+
+  var body: some View {
+    NavigationView {
+      VStack(alignment: .leading, spacing: 12) {
+        Text(model.dynamicComposerHint)
+          .font(.subheadline)
+          .foregroundColor(.secondary)
+        TextEditor(text: $model.dynamicComposerText)
+          .font(.body)
+          .padding(8)
+          .background(Color(UIColor.secondarySystemGroupedBackground))
+          .cornerRadius(10)
+          .frame(minHeight: 180)
+        HStack {
+          Text("\(model.dynamicComposerText.count)/1000")
+            .font(.caption)
+            .foregroundColor(model.dynamicComposerText.count > 1000 ? .red : .secondary)
+          Spacer()
+          if model.dynamicActionLoading {
+            ProgressView()
+          }
+        }
+        if let message = model.dynamicMessage {
+          Text(message)
+            .font(.caption)
+            .foregroundColor(.red)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        Spacer()
+      }
+      .padding(16)
+      .background(Color(UIColor.systemBackground))
+      .navigationBarTitle(model.dynamicComposerTitle, displayMode: .inline)
+      .navigationBarItems(
+        leading: Button("取消") {
+          model.isDynamicComposerPresented = false
+          presentationMode.wrappedValue.dismiss()
+        },
+        trailing: Button(model.dynamicComposerMode == "repost" ? "转发" : "发布") {
+          model.publishDynamicComposer()
+        }
+        .disabled(
+          model.dynamicActionLoading ||
+          model.dynamicComposerText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+          model.dynamicComposerText.count > 1000
+        )
+      )
+    }
+    .navigationViewStyle(StackNavigationViewStyle())
+  }
+}
+
+private struct PiliNativeCommentThreadView: View {
+  @ObservedObject var model: PiliNativeViewModel
+  @Environment(\.presentationMode) private var presentationMode
+
+  var body: some View {
+    NavigationView {
+      Group {
+        if let root = model.commentThreadRoot {
+          ScrollView {
+            LazyVStack(alignment: .leading, spacing: 10) {
+              PiliNativeCommentRow(
+                comment: root,
+                openMember: { model.openCommentMember(root) },
+                toggleLike: { model.toggleCommentLike(root) },
+                reply: { model.beginCommentReply(root) }
+              )
+              .padding(.horizontal, 14)
+              Divider()
+              if let error = model.commentThreadError,
+                 !model.commentThreadItems.isEmpty {
+                Text(error)
+                  .font(.caption)
+                  .foregroundColor(.red)
+                  .padding(.horizontal, 14)
+                  .frame(maxWidth: .infinity, alignment: .leading)
+              }
+              if model.commentThreadLoading && model.commentThreadItems.isEmpty {
+                ProgressView("正在加载回复")
+                  .frame(maxWidth: .infinity, minHeight: 120)
+              } else if let error = model.commentThreadError,
+                        model.commentThreadItems.isEmpty {
+                VStack(spacing: 10) {
+                  Text(error).foregroundColor(.secondary)
+                  Button("重试", action: model.loadCommentThread)
+                }
+                .font(.subheadline)
+                .frame(maxWidth: .infinity, minHeight: 120)
+              } else if model.commentThreadItems.isEmpty {
+                Text("暂时没有二级评论")
+                  .font(.subheadline)
+                  .foregroundColor(.secondary)
+                  .frame(maxWidth: .infinity, minHeight: 120)
+              } else {
+                ForEach(model.commentThreadItems) { comment in
+                  PiliNativeCommentRow(
+                    comment: comment,
+                    openMember: { model.openCommentMember(comment) },
+                    toggleLike: { model.toggleThreadCommentLike(comment) },
+                    reply: { model.beginCommentReply(comment, root: root) }
+                  )
+                  .padding(.horizontal, 14)
+                  if comment.id != model.commentThreadItems.last?.id {
+                    Divider().padding(.leading, 64)
+                  }
+                }
+              }
+            }
+            .padding(.vertical, 12)
+          }
+          .background(Color(UIColor.systemBackground))
+        } else {
+          PiliNativeErrorView(message: "评论详情不可用", retry: {})
+        }
+      }
+      .navigationBarTitle(
+        model.commentThreadTotal > 0 ? "\(model.commentThreadTotal) 条回复" : "评论详情",
+        displayMode: .inline
+      )
+      .navigationBarItems(
+        leading: Button("关闭") {
+          model.isCommentThreadPresented = false
+          presentationMode.wrappedValue.dismiss()
+        },
+        trailing: Button("回复") {
+          if let root = model.commentThreadRoot {
+            model.beginCommentReply(root)
+          }
+        }
+      )
+    }
+    .navigationViewStyle(StackNavigationViewStyle())
+    .sheet(isPresented: $model.isDynamicComposerPresented) {
+      PiliNativeDynamicComposerView(model: model)
+    }
+  }
+}
+
 /// Mirrors PiliPlus' original comment renderer: bracketed tokens are matched
 /// against Content.emotes and replaced with an inline image at size * 20pt.
+private final class PiliNativeMultilineLabel: UILabel {
+  override func layoutSubviews() {
+    super.layoutSubviews()
+    let availableWidth = bounds.width
+    if availableWidth > 0 && abs(preferredMaxLayoutWidth - availableWidth) > 0.5 {
+      preferredMaxLayoutWidth = availableWidth
+      invalidateIntrinsicContentSize()
+    }
+  }
+
+  override var intrinsicContentSize: CGSize {
+    guard preferredMaxLayoutWidth > 0 else { return super.intrinsicContentSize }
+    return sizeThatFits(
+      CGSize(width: preferredMaxLayoutWidth, height: CGFloat.greatestFiniteMagnitude)
+    )
+  }
+}
+
 private struct PiliNativeCommentRichText: UIViewRepresentable {
   let message: String
   let emotes: [String: PiliNativeCommentEmote]
@@ -3118,7 +3595,7 @@ private struct PiliNativeCommentRichText: UIViewRepresentable {
   }
 
   func makeUIView(context: Context) -> UILabel {
-    let label = UILabel()
+    let label = PiliNativeMultilineLabel()
     label.backgroundColor = .clear
     label.numberOfLines = 0
     label.lineBreakMode = .byWordWrapping
@@ -3264,6 +3741,22 @@ private struct PiliNativeCommentRow: View {
   let comment: PiliNativeComment
   let openMember: () -> Void
   let toggleLike: () -> Void
+  let reply: () -> Void
+  let openReplies: () -> Void
+
+  init(
+    comment: PiliNativeComment,
+    openMember: @escaping () -> Void,
+    toggleLike: @escaping () -> Void,
+    reply: @escaping () -> Void = {},
+    openReplies: @escaping () -> Void = {}
+  ) {
+    self.comment = comment
+    self.openMember = openMember
+    self.toggleLike = toggleLike
+    self.reply = reply
+    self.openReplies = openReplies
+  }
 
   var body: some View {
     HStack(alignment: .top, spacing: 10) {
@@ -3315,7 +3808,13 @@ private struct PiliNativeCommentRow: View {
         HStack(spacing: 8) {
           Text(comment.time)
           if !comment.location.isEmpty { Text(comment.location) }
-          if comment.replyCount > 0 { Text("\(comment.replyCount) 条回复") }
+          Button("回复", action: reply)
+            .buttonStyle(PlainButtonStyle())
+          if comment.replyCount > 0 {
+            Button("\(comment.replyCount) 条回复", action: openReplies)
+              .buttonStyle(PlainButtonStyle())
+              .foregroundColor(piliAccent)
+          }
         }
         .font(.caption2)
         .foregroundColor(.secondary)
