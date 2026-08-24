@@ -186,16 +186,16 @@ class PlPlayerController with BlockConfigMixin {
   /// The iOS media-kit renderer currently presents an 8-bit BGRA Flutter
   /// texture. Convert HDR/Dolby Vision into that SDR output inside libmpv so
   /// only video pixels are tone-mapped; never raise UIScreen brightness.
-  Future<void> configureIOSVideoColor(int? quality) async {
+  void configureIOSVideoColor(int? quality) {
     if (!Platform.isIOS) return;
     _iosVideoQuality = quality;
     final player = _videoPlayerController;
     if (player != null) {
-      await _applyIOSVideoColor(player);
+      _applyIOSVideoColor(player);
     }
   }
 
-  Future<void> _applyIOSVideoColor(Player player) async {
+  void _applyIOSVideoColor(Player player) {
     if (!Platform.isIOS) return;
     final quality = _iosVideoQuality;
     final isHDR = quality == 125 || quality == 126 || quality == 129;
@@ -231,7 +231,7 @@ class PlPlayerController with BlockConfigMixin {
 
     for (final property in properties.entries) {
       try {
-        await player.setProperty(property.key, property.value);
+        player.setProperty(property.key, property.value);
       } catch (error) {
         if (kDebugMode) {
           debugPrint(
@@ -814,7 +814,7 @@ class PlPlayerController with BlockConfigMixin {
       ),
     );
 
-    await _applyIOSVideoColor(player);
+    _applyIOSVideoColor(player);
 
     assert(_videoController == null);
 
