@@ -400,6 +400,7 @@ final class IOSNativeUIBridge {
   ) async {
     final bvid = _nonEmpty(arguments['bvid']?.toString());
     final action = arguments['action']?.toString();
+    final heroTag = _nonEmpty(arguments['heroTag']?.toString());
     if (bvid == null || action == null) {
       return const {'state': 'error', 'error': '缺少视频操作参数'};
     }
@@ -408,6 +409,69 @@ final class IOSNativeUIBridge {
     }
 
     switch (action) {
+      case 'like':
+        final relation = await VideoHttp.videoRelation(bvid: bvid);
+        if (relation case Success(:final response)) {
+          final liked = response.like == true;
+          final result = await VideoHttp.likeVideo(
+            bvid: bvid,
+            type: !liked,
+          );
+          return switch (result) {
+            Success(:final response) => {
+              'state': 'success',
+              'message': !liked ? response : '已取消点赞',
+              'liked': !liked,
+            },
+            Error(:final errMsg) => {
+              'state': 'error',
+              'error': errMsg ?? '点赞失败',
+            },
+            _ => const {'state': 'error', 'error': '点赞失败'},
+          };
+        }
+        return const {'state': 'error', 'error': '点赞状态获取失败'};
+      case 'coin':
+        try {
+          final controller = Get.find<UgcIntroController>(tag: heroTag);
+          controller.actionCoinVideo();
+          return const {
+            'state': 'success',
+            'message': '请在原版投币面板中选择数量',
+          };
+        } catch (_) {
+          return const {'state': 'error', 'error': '原版投币面板尚未就绪'};
+        }
+      case 'favorite':
+        try {
+          final controller = Get.find<UgcIntroController>(tag: heroTag);
+          final context = Get.context;
+          if (context == null) {
+            return const {'state': 'error', 'error': '收藏面板暂时无法打开'};
+          }
+          controller.showFavBottomSheet(context);
+          return const {
+            'state': 'success',
+            'message': '已打开原版收藏面板',
+          };
+        } catch (_) {
+          return const {'state': 'error', 'error': '原版收藏面板尚未就绪'};
+        }
+      case 'share':
+        try {
+          final controller = Get.find<UgcIntroController>(tag: heroTag);
+          final context = Get.context;
+          if (context == null) {
+            return const {'state': 'error', 'error': '分享面板暂时无法打开'};
+          }
+          controller.actionShareVideo(context);
+          return const {
+            'state': 'success',
+            'message': '已打开原版分享面板',
+          };
+        } catch (_) {
+          return const {'state': 'error', 'error': '原版分享面板尚未就绪'};
+        }
       case 'triple':
         final result = await VideoHttp.ugcTriple(bvid: bvid);
         return switch (result) {
