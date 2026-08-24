@@ -6,6 +6,70 @@ import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
 
+final class PiliNativeDiagnosticLog: @unchecked Sendable {
+  static let shared = PiliNativeDiagnosticLog()
+
+  private let queue = DispatchQueue(label: "piliglass.native-diagnostic-log")
+  private let formatter: ISO8601DateFormatter = {
+    let formatter = ISO8601DateFormatter()
+    formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    return formatter
+  }()
+  private var lines: [String] = []
+  private var isAetherCaptureInstalled = false
+  private let maximumLineCount = 1600
+
+  private init() {}
+
+  func installAetherCapture() {
+    let shouldInstall = queue.sync { () -> Bool in
+      guard !isAetherCaptureInstalled else { return false }
+      isAetherCaptureInstalled = true
+      return true
+    }
+    guard shouldInstall else { return }
+    let previousHandler = EngineLog.handler
+    EngineLog.handler = { line in
+      previousHandler?(line)
+      PiliNativeDiagnosticLog.shared.append(line, source: "Aether")
+    }
+    append("Aether diagnostic capture installed")
+  }
+
+  func append(_ message: String, source: String = "PiliGlass") {
+    queue.async { [self] in
+      let timestamp = formatter.string(from: Date())
+      lines.append("\(timestamp) [\(source)] \(message)")
+      if lines.count > maximumLineCount {
+        lines.removeFirst(lines.count - maximumLineCount)
+      }
+    }
+  }
+
+  func snapshot() -> String {
+    let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
+      ?? "unknown"
+    let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String
+      ?? "unknown"
+    let header = """
+    PiliGlass native diagnostic log
+    App: \(version) (\(build))
+    System: \(UIDevice.current.systemName) \(UIDevice.current.systemVersion)
+    Device: \(UIDevice.current.model)
+    Generated: \(ISO8601DateFormatter().string(from: Date()))
+    Note: log may contain temporary signed CDN URLs.
+    ----------------------------------------------------------------
+    """
+    let body = queue.sync { lines.joined(separator: "\n") }
+    return body.isEmpty ? "\(header)\nNo diagnostic entries." : "\(header)\n\(body)"
+  }
+
+  func clear() {
+    queue.sync { lines.removeAll(keepingCapacity: true) }
+    append("Diagnostic log cleared")
+  }
+}
+
 // AVFoundation does not consistently attach Bilibili's required request
 // headers to every byte-range request. Present the signed CDN URL through a
 // custom scheme and service AVPlayer's requests with URLSession so DASH video
@@ -164,6 +228,10 @@ private final class PiliNativeAssetResourceLoader: NSObject,
       return
     }
     guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
+      PiliNativeDiagnosticLog.shared.append(
+        "CDN request rejected status=\((response as? HTTPURLResponse)?.statusCode ?? -1) "
+          + "host=\(originalURL.host ?? "unknown") range=\(context.rangeHeader)"
+      )
       finish(
         taskID: dataTask.taskIdentifier,
         error: NSError(
@@ -205,6 +273,11 @@ private final class PiliNativeAssetResourceLoader: NSObject,
     task: URLSessionTask,
     didCompleteWithError error: Error?
   ) {
+    if let error {
+      PiliNativeDiagnosticLog.shared.append(
+        "CDN request failed host=\(originalURL.host ?? "unknown") error=\(error.localizedDescription)"
+      )
+    }
     finish(taskID: task.taskIdentifier, error: error)
   }
 
@@ -344,6 +417,7 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
   ]
 
   override init() {
+    PiliNativeDiagnosticLog.shared.installAetherCapture()
     do {
       engine = try AetherEngine()
     } catch {
@@ -358,6 +432,7 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
     audioPlayer.automaticallyWaitsToMinimizeStalling = false
     audioPlayer.isMuted = false
     audioPlayer.volume = 1
+    PiliNativeDiagnosticLog.shared.append("Native player session initialised")
     installObservers()
   }
 
@@ -420,6 +495,21 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
     }
     let declaredDuration = Double(durationMilliseconds) / 1000
     duration = declaredDuration > 0 ? declaredDuration : offset
+    PiliNativeDiagnosticLog.shared.append(
+      "Playback configure quality=\(quality) segments=\(segments.count) "
+        + "durationMs=\(durationMilliseconds) autoplay=\(autoplay)"
+    )
+    for (index, segment) in segments.enumerated() {
+      let videoHosts = Set(segment.videoURLs.compactMap(\.host)).sorted().joined(separator: ",")
+      let audioHosts = Set(segment.audioURLs.compactMap(\.host)).sorted().joined(separator: ",")
+      PiliNativeDiagnosticLog.shared.append(
+        "Segment[\(index)] qn=\(segment.qualityValue) codec=\(segment.codec) "
+          + "hdr=\(segment.isHDR) videoCandidates=\(segment.videoURLs.count) "
+          + "videoHosts=\(videoHosts.isEmpty ? "none" : videoHosts) "
+          + "audioCandidates=\(segment.audioURLs.count) "
+          + "audioHosts=\(audioHosts.isEmpty ? "none" : audioHosts)"
+      )
+    }
     loadSegment(at: max(0, resumeAt), autoplay: autoplay)
   }
 
@@ -529,6 +619,7 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
   }
 
   func fail(_ message: String) {
+    PiliNativeDiagnosticLog.shared.append("Playback failed: \(message)")
     pausePlayback()
     isReady = false
     isBuffering = false
@@ -540,12 +631,17 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
   private func installObservers() {
     engine.$state
       .receive(on: DispatchQueue.main)
-      .sink { [weak self] state in self?.handleEngineState(state) }
+      .sink { [weak self] state in
+        PiliNativeDiagnosticLog.shared.append("Engine state=\(String(describing: state))")
+        self?.handleEngineState(state)
+      }
       .store(in: &engineCancellables)
     engine.$isBuffering
+      .removeDuplicates()
       .receive(on: DispatchQueue.main)
       .sink { [weak self] buffering in
         guard let self else { return }
+        PiliNativeDiagnosticLog.shared.append("Engine buffering=\(buffering)")
         self.isBuffering = buffering || self.engine.state == .loading
         if buffering {
           self.audioPlayer.pause()
@@ -559,9 +655,11 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
       .sink { [weak self] time in self?.updatePlaybackTime(localTime: time) }
       .store(in: &engineCancellables)
     engine.$videoFormat
+      .removeDuplicates()
       .receive(on: DispatchQueue.main)
       .sink { [weak self] format in
         guard let self else { return }
+        PiliNativeDiagnosticLog.shared.append("Video format=\(String(describing: format))")
         let nativeHDR = format != .sdr
         self.isHDR = nativeHDR || self.segments.contains(where: { $0.isHDR })
         self.hdrBrightnessActive = nativeHDR && self.isReady
@@ -661,9 +759,13 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
       isTryingVideoCandidates = true
       defer { isTryingVideoCandidates = false }
       var loaded = false
-      for url in segment.videoURLs {
+      for (candidateIndex, url) in segment.videoURLs.enumerated() {
         guard !Task.isCancelled, itemBuildGeneration == generation else { return }
         do {
+          PiliNativeDiagnosticLog.shared.append(
+            "Opening video candidate=\(candidateIndex + 1)/\(segment.videoURLs.count) "
+              + "host=\(url.host ?? "unknown") codec=\(segment.codec) qn=\(segment.qualityValue)"
+          )
           engine.stop(resetDisplayCriteria: false)
           let options = LoadOptions(
             httpHeaders: requestHeaders,
@@ -673,10 +775,17 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
             autoplay: false
           )
           try await engine.load(url: url, startPosition: localTime, options: options)
+          PiliNativeDiagnosticLog.shared.append(
+            "Video candidate opened host=\(url.host ?? "unknown")"
+          )
           rebindVideoSurface()
           loaded = true
           break
         } catch {
+          PiliNativeDiagnosticLog.shared.append(
+            "Video candidate failed host=\(url.host ?? "unknown") "
+              + "error=\(error.localizedDescription)"
+          )
           lastError = error
         }
       }
@@ -712,9 +821,13 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
     mediaType: AVMediaType
   ) async throws -> AVURLAsset {
     var lastError: Error = PiliNativePlayerBuildError.noPlayableCandidate
-    for url in urls {
+    for (candidateIndex, url) in urls.enumerated() {
       let asset = makeAsset(url: url)
       do {
+        PiliNativeDiagnosticLog.shared.append(
+          "Checking \(mediaType.rawValue) candidate=\(candidateIndex + 1)/\(urls.count) "
+            + "host=\(url.host ?? "unknown")"
+        )
         guard try await asset.load(.isPlayable) else {
           lastError = PiliNativePlayerBuildError.noPlayableCandidate
           continue
@@ -724,8 +837,15 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
           lastError = PiliNativePlayerBuildError.missingDashTrack
           continue
         }
+        PiliNativeDiagnosticLog.shared.append(
+          "Playable \(mediaType.rawValue) candidate host=\(url.host ?? "unknown")"
+        )
         return asset
       } catch {
+        PiliNativeDiagnosticLog.shared.append(
+          "Rejected \(mediaType.rawValue) candidate host=\(url.host ?? "unknown") "
+            + "error=\(error.localizedDescription)"
+        )
         lastError = error
       }
     }
@@ -749,10 +869,14 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
         guard let self, let audioItem else { return }
         switch audioItem.status {
         case .readyToPlay:
+          PiliNativeDiagnosticLog.shared.append("Audio item ready")
           self.audioItemReady = true
           self.finishPreparingIfReady()
           self.resumeAudioIfPossible()
         case .failed:
+          PiliNativeDiagnosticLog.shared.append(
+            "Audio item failed: \(audioItem.error?.localizedDescription ?? "unknown")"
+          )
           self.fail(audioItem.error?.localizedDescription ?? "音频载入失败")
         default:
           break
@@ -776,6 +900,7 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
   }
 
   private func startPlayback() {
+    PiliNativeDiagnosticLog.shared.append("Playback start requested rate=\(playbackRate)")
     engine.setRate(playbackRate)
     engine.play()
     if audioPlayer.currentItem?.status == .readyToPlay {
@@ -792,6 +917,7 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
           audioItem.status == .readyToPlay else { return }
     activateAudioSessionIfNeeded()
     audioPlayer.playImmediately(atRate: playbackRate)
+    PiliNativeDiagnosticLog.shared.append("Audio resumed rate=\(playbackRate)")
   }
 
   private func activateAudioSessionIfNeeded() {
@@ -800,6 +926,9 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
     do {
       try AVAudioSession.sharedInstance().setActive(true)
     } catch {
+      PiliNativeDiagnosticLog.shared.append(
+        "AVAudioSession activation failed: \(error.localizedDescription)"
+      )
       // AVKit may already own the active playback session. In that case the
       // queue player can still use the existing route.
     }
@@ -1017,6 +1146,64 @@ private extension Array {
   }
 }
 
+private final class PiliNativeDiagnosticLogViewController: UIViewController {
+  private let textView = UITextView()
+
+  override func viewDidLoad() {
+    super.viewDidLoad()
+    title = "播放器日志"
+    view.backgroundColor = .systemBackground
+    textView.translatesAutoresizingMaskIntoConstraints = false
+    textView.isEditable = false
+    textView.isSelectable = true
+    textView.alwaysBounceVertical = true
+    textView.backgroundColor = .secondarySystemBackground
+    textView.textColor = .label
+    textView.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
+    textView.textContainerInset = UIEdgeInsets(top: 14, left: 10, bottom: 14, right: 10)
+    textView.text = PiliNativeDiagnosticLog.shared.snapshot()
+    view.addSubview(textView)
+    NSLayoutConstraint.activate([
+      textView.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
+      textView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+      textView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+      textView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+    ])
+    navigationItem.leftBarButtonItem = UIBarButtonItem(
+      barButtonSystemItem: .close,
+      target: self,
+      action: #selector(closeLog)
+    )
+    navigationItem.rightBarButtonItems = [
+      UIBarButtonItem(
+        barButtonSystemItem: .action,
+        target: self,
+        action: #selector(shareLog)
+      ),
+      UIBarButtonItem(title: "复制", style: .plain, target: self, action: #selector(copyLog)),
+    ]
+  }
+
+  @objc private func closeLog() { dismiss(animated: true) }
+
+  @objc private func copyLog() {
+    UIPasteboard.general.string = textView.text
+    navigationItem.prompt = "日志已复制"
+    DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
+      self?.navigationItem.prompt = nil
+    }
+  }
+
+  @objc private func shareLog() {
+    let controller = UIActivityViewController(
+      activityItems: [textView.text ?? ""],
+      applicationActivities: nil
+    )
+    controller.popoverPresentationController?.barButtonItem = navigationItem.rightBarButtonItems?.first
+    present(controller, animated: true)
+  }
+}
+
 final class PiliNativePlayerViewController: UIViewController {
   private let session: PiliNativePlayerSession
   private let fullscreenPresentation: Bool
@@ -1027,6 +1214,7 @@ final class PiliNativePlayerViewController: UIViewController {
   private let bottomBar = UIStackView()
   private let playButton = UIButton(type: .system)
   private let danmakuButton = UIButton(type: .system)
+  private let logButton = UIButton(type: .system)
   private let qualityButton = UIButton(type: .system)
   private let speedButton = UIButton(type: .system)
   private let fullscreenButton = UIButton(type: .system)
@@ -1127,6 +1315,7 @@ final class PiliNativePlayerViewController: UIViewController {
     configureButton(fullscreenButton, image: fullscreenPresentation ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right", action: #selector(toggleFullscreen))
     configureButton(pipButton, image: "pip.enter", action: #selector(togglePictureInPicture))
     configureTextButton(danmakuButton, title: "弹幕", action: #selector(toggleDanmaku))
+    configureTextButton(logButton, title: "日志", action: #selector(showDiagnosticLog))
     configureTextButton(qualityButton, title: "清晰度", action: nil)
     configureTextButton(speedButton, title: "1.0x", action: #selector(changeSpeed))
 
@@ -1147,6 +1336,7 @@ final class PiliNativePlayerViewController: UIViewController {
     topBar.spacing = 8
     topBar.addArrangedSubview(danmakuButton)
     topBar.addArrangedSubview(UIView())
+    topBar.addArrangedSubview(logButton)
     topBar.addArrangedSubview(qualityButton)
     topBar.addArrangedSubview(pipButton)
 
@@ -1285,6 +1475,18 @@ final class PiliNativePlayerViewController: UIViewController {
   @objc private func toggleDanmaku() { session.danmakuEnabled.toggle(); scheduleControlsHide() }
   @objc private func changeSpeed() { session.cyclePlaybackRate(); scheduleControlsHide() }
   @objc private func toggleFullscreen() { session.isFullscreen.toggle() }
+
+  @objc private func showDiagnosticLog() {
+    controlsHideTask?.cancel()
+    let logController = PiliNativeDiagnosticLogViewController()
+    let navigationController = UINavigationController(rootViewController: logController)
+    navigationController.modalPresentationStyle = .pageSheet
+    if let sheet = navigationController.sheetPresentationController {
+      sheet.detents = [.medium(), .large()]
+      sheet.prefersGrabberVisible = true
+    }
+    present(navigationController, animated: true)
+  }
 
   @objc private func togglePictureInPicture() {
     guard let controller = pictureInPictureController else { return }

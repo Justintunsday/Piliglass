@@ -1395,7 +1395,13 @@ private final class PiliNativeViewModel: ObservableObject {
   }
 
   func loadDynamicDetail() {
-    guard let sourceID = selectedDynamic?.sourceID else { return }
+    guard let sourceID = selectedDynamic?.validSourceID else {
+      dynamicDetailLoading = false
+      PiliNativeDiagnosticLog.shared.append(
+        "Dynamic detail skipped: API did not provide a numeric dynamic ID"
+      )
+      return
+    }
     dynamicDetailLoading = true
     channel.invokeMethod(
       "loadNativeDynamicDetail",
@@ -1406,11 +1412,19 @@ private final class PiliNativeViewModel: ObservableObject {
         self.dynamicDetailLoading = false
         if let flutterError = response as? FlutterError {
           self.dynamicMessage = flutterError.message ?? "动态详情加载失败"
+          PiliNativeDiagnosticLog.shared.append(
+            "Dynamic detail Flutter error id=\(sourceID): "
+              + "\(flutterError.message ?? "unknown")"
+          )
           return
         }
         let result = piliDictionary(response)
         guard result["state"] as? String == "success" else {
           self.dynamicMessage = result["error"] as? String ?? "动态详情加载失败"
+          PiliNativeDiagnosticLog.shared.append(
+            "Dynamic detail failed id=\(sourceID) code=\(piliString(result["code"]) ?? "none") "
+              + "error=\(self.dynamicMessage ?? "unknown")"
+          )
           return
         }
         let refreshed = PiliNativeDynamic(map: piliDictionary(result["dynamic"]), index: 0)
@@ -1425,11 +1439,15 @@ private final class PiliNativeViewModel: ObservableObject {
 
   func toggleDynamicLike() {
     guard let item = selectedDynamic, !dynamicActionLoading else { return }
+    guard let sourceID = item.validSourceID else {
+      dynamicMessage = "该动态缺少有效编号，请刷新动态列表后重试"
+      return
+    }
     dynamicActionLoading = true
     dynamicMessage = nil
     channel.invokeMethod(
       "setNativeDynamicLike",
-      arguments: ["id": item.sourceID, "liked": item.liked]
+      arguments: ["id": sourceID, "liked": item.liked]
     ) { [weak self] response in
       DispatchQueue.main.async {
         guard let self = self else { return }
@@ -1502,8 +1520,9 @@ private final class PiliNativeViewModel: ObservableObject {
     dynamicMessage = nil
 
     if dynamicComposerMode == "repost" {
-      guard let sourceID = selectedDynamic?.sourceID else {
+      guard let sourceID = selectedDynamic?.validSourceID else {
         dynamicActionLoading = false
+        dynamicMessage = "该动态缺少有效编号，请刷新动态列表后重试"
         return
       }
       channel.invokeMethod(
@@ -2097,8 +2116,8 @@ private struct PiliNativeDynamic: Identifiable {
   var forward: Int
 
   init(map: [String: Any], index: Int) {
-    sourceID = piliString(map["id"]) ?? "dynamic"
-    id = "\(sourceID)-\(index)"
+    sourceID = piliString(map["id"]) ?? ""
+    id = sourceID.isEmpty ? "dynamic-\(index)" : "\(sourceID)-\(index)"
     authorID = piliOptionalInt(map["authorId"])
     author = piliString(map["author"]) ?? ""
     avatar = piliString(map["avatar"])
@@ -2116,6 +2135,14 @@ private struct PiliNativeDynamic: Identifiable {
     liked = piliBool(map["liked"])
     comment = piliInt(map["comment"])
     forward = piliInt(map["forward"])
+  }
+
+  var validSourceID: String? {
+    guard !sourceID.isEmpty,
+          sourceID.unicodeScalars.allSatisfy({ (48...57).contains($0.value) }) else {
+      return nil
+    }
+    return sourceID
   }
 }
 

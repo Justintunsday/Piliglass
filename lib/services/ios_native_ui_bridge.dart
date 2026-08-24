@@ -1276,7 +1276,7 @@ final class IOSNativeUIBridge {
   }
 
   Future<void> _openDynamic(Map<dynamic, dynamic> arguments) async {
-    final id = _nonEmpty(arguments['id']?.toString());
+    final id = _numericDynamicID(arguments['id']);
     if (id == null) return;
 
     final items = _dynamicsTabController.loadingState.value.dataOrNull;
@@ -1294,7 +1294,7 @@ final class IOSNativeUIBridge {
   Future<Map<String, dynamic>> _loadNativeDynamicDetail(
     Map<dynamic, dynamic> arguments,
   ) async {
-    final id = _nonEmpty(arguments['id']?.toString());
+    final id = _numericDynamicID(arguments['id']);
     if (id == null) {
       return const {'state': 'error', 'error': '动态编号无效'};
     }
@@ -1319,7 +1319,7 @@ final class IOSNativeUIBridge {
     if (!Accounts.main.isLogin) {
       return const {'state': 'error', 'error': '请先登录账号'};
     }
-    final id = _nonEmpty(arguments['id']?.toString());
+    final id = _numericDynamicID(arguments['id']);
     final liked = arguments['liked'] == true;
     if (id == null) {
       return const {'state': 'error', 'error': '动态编号无效'};
@@ -1345,7 +1345,7 @@ final class IOSNativeUIBridge {
     if (!Accounts.main.isLogin) {
       return const {'state': 'error', 'error': '请先登录账号'};
     }
-    final id = _nonEmpty(arguments['id']?.toString());
+    final id = _numericDynamicID(arguments['id']);
     final message = arguments['message']?.toString().trim() ?? '';
     if (id == null) {
       return const {'state': 'error', 'error': '动态编号无效'};
@@ -2447,9 +2447,15 @@ final class IOSNativeUIBridge {
         major?.music?.cover?.toString(),
       ]);
       final stat = item.modules.moduleStat;
-      final id = item.idStr?.toString() ?? 'dynamic-$index';
+      final id = _firstNonEmpty([
+        item.idStr?.toString(),
+        item.fallback?.id?.toString(),
+      ]);
 
       return {
+        // Keep the transport ID empty when the API did not provide one. Swift
+        // has its own UI identity and must never send `dynamic-$index` to a
+        // server endpoint that accepts numeric dynamic IDs only.
         'id': id,
         'type': item.type?.toString() ?? '',
         'author': author?.name?.toString() ?? '',
@@ -2564,6 +2570,12 @@ final class IOSNativeUIBridge {
     return trimmed == null || trimmed.isEmpty || trimmed == 'null'
         ? null
         : trimmed;
+  }
+
+  static String? _numericDynamicID(dynamic value) {
+    final id = _nonEmpty(value?.toString());
+    if (id == null || !RegExp(r'^\d+$').hasMatch(id)) return null;
+    return id;
   }
 
   static String? _firstNonEmpty(Iterable<String?> values) {

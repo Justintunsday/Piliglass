@@ -112,7 +112,14 @@ class DynamicItemModel {
 
   DynamicItemModel.fromJson(Map<String, dynamic> json) {
     if (json['basic'] != null) basic = Basic.fromJson(json['basic']);
-    idStr = json['id_str'];
+    // Different dynamic endpoints do not consistently use the same key.
+    // Preserve the real numeric ID instead of letting native UI manufacture a
+    // non-numeric `dynamic-0` placeholder that the detail API cannot parse.
+    idStr =
+        json['id_str'] ??
+        json['id'] ??
+        json['dynamic_id_str'] ??
+        json['dyn_id_str'];
     modules = json['modules'] == null
         ? ItemModulesModel()
         : ItemModulesModel.fromJson(json['modules']);
@@ -127,7 +134,12 @@ class DynamicItemModel {
     if (json['item']?['basic'] != null) {
       basic = Basic.fromJson(json['item']['basic']);
     }
-    idStr = json['item']?['id_str'];
+    idStr =
+        json['item']?['id_str'] ??
+        json['item']?['id'] ??
+        json['item']?['dynamic_id_str'] ??
+        json['item']?['dyn_id_str'] ??
+        json['fallback']?['id'];
     if (json['item']?['modules'] case List list) {
       modules = ItemModulesModel.fromOpusJson(list);
     } else {
