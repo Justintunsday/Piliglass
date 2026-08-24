@@ -334,6 +334,7 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
   private var isTryingVideoCandidates = false
   private let assetLoaderLock = NSLock()
   private var assetLoaders: [PiliNativeAssetResourceLoader] = []
+  private weak var videoSurface: AetherPlayerView?
 
   private let requestHeaders = [
     "Accept": "*/*",
@@ -364,7 +365,18 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
   }
 
   func bindVideoSurface(_ surface: AetherPlayerView) {
+    videoSurface = surface
     engine.bind(view: surface)
+  }
+
+  func unbindVideoSurface(_ surface: AetherPlayerView) {
+    engine.unbind(view: surface)
+    if videoSurface === surface { videoSurface = nil }
+  }
+
+  private func rebindVideoSurface() {
+    guard let videoSurface else { return }
+    engine.bind(view: videoSurface)
   }
 
   func configure(
@@ -550,6 +562,17 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
       .receive(on: DispatchQueue.main)
       .sink { [weak self] player in self?.pictureInPicturePlayer = player }
       .store(in: &engineCancellables)
+    engine.$hasFirstFrameReadyForDisplay
+      .removeDuplicates()
+      .receive(on: DispatchQueue.main)
+      .sink { [weak self] ready in
+        guard ready else { return }
+        // Re-attach the active renderer after its first real frame arrives. This
+        // also repairs a surface that SwiftUI mounted before Aether created the
+        // session's AVPlayerLayer/AVSampleBufferDisplayLayer.
+        self?.rebindVideoSurface()
+      }
+      .store(in: &engineCancellables)
   }
 
   private func handleEngineState(_ state: PlaybackState) {
@@ -643,6 +666,7 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
             autoplay: false
           )
           try await engine.load(url: url, startPosition: localTime, options: options)
+          rebindVideoSurface()
           loaded = true
           break
         } catch {
@@ -983,7 +1007,6 @@ final class PiliNativePlayerViewController: UIViewController {
   private let spinner = UIActivityIndicatorView(style: .large)
   private let errorLabel = UILabel()
   private var pictureInPictureController: AVPictureInPictureController?
-  private var pictureInPictureLayer: AVPlayerLayer?
   private var cancellables = Set<AnyCancellable>()
   private var controlsHideTask: DispatchWorkItem?
   private var wasPlayingBeforeScrub = false
@@ -1020,9 +1043,20 @@ final class PiliNativePlayerViewController: UIViewController {
     scheduleControlsHide()
   }
 
+  override func viewDidLayoutSubviews() {
+    super.viewDidLayoutSubviews()
+    // Aether owns a polymorphic CALayer. Rebinding is idempotent and keeps the
+    // active layer attached when SwiftUI changes the embedded/fullscreen host.
+    session.bindVideoSurface(canvas)
+  }
+
   override func viewWillDisappear(_ animated: Bool) {
     super.viewWillDisappear(animated)
     controlsHideTask?.cancel()
+  }
+
+  func detachVideoSurface() {
+    session.unbindVideoSurface(canvas)
   }
 
   private func buildInterface() {
@@ -1177,16 +1211,15 @@ final class PiliNativePlayerViewController: UIViewController {
   private func configurePictureInPicture(player: AVPlayer?) {
     pictureInPictureController?.stopPictureInPicture()
     pictureInPictureController = nil
-    pictureInPictureLayer?.removeFromSuperlayer()
-    pictureInPictureLayer = nil
-    guard AVPictureInPictureController.isPictureInPictureSupported(), let player else {
+    guard AVPictureInPictureController.isPictureInPictureSupported(),
+          player != nil,
+          let layer = session.engine.nativePlayerLayer else {
       pipButton.isHidden = true
       return
     }
-    let layer = AVPlayerLayer(player: player)
-    layer.frame = CGRect(x: -2, y: -2, width: 1, height: 1)
-    canvas.layer.addSublayer(layer)
-    pictureInPictureLayer = layer
+    // Reuse Aether's visible player layer. Creating a second hidden
+    // AVPlayerLayer for the same AVPlayer can leave the visible surface without
+    // a video output while audio continues normally.
     pictureInPictureController = AVPictureInPictureController(playerLayer: layer)
     pipButton.isHidden = false
   }
@@ -1313,6 +1346,7 @@ struct PiliNativePlayerView: UIViewControllerRepresentable {
     _ uiViewController: PiliNativePlayerViewController,
     coordinator: Void
   ) {
+    uiViewController.detachVideoSurface()
     uiViewController.view.layer.removeAllAnimations()
   }
 }
