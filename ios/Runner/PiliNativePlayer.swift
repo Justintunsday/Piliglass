@@ -9,6 +9,26 @@ import UIKit
 struct PiliNativePlayerSegment {
   let url: URL
   let duration: TimeInterval
+  let audioURL: URL?
+  let isHDR: Bool
+  let qualityValue: Int
+  let codec: String
+
+  init(
+    url: URL,
+    duration: TimeInterval,
+    audioURL: URL? = nil,
+    isHDR: Bool = false,
+    qualityValue: Int = 0,
+    codec: String = ""
+  ) {
+    self.url = url
+    self.duration = duration
+    self.audioURL = audioURL
+    self.isHDR = isHDR
+    self.qualityValue = qualityValue
+    self.codec = codec
+  }
 }
 
 struct PiliNativePlayerQuality: Identifiable, Equatable {
@@ -41,6 +61,8 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
   @Published var danmakuEnabled = true
   @Published var isFullscreen = false
   @Published private(set) var playbackRate: Float = 1
+  @Published private(set) var isHDR = false
+  @Published private(set) var hdrBrightnessActive = false
 
   let player = AVQueuePlayer()
   var onDanmakuSegmentNeeded: ((Int) -> Void)?
@@ -56,12 +78,18 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
   private var itemStatusObservation: NSKeyValueObservation?
   private var shouldAutoplay = true
   private var pendingSeek: TimeInterval?
+  private var itemBuildGeneration = UUID()
+  private var brightnessGeneration = UUID()
+  private var brightnessBeforeHDR: CGFloat?
+  private var applicationObservers: [NSObjectProtocol] = []
 
   override init() {
     super.init()
     player.actionAtItemEnd = .advance
     player.automaticallyWaitsToMinimizeStalling = true
+    player.preventsDisplaySleepDuringVideoPlayback = true
     installObservers()
+    installApplicationObservers()
   }
 
   deinit {
@@ -70,6 +98,8 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
     }
     timeControlObservation?.invalidate()
     itemStatusObservation?.invalidate()
+    applicationObservers.forEach { NotificationCenter.default.removeObserver($0) }
+    restoreBrightness(immediately: true)
   }
 
   func configure(
@@ -94,6 +124,8 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
     self.segments = segments
     self.qualityLabel = quality
     self.qualities = qualities
+    isHDR = segments.contains(where: { $0.isHDR })
+    if !isHDR { restoreBrightness() }
     shouldAutoplay = autoplay
     errorMessage = nil
     isReady = false
@@ -172,6 +204,8 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
     currentTime = 0
     duration = 0
     errorMessage = nil
+    isHDR = false
+    restoreBrightness()
   }
 
   func fail(_ message: String) {
@@ -180,6 +214,7 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
     isBuffering = false
     isPlaying = false
     errorMessage = message
+    restoreBrightness()
   }
 
   private func installObservers() {
@@ -202,6 +237,29 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
     }
   }
 
+  private func installApplicationObservers() {
+    let center = NotificationCenter.default
+    applicationObservers.append(
+      center.addObserver(
+        forName: UIApplication.willResignActiveNotification,
+        object: nil,
+        queue: .main
+      ) { [weak self] _ in
+        self?.restoreBrightness(immediately: true)
+      }
+    )
+    applicationObservers.append(
+      center.addObserver(
+        forName: UIApplication.didBecomeActiveNotification,
+        object: nil,
+        queue: .main
+      ) { [weak self] _ in
+        guard let self = self, self.isReady, self.isHDR else { return }
+        self.activateHDRBrightnessIfSupported()
+      }
+    )
+  }
+
   private func rebuildQueue(at globalTime: TimeInterval, autoplay: Bool) {
     guard !segments.isEmpty else { return }
     let segmentIndex = index(for: globalTime)
@@ -212,30 +270,99 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
     itemStatusObservation?.invalidate()
     pendingSeek = localTime
     shouldAutoplay = autoplay
-
-    for index in segmentIndex..<segments.count {
-      let item = makeItem(for: segments[index])
-      itemIndices[ObjectIdentifier(item)] = index
-      player.insert(item, after: nil)
+    isBuffering = true
+    let generation = UUID()
+    itemBuildGeneration = generation
+    let sourceSegments = segments
+    Task { [weak self] in
+      guard let self = self else { return }
+      do {
+        var builtItems: [(AVPlayerItem, Int)] = []
+        for index in segmentIndex..<sourceSegments.count {
+          let item = try await self.makeItem(for: sourceSegments[index])
+          builtItems.append((item, index))
+        }
+        await MainActor.run {
+          guard self.itemBuildGeneration == generation else { return }
+          for (item, index) in builtItems {
+            self.itemIndices[ObjectIdentifier(item)] = index
+            self.player.insert(item, after: nil)
+          }
+          guard let first = self.player.currentItem else {
+            self.fail("播放器初始化失败")
+            return
+          }
+          self.observeStatus(of: first)
+        }
+      } catch {
+        await MainActor.run {
+          guard self.itemBuildGeneration == generation else { return }
+          self.fail("4K/HDR 轨道载入失败：\(error.localizedDescription)")
+        }
+      }
     }
-    guard let first = player.currentItem else {
-      fail("播放器初始化失败")
-      return
-    }
-    observeStatus(of: first)
   }
 
-  private func makeItem(for segment: PiliNativePlayerSegment) -> AVPlayerItem {
+  private func makeAsset(url: URL) -> AVURLAsset {
     let headers = [
       "Referer": "https://www.bilibili.com/",
       "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15",
     ]
-    let asset = AVURLAsset(
-      url: segment.url,
+    return AVURLAsset(
+      url: url,
       options: ["AVURLAssetHTTPHeaderFieldsKey": headers]
     )
-    let item = AVPlayerItem(asset: asset)
+  }
+
+  private func makeItem(for segment: PiliNativePlayerSegment) async throws -> AVPlayerItem {
+    let videoAsset = makeAsset(url: segment.url)
+    guard let audioURL = segment.audioURL else {
+      let item = AVPlayerItem(asset: videoAsset)
+      item.preferredForwardBufferDuration = segment.qualityValue >= 120 ? 16 : 8
+      item.appliesPerFrameHDRDisplayMetadata = segment.isHDR
+      return item
+    }
+
+    let audioAsset = makeAsset(url: audioURL)
+    async let loadedVideoTracks = videoAsset.loadTracks(withMediaType: .video)
+    async let loadedAudioTracks = audioAsset.loadTracks(withMediaType: .audio)
+    async let loadedVideoDuration = videoAsset.load(.duration)
+    async let loadedAudioDuration = audioAsset.load(.duration)
+    let (videoTracks, audioTracks, videoDuration, audioDuration) = try await (
+      loadedVideoTracks,
+      loadedAudioTracks,
+      loadedVideoDuration,
+      loadedAudioDuration
+    )
+    guard let sourceVideoTrack = videoTracks.first,
+          let sourceAudioTrack = audioTracks.first else {
+      throw PiliNativePlayerBuildError.missingDashTrack
+    }
+
+    let duration = CMTimeCompare(videoDuration, audioDuration) <= 0
+      ? videoDuration
+      : audioDuration
+    guard duration.isNumeric, duration.seconds > 0 else {
+      throw PiliNativePlayerBuildError.invalidDashDuration
+    }
+    let composition = AVMutableComposition()
+    guard let videoTrack = composition.addMutableTrack(
+      withMediaType: .video,
+      preferredTrackID: kCMPersistentTrackID_Invalid
+    ), let audioTrack = composition.addMutableTrack(
+      withMediaType: .audio,
+      preferredTrackID: kCMPersistentTrackID_Invalid
+    ) else {
+      throw PiliNativePlayerBuildError.compositionUnavailable
+    }
+    let timeRange = CMTimeRange(start: .zero, duration: duration)
+    try videoTrack.insertTimeRange(timeRange, of: sourceVideoTrack, at: .zero)
+    try audioTrack.insertTimeRange(timeRange, of: sourceAudioTrack, at: .zero)
+    videoTrack.preferredTransform = try await sourceVideoTrack.load(.preferredTransform)
+
+    let item = AVPlayerItem(asset: composition)
     item.preferredForwardBufferDuration = 8
+    item.appliesPerFrameHDRDisplayMetadata = segment.isHDR
     return item
   }
 
@@ -258,6 +385,7 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
               self.isReady = true
               self.isBuffering = false
               self.errorMessage = nil
+              if self.isHDR { self.activateHDRBrightnessIfSupported() }
               if self.shouldAutoplay {
                 self.player.playImmediately(atRate: self.playbackRate)
               }
@@ -306,6 +434,81 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
       return index
     }
     return 0
+  }
+
+  private func activateHDRBrightnessIfSupported() {
+    guard UIApplication.shared.applicationState == .active, isHDR else { return }
+    guard #available(iOS 16.0, *) else {
+      // AVPlayerLayer still performs system HDR tone mapping on iOS 15. The
+      // public EDR headroom signal used for a safe brightness ramp is newer.
+      hdrBrightnessActive = false
+      return
+    }
+    let screen = UIScreen.main
+    guard screen.potentialEDRHeadroom > 1.05 else {
+      hdrBrightnessActive = false
+      return
+    }
+    if brightnessBeforeHDR == nil { brightnessBeforeHDR = screen.brightness }
+    let original = brightnessBeforeHDR ?? screen.brightness
+    let constrained = ProcessInfo.processInfo.isLowPowerModeEnabled ||
+      ProcessInfo.processInfo.thermalState == .serious ||
+      ProcessInfo.processInfo.thermalState == .critical
+    guard !constrained else {
+      hdrBrightnessActive = false
+      return
+    }
+    let floor: CGFloat
+    if screen.potentialEDRHeadroom >= 2 {
+      floor = 0.86
+    } else {
+      floor = 0.80
+    }
+    rampBrightness(to: min(1, max(original, floor)))
+    hdrBrightnessActive = true
+  }
+
+  private func restoreBrightness(immediately: Bool = false) {
+    guard let original = brightnessBeforeHDR else {
+      hdrBrightnessActive = false
+      return
+    }
+    brightnessBeforeHDR = nil
+    hdrBrightnessActive = false
+    if immediately {
+      brightnessGeneration = UUID()
+      UIScreen.main.brightness = original
+    } else {
+      rampBrightness(to: original)
+    }
+  }
+
+  private func rampBrightness(to target: CGFloat) {
+    let generation = UUID()
+    brightnessGeneration = generation
+    let start = UIScreen.main.brightness
+    let steps = 8
+    for step in 1...steps {
+      DispatchQueue.main.asyncAfter(deadline: .now() + Double(step) * 0.035) { [weak self] in
+        guard let self = self, self.brightnessGeneration == generation else { return }
+        let progress = CGFloat(step) / CGFloat(steps)
+        UIScreen.main.brightness = start + (target - start) * progress
+      }
+    }
+  }
+}
+
+private enum PiliNativePlayerBuildError: LocalizedError {
+  case missingDashTrack
+  case invalidDashDuration
+  case compositionUnavailable
+
+  var errorDescription: String? {
+    switch self {
+    case .missingDashTrack: return "视频或音频轨不存在"
+    case .invalidDashDuration: return "轨道时长无效"
+    case .compositionUnavailable: return "无法创建组合轨道"
+    }
   }
 }
 

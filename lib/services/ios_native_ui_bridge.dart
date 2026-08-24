@@ -21,6 +21,7 @@ import 'package:PiliPlus/models/common/dynamic/dynamics_type.dart';
 import 'package:PiliPlus/models/common/nav_bar_config.dart';
 import 'package:PiliPlus/models/common/search/search_type.dart';
 import 'package:PiliPlus/models/common/setting_type.dart';
+import 'package:PiliPlus/models/common/video/video_type.dart';
 import 'package:PiliPlus/models/search/result.dart';
 import 'package:PiliPlus/pages/about/view.dart';
 import 'package:PiliPlus/pages/dynamics/controller.dart';
@@ -406,11 +407,16 @@ final class IOSNativeUIBridge {
       return const {'state': 'error', 'error': '播放参数不完整'};
     }
 
-    final result = await VideoHttp.tvPlayUrl(
+    // Use the same DASH-capable request as the original Flutter player.
+    // The TV endpoint only exposes legacy muxed streams for many videos and
+    // therefore silently drops 4K, HDR and Dolby Vision representations.
+    final result = await VideoHttp.videoUrl(
+      avid: aid,
+      bvid: bvid,
       cid: cid,
-      objectId: aid,
-      playurlType: 1,
       qn: quality,
+      tryLook: !Accounts.get(AccountType.video).isLogin,
+      videoType: VideoType.ugc,
     );
     return switch (result) {
       Loading() => const {'state': 'loading'},
@@ -420,6 +426,117 @@ final class IOSNativeUIBridge {
         'code': ?code,
       },
       Success(:final response) => () {
+        final qualityValues = response.acceptQuality ?? const <int>[];
+        final qualityDescriptions = response.acceptDesc ?? const [];
+        final formatByQuality = {
+          for (final format in response.supportFormats ?? const [])
+            if (format.quality != null) format.quality!: format,
+        };
+        final qualities = <Map<String, dynamic>>[];
+        for (var index = 0; index < qualityValues.length; index++) {
+          final value = qualityValues[index];
+          final format = formatByQuality[value];
+          qualities.add({
+            'value': value,
+            'label': format?.newDesc ??
+                format?.displayDesc ??
+                (index < qualityDescriptions.length
+                    ? qualityDescriptions[index].toString()
+                    : '${value}P'),
+            'codecs': format?.codecs ?? const <String>[],
+            'hdr': value == 125 || value == 126 || value == 129,
+          });
+        }
+
+        final dash = response.dash;
+        if (dash?.video?.isNotEmpty == true) {
+          final videos = dash!.video!;
+          final requested = videos
+              .where((item) => item.quality.code == quality)
+              .toList();
+          final actualQuality = requested.isNotEmpty
+              ? quality
+              : response.quality ?? videos.first.quality.code;
+          final candidates = videos
+              .where((item) => item.quality.code == actualQuality)
+              .toList();
+          if (candidates.isEmpty) candidates.add(videos.first);
+          final isHdr = actualQuality == 125 ||
+              actualQuality == 126 ||
+              actualQuality == 129;
+          final preferHevc = isHdr || actualQuality >= 120;
+          int codecRank(dynamic item) {
+            final codec = item.codecs?.toString().toLowerCase() ?? '';
+            if (codec.startsWith('hvc1') || codec.startsWith('hev1')) {
+              return preferHevc ? 0 : 1;
+            }
+            if (codec.startsWith('avc1')) return preferHevc ? 2 : 0;
+            if (codec.startsWith('av01')) return 3;
+            return 4;
+          }
+          candidates.sort((a, b) => codecRank(a).compareTo(codecRank(b)));
+          final selectedVideo = candidates.first;
+          final videoUrl = VideoUtils.getCdnUrl(selectedVideo.playUrls);
+
+          final audioCandidates = dash.audio ?? const [];
+          if (audioCandidates.isNotEmpty) {
+            audioCandidates.sort((a, b) {
+              int rank(dynamic item) {
+                final codec = item.codecs?.toString().toLowerCase() ?? '';
+                if (codec.startsWith('mp4a')) return 0;
+                if (codec.contains('ec-3') || codec.contains('ac-3')) return 1;
+                return 2;
+              }
+              final codecOrder = rank(a).compareTo(rank(b));
+              if (codecOrder != 0) return codecOrder;
+              return (b.bandWidth ?? 0).compareTo(a.bandWidth ?? 0);
+            });
+          }
+          final selectedAudio = audioCandidates.firstOrNull;
+          final audioUrl = selectedAudio == null
+              ? null
+              : VideoUtils.getCdnUrl(
+                  selectedAudio.playUrls,
+                  isAudio: true,
+                );
+          if (videoUrl.isEmpty) {
+            return const {
+              'state': 'error',
+              'error': '4K/HDR 视频轨地址为空',
+            };
+          }
+          final durationMs = (dash.duration ?? 0) * 1000;
+          final format = formatByQuality[actualQuality];
+          return {
+            'state': 'success',
+            'streamKind': 'dash',
+            'segments': [
+              {
+                'url': videoUrl,
+                'audioURL': audioUrl,
+                'duration': durationMs,
+                'codec': selectedVideo.codecs ?? '',
+                'width': selectedVideo.width ?? 0,
+                'height': selectedVideo.height ?? 0,
+                'quality': actualQuality,
+                'hdr': isHdr,
+              },
+            ],
+            'urls': [videoUrl],
+            'quality': actualQuality,
+            'qualityText': format?.newDesc ??
+                format?.displayDesc ??
+                '${actualQuality}P',
+            'qualities': qualities,
+            'duration': durationMs,
+            'segmentCount': 1,
+            'isHDR': isHdr,
+            'codec': selectedVideo.codecs ?? '',
+            'width': selectedVideo.width ?? 0,
+            'height': selectedVideo.height ?? 0,
+          };
+        }
+
         final sourceSegments = response.durl ?? const [];
         final segments = sourceSegments
             .where((segment) => segment.playUrls.isNotEmpty)
@@ -439,17 +556,6 @@ final class IOSNativeUIBridge {
             'error': '原生播放器暂时无法解析该视频格式',
           };
         }
-        final qualityValues = response.acceptQuality ?? const <int>[];
-        final qualityDescriptions = response.acceptDesc ?? const [];
-        final qualities = <Map<String, dynamic>>[];
-        for (var index = 0; index < qualityValues.length; index++) {
-          qualities.add({
-            'value': qualityValues[index],
-            'label': index < qualityDescriptions.length
-                ? qualityDescriptions[index].toString()
-                : '${qualityValues[index]}P',
-          });
-        }
         final currentQuality = response.quality ?? quality;
         final currentQualityIndex = qualityValues.indexOf(currentQuality);
         return {
@@ -466,6 +572,8 @@ final class IOSNativeUIBridge {
           'qualities': qualities,
           'duration': response.timeLength ?? 0,
           'segmentCount': segments.length,
+          'streamKind': 'progressive',
+          'isHDR': false,
         };
       }(),
     };

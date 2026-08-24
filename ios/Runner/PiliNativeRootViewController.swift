@@ -647,10 +647,15 @@ private final class PiliNativeViewModel: ObservableObject {
         for row in segmentRows {
           let map = piliDictionary(row)
           guard let rawURL = piliString(map["url"]), let url = URL(string: rawURL) else { continue }
+          let audioURL = piliString(map["audioURL"]).flatMap(URL.init(string:))
           segments.append(
             PiliNativePlayerSegment(
               url: url,
-              duration: Double(piliInt(map["duration"])) / 1000
+              duration: Double(piliInt(map["duration"])) / 1000,
+              audioURL: audioURL,
+              isHDR: piliBool(map["hdr"]),
+              qualityValue: piliInt(map["quality"]),
+              codec: piliString(map["codec"]) ?? ""
             )
           )
         }
