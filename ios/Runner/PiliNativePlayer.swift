@@ -352,7 +352,12 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
     super.init()
     engine.videoGravity = .resizeAspect
     audioPlayer.actionAtItemEnd = .advance
-    audioPlayer.automaticallyWaitsToMinimizeStalling = true
+    // The Aether video clock owns buffering. Letting AVPlayer independently
+    // wait to minimise stalls can leave the separate DASH audio track paused
+    // after the video has already resumed.
+    audioPlayer.automaticallyWaitsToMinimizeStalling = false
+    audioPlayer.isMuted = false
+    audioPlayer.volume = 1
     installObservers()
   }
 
@@ -542,7 +547,11 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
       .sink { [weak self] buffering in
         guard let self else { return }
         self.isBuffering = buffering || self.engine.state == .loading
-        if buffering { self.audioPlayer.pause() }
+        if buffering {
+          self.audioPlayer.pause()
+        } else {
+          self.resumeAudioIfPossible()
+        }
       }
       .store(in: &engineCancellables)
     engine.clock.$currentTime
@@ -585,9 +594,7 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
     case .playing:
       isPlaying = true
       isBuffering = false
-      if audioPlayer.currentItem?.status == .readyToPlay, audioPlayer.rate == 0 {
-        audioPlayer.playImmediately(atRate: playbackRate)
-      }
+      resumeAudioIfPossible()
     case .paused:
       isPlaying = false
       audioPlayer.pause()
@@ -744,6 +751,7 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
         case .readyToPlay:
           self.audioItemReady = true
           self.finishPreparingIfReady()
+          self.resumeAudioIfPossible()
         case .failed:
           self.fail(audioItem.error?.localizedDescription ?? "音频载入失败")
         default:
@@ -771,7 +779,29 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
     engine.setRate(playbackRate)
     engine.play()
     if audioPlayer.currentItem?.status == .readyToPlay {
+      activateAudioSessionIfNeeded()
       audioPlayer.playImmediately(atRate: playbackRate)
+    }
+  }
+
+  private func resumeAudioIfPossible() {
+    guard isReady,
+          engine.state == .playing,
+          !engine.isBuffering,
+          let audioItem = audioPlayer.currentItem,
+          audioItem.status == .readyToPlay else { return }
+    activateAudioSessionIfNeeded()
+    audioPlayer.playImmediately(atRate: playbackRate)
+  }
+
+  private func activateAudioSessionIfNeeded() {
+    audioPlayer.isMuted = false
+    audioPlayer.volume = 1
+    do {
+      try AVAudioSession.sharedInstance().setActive(true)
+    } catch {
+      // AVKit may already own the active playback session. In that case the
+      // queue player can still use the existing route.
     }
   }
 

@@ -2085,6 +2085,8 @@ private struct PiliNativeDynamic: Identifiable {
   let title: String
   let body: String
   let cover: String?
+  let coverWidth: CGFloat
+  let coverHeight: CGFloat
   let aid: Int?
   let bvid: String?
   let commentOID: Int?
@@ -2104,6 +2106,8 @@ private struct PiliNativeDynamic: Identifiable {
     title = piliString(map["title"]) ?? ""
     body = piliString(map["body"]) ?? ""
     cover = piliString(map["cover"])
+    coverWidth = CGFloat(max(0, piliDouble(map["coverWidth"])))
+    coverHeight = CGFloat(max(0, piliDouble(map["coverHeight"])))
     aid = piliOptionalInt(map["aid"])
     bvid = piliString(map["bvid"])
     commentOID = piliOptionalInt(map["commentOid"])
@@ -2649,12 +2653,13 @@ private struct PiliNativeDynamicRow: View {
               .lineLimit(4)
           }
           if let cover = item.cover {
-            PiliRemoteImage(urlString: cover)
-              .aspectRatio(16 / 9, contentMode: .fill)
-              .frame(maxWidth: .infinity)
-              .frame(maxHeight: 190)
-              .clipped()
-              .cornerRadius(9)
+            PiliNativeDynamicPictureView(
+              urlString: cover,
+              sourceWidth: item.coverWidth,
+              sourceHeight: item.coverHeight,
+              maxWidth: min(UIScreen.main.bounds.width - 96, 520),
+              maxHeight: 220
+            )
           }
           HStack(spacing: 22) {
             PiliNativeStat(icon: "arrowshape.turn.up.right", count: item.forward)
@@ -2669,6 +2674,67 @@ private struct PiliNativeDynamicRow: View {
       .contentShape(Rectangle())
     }
     .buttonStyle(PlainButtonStyle())
+  }
+}
+
+private struct PiliNativeDynamicPictureView: View {
+  let sourceWidth: CGFloat
+  let sourceHeight: CGFloat
+  let maxWidth: CGFloat
+  let maxHeight: CGFloat
+  let cornerRadius: CGFloat
+  @StateObject private var loader: PiliImageLoader
+
+  init(
+    urlString: String,
+    sourceWidth: CGFloat,
+    sourceHeight: CGFloat,
+    maxWidth: CGFloat,
+    maxHeight: CGFloat,
+    cornerRadius: CGFloat = 9
+  ) {
+    self.sourceWidth = sourceWidth
+    self.sourceHeight = sourceHeight
+    self.maxWidth = maxWidth
+    self.maxHeight = maxHeight
+    self.cornerRadius = cornerRadius
+    _loader = StateObject(wrappedValue: PiliImageLoader(urlString: urlString))
+  }
+
+  private var displaySize: CGSize {
+    let sourceSize: CGSize
+    if sourceWidth > 0, sourceHeight > 0 {
+      sourceSize = CGSize(width: sourceWidth, height: sourceHeight)
+    } else if let image = loader.image, image.size.width > 0, image.size.height > 0 {
+      sourceSize = image.size
+    } else {
+      return CGSize(width: min(160, maxWidth), height: min(120, maxHeight))
+    }
+
+    let scale = min(min(maxWidth / sourceSize.width, maxHeight / sourceSize.height), 1)
+    return CGSize(
+      width: max(sourceSize.width * scale, 1),
+      height: max(sourceSize.height * scale, 1)
+    )
+  }
+
+  var body: some View {
+    Group {
+      if let image = loader.image {
+        Image(uiImage: image)
+          .resizable()
+          .aspectRatio(contentMode: .fit)
+      } else {
+        ZStack {
+          Color(UIColor.tertiarySystemFill)
+          Image(systemName: "photo")
+            .foregroundColor(Color(UIColor.tertiaryLabel))
+        }
+      }
+    }
+    .frame(width: displaySize.width, height: displaySize.height)
+    .background(Color(UIColor.tertiarySystemFill))
+    .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
   }
 }
 
@@ -3739,11 +3805,14 @@ private struct PiliNativeDynamicDetailView: View {
                   .textSelection(.enabled)
               }
               if let cover = item.cover {
-                PiliRemoteImage(urlString: cover)
-                  .aspectRatio(16 / 9, contentMode: .fill)
-                  .frame(maxWidth: .infinity)
-                  .clipped()
-                  .cornerRadius(12)
+                PiliNativeDynamicPictureView(
+                  urlString: cover,
+                  sourceWidth: item.coverWidth,
+                  sourceHeight: item.coverHeight,
+                  maxWidth: min(UIScreen.main.bounds.width - 32, 600),
+                  maxHeight: 420,
+                  cornerRadius: 12
+                )
               }
 
               if item.bvid != nil {

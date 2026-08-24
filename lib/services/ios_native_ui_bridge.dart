@@ -504,13 +504,22 @@ final class IOSNativeUIBridge {
           final isHdr = actualQuality == 125 ||
               actualQuality == 126 ||
               actualQuality == 129;
+          final isDolbyVision = actualQuality == 126;
           final preferHevc = isHdr || actualQuality >= 120;
           int codecRank(dynamic item) {
             final codec = item.codecs?.toString().toLowerCase() ?? '';
-            if (codec.startsWith('hvc1') || codec.startsWith('hev1')) {
-              return preferHevc ? 0 : 1;
+            // Bilibili exposes Dolby Vision as its own dvh1/dvhe DASH
+            // representation. It must win for quality 126; treating it as an
+            // unknown codec silently selected the plain HEVC fallback instead.
+            if (codec.startsWith('dvh1') || codec.startsWith('dvhe')) {
+              return isDolbyVision ? 0 : 1;
             }
-            if (codec.startsWith('avc1')) return preferHevc ? 2 : 0;
+            if (codec.startsWith('hvc1') || codec.startsWith('hev1')) {
+              return isDolbyVision ? 1 : (preferHevc ? 0 : 1);
+            }
+            if (codec.startsWith('avc1')) {
+              return isDolbyVision ? 3 : (preferHevc ? 2 : 0);
+            }
             if (codec.startsWith('av01')) return 3;
             return 4;
           }
@@ -2414,6 +2423,7 @@ final class IOSNativeUIBridge {
       final archive =
           major?.archive ?? major?.ugcSeason ?? major?.pgc ?? major?.courses;
       final opus = major?.opus;
+      final opusPicture = opus?.pics?.firstOrNull;
       final live = major?.liveRcmd ?? major?.live;
 
       final title = _firstNonEmpty([
@@ -2449,6 +2459,8 @@ final class IOSNativeUIBridge {
         'title': title ?? '',
         'body': body ?? '',
         'cover': _normalizeURL(cover),
+        'coverWidth': _asInt(opusPicture?.width),
+        'coverHeight': _asInt(opusPicture?.height),
         'bvid': archive?.bvid?.toString(),
         'aid': _asInt(archive?.aid),
         'commentOid': _asInt(item.basic?.commentIdStr),
