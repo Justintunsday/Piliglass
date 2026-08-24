@@ -1,5 +1,8 @@
 import 'dart:async';
 
+import 'package:PiliPlus/grpc/bilibili/main/community/reply/v1.pb.dart'
+    show Mode, ReplyInfo;
+import 'package:PiliPlus/grpc/reply.dart';
 import 'package:PiliPlus/http/fav.dart';
 import 'package:PiliPlus/http/fan.dart';
 import 'package:PiliPlus/http/follow.dart';
@@ -1301,6 +1304,72 @@ final class IOSNativeUIBridge {
     if (oid == null || oid <= 0) {
       return const {'state': 'error', 'error': '评论参数无效'};
     }
+
+    // The original Flutter comment page uses ReplyGrpc.mainList. Its
+    // Content.emotes map carries the image URL and display size for every
+    // bracketed emote in the message; the legacy web model below does not.
+    final grpcResult = await ReplyGrpc.mainList(
+      oid: oid,
+      type: type,
+      mode: Mode.MAIN_LIST_HOT,
+      offset: null,
+      cursorNext: null,
+    );
+    if (grpcResult case Success(:final response)) {
+      final replies = <ReplyInfo>[
+        if (response.hasUpTop()) response.upTop,
+        ...response.replies,
+      ];
+      return {
+        'state': 'success',
+        'total': response.hasSubjectControl()
+            ? response.subjectControl.count.toInt()
+            : replies.length,
+        'hasMore': !response.cursor.isEnd,
+        'items': replies.asMap().entries.map((entry) {
+          final item = entry.value;
+          final content = item.content;
+          final control = item.replyControl;
+          final member = item.member;
+          return {
+            'id': item.id.toString(),
+            'rpid': item.id.toInt(),
+            'memberId': item.mid.toInt(),
+            'author': member.name.isEmpty ? '用户' : member.name,
+            'avatar': _normalizeURL(member.face),
+            'message': content.message,
+            'time': control.timeDesc.isNotEmpty
+                ? control.timeDesc
+                : DateFormatUtils.format(item.ctime.toInt()),
+            'location': control.location,
+            'like': item.like.toInt(),
+            'liked': control.action.toInt() == 1,
+            'replyCount': item.count.toInt(),
+            'level': member.level.toInt(),
+            'pictures': content.pictures
+                .map((picture) => _normalizeURL(picture.imgSrc))
+                .whereType<String>()
+                .toList(),
+            'emotes': content.emotes.entries.map((entry) {
+              final emote = entry.value;
+              final source = emote.hasWebpUrl() && emote.webpUrl.isNotEmpty
+                  ? emote.webpUrl
+                  : emote.hasGifUrl() && emote.gifUrl.isNotEmpty
+                  ? emote.gifUrl
+                  : emote.url;
+              return {
+                'text': entry.key,
+                'url': _normalizeURL(source),
+                'size': emote.size.toInt().clamp(1, 2),
+              };
+            }).where((emote) => emote['url'] != null).toList(),
+          };
+        }).toList(),
+      };
+    }
+
+    // Keep the previous web request as a compatibility fallback if gRPC is
+    // unavailable. Plain comments will still load instead of failing entirely.
     final result = await ReplyHttp.replyList(
       isLogin: Accounts.main.isLogin,
       oid: oid,

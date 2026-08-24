@@ -1396,6 +1396,7 @@ private struct PiliNativeComment: Identifiable {
   let replyCount: Int
   let level: Int
   let pictures: [String]
+  let emotes: [String: PiliNativeCommentEmote]
 
   init(map: [String: Any], index: Int) {
     id = piliString(map["id"]) ?? "comment-\(index)"
@@ -1411,7 +1412,31 @@ private struct PiliNativeComment: Identifiable {
     replyCount = piliInt(map["replyCount"])
     level = piliInt(map["level"])
     pictures = (map["pictures"] as? [Any])?.compactMap { piliString($0) } ?? []
+    let emoteRows = map["emotes"] as? [Any] ?? []
+    let emotePairs: [(String, PiliNativeCommentEmote)] = emoteRows.compactMap {
+      row -> (String, PiliNativeCommentEmote)? in
+      let value = piliDictionary(row)
+      guard
+        let text = piliString(value["text"]),
+        let url = piliString(value["url"])
+      else { return nil }
+      return (
+        text,
+        PiliNativeCommentEmote(
+          text: text,
+          url: url,
+          size: min(max(piliInt(value["size"]), 1), 2)
+        )
+      )
+    )
+    emotes = Dictionary(uniqueKeysWithValues: emotePairs)
   }
+}
+
+private struct PiliNativeCommentEmote: Hashable {
+  let text: String
+  let url: String
+  let size: Int
 }
 
 private struct PiliNativeDownload: Identifiable {
@@ -3099,6 +3124,161 @@ private struct PiliNativeCommentsSection: View {
   }
 }
 
+/// Mirrors PiliPlus' original comment renderer: bracketed tokens are matched
+/// against Content.emotes and replaced with an inline image at size * 20pt.
+private struct PiliNativeCommentRichText: UIViewRepresentable {
+  let message: String
+  let emotes: [String: PiliNativeCommentEmote]
+
+  private static let imageCache = NSCache<NSURL, UIImage>()
+
+  func makeCoordinator() -> Coordinator {
+    Coordinator(parent: self)
+  }
+
+  func makeUIView(context: Context) -> UILabel {
+    let label = UILabel()
+    label.backgroundColor = .clear
+    label.numberOfLines = 0
+    label.lineBreakMode = .byWordWrapping
+    label.adjustsFontForContentSizeCategory = true
+    label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+    context.coordinator.label = label
+    return label
+  }
+
+  func updateUIView(_ label: UILabel, context: Context) {
+    context.coordinator.parent = self
+    context.coordinator.render(in: label)
+  }
+
+  final class Coordinator {
+    var parent: PiliNativeCommentRichText
+    weak var label: UILabel?
+    private var requestedURLs = Set<String>()
+
+    init(parent: PiliNativeCommentRichText) {
+      self.parent = parent
+    }
+
+    func render(in label: UILabel) {
+      let font = UIFont.preferredFont(forTextStyle: .subheadline)
+      let attributes: [NSAttributedString.Key: Any] = [
+        .font: font,
+        .foregroundColor: UIColor.label,
+      ]
+      let output = NSMutableAttributedString(string: "")
+      let source = parent.message as NSString
+      let keys = parent.emotes.keys.sorted { $0.count > $1.count }
+      guard !keys.isEmpty else {
+        label.attributedText = NSAttributedString(
+          string: parent.message,
+          attributes: attributes
+        )
+        label.accessibilityLabel = parent.message
+        return
+      }
+
+      let pattern = keys
+        .map { NSRegularExpression.escapedPattern(for: $0) }
+        .joined(separator: "|")
+      guard let regex = try? NSRegularExpression(pattern: pattern) else {
+        label.attributedText = NSAttributedString(
+          string: parent.message,
+          attributes: attributes
+        )
+        return
+      }
+
+      var cursor = 0
+      for match in regex.matches(
+        in: parent.message,
+        range: NSRange(location: 0, length: source.length)
+      ) {
+        if match.range.location > cursor {
+          output.append(
+            NSAttributedString(
+              string: source.substring(
+                with: NSRange(
+                  location: cursor,
+                  length: match.range.location - cursor
+                )
+              ),
+              attributes: attributes
+            )
+          )
+        }
+
+        let token = source.substring(with: match.range)
+        if let emote = parent.emotes[token] {
+          output.append(attachment(for: emote, font: font))
+          requestImageIfNeeded(emote)
+        } else {
+          output.append(NSAttributedString(string: token, attributes: attributes))
+        }
+        cursor = NSMaxRange(match.range)
+      }
+
+      if cursor < source.length {
+        output.append(
+          NSAttributedString(
+            string: source.substring(from: cursor),
+            attributes: attributes
+          )
+        )
+      }
+      label.attributedText = output
+      label.accessibilityLabel = parent.message
+    }
+
+    private func attachment(
+      for emote: PiliNativeCommentEmote,
+      font: UIFont
+    ) -> NSAttributedString {
+      let pointSize = CGFloat(emote.size) * 20
+      let attachment = NSTextAttachment()
+      if let url = URL(string: emote.url),
+         let cached = PiliNativeCommentRichText.imageCache.object(forKey: url as NSURL) {
+        attachment.image = cached
+      } else {
+        attachment.image = UIImage(systemName: "face.smiling")?.withTintColor(
+          .tertiaryLabel,
+          renderingMode: .alwaysOriginal
+        )
+      }
+      attachment.bounds = CGRect(
+        x: 0,
+        y: font.descender / 2,
+        width: pointSize,
+        height: pointSize
+      )
+      return NSAttributedString(attachment: attachment)
+    }
+
+    private func requestImageIfNeeded(_ emote: PiliNativeCommentEmote) {
+      guard
+        let url = URL(string: emote.url),
+        PiliNativeCommentRichText.imageCache.object(forKey: url as NSURL) == nil,
+        requestedURLs.insert(emote.url).inserted
+      else { return }
+
+      URLSession.shared.dataTask(with: url) { [weak self] data, _, _ in
+        guard let self = self else { return }
+        guard let data = data, let image = UIImage(data: data) else {
+          DispatchQueue.main.async { self.requestedURLs.remove(emote.url) }
+          return
+        }
+        PiliNativeCommentRichText.imageCache.setObject(image, forKey: url as NSURL)
+        DispatchQueue.main.async {
+          guard let label = self.label else { return }
+          self.render(in: label)
+          label.invalidateIntrinsicContentSize()
+        }
+      }.resume()
+    }
+  }
+}
+
 private struct PiliNativeCommentRow: View {
   let comment: PiliNativeComment
   let openMember: () -> Void
@@ -3131,10 +3311,12 @@ private struct PiliNativeCommentRow: View {
           .buttonStyle(PlainButtonStyle())
         }
 
-        Text(comment.message)
-          .font(.subheadline)
+        PiliNativeCommentRichText(
+          message: comment.message,
+          emotes: comment.emotes
+        )
+          .frame(maxWidth: .infinity, alignment: .leading)
           .fixedSize(horizontal: false, vertical: true)
-          .textSelection(.enabled)
 
         if !comment.pictures.isEmpty {
           ScrollView(.horizontal, showsIndicators: false) {
