@@ -41,11 +41,11 @@ PiliGlass 在保留 PiliPlus 网络协议、登录状态和功能实现的基础
 
 ## 适配平台
 
-- [x] Android
+- [ ] Android
 - [x] iOS
 - [x] Pad
-- [x] Windows
-- [x] Linux
+- [ ] Windows
+- [ ] Linux
 
 [![Packaging status](https://repology.org/badge/vertical-allrepos/piliplus.svg)](https://repology.org/project/piliplus/versions)
 
@@ -241,7 +241,9 @@ PiliGlass 在保留 PiliPlus 网络协议、登录状态和功能实现的基础
 
 ## 声明
 
-此项目（PiliGlass）是个人为了兴趣而开发，仅用于学习和测试，请于下载后24小时内删除。
+此项目（PiliGlass）完全由 Codex 完成开发。
+
+本项目仅用于兴趣学习和测试，请于下载后24小时内删除。
 所用API皆从官方网站收集，不提供任何破解内容。
 在此致敬原作者：[guozhigq/pilipala](https://github.com/guozhigq/pilipala)
 在此致敬上游作者：[orz12/PiliPalaX](https://github.com/orz12/PiliPalaX)
