@@ -17,11 +17,7 @@ private extension Notification.Name {
 private final class PiliNativeFlutterPlayerSurface {
   private let flutterViewController: FlutterViewController
   private weak var homeController: UIViewController?
-  private weak var activeContainer: PiliNativeFlutterPlayerContainerController?
   private var homeConstraints: [NSLayoutConstraint] = []
-  private var playerConstraints: [NSLayoutConstraint] = []
-  private var hasPresentedFirstFrame = false
-  var onSurfaceMounted: (() -> Void)?
 
   init(flutterViewController: FlutterViewController) {
     self.flutterViewController = flutterViewController
@@ -43,85 +39,11 @@ private final class PiliNativeFlutterPlayerSurface {
     flutterViewController.didMove(toParent: homeController)
   }
 
-  func mount(in container: PiliNativeFlutterPlayerContainerController) {
-    guard activeContainer !== container else {
-      flutterViewController.view.isHidden = false
-      return
-    }
-    NSLayoutConstraint.deactivate(homeConstraints)
-    NSLayoutConstraint.deactivate(playerConstraints)
-    detachFlutterController()
-    container.addChild(flutterViewController)
-    let flutterView = flutterViewController.view!
-    let shouldFadeIn = !hasPresentedFirstFrame
-    flutterView.alpha = shouldFadeIn ? 0 : 1
-    flutterView.frame = container.view.bounds
-    flutterView.translatesAutoresizingMaskIntoConstraints = false
-    container.view.addSubview(flutterView)
-    playerConstraints = [
-      flutterView.topAnchor.constraint(equalTo: container.view.topAnchor),
-      flutterView.leadingAnchor.constraint(equalTo: container.view.leadingAnchor),
-      flutterView.trailingAnchor.constraint(equalTo: container.view.trailingAnchor),
-      flutterView.bottomAnchor.constraint(equalTo: container.view.bottomAnchor),
-    ]
-    NSLayoutConstraint.activate(playerConstraints)
-    flutterViewController.didMove(toParent: container)
-    activeContainer = container
-    flutterView.isHidden = false
-    container.view.setNeedsLayout()
-    container.view.layoutIfNeeded()
-    flutterViewController.viewDidLayoutSubviews()
-
-    guard shouldFadeIn else {
-      DispatchQueue.main.async { [weak self, weak container] in
-        guard let self = self, let container = container, self.activeContainer === container else { return }
-        self.flutterViewController.viewDidLayoutSubviews()
-        self.flutterViewController.view.setNeedsDisplay()
-        self.onSurfaceMounted?()
-      }
-      return
-    }
-    // The Flutter view was previously laid out at the hidden root size. Give
-    // Flutter two layout passes at the final 16:9 bounds before revealing the
-    // texture so the stale centered preview can never flash on screen.
-    DispatchQueue.main.async { [weak self, weak container] in
-      guard let self = self, let container = container, self.activeContainer === container else { return }
-      container.view.setNeedsLayout()
-      container.view.layoutIfNeeded()
-      self.flutterViewController.view.setNeedsLayout()
-      self.flutterViewController.view.layoutIfNeeded()
-      DispatchQueue.main.async { [weak self, weak container] in
-        guard let self = self, let container = container, self.activeContainer === container else { return }
-        container.view.layoutIfNeeded()
-        self.flutterViewController.viewDidLayoutSubviews()
-        self.flutterViewController.view.setNeedsDisplay()
-        self.hasPresentedFirstFrame = true
-        self.onSurfaceMounted?()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self, weak container] in
-          guard let self = self, let container = container, self.activeContainer === container else { return }
-          UIView.animate(
-            withDuration: 0.18,
-            delay: 0,
-            options: [.beginFromCurrentState, .curveEaseOut]
-          ) {
-            self.flutterViewController.view.alpha = 1
-          }
-        }
-      }
-    }
-  }
-
-  func unmount(from container: PiliNativeFlutterPlayerContainerController) {
-    guard activeContainer === container else { return }
-    restore(hidden: true)
-  }
-
   func restore(hidden: Bool) {
-    NSLayoutConstraint.deactivate(playerConstraints)
-    NSLayoutConstraint.deactivate(homeConstraints)
-    playerConstraints = []
-    detachFlutterController()
-    if let homeController = homeController {
+    if let homeController, flutterViewController.parent !== homeController {
+      NSLayoutConstraint.deactivate(homeConstraints)
+      homeConstraints = []
+      detachFlutterController()
       homeController.addChild(flutterViewController)
       let flutterView = flutterViewController.view!
       flutterView.translatesAutoresizingMaskIntoConstraints = false
@@ -129,13 +51,7 @@ private final class PiliNativeFlutterPlayerSurface {
       NSLayoutConstraint.activate(homeConstraints)
       flutterViewController.didMove(toParent: homeController)
     }
-    activeContainer = nil
     flutterViewController.view.isHidden = hidden
-  }
-
-  func prepareForPlayback() {
-    hasPresentedFirstFrame = false
-    restore(hidden: true)
   }
 
   private func detachFlutterController() {
@@ -149,56 +65,11 @@ private final class PiliNativeFlutterPlayerSurface {
   }
 }
 
-private final class PiliNativeFlutterPlayerContainerController: UIViewController {
-  override func viewDidLoad() {
-    super.viewDidLoad()
-    view.backgroundColor = .clear
-    view.clipsToBounds = true
-  }
-}
-
-private struct PiliNativeOriginalPlayerView: UIViewControllerRepresentable {
-  let surface: PiliNativeFlutterPlayerSurface
-
-  final class Coordinator {
-    let surface: PiliNativeFlutterPlayerSurface
-
-    init(surface: PiliNativeFlutterPlayerSurface) {
-      self.surface = surface
-    }
-  }
-
-  func makeCoordinator() -> Coordinator {
-    Coordinator(surface: surface)
-  }
-
-  func makeUIViewController(context: Context) -> PiliNativeFlutterPlayerContainerController {
-    PiliNativeFlutterPlayerContainerController()
-  }
-
-  func updateUIViewController(
-    _ uiViewController: PiliNativeFlutterPlayerContainerController,
-    context: Context
-  ) {
-    surface.mount(in: uiViewController)
-  }
-
-  static func dismantleUIViewController(
-    _ uiViewController: PiliNativeFlutterPlayerContainerController,
-    coordinator: Coordinator
-  ) {
-    // Only the currently active mount may restore the Flutter surface. This
-    // keeps the inline and full-screen SwiftUI hosts from stealing it from
-    // each other during a transition.
-    coordinator.surface.unmount(from: uiViewController)
-  }
-}
-
 /// Hosts a fully native SwiftUI root interface over the original Flutter root.
 ///
-/// Dart remains alive underneath for login state and the original request
-/// protocol. SwiftUI owns the surrounding interface while the original
-/// media-kit/libmpv surface owns playback, controls, full-screen and danmaku.
+/// Dart remains alive underneath for login state and request services.
+/// SwiftUI owns the interface while the native player owns playback,
+/// controls, full-screen presentation and danmaku.
 final class PiliNativeRootViewController: UIViewController {
   private let flutterViewController: FlutterViewController
   private lazy var channel = FlutterMethodChannel(
@@ -480,9 +351,6 @@ private final class PiliNativeViewModel: ObservableObject {
   ) {
     self.channel = channel
     self.flutterPlayerSurface = flutterPlayerSurface
-    flutterPlayerSurface.onSurfaceMounted = { [weak self] in
-      self?.refreshOriginalPlayerSurface()
-    }
     nativePlayerSession.onDanmakuSegmentNeeded = { [weak self] segmentIndex in
       self?.loadNativeDanmaku(segmentIndex: segmentIndex)
     }
@@ -499,14 +367,6 @@ private final class PiliNativeViewModel: ObservableObject {
       .sink { [weak self] fullscreen in
         self?.originalPlayerFullscreen = fullscreen
       }
-  }
-
-  private func refreshOriginalPlayerSurface() {
-    guard !originalPlayerHeroTag.isEmpty else { return }
-    channel.invokeMethod(
-      "refreshNativePlayerSurface",
-      arguments: ["heroTag": originalPlayerHeroTag]
-    )
   }
 
   func configure(titles: [String]?, selectedIndex: Int?) {
@@ -666,22 +526,6 @@ private final class PiliNativeViewModel: ObservableObject {
     arguments["title"] = video.title
     if let cover = video.cover { arguments["cover"] = cover }
     requestVideoDetail(arguments)
-  }
-
-  private func launchOriginalPlayer(_ arguments: [String: Any]) {
-    channel.invokeMethod("openVideo", arguments: arguments) { [weak self] response in
-      DispatchQueue.main.async {
-        guard let self = self else { return }
-        if let error = response as? FlutterError {
-          self.originalPlayerError = error.message ?? "原版播放器启动失败"
-          return
-        }
-        let result = piliDictionary(response)
-        if result["state"] as? String == "error" {
-          self.originalPlayerError = result["error"] as? String ?? "原版播放器启动失败"
-        }
-      }
-    }
   }
 
   func retryVideoDetail() {
@@ -2715,6 +2559,7 @@ private struct PiliNativeHomeView: View {
             }
           }
           .background(Color(UIColor.systemGroupedBackground))
+          .refreshable { model.refresh("home") }
         }
       }
       .navigationBarTitle("PiliGlass", displayMode: .inline)
@@ -2740,10 +2585,6 @@ private struct PiliNativeHomeView: View {
             }
           }
           .accessibilityLabel("我的")
-          Button(action: { model.refresh("home") }) {
-            Image(systemName: "arrow.clockwise")
-          }
-          .accessibilityLabel("刷新")
         }
       )
     }
@@ -2859,15 +2700,13 @@ private struct PiliNativeDynamicsView: View {
             }
           }
           .background(Color(UIColor.systemBackground))
+          .refreshable { model.refresh("dynamics") }
         }
       }
       .navigationBarTitle("动态", displayMode: .inline)
       .navigationBarItems(
         leading: Button(action: { model.isSearchPresented = true }) {
           Image(systemName: "magnifyingglass")
-        },
-        trailing: Button(action: { model.refresh("dynamics") }) {
-          Image(systemName: "arrow.clockwise")
         }
       )
     }
@@ -3163,13 +3002,11 @@ private struct PiliNativeMineView: View {
         }
       }
       .listStyle(InsetGroupedListStyle())
+      .refreshable { model.refresh("mine") }
       .navigationBarTitle("我的", displayMode: .inline)
       .navigationBarItems(
         leading: Button(action: { model.isSearchPresented = true }) {
           Image(systemName: "magnifyingglass")
-        },
-        trailing: Button(action: { model.refresh("mine") }) {
-          Image(systemName: "arrow.clockwise")
         }
       )
     }
@@ -3270,6 +3107,7 @@ private struct PiliNativeProfileView: View {
             .padding(.bottom, 32)
           }
           .background(Color(UIColor.systemGroupedBackground))
+          .refreshable { model.loadProfile() }
         } else {
           PiliNativeErrorView(message: "暂无个人资料", retry: model.loadProfile)
         }
@@ -3279,13 +3117,6 @@ private struct PiliNativeProfileView: View {
         leading: Button("关闭") {
           model.isProfilePresented = false
           presentationMode.wrappedValue.dismiss()
-        },
-        trailing: Menu {
-          Button(action: model.loadProfile) {
-            Label("刷新", systemImage: "arrow.clockwise")
-          }
-        } label: {
-          Image(systemName: "ellipsis.circle")
         }
       )
     }
@@ -3360,18 +3191,7 @@ private struct PiliNativeProfileView: View {
         }
         .padding(.vertical, 4)
 
-        if profile.isSelf {
-          Button(action: model.loadProfile) {
-            Label("刷新个人资料", systemImage: "arrow.clockwise")
-              .font(.system(size: 15, weight: .semibold))
-              .foregroundColor(.primary)
-              .frame(maxWidth: .infinity)
-              .padding(.vertical, 11)
-              .background(Color(UIColor.secondarySystemGroupedBackground))
-              .cornerRadius(12)
-          }
-          .buttonStyle(PlainButtonStyle())
-        } else {
+        if !profile.isSelf {
           Button(action: model.toggleProfileFollow) {
             Label(
               profile.isFollowing ? "已关注" : "关注",
@@ -4029,25 +3849,6 @@ private struct PiliNativeVideoMetric: View {
     }
     .foregroundColor(color)
     .frame(maxWidth: .infinity)
-  }
-}
-
-private struct PiliNativeVideoActionButton: View {
-  let title: String
-  let icon: String
-  let action: () -> Void
-
-  var body: some View {
-    Button(action: action) {
-      Label(title, systemImage: icon)
-        .font(.subheadline)
-        .foregroundColor(.primary)
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 10)
-        .background(Color(UIColor.secondarySystemGroupedBackground))
-        .cornerRadius(10)
-    }
-    .buttonStyle(PlainButtonStyle())
   }
 }
 
@@ -4730,7 +4531,11 @@ private struct PiliNativeMessagesView: View {
           } else if let error = model.messagesError, model.messages.isEmpty {
             PiliNativeErrorView(message: error) { model.loadMessages() }
           } else if model.messages.isEmpty {
-            PiliNativeEmptyView(icon: "bell.slash", title: "暂无消息", subtitle: "新的互动消息会显示在这里")
+            ScrollView {
+              PiliNativeEmptyView(icon: "bell.slash", title: "暂无消息", subtitle: "新的互动消息会显示在这里")
+                .frame(maxWidth: .infinity, minHeight: 420)
+            }
+            .refreshable { model.loadMessages() }
           } else {
             List(model.messages) { message in
               Button(action: { model.openMessageMember(message) }) {
@@ -4740,15 +4545,13 @@ private struct PiliNativeMessagesView: View {
               .disabled(message.memberID == nil)
             }
             .listStyle(PlainListStyle())
+            .refreshable { model.loadMessages() }
           }
         }
       }
       .navigationBarTitle("消息中心", displayMode: .inline)
       .navigationBarItems(
-        leading: Button("关闭") { presentationMode.wrappedValue.dismiss() },
-        trailing: Button(action: { model.loadMessages() }) {
-          Image(systemName: "arrow.clockwise")
-        }
+        leading: Button("关闭") { presentationMode.wrappedValue.dismiss() }
       )
     }
     .navigationViewStyle(StackNavigationViewStyle())
@@ -4929,7 +4732,11 @@ private struct PiliNativeDownloadsView: View {
         } else if let error = model.downloadsError, model.downloads.isEmpty {
           PiliNativeErrorView(message: error, retry: model.presentDownloads)
         } else if model.downloads.isEmpty {
-          PiliNativeEmptyView(icon: "arrow.down.circle", title: "暂无离线缓存", subtitle: "已缓存和正在缓存的视频会显示在这里")
+          ScrollView {
+            PiliNativeEmptyView(icon: "arrow.down.circle", title: "暂无离线缓存", subtitle: "已缓存和正在缓存的视频会显示在这里")
+              .frame(maxWidth: .infinity, minHeight: 520)
+          }
+          .refreshable { model.presentDownloads() }
         } else {
           List(model.downloads) { item in
             Button(action: { model.openDownload(item) }) {
@@ -4966,866 +4773,15 @@ private struct PiliNativeDownloadsView: View {
             .buttonStyle(PlainButtonStyle())
           }
           .listStyle(PlainListStyle())
+          .refreshable { model.presentDownloads() }
         }
       }
       .navigationBarTitle("离线缓存", displayMode: .inline)
       .navigationBarItems(
-        leading: Button("关闭") { presentationMode.wrappedValue.dismiss() },
-        trailing: Button(action: model.presentDownloads) {
-          Image(systemName: "arrow.clockwise")
-        }
+        leading: Button("关闭") { presentationMode.wrappedValue.dismiss() }
       )
     }
     .navigationViewStyle(StackNavigationViewStyle())
-  }
-}
-
-// MARK: - Native inline video introduction
-
-final class PiliNativeVideoIntroFactory: NSObject, FlutterPlatformViewFactory {
-  private let messenger: FlutterBinaryMessenger
-
-  init(messenger: FlutterBinaryMessenger) {
-    self.messenger = messenger
-    super.init()
-  }
-
-  func createArgsCodec() -> FlutterMessageCodec & NSObjectProtocol {
-    FlutterStandardMessageCodec.sharedInstance()
-  }
-
-  func create(
-    withFrame frame: CGRect,
-    viewIdentifier viewId: Int64,
-    arguments args: Any?
-  ) -> FlutterPlatformView {
-    PiliNativeVideoIntroPlatformView(
-      frame: frame,
-      arguments: piliDictionary(args),
-      messenger: messenger
-    )
-  }
-}
-
-private final class PiliNativeHostingContainerView: UIView {
-  let hostingController: UIViewController
-
-  init(frame: CGRect, hostingController: UIViewController) {
-    self.hostingController = hostingController
-    super.init(frame: frame)
-    backgroundColor = .systemBackground
-  }
-
-  required init?(coder: NSCoder) {
-    fatalError("init(coder:) has not been implemented")
-  }
-
-  override func didMoveToWindow() {
-    super.didMoveToWindow()
-    if window == nil {
-      detachHostingController()
-    } else {
-      attachHostingControllerIfNeeded()
-    }
-  }
-
-  private func attachHostingControllerIfNeeded() {
-    guard hostingController.parent == nil else { return }
-    var responder: UIResponder? = self
-    while let current = responder {
-      if let parent = current as? UIViewController {
-        parent.addChild(hostingController)
-        hostingController.view.frame = bounds
-        hostingController.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        addSubview(hostingController.view)
-        hostingController.didMove(toParent: parent)
-        return
-      }
-      responder = current.next
-    }
-  }
-
-  private func detachHostingController() {
-    guard hostingController.parent != nil else { return }
-    hostingController.willMove(toParent: nil)
-    hostingController.view.removeFromSuperview()
-    hostingController.removeFromParent()
-  }
-
-  deinit {
-    detachHostingController()
-  }
-}
-
-private final class PiliNativeVideoIntroPlatformView: NSObject, FlutterPlatformView {
-  private let hostingController: UIHostingController<PiliNativeInlineVideoIntroView>
-  private let containerView: PiliNativeHostingContainerView
-
-  init(frame: CGRect, arguments: [String: Any], messenger: FlutterBinaryMessenger) {
-    let model = PiliNativeInlineVideoIntroModel(arguments: arguments, messenger: messenger)
-    let host = UIHostingController(
-      rootView: PiliNativeInlineVideoIntroView(model: model)
-    )
-    hostingController = host
-    containerView = PiliNativeHostingContainerView(
-      frame: frame,
-      hostingController: host
-    )
-    super.init()
-    host.view.backgroundColor = .systemBackground
-  }
-
-  func view() -> UIView {
-    containerView
-  }
-}
-
-private final class PiliNativeInlineVideoIntroModel: ObservableObject {
-  @Published private(set) var detail: PiliNativeVideoDetail?
-  @Published private(set) var loading = true
-  @Published private(set) var error: String?
-  @Published private(set) var actionLoading = false
-  @Published private(set) var message: String?
-  @Published private(set) var currentCID: Int?
-  @Published private(set) var comments: [PiliNativeComment] = []
-  @Published private(set) var commentsLoading = false
-  @Published private(set) var commentsError: String?
-  @Published private(set) var commentsTotal = 0
-  @Published private(set) var commentActionLoading = false
-  @Published var isComposerPresented = false
-  @Published var composerText = ""
-  @Published private(set) var composerTitle = "发表评论"
-  @Published private(set) var composerHint = "友善地发表一条评论"
-  @Published var isThreadPresented = false
-  @Published private(set) var threadRoot: PiliNativeComment?
-  @Published private(set) var threadItems: [PiliNativeComment] = []
-  @Published private(set) var threadLoading = false
-  @Published private(set) var threadError: String?
-  @Published private(set) var threadTotal = 0
-
-  private let channel: FlutterMethodChannel
-  private let bvid: String
-  private let aid: Int?
-  private let heroTag: String
-  private let fallbackTitle: String
-  private let fallbackCover: String?
-  private var hasLoaded = false
-  private var composerRootRpid: Int?
-  private var composerParentRpid: Int?
-
-  init(arguments: [String: Any], messenger: FlutterBinaryMessenger) {
-    channel = FlutterMethodChannel(name: piliNativeChannelName, binaryMessenger: messenger)
-    bvid = piliString(arguments["bvid"]) ?? ""
-    aid = piliOptionalInt(arguments["aid"])
-    heroTag = piliString(arguments["heroTag"]) ?? ""
-    fallbackTitle = piliString(arguments["title"]) ?? ""
-    fallbackCover = piliString(arguments["cover"])
-    currentCID = piliOptionalInt(arguments["cid"])
-  }
-
-  func load() {
-    guard !hasLoaded else { return }
-    hasLoaded = true
-    requestDetail(showLoading: true, refreshComments: true)
-  }
-
-  private func requestDetail(showLoading: Bool, refreshComments: Bool) {
-    if showLoading { loading = true }
-    var arguments: [String: Any] = ["bvid": bvid, "title": fallbackTitle]
-    if let aid = aid { arguments["aid"] = aid }
-    if let fallbackCover = fallbackCover { arguments["cover"] = fallbackCover }
-    channel.invokeMethod("loadVideoDetail", arguments: arguments) { [weak self] response in
-      DispatchQueue.main.async {
-        guard let self = self else { return }
-        if showLoading { self.loading = false }
-        if let flutterError = response as? FlutterError {
-          self.error = flutterError.message ?? "视频简介加载失败"
-          return
-        }
-        let result = piliDictionary(response)
-        guard result["state"] as? String == "success" else {
-          self.error = result["error"] as? String ?? "视频简介加载失败"
-          return
-        }
-        var refreshed = PiliNativeVideoDetail(map: piliDictionary(result["video"]))
-        if let active = self.detail, !refreshed.relationLoaded {
-          refreshed.liked = active.liked
-          refreshed.coinCount = active.coinCount
-          refreshed.favorited = active.favorited
-        }
-        self.detail = refreshed
-        if self.currentCID == nil { self.currentCID = self.detail?.cid }
-        self.error = nil
-        if refreshComments, let aid = self.detail?.aid {
-          self.loadComments(oid: aid)
-        }
-      }
-    }
-  }
-
-  private func refreshDetail() {
-    requestDetail(showLoading: false, refreshComments: false)
-  }
-
-  func retry() {
-    hasLoaded = false
-    error = nil
-    load()
-  }
-
-  func perform(_ action: String) {
-    guard let detail = detail, !actionLoading else { return }
-    actionLoading = true
-    message = nil
-    channel.invokeMethod(
-      "performVideoAction",
-      arguments: ["action": action, "bvid": detail.bvid, "heroTag": heroTag]
-    ) { [weak self] response in
-      DispatchQueue.main.async {
-        guard let self = self else { return }
-        self.actionLoading = false
-        if let flutterError = response as? FlutterError {
-          self.message = flutterError.message ?? "操作失败"
-          return
-        }
-        let result = piliDictionary(response)
-        if result["state"] as? String == "success" {
-          self.message = result["message"] as? String ?? "操作成功"
-          if var current = self.detail {
-            switch action {
-            case "like":
-              let liked = piliBool(result["liked"])
-              if current.liked != liked {
-                current.like = max(0, current.like + (liked ? 1 : -1))
-              }
-              current.liked = liked
-            case "coin":
-              current.coin += 1
-              current.coinCount += 1
-            case "favorite":
-              let favorited = piliBool(result["favorite"])
-              if current.favorited != favorited {
-                current.favorite = max(0, current.favorite + (favorited ? 1 : -1))
-              }
-              current.favorited = favorited
-            default:
-              break
-            }
-            self.detail = current
-          }
-          DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
-            self?.refreshDetail()
-          }
-        } else {
-          self.message = result["error"] as? String ?? "操作失败"
-        }
-      }
-    }
-  }
-
-  func openMember(_ memberID: Int?) {
-    guard let memberID = memberID else { return }
-    NotificationCenter.default.post(name: .piliPresentNativeProfile, object: memberID)
-  }
-
-  func selectPart(_ part: PiliNativeVideoPart) {
-    guard let cid = part.cid, cid != currentCID else { return }
-    let previousCID = currentCID
-    currentCID = cid
-    message = "正在切换到 P\(part.index)"
-    channel.invokeMethod(
-      "changeNativeVideoPart",
-      arguments: ["heroTag": heroTag, "cid": cid]
-    ) { [weak self] response in
-      DispatchQueue.main.async {
-        guard let self = self else { return }
-        let result = piliDictionary(response)
-        if result["state"] as? String == "success" {
-          self.message = "已切换到 P\(part.index)"
-        } else {
-          self.currentCID = previousCID
-          self.message = result["error"] as? String ?? "切换分P失败"
-        }
-      }
-    }
-  }
-
-  func loadComments(oid: Int, preserveExisting: Bool = false) {
-    if !preserveExisting {
-      comments = []
-      commentsTotal = 0
-    }
-    commentsLoading = true
-    commentsError = nil
-    channel.invokeMethod(
-      "loadNativeComments",
-      arguments: ["oid": oid, "type": 1, "page": 1]
-    ) { [weak self] response in
-      DispatchQueue.main.async {
-        guard let self = self else { return }
-        self.commentsLoading = false
-        if let flutterError = response as? FlutterError {
-          self.commentsError = flutterError.message ?? "评论加载失败"
-          return
-        }
-        let result = piliDictionary(response)
-        guard result["state"] as? String == "success" else {
-          self.commentsError = result["error"] as? String ?? "评论加载失败"
-          return
-        }
-        let rows = result["items"] as? [Any] ?? []
-        self.comments = rows.enumerated().map {
-          PiliNativeComment(map: piliDictionary($0.element), index: $0.offset)
-        }
-        self.commentsTotal = piliInt(result["total"])
-      }
-    }
-  }
-
-  func toggleCommentLike(_ comment: PiliNativeComment) {
-    guard let aid = detail?.aid else { return }
-    channel.invokeMethod(
-      "setNativeCommentLike",
-      arguments: [
-        "oid": aid,
-        "type": 1,
-        "rpid": comment.rpid,
-        "liked": comment.liked,
-      ]
-    ) { [weak self] response in
-      DispatchQueue.main.async {
-        guard let self = self else { return }
-        let result = piliDictionary(response)
-        guard result["state"] as? String == "success" else {
-          self.commentsError = result["error"] as? String ?? "评论点赞失败"
-          return
-        }
-        let nowLiked = piliBool(result["liked"])
-        if let index = self.comments.firstIndex(where: { $0.id == comment.id }) {
-          self.comments[index].liked = nowLiked
-          self.comments[index].like = max(0, self.comments[index].like + (nowLiked ? 1 : -1))
-          if self.threadRoot?.id == comment.id {
-            self.threadRoot?.liked = nowLiked
-            self.threadRoot?.like = self.comments[index].like
-          }
-        }
-        self.loadComments(oid: aid, preserveExisting: true)
-        if self.isThreadPresented { self.loadThread() }
-      }
-    }
-  }
-
-  func beginComment() {
-    guard detail?.aid != nil else {
-      message = "评论参数无效"
-      return
-    }
-    composerRootRpid = nil
-    composerParentRpid = nil
-    composerTitle = "发表评论"
-    composerHint = "友善地发表一条评论"
-    composerText = ""
-    message = nil
-    isComposerPresented = true
-  }
-
-  func beginReply(_ comment: PiliNativeComment, root: PiliNativeComment? = nil) {
-    guard detail?.aid != nil else {
-      message = "评论参数无效"
-      return
-    }
-    let rootComment = root ?? comment
-    composerRootRpid = rootComment.rpid
-    composerParentRpid = comment.rpid
-    composerTitle = "回复 \(comment.author)"
-    composerHint = "回复 @\(comment.author)"
-    composerText = ""
-    message = nil
-    isComposerPresented = true
-  }
-
-  func publishComment() {
-    guard !commentActionLoading, let oid = detail?.aid else { return }
-    let text = composerText.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !text.isEmpty else {
-      message = "评论内容不能为空"
-      return
-    }
-    guard text.count <= 1000 else {
-      message = "评论不能超过 1000 个字符"
-      return
-    }
-    let root = composerRootRpid
-    let parent = composerParentRpid
-    var arguments: [String: Any] = [
-      "oid": oid,
-      "type": 1,
-      "message": text,
-    ]
-    if let root = root { arguments["root"] = root }
-    if let parent = parent { arguments["parent"] = parent }
-    commentActionLoading = true
-    message = nil
-    channel.invokeMethod("publishNativeComment", arguments: arguments) { [weak self] response in
-      DispatchQueue.main.async {
-        guard let self = self else { return }
-        self.commentActionLoading = false
-        let result = piliDictionary(response)
-        guard result["state"] as? String == "success" else {
-          self.message = result["error"] as? String ?? "评论发布失败"
-          return
-        }
-        self.message = result["message"] as? String ?? "发布成功"
-        self.isComposerPresented = false
-        self.loadComments(oid: oid)
-        self.refreshDetail()
-        if root != nil, self.isThreadPresented {
-          self.loadThread()
-        }
-      }
-    }
-  }
-
-  func openThread(_ comment: PiliNativeComment) {
-    threadRoot = comment
-    threadItems = []
-    threadError = nil
-    threadTotal = comment.replyCount
-    isThreadPresented = true
-    loadThread()
-  }
-
-  func loadThread() {
-    guard let oid = detail?.aid, let root = threadRoot else { return }
-    threadLoading = true
-    threadError = nil
-    channel.invokeMethod(
-      "loadNativeCommentReplies",
-      arguments: ["oid": oid, "type": 1, "root": root.rpid]
-    ) { [weak self] response in
-      DispatchQueue.main.async {
-        guard let self = self, self.threadRoot?.rpid == root.rpid else { return }
-        self.threadLoading = false
-        let result = piliDictionary(response)
-        guard result["state"] as? String == "success" else {
-          self.threadError = result["error"] as? String ?? "二级评论加载失败"
-          return
-        }
-        let rows = result["items"] as? [Any] ?? []
-        self.threadItems = rows.enumerated().map {
-          PiliNativeComment(map: piliDictionary($0.element), index: $0.offset)
-        }
-        self.threadTotal = piliInt(result["total"])
-      }
-    }
-  }
-
-  func toggleThreadCommentLike(_ comment: PiliNativeComment) {
-    guard let oid = detail?.aid else { return }
-    channel.invokeMethod(
-      "setNativeCommentLike",
-      arguments: [
-        "oid": oid,
-        "type": 1,
-        "rpid": comment.rpid,
-        "liked": comment.liked,
-      ]
-    ) { [weak self] response in
-      DispatchQueue.main.async {
-        guard let self = self else { return }
-        let result = piliDictionary(response)
-        guard result["state"] as? String == "success" else {
-          self.threadError = result["error"] as? String ?? "评论点赞失败"
-          return
-        }
-        let nowLiked = piliBool(result["liked"])
-        if let index = self.threadItems.firstIndex(where: { $0.id == comment.id }) {
-          self.threadItems[index].liked = nowLiked
-          self.threadItems[index].like = max(
-            0,
-            self.threadItems[index].like + (nowLiked ? 1 : -1)
-          )
-        }
-        self.loadThread()
-        self.loadComments(oid: oid, preserveExisting: true)
-      }
-    }
-  }
-}
-
-private struct PiliNativeInlineVideoIntroView: View {
-  @ObservedObject var model: PiliNativeInlineVideoIntroModel
-
-  var body: some View {
-    Group {
-      if model.loading && model.detail == nil {
-        PiliNativeLoadingView(title: "正在加载视频简介")
-      } else if let error = model.error, model.detail == nil {
-        PiliNativeErrorView(message: error, retry: model.retry)
-      } else if let video = model.detail {
-        ScrollView {
-          LazyVStack(alignment: .leading, spacing: 14) {
-            ownerRow(video)
-
-            Text(video.title)
-              .font(.title3)
-              .fontWeight(.semibold)
-              .fixedSize(horizontal: false, vertical: true)
-
-            HStack(spacing: 14) {
-              Label(video.viewText, systemImage: "play.rectangle")
-              Label(video.danmakuText, systemImage: "text.bubble")
-              if !video.pubdateText.isEmpty { Text(video.pubdateText) }
-            }
-            .font(.caption)
-            .foregroundColor(.secondary)
-
-            if !video.argueMessage.isEmpty {
-              Label(video.argueMessage, systemImage: "exclamationmark.triangle")
-                .font(.caption)
-                .foregroundColor(.orange)
-                .padding(10)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Color.orange.opacity(0.1))
-                .cornerRadius(9)
-            }
-
-            metrics(video)
-
-            if let message = model.message {
-              Text(message)
-                .font(.caption)
-                .foregroundColor(.secondary)
-                .frame(maxWidth: .infinity, alignment: .center)
-            }
-
-            if !video.description.isEmpty {
-              VStack(alignment: .leading, spacing: 7) {
-                Text("简介").font(.headline)
-                Text(video.description)
-                  .font(.subheadline)
-                  .foregroundColor(.secondary)
-                  .textSelection(.enabled)
-              }
-            }
-
-            if !video.tags.isEmpty {
-              ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-                  ForEach(video.tags) { tag in
-                    Text(tag.name)
-                      .font(.caption)
-                      .padding(.horizontal, 10)
-                      .padding(.vertical, 6)
-                      .background(Color(UIColor.secondarySystemBackground))
-                      .clipShape(Capsule())
-                  }
-                }
-              }
-            }
-
-            if video.pages.count > 1 {
-              parts(video)
-            }
-
-            Divider()
-            inlineComments
-          }
-          .padding(.horizontal, 14)
-          .padding(.vertical, 12)
-          .padding(.bottom, 24)
-        }
-        .background(Color(UIColor.systemBackground))
-      } else {
-        PiliNativeErrorView(message: "暂无视频简介", retry: model.retry)
-      }
-    }
-    .onAppear(perform: model.load)
-    .sheet(isPresented: $model.isComposerPresented) {
-      PiliNativeInlineVideoCommentComposerView(model: model)
-    }
-    .fullScreenCover(isPresented: $model.isThreadPresented) {
-      PiliNativeInlineVideoCommentThreadView(model: model)
-    }
-  }
-
-  private func ownerRow(_ video: PiliNativeVideoDetail) -> some View {
-    Button(action: { model.openMember(video.ownerID) }) {
-      HStack(spacing: 11) {
-        PiliRemoteImage(urlString: video.ownerFace)
-          .frame(width: 44, height: 44)
-          .clipShape(Circle())
-        VStack(alignment: .leading, spacing: 3) {
-          Text(video.owner.isEmpty ? "UP 主" : video.owner)
-            .font(.headline)
-            .foregroundColor(.primary)
-          Text(video.copyrightText)
-            .font(.caption)
-            .foregroundColor(.secondary)
-        }
-        Spacer()
-        Image(systemName: "chevron.right")
-          .font(.caption)
-          .foregroundColor(Color(UIColor.tertiaryLabel))
-      }
-    }
-    .buttonStyle(PlainButtonStyle())
-  }
-
-  private func metrics(_ video: PiliNativeVideoDetail) -> some View {
-    HStack(spacing: 0) {
-      Button(action: { model.perform("like") }) {
-        PiliNativeVideoMetric(
-          icon: video.liked ? "hand.thumbsup.fill" : "hand.thumbsup",
-          value: video.like,
-          title: "点赞",
-          color: video.liked ? piliAccent : .secondary
-        )
-      }
-      Button(action: { model.perform("coin") }) {
-        PiliNativeVideoMetric(
-          icon: video.coinCount > 0 ? "circle.hexagongrid.fill" : "circle.hexagongrid",
-          value: video.coin,
-          title: "投币",
-          color: video.coinCount > 0 ? piliAccent : .secondary
-        )
-      }
-      Button(action: { model.perform("favorite") }) {
-        PiliNativeVideoMetric(
-          icon: video.favorited ? "star.fill" : "star",
-          value: video.favorite,
-          title: "收藏",
-          color: video.favorited ? piliAccent : .secondary
-        )
-      }
-      Button(action: model.beginComment) {
-        PiliNativeVideoMetric(icon: "bubble.left", value: video.reply, title: "评论")
-      }
-      Button(action: { model.perform("share") }) {
-        PiliNativeVideoMetric(icon: "square.and.arrow.up", value: video.share, title: "分享")
-      }
-    }
-    .buttonStyle(PlainButtonStyle())
-    .disabled(model.actionLoading)
-    .padding(.vertical, 4)
-  }
-
-  private var inlineComments: some View {
-    VStack(alignment: .leading, spacing: 12) {
-      HStack {
-        Text("评论").font(.headline)
-        if model.commentsTotal > 0 {
-          Text(String(model.commentsTotal))
-            .font(.caption)
-            .foregroundColor(.secondary)
-        }
-        Spacer()
-        Button(action: model.beginComment) {
-          Label("写评论", systemImage: "square.and.pencil")
-            .font(.caption)
-        }
-        .disabled(model.commentActionLoading)
-      }
-      if let error = model.commentsError, !model.comments.isEmpty {
-        Text(error)
-          .font(.caption)
-          .foregroundColor(.red)
-          .frame(maxWidth: .infinity, alignment: .leading)
-      }
-      if model.commentsLoading {
-        HStack(spacing: 8) {
-          ProgressView()
-          Text("正在加载评论")
-        }
-        .font(.caption)
-        .foregroundColor(.secondary)
-        .frame(maxWidth: .infinity, minHeight: 64)
-      } else if let error = model.commentsError, model.comments.isEmpty {
-        Text(error)
-          .font(.subheadline)
-          .foregroundColor(.secondary)
-          .frame(maxWidth: .infinity, minHeight: 64)
-      } else if model.comments.isEmpty {
-        Text("暂时没有评论")
-          .font(.subheadline)
-          .foregroundColor(.secondary)
-          .frame(maxWidth: .infinity, minHeight: 64)
-      } else {
-        ForEach(model.comments) { comment in
-          PiliNativeCommentRow(
-            comment: comment,
-            openMember: { model.openMember(comment.memberID) },
-            toggleLike: { model.toggleCommentLike(comment) },
-            reply: { model.beginReply(comment) },
-            openReplies: { model.openThread(comment) }
-          )
-          if comment.id != model.comments.last?.id {
-            Divider().padding(.leading, 50)
-          }
-        }
-      }
-    }
-  }
-
-  private func parts(_ video: PiliNativeVideoDetail) -> some View {
-    VStack(alignment: .leading, spacing: 9) {
-      Text("视频选集 · \(video.pages.count)")
-        .font(.headline)
-      ForEach(video.pages) { part in
-        Button(action: { model.selectPart(part) }) {
-          HStack(spacing: 9) {
-            Image(systemName: model.currentCID == part.cid ? "play.circle.fill" : "play.circle")
-              .foregroundColor(model.currentCID == part.cid ? piliAccent : .secondary)
-            Text("P\(part.index)  \(part.title)")
-              .font(.subheadline)
-              .foregroundColor(.primary)
-              .lineLimit(2)
-            Spacer()
-            Text(part.durationText)
-              .font(.caption)
-              .foregroundColor(.secondary)
-          }
-          .padding(10)
-          .background(Color(UIColor.secondarySystemBackground))
-          .cornerRadius(9)
-        }
-        .buttonStyle(PlainButtonStyle())
-      }
-    }
-  }
-}
-
-private struct PiliNativeInlineVideoCommentComposerView: View {
-  @ObservedObject var model: PiliNativeInlineVideoIntroModel
-  @Environment(\.presentationMode) private var presentationMode
-
-  var body: some View {
-    NavigationView {
-      VStack(alignment: .leading, spacing: 12) {
-        Text(model.composerHint)
-          .font(.subheadline)
-          .foregroundColor(.secondary)
-        TextEditor(text: $model.composerText)
-          .font(.body)
-          .padding(8)
-          .background(Color(UIColor.secondarySystemGroupedBackground))
-          .cornerRadius(10)
-          .frame(minHeight: 180)
-        HStack {
-          Text("\(model.composerText.count)/1000")
-            .font(.caption)
-            .foregroundColor(model.composerText.count > 1000 ? .red : .secondary)
-          Spacer()
-          if model.commentActionLoading { ProgressView() }
-        }
-        if let message = model.message {
-          Text(message)
-            .font(.caption)
-            .foregroundColor(.red)
-            .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        Spacer()
-      }
-      .padding(16)
-      .background(Color(UIColor.systemBackground))
-      .navigationBarTitle(model.composerTitle, displayMode: .inline)
-      .navigationBarItems(
-        leading: Button("取消") {
-          model.isComposerPresented = false
-          presentationMode.wrappedValue.dismiss()
-        },
-        trailing: Button("发布", action: model.publishComment)
-          .disabled(
-            model.commentActionLoading ||
-            model.composerText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
-            model.composerText.count > 1000
-          )
-      )
-    }
-    .navigationViewStyle(StackNavigationViewStyle())
-  }
-}
-
-private struct PiliNativeInlineVideoCommentThreadView: View {
-  @ObservedObject var model: PiliNativeInlineVideoIntroModel
-  @Environment(\.presentationMode) private var presentationMode
-
-  var body: some View {
-    NavigationView {
-      Group {
-        if let root = model.threadRoot {
-          ScrollView {
-            LazyVStack(alignment: .leading, spacing: 10) {
-              PiliNativeCommentRow(
-                comment: root,
-                openMember: { model.openMember(root.memberID) },
-                toggleLike: { model.toggleCommentLike(root) },
-                reply: { model.beginReply(root) }
-              )
-              .padding(.horizontal, 14)
-              Divider()
-              if let error = model.threadError, !model.threadItems.isEmpty {
-                Text(error)
-                  .font(.caption)
-                  .foregroundColor(.red)
-                  .padding(.horizontal, 14)
-                  .frame(maxWidth: .infinity, alignment: .leading)
-              }
-              if model.threadLoading && model.threadItems.isEmpty {
-                ProgressView("正在加载回复")
-                  .frame(maxWidth: .infinity, minHeight: 120)
-              } else if let error = model.threadError, model.threadItems.isEmpty {
-                VStack(spacing: 10) {
-                  Text(error).foregroundColor(.secondary)
-                  Button("重试", action: model.loadThread)
-                }
-                .font(.subheadline)
-                .frame(maxWidth: .infinity, minHeight: 120)
-              } else if model.threadItems.isEmpty {
-                Text("暂时没有二级评论")
-                  .font(.subheadline)
-                  .foregroundColor(.secondary)
-                  .frame(maxWidth: .infinity, minHeight: 120)
-              } else {
-                ForEach(model.threadItems) { comment in
-                  PiliNativeCommentRow(
-                    comment: comment,
-                    openMember: { model.openMember(comment.memberID) },
-                    toggleLike: { model.toggleThreadCommentLike(comment) },
-                    reply: { model.beginReply(comment, root: root) }
-                  )
-                  .padding(.horizontal, 14)
-                  if comment.id != model.threadItems.last?.id {
-                    Divider().padding(.leading, 64)
-                  }
-                }
-              }
-            }
-            .padding(.vertical, 12)
-          }
-          .background(Color(UIColor.systemBackground))
-        } else {
-          PiliNativeErrorView(message: "评论详情不可用", retry: {})
-        }
-      }
-      .navigationBarTitle(
-        model.threadTotal > 0 ? "\(model.threadTotal) 条回复" : "评论详情",
-        displayMode: .inline
-      )
-      .navigationBarItems(
-        leading: Button("关闭") {
-          model.isThreadPresented = false
-          presentationMode.wrappedValue.dismiss()
-        },
-        trailing: Button("回复") {
-          if let root = model.threadRoot { model.beginReply(root) }
-        }
-      )
-    }
-    .navigationViewStyle(StackNavigationViewStyle())
-    .sheet(isPresented: $model.isComposerPresented) {
-      PiliNativeInlineVideoCommentComposerView(model: model)
-    }
   }
 }
 
@@ -5843,20 +4799,23 @@ private struct PiliNativeLibraryView: View {
         } else if let error = model.libraryError, model.libraryItems.isEmpty {
           PiliNativeErrorView(message: error) { model.loadLibrary(refresh: true) }
         } else if model.libraryItems.isEmpty {
-          VStack(spacing: 12) {
-            Image(systemName: emptySymbol)
-              .font(.system(size: 38))
-              .foregroundColor(.secondary)
-            Text("这里还没有内容")
-              .font(.headline)
-            Text("可以下拉刷新，或使用右上角菜单打开完整功能。")
-              .font(.caption)
-              .foregroundColor(.secondary)
-              .multilineTextAlignment(.center)
+          ScrollView {
+            VStack(spacing: 12) {
+              Image(systemName: emptySymbol)
+                .font(.system(size: 38))
+                .foregroundColor(.secondary)
+              Text("这里还没有内容")
+                .font(.headline)
+              Text("下拉即可刷新内容。")
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.center)
+            }
+            .padding(.horizontal, 30)
+            .frame(maxWidth: .infinity, minHeight: 520)
           }
-          .padding(.horizontal, 30)
-          .frame(maxWidth: .infinity, maxHeight: .infinity)
           .background(Color(UIColor.systemGroupedBackground))
+          .refreshable { model.loadLibrary(refresh: true) }
         } else {
           ScrollView {
             LazyVStack(spacing: 0) {
@@ -5897,14 +4856,7 @@ private struct PiliNativeLibraryView: View {
       }
       .navigationBarTitle(model.libraryTitle, displayMode: .inline)
       .navigationBarItems(
-        leading: leadingButton,
-        trailing: Menu {
-          Button(action: { model.loadLibrary(refresh: true) }) {
-            Label("刷新", systemImage: "arrow.clockwise")
-          }
-        } label: {
-          Image(systemName: "ellipsis.circle")
-        }
+        leading: leadingButton
       )
     }
     .navigationViewStyle(StackNavigationViewStyle())
@@ -6211,14 +5163,12 @@ private struct PiliNativeSettingsView: View {
             }
 
           }
+          .refreshable { model.loadSettings() }
         }
       }
       .navigationBarTitle("设置", displayMode: .inline)
       .navigationBarItems(
-        leading: Button("关闭") { presentationMode.wrappedValue.dismiss() },
-        trailing: Button(action: model.loadSettings) {
-          Image(systemName: "arrow.clockwise")
-        }
+        leading: Button("关闭") { presentationMode.wrappedValue.dismiss() }
       )
       .searchable(text: $searchText, prompt: "搜索设置")
     }

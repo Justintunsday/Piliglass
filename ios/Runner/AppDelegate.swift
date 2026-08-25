@@ -13,12 +13,5 @@ import UIKit
 
   func didInitializeImplicitFlutterEngine(_ engineBridge: FlutterImplicitEngineBridge) {
     GeneratedPluginRegistrant.register(with: engineBridge.pluginRegistry)
-    guard let registrar = engineBridge.pluginRegistry.registrar(
-      forPlugin: "PiliNativeVideoIntroPlugin"
-    ) else { return }
-    registrar.register(
-      PiliNativeVideoIntroFactory(messenger: registrar.messenger()),
-      withId: "piliglass/native_video_intro"
-    )
   }
 }
