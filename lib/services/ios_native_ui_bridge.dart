@@ -8,6 +8,7 @@ import 'package:PiliPlus/http/fav.dart';
 import 'package:PiliPlus/http/fan.dart';
 import 'package:PiliPlus/http/follow.dart';
 import 'package:PiliPlus/http/dynamics.dart';
+import 'package:PiliPlus/http/danmaku.dart';
 import 'package:PiliPlus/http/login.dart';
 import 'package:PiliPlus/http/loading_state.dart';
 import 'package:PiliPlus/http/member.dart';
@@ -146,6 +147,8 @@ final class IOSNativeUIBridge {
         return _loadNativePlayback(_arguments(call));
       case 'loadNativeDanmaku':
         return _loadNativeDanmaku(_arguments(call));
+      case 'sendNativeDanmaku':
+        return _sendNativeDanmaku(_arguments(call));
       case 'playVideo':
         return _playVideo(_arguments(call));
       case 'performVideoAction':
@@ -679,6 +682,44 @@ final class IOSNativeUIBridge {
               },
             )
             .toList(),
+      },
+    };
+  }
+
+  Future<Map<String, dynamic>> _sendNativeDanmaku(
+    Map<dynamic, dynamic> arguments,
+  ) async {
+    final cid = _asInt(arguments['cid']);
+    final bvid = _nonEmpty(arguments['bvid']?.toString());
+    final content = _nonEmpty(arguments['content']?.toString());
+    final progress = _asInt(arguments['progress']) ?? 0;
+    if (!Accounts.main.isLogin) {
+      return const {'state': 'error', 'error': '请先登录账号'};
+    }
+    if (cid == null || cid <= 0 || bvid == null || content == null) {
+      return const {'state': 'error', 'error': '弹幕参数不完整'};
+    }
+
+    final result = await DanmakuHttp.shootDanmaku(
+      oid: cid,
+      bvid: bvid,
+      msg: content.length > 100 ? content.substring(0, 100) : content,
+      progress: progress < 0 ? 0 : progress,
+      mode: 1,
+      fontSize: 25,
+      color: 0xFFFFFF,
+    );
+    return switch (result) {
+      Loading() => const {'state': 'loading'},
+      Error(:final errMsg, :final code) => {
+        'state': 'error',
+        'error': errMsg ?? '弹幕发送失败',
+        'code': ?code,
+      },
+      Success(:final response) => {
+        'state': 'success',
+        'message': '弹幕发送成功',
+        'dmid': response.dmid,
       },
     };
   }

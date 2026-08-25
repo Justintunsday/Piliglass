@@ -461,6 +461,9 @@ private final class PiliNativeViewModel: ObservableObject {
       guard let self = self, let video = self.videoDetail, let cid = self.nativePlayerCID else { return }
       self.loadNativePlayback(video: video, cid: cid, quality: quality, resumeAt: resumeAt)
     }
+    nativePlayerSession.onDanmakuSendRequested = { [weak self] content, progress in
+      self?.sendNativeDanmaku(content: content, progress: progress)
+    }
     nativePlayerFullscreenCancellable = nativePlayerSession.$isFullscreen
       .removeDuplicates()
       .receive(on: DispatchQueue.main)
@@ -622,6 +625,7 @@ private final class PiliNativeViewModel: ObservableObject {
     originalPlayerFullscreen = false
     originalPlayerHeroTag = ""
     nativePlayerCID = nil
+    nativePlayerSession.configureOverlayMetadata(title: video.title, like: 0, reply: 0, share: 0)
     isVideoDetailPresented = true
 
     var arguments: [String: Any] = [:]
@@ -676,6 +680,12 @@ private final class PiliNativeViewModel: ObservableObject {
         }
         let detail = PiliNativeVideoDetail(map: piliDictionary(result["video"]))
         self.videoDetail = detail
+        self.nativePlayerSession.configureOverlayMetadata(
+          title: detail.title,
+          like: detail.like,
+          reply: detail.reply,
+          share: detail.share
+        )
         self.videoDetailError = nil
         self.nativePlayerCID = detail.cid ?? detail.pages.first?.cid
         if let cid = self.nativePlayerCID {
@@ -824,6 +834,38 @@ private final class PiliNativeViewModel: ObservableObject {
     }
   }
 
+  private func sendNativeDanmaku(content: String, progress: Int) {
+    guard let cid = nativePlayerCID, let video = videoDetail else {
+      nativePlayerSession.reportDanmakuSendResult("弹幕参数不完整")
+      return
+    }
+    channel.invokeMethod(
+      "sendNativeDanmaku",
+      arguments: [
+        "cid": cid,
+        "bvid": video.bvid,
+        "content": content,
+        "progress": progress,
+      ]
+    ) { [weak self] response in
+      DispatchQueue.main.async {
+        guard let self else { return }
+        if let error = response as? FlutterError {
+          self.nativePlayerSession.reportDanmakuSendResult(error.message ?? "弹幕发送失败")
+          return
+        }
+        let result = piliDictionary(response)
+        guard result["state"] as? String == "success" else {
+          self.nativePlayerSession.reportDanmakuSendResult(
+            result["error"] as? String ?? "弹幕发送失败"
+          )
+          return
+        }
+        self.nativePlayerSession.reportDanmakuSendResult("弹幕发送成功", sentContent: content)
+      }
+    }
+  }
+
   func originalPlayerDidBecomeReady(_ arguments: [String: Any]) {
     originalPlayerHeroTag = piliString(arguments["heroTag"]) ?? ""
     originalPlayerError = nil
@@ -950,6 +992,12 @@ private final class PiliNativeViewModel: ObservableObject {
       break
     }
     videoDetail = current
+    nativePlayerSession.configureOverlayMetadata(
+      title: current.title,
+      like: current.like,
+      reply: current.reply,
+      share: current.share
+    )
   }
 
   func refreshCurrentVideoDetail() {
@@ -974,6 +1022,12 @@ private final class PiliNativeViewModel: ObservableObject {
           refreshed.favorited = active.favorited
         }
         self.videoDetail = refreshed
+        self.nativePlayerSession.configureOverlayMetadata(
+          title: refreshed.title,
+          like: refreshed.like,
+          reply: refreshed.reply,
+          share: refreshed.share
+        )
       }
     }
   }
@@ -3730,19 +3784,10 @@ private struct PiliNativeOriginalPlayerFullscreenView: View {
   @ObservedObject var model: PiliNativeViewModel
 
   var body: some View {
-    ZStack(alignment: .topTrailing) {
+    ZStack {
       Color.black.ignoresSafeArea()
       PiliNativePlayerView(session: model.nativePlayerSession, fullscreen: true)
         .ignoresSafeArea()
-      Button(action: model.exitOriginalPlayerFullscreen) {
-        Image(systemName: "xmark")
-          .font(.headline)
-          .foregroundColor(.white)
-          .padding(11)
-          .background(Color.black.opacity(0.6))
-          .clipShape(Circle())
-      }
-      .padding()
     }
   }
 }

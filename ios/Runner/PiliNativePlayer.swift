@@ -402,6 +402,11 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
   @Published private(set) var playbackRate: Float = 1
   @Published private(set) var isHDR = false
   @Published private(set) var hdrBrightnessActive = false
+  @Published private(set) var videoTitle = "正在播放"
+  @Published private(set) var videoLikeCount = 0
+  @Published private(set) var videoReplyCount = 0
+  @Published private(set) var videoShareCount = 0
+  @Published private(set) var danmakuStatusMessage: String?
 
   @Published private(set) var pictureInPicturePlayer: AVPlayer?
 
@@ -409,6 +414,7 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
   private let audioEngine: AetherEngine
   var onDanmakuSegmentNeeded: ((Int) -> Void)?
   var onQualityRequested: ((Int, TimeInterval) -> Void)?
+  var onDanmakuSendRequested: ((String, Int) -> Void)?
 
   private(set) var danmakuItems: [PiliNativeDanmakuItem] = []
   private var segments: [PiliNativePlayerSegment] = []
@@ -528,6 +534,47 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
     danmakuItems.removeAll()
     danmakuRevision += 1
     requestDanmaku(near: currentTime)
+  }
+
+  func configureOverlayMetadata(title: String, like: Int, reply: Int, share: Int) {
+    videoTitle = title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+      ? "正在播放"
+      : title
+    videoLikeCount = max(0, like)
+    videoReplyCount = max(0, reply)
+    videoShareCount = max(0, share)
+  }
+
+  func requestDanmakuSend(_ content: String) {
+    let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return }
+    danmakuStatusMessage = "正在发送弹幕…"
+    onDanmakuSendRequested?(trimmed, Int(max(0, currentTime) * 1000))
+  }
+
+  func reportDanmakuSendResult(_ message: String, sentContent: String? = nil) {
+    if let sentContent, !sentContent.isEmpty {
+      danmakuItems.append(
+        PiliNativeDanmakuItem(
+          id: "local-\(UUID().uuidString)",
+          progress: currentTime + 0.25,
+          mode: 1,
+          fontSize: 25,
+          color: .white,
+          content: sentContent,
+          weight: Int.max
+        )
+      )
+      danmakuItems.sort { lhs, rhs in
+        lhs.progress == rhs.progress ? lhs.weight > rhs.weight : lhs.progress < rhs.progress
+      }
+      danmakuRevision += 1
+    }
+    danmakuStatusMessage = message
+    DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
+      guard self?.danmakuStatusMessage == message else { return }
+      self?.danmakuStatusMessage = nil
+    }
   }
 
   func appendDanmaku(_ items: [PiliNativeDanmakuItem]) {
@@ -1011,12 +1058,23 @@ private enum PiliNativePlayerBuildError: LocalizedError {
 // MARK: - UIKit video surface and customizable controls
 
 private final class PiliNativeDanmakuView: UIView {
+  private enum BlockCategory: Int {
+    case fixed
+    case scrolling
+    case colorful
+    case advanced
+    case reverse
+  }
+
   private var cursor = 0
   private var lastTime: TimeInterval = -1
   private var lastRevision = -1
   private var scrollingLane = 0
   private var topLane = 0
   private var bottomLane = 0
+  private var displayAreaFraction: CGFloat = 0.75
+  private var opacityMultiplier: CGFloat = 1
+  private var blockedCategories = Set<Int>()
 
   override init(frame: CGRect) {
     super.init(frame: frame)
@@ -1047,6 +1105,17 @@ private final class PiliNativeDanmakuView: UIView {
     lastRevision = -1
   }
 
+  func applySettings(
+    displayArea: CGFloat,
+    opacity: CGFloat,
+    blockedCategories: Set<Int>
+  ) {
+    displayAreaFraction = min(max(displayArea, 0.25), 1)
+    opacityMultiplier = min(max(opacity, 0.1), 1)
+    self.blockedCategories = blockedCategories
+    clear()
+  }
+
   private func reset(at time: TimeInterval, items: [PiliNativeDanmakuItem], revision: Int) {
     subviews.forEach { $0.removeFromSuperview() }
     cursor = items.partitioningIndex { $0.progress > time + 0.08 }
@@ -1059,6 +1128,7 @@ private final class PiliNativeDanmakuView: UIView {
 
   private func display(_ item: PiliNativeDanmakuItem) {
     guard bounds.width > 0, bounds.height > 0 else { return }
+    if shouldBlock(item) { return }
     let label = UILabel()
     label.numberOfLines = 1
     let shadow = NSShadow()
@@ -1074,18 +1144,19 @@ private final class PiliNativeDanmakuView: UIView {
       ]
     )
     label.sizeToFit()
-    label.alpha = 0.96
+    label.alpha = 0.96 * opacityMultiplier
     addSubview(label)
 
     let laneHeight = max(25, label.bounds.height + 5)
-    let laneCount = max(1, Int(bounds.height * 0.72 / laneHeight))
+    let visibleHeight = max(laneHeight, bounds.height * displayAreaFraction)
+    let laneCount = max(1, Int((visibleHeight - 12) / laneHeight))
     switch item.mode {
     case 4:
       let lane = bottomLane % max(1, min(laneCount, 3))
       bottomLane += 1
       label.center = CGPoint(
         x: bounds.midX,
-        y: bounds.height * 0.82 - CGFloat(lane) * laneHeight
+        y: visibleHeight - CGFloat(lane) * laneHeight - laneHeight / 2
       )
       fade(label)
     case 5:
@@ -1109,6 +1180,25 @@ private final class PiliNativeDanmakuView: UIView {
         label.removeFromSuperview()
       }
     }
+  }
+
+  private func shouldBlock(_ item: PiliNativeDanmakuItem) -> Bool {
+    if blockedCategories.contains(BlockCategory.fixed.rawValue), item.mode == 4 || item.mode == 5 {
+      return true
+    }
+    if blockedCategories.contains(BlockCategory.scrolling.rawValue), (1...3).contains(item.mode) {
+      return true
+    }
+    if blockedCategories.contains(BlockCategory.colorful.rawValue), item.color != UIColor.white {
+      return true
+    }
+    if blockedCategories.contains(BlockCategory.advanced.rawValue), item.mode >= 7 {
+      return true
+    }
+    if blockedCategories.contains(BlockCategory.reverse.rawValue), item.mode == 6 {
+      return true
+    }
+    return false
   }
 
   private func fade(_ label: UILabel) {
@@ -1194,7 +1284,7 @@ private final class PiliNativeDiagnosticLogViewController: UIViewController {
   }
 }
 
-final class PiliNativePlayerViewController: UIViewController {
+final class PiliNativePlayerViewController: UIViewController, UIGestureRecognizerDelegate {
   private let session: PiliNativePlayerSession
   private let fullscreenPresentation: Bool
   private let canvas = AetherPlayerView()
@@ -1202,23 +1292,47 @@ final class PiliNativePlayerViewController: UIViewController {
   private let controls = UIView()
   private let topBar = UIStackView()
   private let bottomBar = UIStackView()
+  private let topChrome = UIView()
+  private let bottomChrome = UIView()
   private let playButton = UIButton(type: .system)
   private let danmakuButton = UIButton(type: .system)
+  private let danmakuSettingsButton = UIButton(type: .system)
+  private let danmakuInputButton = UIButton(type: .system)
   private let logButton = UIButton(type: .system)
   private let qualityButton = UIButton(type: .system)
   private let speedButton = UIButton(type: .system)
   private let fullscreenButton = UIButton(type: .system)
   private let pipButton = UIButton(type: .system)
+  private let backButton = UIButton(type: .system)
+  private let lockButton = UIButton(type: .system)
+  private let titleLabel = UILabel()
+  private let likeLabel = UILabel()
+  private let replyLabel = UILabel()
+  private let shareLabel = UILabel()
+  private let systemTimeLabel = UILabel()
+  private let batteryLabel = UILabel()
+  private let fullTimeLabel = UILabel()
   private let currentLabel = UILabel()
   private let durationLabel = UILabel()
   private let slider = UISlider()
   private let spinner = UIActivityIndicatorView(style: .large)
   private let errorLabel = UILabel()
+  private let toastLabel = UILabel()
+  private let danmakuSettingsPanel = UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterialDark))
+  private let displayAreaSlider = UISlider()
+  private let opacitySlider = UISlider()
+  private let displayAreaValueLabel = UILabel()
+  private let opacityValueLabel = UILabel()
+  private var blockButtons: [UIButton] = []
+  private var blockedDanmakuCategories = Set<Int>()
   private var pictureInPictureController: AVPictureInPictureController?
   private var cancellables = Set<AnyCancellable>()
   private var controlsHideTask: DispatchWorkItem?
+  private var statusTimer: Timer?
   private var wasPlayingBeforeScrub = false
   private var isScrubbing = false
+  private var controlsLocked = false
+  private var settingsPanelVisible = false
 
   init(session: PiliNativePlayerSession, fullscreen: Bool) {
     self.session = session
@@ -1242,12 +1356,14 @@ final class PiliNativePlayerViewController: UIViewController {
     bindSession()
     session.bindVideoSurface(canvas)
     pipButton.isHidden = !AVPictureInPictureController.isPictureInPictureSupported()
+    if fullscreenPresentation { startSystemStatusUpdates() }
   }
 
   override func viewDidAppear(_ animated: Bool) {
     super.viewDidAppear(animated)
     session.bindVideoSurface(canvas)
     if fullscreenPresentation { requestOrientation(.landscape) }
+    if fullscreenPresentation, statusTimer == nil { startSystemStatusUpdates() }
     scheduleControlsHide()
   }
 
@@ -1261,10 +1377,18 @@ final class PiliNativePlayerViewController: UIViewController {
   override func viewWillDisappear(_ animated: Bool) {
     super.viewWillDisappear(animated)
     controlsHideTask?.cancel()
+    statusTimer?.invalidate()
+    statusTimer = nil
   }
 
   func detachVideoSurface() {
     session.unbindVideoSurface(canvas)
+  }
+
+  func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
+    if touch.view is UIControl { return false }
+    if let touchedView = touch.view, touchedView.isDescendant(of: danmakuSettingsPanel) { return false }
+    return true
   }
 
   private func buildInterface() {
@@ -1295,19 +1419,31 @@ final class PiliNativePlayerViewController: UIViewController {
     ])
 
     let tap = UITapGestureRecognizer(target: self, action: #selector(toggleControls))
+    tap.cancelsTouchesInView = false
+    tap.delegate = self
     controls.addGestureRecognizer(tap)
     let doubleTap = UITapGestureRecognizer(target: self, action: #selector(doubleTapSeek(_:)))
     doubleTap.numberOfTapsRequired = 2
+    doubleTap.cancelsTouchesInView = false
+    doubleTap.delegate = self
     controls.addGestureRecognizer(doubleTap)
     tap.require(toFail: doubleTap)
 
     configureButton(playButton, image: "play.fill", action: #selector(togglePlayback))
     configureButton(fullscreenButton, image: fullscreenPresentation ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right", action: #selector(toggleFullscreen))
     configureButton(pipButton, image: "pip.enter", action: #selector(togglePictureInPicture))
+    configureButton(backButton, image: "chevron.left", action: #selector(exitFullscreen))
+    configureButton(lockButton, image: "lock.open.fill", action: #selector(toggleScreenLock))
+    configureButton(danmakuSettingsButton, image: "slider.horizontal.3", action: #selector(toggleDanmakuSettings))
     configureTextButton(danmakuButton, title: "弹幕", action: #selector(toggleDanmaku))
     configureTextButton(logButton, title: "日志", action: #selector(showDiagnosticLog))
     configureTextButton(qualityButton, title: "清晰度", action: nil)
     configureTextButton(speedButton, title: "1.0x", action: #selector(changeSpeed))
+    configureTextButton(
+      danmakuInputButton,
+      title: "发个友善的弹幕见证当下",
+      action: #selector(showDanmakuComposer)
+    )
 
     currentLabel.font = .monospacedDigitSystemFont(ofSize: 11, weight: .medium)
     durationLabel.font = currentLabel.font
@@ -1315,12 +1451,47 @@ final class PiliNativePlayerViewController: UIViewController {
     durationLabel.textColor = .white
     currentLabel.text = "00:00"
     durationLabel.text = "00:00"
+    fullTimeLabel.font = .monospacedDigitSystemFont(ofSize: 12, weight: .medium)
+    fullTimeLabel.textColor = .white
+    fullTimeLabel.text = "00:00/00:00"
     slider.minimumTrackTintColor = UIColor(red: 0.93, green: 0.29, blue: 0.48, alpha: 1)
     slider.maximumTrackTintColor = UIColor.white.withAlphaComponent(0.38)
     slider.addTarget(self, action: #selector(scrubStarted), for: .touchDown)
     slider.addTarget(self, action: #selector(scrubChanged), for: .valueChanged)
     slider.addTarget(self, action: #selector(scrubEnded), for: [.touchUpInside, .touchUpOutside, .touchCancel])
 
+    if fullscreenPresentation {
+      buildFullscreenControls()
+    } else {
+      buildEmbeddedControls()
+    }
+
+    errorLabel.textColor = .white
+    errorLabel.font = .systemFont(ofSize: 13, weight: .medium)
+    errorLabel.textAlignment = .center
+    errorLabel.numberOfLines = 3
+    errorLabel.isHidden = true
+    spinner.color = .white
+    spinner.hidesWhenStopped = true
+
+    toastLabel.translatesAutoresizingMaskIntoConstraints = false
+    toastLabel.textColor = .white
+    toastLabel.backgroundColor = UIColor.black.withAlphaComponent(0.72)
+    toastLabel.font = .systemFont(ofSize: 13, weight: .medium)
+    toastLabel.textAlignment = .center
+    toastLabel.layer.cornerRadius = 9
+    toastLabel.clipsToBounds = true
+    toastLabel.isHidden = true
+    view.addSubview(toastLabel)
+    NSLayoutConstraint.activate([
+      toastLabel.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+      toastLabel.centerYAnchor.constraint(equalTo: view.centerYAnchor, constant: 54),
+      toastLabel.heightAnchor.constraint(greaterThanOrEqualToConstant: 36),
+      toastLabel.widthAnchor.constraint(lessThanOrEqualTo: view.widthAnchor, multiplier: 0.7),
+    ])
+  }
+
+  private func buildEmbeddedControls() {
     topBar.axis = .horizontal
     topBar.alignment = .center
     topBar.spacing = 8
@@ -1353,14 +1524,255 @@ final class PiliNativePlayerViewController: UIViewController {
       bottomBar.bottomAnchor.constraint(equalTo: controls.safeAreaLayoutGuide.bottomAnchor, constant: -6),
       slider.widthAnchor.constraint(greaterThanOrEqualToConstant: 70),
     ])
+  }
 
-    errorLabel.textColor = .white
-    errorLabel.font = .systemFont(ofSize: 13, weight: .medium)
-    errorLabel.textAlignment = .center
-    errorLabel.numberOfLines = 3
-    errorLabel.isHidden = true
-    spinner.color = .white
-    spinner.hidesWhenStopped = true
+  private func buildFullscreenControls() {
+    topChrome.translatesAutoresizingMaskIntoConstraints = false
+    bottomChrome.translatesAutoresizingMaskIntoConstraints = false
+    topChrome.backgroundColor = UIColor.black.withAlphaComponent(0.48)
+    bottomChrome.backgroundColor = UIColor.black.withAlphaComponent(0.52)
+    controls.addSubview(topChrome)
+    controls.addSubview(bottomChrome)
+    NSLayoutConstraint.activate([
+      topChrome.topAnchor.constraint(equalTo: controls.topAnchor),
+      topChrome.leadingAnchor.constraint(equalTo: controls.leadingAnchor),
+      topChrome.trailingAnchor.constraint(equalTo: controls.trailingAnchor),
+      topChrome.heightAnchor.constraint(equalToConstant: 64),
+      bottomChrome.leadingAnchor.constraint(equalTo: controls.leadingAnchor),
+      bottomChrome.trailingAnchor.constraint(equalTo: controls.trailingAnchor),
+      bottomChrome.bottomAnchor.constraint(equalTo: controls.bottomAnchor),
+      bottomChrome.heightAnchor.constraint(equalToConstant: 116),
+    ])
+
+    titleLabel.font = .systemFont(ofSize: 15, weight: .semibold)
+    titleLabel.textColor = .white
+    titleLabel.numberOfLines = 1
+    titleLabel.lineBreakMode = .byTruncatingTail
+    titleLabel.text = session.videoTitle
+    titleLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+
+    let metricStack = UIStackView(arrangedSubviews: [
+      metricView(icon: "hand.thumbsup.fill", label: likeLabel),
+      metricView(icon: "bubble.left.fill", label: replyLabel),
+      metricView(icon: "arrowshape.turn.up.right.fill", label: shareLabel),
+    ])
+    metricStack.axis = .horizontal
+    metricStack.alignment = .center
+    metricStack.spacing = 12
+
+    let wifiView = UIImageView(image: UIImage(systemName: "wifi"))
+    wifiView.tintColor = .white
+    wifiView.contentMode = .scaleAspectFit
+    wifiView.widthAnchor.constraint(equalToConstant: 18).isActive = true
+    [systemTimeLabel, batteryLabel].forEach {
+      $0.textColor = .white
+      $0.font = .monospacedDigitSystemFont(ofSize: 11, weight: .semibold)
+    }
+    let statusStack = UIStackView(arrangedSubviews: [systemTimeLabel, wifiView, batteryLabel])
+    statusStack.axis = .horizontal
+    statusStack.alignment = .center
+    statusStack.spacing = 7
+
+    topBar.axis = .horizontal
+    topBar.alignment = .center
+    topBar.spacing = 10
+    topBar.addArrangedSubview(backButton)
+    topBar.addArrangedSubview(titleLabel)
+    topBar.addArrangedSubview(metricStack)
+    topBar.addArrangedSubview(statusStack)
+    topBar.translatesAutoresizingMaskIntoConstraints = false
+    topChrome.addSubview(topBar)
+    NSLayoutConstraint.activate([
+      topBar.leadingAnchor.constraint(equalTo: controls.safeAreaLayoutGuide.leadingAnchor, constant: 8),
+      topBar.trailingAnchor.constraint(equalTo: controls.safeAreaLayoutGuide.trailingAnchor, constant: -10),
+      topBar.bottomAnchor.constraint(equalTo: topChrome.bottomAnchor, constant: -8),
+      topBar.heightAnchor.constraint(equalToConstant: 42),
+    ])
+
+    let progressRow = UIStackView(arrangedSubviews: [fullTimeLabel, slider])
+    progressRow.axis = .horizontal
+    progressRow.alignment = .center
+    progressRow.spacing = 10
+    fullTimeLabel.widthAnchor.constraint(greaterThanOrEqualToConstant: 94).isActive = true
+
+    danmakuButton.setImage(UIImage(systemName: "checkmark.square.fill"), for: .normal)
+    danmakuButton.tintColor = .white
+    danmakuButton.setTitle(" 弹幕", for: .normal)
+    danmakuInputButton.contentHorizontalAlignment = .left
+    danmakuInputButton.setTitleColor(UIColor.white.withAlphaComponent(0.78), for: .normal)
+    danmakuInputButton.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+    danmakuInputButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 180).isActive = true
+
+    let actionRow = UIStackView(arrangedSubviews: [
+      playButton,
+      danmakuButton,
+      danmakuSettingsButton,
+      danmakuInputButton,
+      speedButton,
+      qualityButton,
+    ])
+    actionRow.axis = .horizontal
+    actionRow.alignment = .center
+    actionRow.spacing = 10
+
+    bottomBar.axis = .vertical
+    bottomBar.alignment = .fill
+    bottomBar.spacing = 8
+    bottomBar.addArrangedSubview(progressRow)
+    bottomBar.addArrangedSubview(actionRow)
+    bottomBar.translatesAutoresizingMaskIntoConstraints = false
+    bottomChrome.addSubview(bottomBar)
+    NSLayoutConstraint.activate([
+      bottomBar.leadingAnchor.constraint(equalTo: controls.safeAreaLayoutGuide.leadingAnchor, constant: 14),
+      bottomBar.trailingAnchor.constraint(equalTo: controls.safeAreaLayoutGuide.trailingAnchor, constant: -14),
+      bottomBar.topAnchor.constraint(equalTo: bottomChrome.topAnchor, constant: 10),
+      bottomBar.bottomAnchor.constraint(equalTo: controls.safeAreaLayoutGuide.bottomAnchor, constant: -8),
+    ])
+
+    lockButton.translatesAutoresizingMaskIntoConstraints = false
+    lockButton.backgroundColor = UIColor.black.withAlphaComponent(0.52)
+    lockButton.layer.cornerRadius = 16
+    view.addSubview(lockButton)
+    NSLayoutConstraint.activate([
+      lockButton.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -12),
+      lockButton.centerYAnchor.constraint(equalTo: view.centerYAnchor),
+    ])
+
+    buildDanmakuSettingsPanel()
+  }
+
+  private func metricView(icon: String, label: UILabel) -> UIView {
+    let image = UIImageView(image: UIImage(systemName: icon))
+    image.tintColor = .white
+    image.contentMode = .scaleAspectFit
+    image.widthAnchor.constraint(equalToConstant: 15).isActive = true
+    label.textColor = .white
+    label.font = .monospacedDigitSystemFont(ofSize: 11, weight: .medium)
+    label.text = "0"
+    let stack = UIStackView(arrangedSubviews: [image, label])
+    stack.axis = .horizontal
+    stack.alignment = .center
+    stack.spacing = 4
+    return stack
+  }
+
+  private func buildDanmakuSettingsPanel() {
+    danmakuSettingsPanel.translatesAutoresizingMaskIntoConstraints = false
+    danmakuSettingsPanel.isHidden = true
+    danmakuSettingsPanel.layer.cornerRadius = 18
+    danmakuSettingsPanel.clipsToBounds = true
+    view.addSubview(danmakuSettingsPanel)
+    NSLayoutConstraint.activate([
+      danmakuSettingsPanel.topAnchor.constraint(equalTo: view.topAnchor),
+      danmakuSettingsPanel.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+      danmakuSettingsPanel.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+      danmakuSettingsPanel.widthAnchor.constraint(equalTo: view.widthAnchor, multiplier: 0.5),
+    ])
+
+    let panelTitle = UILabel()
+    panelTitle.text = "弹幕设置"
+    panelTitle.textColor = .white
+    panelTitle.font = .systemFont(ofSize: 18, weight: .bold)
+    let closeButton = UIButton(type: .system)
+    closeButton.tintColor = .white
+    closeButton.setImage(UIImage(systemName: "xmark"), for: .normal)
+    closeButton.addTarget(self, action: #selector(toggleDanmakuSettings), for: .touchUpInside)
+    let header = UIStackView(arrangedSubviews: [panelTitle, UIView(), closeButton])
+    header.axis = .horizontal
+    header.alignment = .center
+
+    displayAreaSlider.minimumValue = 0.25
+    displayAreaSlider.maximumValue = 1
+    displayAreaSlider.value = 0.75
+    displayAreaSlider.minimumTrackTintColor = UIColor(red: 0.93, green: 0.29, blue: 0.48, alpha: 1)
+    displayAreaSlider.addTarget(self, action: #selector(danmakuSettingsChanged), for: .valueChanged)
+    opacitySlider.minimumValue = 0.1
+    opacitySlider.maximumValue = 1
+    opacitySlider.value = 1
+    opacitySlider.minimumTrackTintColor = displayAreaSlider.minimumTrackTintColor
+    opacitySlider.addTarget(self, action: #selector(danmakuSettingsChanged), for: .valueChanged)
+
+    let areaRow = settingsSliderRow(
+      title: "显示区域",
+      slider: displayAreaSlider,
+      valueLabel: displayAreaValueLabel
+    )
+    let opacityRow = settingsSliderRow(
+      title: "不透明度",
+      slider: opacitySlider,
+      valueLabel: opacityValueLabel
+    )
+
+    let blockTitle = UILabel()
+    blockTitle.text = "画面防挡 / 按弹幕类型屏蔽"
+    blockTitle.textColor = UIColor.white.withAlphaComponent(0.82)
+    blockTitle.font = .systemFont(ofSize: 13, weight: .semibold)
+
+    let definitions = [
+      ("pin.fill", "固定"),
+      ("arrow.left", "滚动"),
+      ("paintpalette.fill", "彩色"),
+      ("sparkles", "高级"),
+      ("number", "计数"),
+    ]
+    blockButtons = definitions.enumerated().map { index, definition in
+      makeDanmakuBlockButton(icon: definition.0, title: definition.1, tag: index)
+    }
+    let blockRow = UIStackView(arrangedSubviews: blockButtons)
+    blockRow.axis = .horizontal
+    blockRow.distribution = .fillEqually
+    blockRow.spacing = 8
+
+    let content = UIStackView(arrangedSubviews: [header, areaRow, opacityRow, blockTitle, blockRow, UIView()])
+    content.translatesAutoresizingMaskIntoConstraints = false
+    content.axis = .vertical
+    content.spacing = 16
+    danmakuSettingsPanel.contentView.addSubview(content)
+    NSLayoutConstraint.activate([
+      content.topAnchor.constraint(equalTo: danmakuSettingsPanel.contentView.safeAreaLayoutGuide.topAnchor, constant: 18),
+      content.leadingAnchor.constraint(equalTo: danmakuSettingsPanel.contentView.leadingAnchor, constant: 20),
+      content.trailingAnchor.constraint(equalTo: danmakuSettingsPanel.contentView.safeAreaLayoutGuide.trailingAnchor, constant: -20),
+      content.bottomAnchor.constraint(equalTo: danmakuSettingsPanel.contentView.safeAreaLayoutGuide.bottomAnchor, constant: -16),
+      blockRow.heightAnchor.constraint(equalToConstant: 64),
+    ])
+    danmakuSettingsChanged()
+  }
+
+  private func settingsSliderRow(
+    title: String,
+    slider: UISlider,
+    valueLabel: UILabel
+  ) -> UIView {
+    let titleLabel = UILabel()
+    titleLabel.text = title
+    titleLabel.textColor = .white
+    titleLabel.font = .systemFont(ofSize: 14, weight: .medium)
+    valueLabel.textColor = UIColor.white.withAlphaComponent(0.7)
+    valueLabel.font = .monospacedDigitSystemFont(ofSize: 12, weight: .medium)
+    valueLabel.textAlignment = .right
+    valueLabel.widthAnchor.constraint(equalToConstant: 46).isActive = true
+    let row = UIStackView(arrangedSubviews: [titleLabel, slider, valueLabel])
+    row.axis = .horizontal
+    row.alignment = .center
+    row.spacing = 10
+    return row
+  }
+
+  private func makeDanmakuBlockButton(icon: String, title: String, tag: Int) -> UIButton {
+    let button = UIButton(type: .system)
+    button.tag = tag
+    var configuration = UIButton.Configuration.gray()
+    configuration.image = UIImage(systemName: icon)
+    configuration.title = title
+    configuration.imagePlacement = .top
+    configuration.imagePadding = 5
+    configuration.baseForegroundColor = .white
+    configuration.background.backgroundColor = UIColor.white.withAlphaComponent(0.08)
+    configuration.background.cornerRadius = 10
+    button.configuration = configuration
+    button.titleLabel?.font = .systemFont(ofSize: 11, weight: .medium)
+    button.addTarget(self, action: #selector(toggleDanmakuBlock(_:)), for: .touchUpInside)
+    return button
   }
 
   private func bindSession() {
@@ -1377,12 +1789,14 @@ final class PiliNativePlayerViewController: UIViewController {
     session.$duration.receive(on: DispatchQueue.main).sink { [weak self] duration in
       self?.durationLabel.text = Self.formatTime(duration)
       self?.slider.maximumValue = Float(max(duration, 1))
+      self?.refreshFullscreenTimeLabel()
     }.store(in: &cancellables)
     session.$currentTime.receive(on: DispatchQueue.main).sink { [weak self] time in
       guard let self = self else { return }
       if !self.isScrubbing {
         self.currentLabel.text = Self.formatTime(time)
         self.slider.value = Float(time)
+        self.refreshFullscreenTimeLabel()
       }
       if self.session.danmakuEnabled {
         self.danmakuView.render(
@@ -1401,8 +1815,17 @@ final class PiliNativePlayerViewController: UIViewController {
       )
     }.store(in: &cancellables)
     session.$danmakuEnabled.receive(on: DispatchQueue.main).sink { [weak self] enabled in
-      self?.danmakuButton.setTitle(enabled ? "弹幕开" : "弹幕关", for: .normal)
-      if !enabled { self?.danmakuView.clear() }
+      guard let self else { return }
+      self.danmakuButton.setTitle(
+        self.fullscreenPresentation ? " 弹幕" : (enabled ? "弹幕开" : "弹幕关"),
+        for: .normal
+      )
+      self.danmakuButton.setImage(
+        UIImage(systemName: enabled ? "checkmark.square.fill" : "square"),
+        for: .normal
+      )
+      self.danmakuButton.alpha = enabled ? 1 : 0.66
+      if !enabled { self.danmakuView.clear() }
     }.store(in: &cancellables)
     session.$qualityLabel.receive(on: DispatchQueue.main).sink { [weak self] label in
       self?.qualityButton.setTitle(label, for: .normal)
@@ -1415,6 +1838,22 @@ final class PiliNativePlayerViewController: UIViewController {
     }.store(in: &cancellables)
     session.$pictureInPicturePlayer.receive(on: DispatchQueue.main).sink { [weak self] player in
       self?.configurePictureInPicture(player: player)
+    }.store(in: &cancellables)
+    session.$videoTitle.receive(on: DispatchQueue.main).sink { [weak self] title in
+      self?.titleLabel.text = title
+    }.store(in: &cancellables)
+    session.$videoLikeCount.receive(on: DispatchQueue.main).sink { [weak self] value in
+      self?.likeLabel.text = Self.formatMetric(value)
+    }.store(in: &cancellables)
+    session.$videoReplyCount.receive(on: DispatchQueue.main).sink { [weak self] value in
+      self?.replyLabel.text = Self.formatMetric(value)
+    }.store(in: &cancellables)
+    session.$videoShareCount.receive(on: DispatchQueue.main).sink { [weak self] value in
+      self?.shareLabel.text = Self.formatMetric(value)
+    }.store(in: &cancellables)
+    session.$danmakuStatusMessage.receive(on: DispatchQueue.main).sink { [weak self] message in
+      self?.toastLabel.text = message.map { "  \($0)  " }
+      self?.toastLabel.isHidden = message == nil
     }.store(in: &cancellables)
   }
 
@@ -1465,6 +1904,82 @@ final class PiliNativePlayerViewController: UIViewController {
   @objc private func toggleDanmaku() { session.danmakuEnabled.toggle(); scheduleControlsHide() }
   @objc private func changeSpeed() { session.cyclePlaybackRate(); scheduleControlsHide() }
   @objc private func toggleFullscreen() { session.isFullscreen.toggle() }
+  @objc private func exitFullscreen() { session.isFullscreen = false }
+
+  @objc private func toggleScreenLock() {
+    controlsLocked.toggle()
+    controlsHideTask?.cancel()
+    if controlsLocked { setDanmakuSettingsVisible(false, animated: false) }
+    lockButton.setImage(
+      UIImage(systemName: controlsLocked ? "lock.fill" : "lock.open.fill"),
+      for: .normal
+    )
+    UIView.animate(withDuration: 0.2) {
+      self.chromeViews.forEach { $0.alpha = self.controlsLocked ? 0 : 1 }
+      self.lockButton.backgroundColor = self.controlsLocked
+        ? UIColor(red: 0.93, green: 0.29, blue: 0.48, alpha: 0.82)
+        : UIColor.black.withAlphaComponent(0.52)
+    }
+    if !controlsLocked { scheduleControlsHide() }
+  }
+
+  @objc private func toggleDanmakuSettings() {
+    guard !controlsLocked else { return }
+    controlsHideTask?.cancel()
+    setDanmakuSettingsVisible(!settingsPanelVisible, animated: true)
+  }
+
+  @objc private func danmakuSettingsChanged() {
+    let area = CGFloat(displayAreaSlider.value)
+    let opacity = CGFloat(opacitySlider.value)
+    displayAreaValueLabel.text = "\(Int((area * 100).rounded()))%"
+    opacityValueLabel.text = "\(Int((opacity * 100).rounded()))%"
+    danmakuView.applySettings(
+      displayArea: area,
+      opacity: opacity,
+      blockedCategories: blockedDanmakuCategories
+    )
+  }
+
+  @objc private func toggleDanmakuBlock(_ sender: UIButton) {
+    if blockedDanmakuCategories.contains(sender.tag) {
+      blockedDanmakuCategories.remove(sender.tag)
+    } else {
+      blockedDanmakuCategories.insert(sender.tag)
+    }
+    let blocked = blockedDanmakuCategories.contains(sender.tag)
+    if var configuration = sender.configuration {
+      configuration.baseForegroundColor = blocked
+        ? UIColor(red: 0.98, green: 0.38, blue: 0.56, alpha: 1)
+        : .white
+      configuration.background.backgroundColor = blocked
+        ? UIColor(red: 0.93, green: 0.29, blue: 0.48, alpha: 0.2)
+        : UIColor.white.withAlphaComponent(0.08)
+      sender.configuration = configuration
+    }
+    danmakuSettingsChanged()
+  }
+
+  @objc private func showDanmakuComposer() {
+    controlsHideTask?.cancel()
+    let alert = UIAlertController(title: "发送弹幕", message: nil, preferredStyle: .alert)
+    alert.addTextField { field in
+      field.placeholder = "发个友善的弹幕见证当下"
+      field.clearButtonMode = .whileEditing
+      field.returnKeyType = .send
+    }
+    alert.addAction(UIAlertAction(title: "取消", style: .cancel) { [weak self] _ in
+      self?.scheduleControlsHide()
+    })
+    alert.addAction(UIAlertAction(title: "发送", style: .default) { [weak self, weak alert] _ in
+      guard let self,
+            let raw = alert?.textFields?.first?.text,
+            !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+      self.session.requestDanmakuSend(String(raw.prefix(100)))
+      self.scheduleControlsHide()
+    })
+    present(alert, animated: true)
+  }
 
   @objc private func showDiagnosticLog() {
     controlsHideTask?.cancel()
@@ -1484,15 +1999,22 @@ final class PiliNativePlayerViewController: UIViewController {
   }
 
   @objc private func toggleControls() {
+    guard !controlsLocked else { return }
     controlsHideTask?.cancel()
-    UIView.animate(withDuration: 0.18) {
-      self.topBar.alpha = self.topBar.alpha > 0.1 ? 0 : 1
-      self.bottomBar.alpha = self.bottomBar.alpha > 0.1 ? 0 : 1
+    if settingsPanelVisible {
+      setDanmakuSettingsVisible(false, animated: true)
+      scheduleControlsHide()
+      return
     }
-    if topBar.alpha < 0.1 { scheduleControlsHide() }
+    let shouldShow = (chromeViews.first?.alpha ?? 0) < 0.1
+    UIView.animate(withDuration: 0.18) {
+      self.chromeViews.forEach { $0.alpha = shouldShow ? 1 : 0 }
+    }
+    if shouldShow { scheduleControlsHide() }
   }
 
   @objc private func doubleTapSeek(_ gesture: UITapGestureRecognizer) {
+    guard !controlsLocked, !settingsPanelVisible else { return }
     session.skip(by: gesture.location(in: controls).x < controls.bounds.midX ? -10 : 10)
   }
 
@@ -1503,7 +2025,10 @@ final class PiliNativePlayerViewController: UIViewController {
     controlsHideTask?.cancel()
   }
 
-  @objc private func scrubChanged() { currentLabel.text = Self.formatTime(Double(slider.value)) }
+  @objc private func scrubChanged() {
+    currentLabel.text = Self.formatTime(Double(slider.value))
+    fullTimeLabel.text = "\(Self.formatTime(Double(slider.value)))/\(Self.formatTime(session.duration))"
+  }
 
   @objc private func scrubEnded() {
     isScrubbing = false
@@ -1513,15 +2038,83 @@ final class PiliNativePlayerViewController: UIViewController {
 
   private func scheduleControlsHide() {
     controlsHideTask?.cancel()
-    guard session.isPlaying else { return }
+    guard session.isPlaying, !controlsLocked, !settingsPanelVisible else { return }
     let task = DispatchWorkItem { [weak self] in
       UIView.animate(withDuration: 0.2) {
-        self?.topBar.alpha = 0
-        self?.bottomBar.alpha = 0
+        self?.chromeViews.forEach { $0.alpha = 0 }
       }
     }
     controlsHideTask = task
     DispatchQueue.main.asyncAfter(deadline: .now() + 3, execute: task)
+  }
+
+  private var chromeViews: [UIView] {
+    fullscreenPresentation ? [topChrome, bottomChrome] : [topBar, bottomBar]
+  }
+
+  private func setDanmakuSettingsVisible(_ visible: Bool, animated: Bool) {
+    settingsPanelVisible = visible
+    if visible {
+      danmakuSettingsPanel.isHidden = false
+      view.bringSubviewToFront(danmakuSettingsPanel)
+      view.bringSubviewToFront(toastLabel)
+      view.layoutIfNeeded()
+      danmakuSettingsPanel.transform = CGAffineTransform(
+        translationX: max(danmakuSettingsPanel.bounds.width, view.bounds.width * 0.5),
+        y: 0
+      )
+      danmakuSettingsPanel.alpha = 0
+      lockButton.alpha = 0
+      let animations = {
+        self.danmakuSettingsPanel.transform = .identity
+        self.danmakuSettingsPanel.alpha = 1
+      }
+      if animated {
+        UIView.animate(withDuration: 0.24, animations: animations)
+      } else {
+        animations()
+      }
+    } else {
+      let animations = {
+        self.danmakuSettingsPanel.transform = CGAffineTransform(
+          translationX: max(self.danmakuSettingsPanel.bounds.width, self.view.bounds.width * 0.5),
+          y: 0
+        )
+        self.danmakuSettingsPanel.alpha = 0
+      }
+      let completion: (Bool) -> Void = { _ in
+        self.danmakuSettingsPanel.isHidden = true
+        self.danmakuSettingsPanel.transform = .identity
+        self.lockButton.alpha = 1
+      }
+      if animated {
+        UIView.animate(withDuration: 0.2, animations: animations, completion: completion)
+      } else {
+        animations()
+        completion(true)
+      }
+    }
+  }
+
+  private func refreshFullscreenTimeLabel() {
+    fullTimeLabel.text = "\(Self.formatTime(session.currentTime))/\(Self.formatTime(session.duration))"
+  }
+
+  private func startSystemStatusUpdates() {
+    UIDevice.current.isBatteryMonitoringEnabled = true
+    updateSystemStatus()
+    statusTimer?.invalidate()
+    statusTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
+      self?.updateSystemStatus()
+    }
+  }
+
+  private func updateSystemStatus() {
+    let formatter = DateFormatter()
+    formatter.dateFormat = "HH:mm"
+    systemTimeLabel.text = formatter.string(from: Date())
+    let batteryLevel = UIDevice.current.batteryLevel
+    batteryLabel.text = batteryLevel >= 0 ? "\(Int((batteryLevel * 100).rounded()))%" : "--%"
   }
 
   private func requestOrientation(_ orientations: UIInterfaceOrientationMask) {
@@ -1551,6 +2144,18 @@ final class PiliNativePlayerViewController: UIViewController {
       return String(format: "%02d:%02d:%02d", seconds / 3600, seconds / 60 % 60, seconds % 60)
     }
     return String(format: "%02d:%02d", seconds / 60, seconds % 60)
+  }
+
+  private static func formatMetric(_ value: Int) -> String {
+    if value >= 100_000_000 {
+      return String(format: "%.1f亿", Double(value) / 100_000_000)
+        .replacingOccurrences(of: ".0亿", with: "亿")
+    }
+    if value >= 10_000 {
+      return String(format: "%.1f万", Double(value) / 10_000)
+        .replacingOccurrences(of: ".0万", with: "万")
+    }
+    return String(value)
   }
 }
 
