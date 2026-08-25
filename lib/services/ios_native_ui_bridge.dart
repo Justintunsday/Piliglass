@@ -1906,6 +1906,23 @@ final class IOSNativeUIBridge {
                   (info.gifUrl.isNotEmpty || info.url.isNotEmpty))
                 info.text: info.gifUrl.isNotEmpty ? info.gifUrl : info.url,
           };
+          final emoteRows = response.eInfos
+              .where(
+                (info) =>
+                    info.text.isNotEmpty &&
+                    (info.gifUrl.isNotEmpty || info.url.isNotEmpty),
+              )
+              .map(
+                (info) => {
+                  'text': info.text,
+                  'url': _normalizeURL(
+                    info.gifUrl.isNotEmpty ? info.gifUrl : info.url,
+                  ),
+                  'size': info.size.clamp(1, 2),
+                },
+              )
+              .where((info) => info['url'] != null)
+              .toList();
           if (messages.isNotEmpty) {
             unawaited(() async {
               await MsgHttp.ackSessionMsg(
@@ -1917,6 +1934,7 @@ final class IOSNativeUIBridge {
           return {
             'state': 'success',
             'hasMore': response.hasMore != 0 && messages.isNotEmpty,
+            'emotes': emoteRows,
             'nextSeqno': messages.isEmpty
                 ? null
                 : messages.last.msgSeqno.toInt(),

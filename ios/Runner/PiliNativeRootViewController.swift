@@ -1445,8 +1445,13 @@ private final class PiliNativeViewModel: ObservableObject {
           return
         }
         let rows = result["items"] as? [Any] ?? []
+        let emoteRows = result["emotes"] as? [Any] ?? []
         let newItems = rows.enumerated().map {
-          PiliNativeChatMessage(map: piliDictionary($0.element), index: $0.offset)
+          var map = piliDictionary($0.element)
+          // The gRPC response shares one emotion table across the page. Attach
+          // it while adapting rows so mixed text can resolve every token.
+          map["emotes"] = emoteRows
+          return PiliNativeChatMessage(map: map, index: $0.offset)
         }
         if refresh {
           self.chatMessages = newItems
@@ -2704,6 +2709,7 @@ private struct PiliNativeChatMessage: Identifiable {
   let imageWidth: Double?
   let imageHeight: Double?
   let emote: String?
+  let emotes: [String: PiliNativeCommentEmote]
   let isSystem: Bool
   let isRecalled: Bool
   let isAutoReply: Bool
@@ -2722,6 +2728,21 @@ private struct PiliNativeChatMessage: Identifiable {
     imageWidth = piliOptionalDouble(map["imageWidth"])
     imageHeight = piliOptionalDouble(map["imageHeight"])
     emote = piliString(map["emote"])
+    let emoteRows = map["emotes"] as? [Any] ?? []
+    var parsedEmotes: [String: PiliNativeCommentEmote] = [:]
+    for row in emoteRows {
+      let value = piliDictionary(row)
+      guard
+        let text = piliString(value["text"]),
+        let url = piliString(value["url"])
+      else { continue }
+      parsedEmotes[text] = PiliNativeCommentEmote(
+        text: text,
+        url: url,
+        size: min(max(piliInt(value["size"]), 1), 2)
+      )
+    }
+    emotes = parsedEmotes
     isSystem = piliBool(map["isSystem"])
     isRecalled = piliBool(map["isRecalled"])
     isAutoReply = piliBool(map["isAutoReply"])
@@ -4772,8 +4793,22 @@ private final class PiliNativeMultilineLabel: UILabel {
 private struct PiliNativeCommentRichText: UIViewRepresentable {
   let message: String
   let emotes: [String: PiliNativeCommentEmote]
+  let textStyle: UIFont.TextStyle
+  let textColor: UIColor
 
   private static let imageCache = NSCache<NSURL, UIImage>()
+
+  init(
+    message: String,
+    emotes: [String: PiliNativeCommentEmote],
+    textStyle: UIFont.TextStyle = .subheadline,
+    textColor: UIColor = .label
+  ) {
+    self.message = message
+    self.emotes = emotes
+    self.textStyle = textStyle
+    self.textColor = textColor
+  }
 
   func makeCoordinator() -> Coordinator {
     Coordinator(parent: self)
@@ -4805,10 +4840,10 @@ private struct PiliNativeCommentRichText: UIViewRepresentable {
     }
 
     func render(in label: UILabel) {
-      let font = UIFont.preferredFont(forTextStyle: .subheadline)
+      let font = UIFont.preferredFont(forTextStyle: parent.textStyle)
       let attributes: [NSAttributedString.Key: Any] = [
         .font: font,
-        .foregroundColor: UIColor.label,
+        .foregroundColor: parent.textColor,
       ]
       let output = NSMutableAttributedString(string: "")
       let source = parent.message as NSString
@@ -5309,9 +5344,29 @@ private struct PiliNativeChatView: View {
   @State private var hasScrolledInitially = false
   @State private var scrollAfterUpdate = false
 
-  private let quickEmotes = [
+  private let preferredQuickEmoteTokens = [
     "[doge]", "[笑哭]", "[喜欢]", "[打call]", "[妙啊]", "[大哭]", "[鼓掌]", "[给心心]",
   ]
+
+  private var quickEmotes: [SGQuickEmote] {
+    var available: [String: PiliNativeCommentEmote] = [:]
+    for message in model.chatMessages {
+      for (token, emote) in message.emotes where available[token] == nil {
+        available[token] = emote
+      }
+    }
+
+    var tokens = preferredQuickEmoteTokens
+    tokens.append(
+      contentsOf: available.keys
+        .filter { !preferredQuickEmoteTokens.contains($0) }
+        .sorted()
+        .prefix(24)
+    )
+    return tokens.map { token in
+      SGQuickEmote(token: token, url: available[token].flatMap { URL(string: $0.url) })
+    }
+  }
 
   private var orderedMessages: [PiliNativeChatMessage] {
     Array(model.chatMessages.reversed())
@@ -5529,11 +5584,19 @@ private struct PiliNativeChatBubble: View {
               .frame(width: imageSize.width, height: imageSize.height)
               .clipped()
               .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-          } else {
+          } else if message.emotes.isEmpty || message.isRecalled {
             Text(message.isRecalled ? "已撤回" : message.text)
               .font(.body)
               .foregroundColor(message.isOwner ? .white : .primary)
               .textSelection(.enabled)
+          } else {
+            PiliNativeCommentRichText(
+              message: message.text,
+              emotes: message.emotes,
+              textStyle: .body,
+              textColor: message.isOwner ? .white : .label
+            )
+            .fixedSize(horizontal: false, vertical: true)
           }
           if message.isAutoReply {
             Text("自动回复")

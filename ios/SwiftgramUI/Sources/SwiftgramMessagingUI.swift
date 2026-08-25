@@ -16,6 +16,16 @@ public enum SGMessageMetrics {
   public static let bubbleEdgeInset: CGFloat = 8
 }
 
+public struct SGQuickEmote: Hashable {
+  public let token: String
+  public let url: URL?
+
+  public init(token: String, url: URL? = nil) {
+    self.token = token
+    self.url = url
+  }
+}
+
 /// A reusable chat-list row that keeps the data source outside SwiftgramUI.
 public struct SGChatListRow<Avatar: View, Accessory: View>: View {
   private let title: String
@@ -161,6 +171,39 @@ private struct SGMessageBubbleShape: Shape {
   }
 }
 
+/// Uses a message's intrinsic width until it reaches Swiftgram's cap, then
+/// proposes the capped width again so long text wraps instead of overflowing.
+private struct SGIntrinsicWidthCappedLayout: Layout {
+  let maximumWidth: CGFloat
+
+  func sizeThatFits(
+    proposal: ProposedViewSize,
+    subviews: Subviews,
+    cache: inout ()
+  ) -> CGSize {
+    guard let subview = subviews.first else { return .zero }
+    let availableWidth = max(1, min(proposal.width ?? maximumWidth, maximumWidth))
+    let naturalSize = subview.sizeThatFits(.unspecified)
+    let width = max(1, min(naturalSize.width, availableWidth))
+    let fitted = subview.sizeThatFits(ProposedViewSize(width: width, height: nil))
+    return CGSize(width: ceil(width), height: ceil(fitted.height))
+  }
+
+  func placeSubviews(
+    in bounds: CGRect,
+    proposal: ProposedViewSize,
+    subviews: Subviews,
+    cache: inout ()
+  ) {
+    guard let subview = subviews.first else { return }
+    subview.place(
+      at: bounds.origin,
+      anchor: .topLeading,
+      proposal: ProposedViewSize(width: bounds.width, height: bounds.height)
+    )
+  }
+}
+
 /// Swiftgram-style incoming/outgoing bubble container.
 public struct SGMessageBubble<Content: View>: View {
   private let isOutgoing: Bool
@@ -181,13 +224,14 @@ public struct SGMessageBubble<Content: View>: View {
   }
 
   public var body: some View {
-    content
-      .frame(maxWidth: SGMessageMetrics.bubbleMaximumWidth, alignment: isOutgoing ? .trailing : .leading)
-      .background(
-        SGMessageBubbleShape(isOutgoing: isOutgoing, showsTail: showsTail)
-          .fill(backgroundColor)
-      )
-      .clipShape(SGMessageBubbleShape(isOutgoing: isOutgoing, showsTail: showsTail))
+    SGIntrinsicWidthCappedLayout(maximumWidth: SGMessageMetrics.bubbleMaximumWidth) {
+      content.fixedSize(horizontal: false, vertical: true)
+    }
+    .background(
+      SGMessageBubbleShape(isOutgoing: isOutgoing, showsTail: showsTail)
+        .fill(backgroundColor)
+    )
+    .clipShape(SGMessageBubbleShape(isOutgoing: isOutgoing, showsTail: showsTail))
   }
 }
 
@@ -197,7 +241,7 @@ public struct SGChatInputPanel: View {
   @Binding private var showsEmotes: Bool
   private let isSending: Bool
   private let accentColor: Color
-  private let quickEmotes: [String]
+  private let quickEmotes: [SGQuickEmote]
   private let onPhoto: () -> Void
   private let onSend: () -> Void
 
@@ -206,7 +250,7 @@ public struct SGChatInputPanel: View {
     showsEmotes: Binding<Bool>,
     isSending: Bool,
     accentColor: Color,
-    quickEmotes: [String],
+    quickEmotes: [SGQuickEmote],
     onPhoto: @escaping () -> Void,
     onSend: @escaping () -> Void
   ) {
@@ -229,12 +273,31 @@ public struct SGChatInputPanel: View {
         ScrollView(.horizontal, showsIndicators: false) {
           HStack(spacing: 8) {
             ForEach(quickEmotes, id: \.self) { emote in
-              Button(emote) { text += emote }
-                .font(.caption)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 7)
+              Button { text += emote.token } label: {
+                Group {
+                  if let url = emote.url {
+                    AsyncImage(url: url) { phase in
+                      if let image = phase.image {
+                        image.resizable().scaledToFit()
+                      } else {
+                        Image(systemName: "face.smiling")
+                          .foregroundColor(.secondary)
+                      }
+                    }
+                    .frame(width: 32, height: 32)
+                  } else {
+                    Text(emote.token)
+                      .font(.caption)
+                      .padding(.horizontal, 4)
+                  }
+                }
+                .frame(minWidth: 34, minHeight: 34)
+                .padding(.horizontal, 4)
                 .background(Color(UIColor.secondarySystemBackground))
-                .clipShape(Capsule())
+                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+              }
+              .buttonStyle(PlainButtonStyle())
+              .accessibilityLabel(emote.token)
             }
           }
           .padding(.horizontal, 12)
