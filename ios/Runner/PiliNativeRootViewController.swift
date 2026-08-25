@@ -2,6 +2,7 @@ import Combine
 import CoreImage.CIFilterBuiltins
 import CoreText
 import Flutter
+import PhotosUI
 import SwiftUI
 import UIKit
 
@@ -313,6 +314,13 @@ private final class PiliNativeViewModel: ObservableObject {
   @Published private(set) var messagesLoadingMore = false
   @Published private(set) var messagesHasMore = false
   @Published private(set) var messagesError: String?
+  @Published var selectedChat: PiliNativeMessage?
+  @Published private(set) var chatMessages: [PiliNativeChatMessage] = []
+  @Published private(set) var chatLoading = false
+  @Published private(set) var chatLoadingMore = false
+  @Published private(set) var chatHasMore = false
+  @Published private(set) var chatSending = false
+  @Published private(set) var chatError: String?
 
   @Published var isLoginPresented = false
   @Published private(set) var loginQRCodeURL = ""
@@ -356,6 +364,7 @@ private final class PiliNativeViewModel: ObservableObject {
   private var commentThreadOffset: String?
   private var messageCursor: Int?
   private var messageCursorTime: Int?
+  private var chatNextSeqno: Int?
   private var composerRootRpid: Int?
   private var composerParentRpid: Int?
   private var originalPlayerHeroTag = ""
@@ -1383,20 +1392,139 @@ private final class PiliNativeViewModel: ObservableObject {
       openMessageMember(message)
       return
     }
-    isMessagesPresented = false
-    DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) { [weak self] in
-      guard let self else { return }
-      var arguments: [String: Any] = [
-        "name": message.author,
-        "avatar": message.avatar ?? "",
-        "isLive": message.isLive,
-      ]
-      if let talkerID = message.talkerID { arguments["talkerId"] = talkerID }
-      if let memberID = message.memberID { arguments["memberId"] = memberID }
-      self.channel.invokeMethod(
-        "openNativeSession",
-        arguments: arguments
-      )
+    guard message.talkerID != nil else {
+      messagesError = "该折叠会话暂无可用的私信对象"
+      return
+    }
+    selectedChat = message
+    chatMessages = []
+    chatNextSeqno = nil
+    chatHasMore = false
+    chatError = nil
+    loadChat(refresh: true)
+  }
+
+  func closeChat() {
+    selectedChat = nil
+    chatMessages = []
+    chatNextSeqno = nil
+    chatHasMore = false
+    chatError = nil
+    if messageKind == "sessions" {
+      loadMessages(refresh: true)
+    }
+  }
+
+  func loadChat(refresh: Bool = true) {
+    guard let chat = selectedChat, let talkerID = chat.talkerID else { return }
+    if refresh {
+      chatLoading = chatMessages.isEmpty
+      chatLoadingMore = false
+      chatNextSeqno = nil
+      chatHasMore = false
+      chatError = nil
+    } else {
+      guard chatHasMore, !chatLoading, !chatLoadingMore else { return }
+      chatLoadingMore = true
+    }
+    var arguments: [String: Any] = ["talkerId": talkerID]
+    if !refresh, let chatNextSeqno { arguments["endSeqno"] = chatNextSeqno }
+    channel.invokeMethod("loadNativeChat", arguments: arguments) { [weak self] response in
+      DispatchQueue.main.async {
+        guard let self, self.selectedChat?.id == chat.id else { return }
+        self.chatLoading = false
+        self.chatLoadingMore = false
+        if let error = response as? FlutterError {
+          self.chatError = error.message ?? "聊天记录加载失败"
+          return
+        }
+        let result = piliDictionary(response)
+        guard result["state"] as? String == "success" else {
+          self.chatError = result["error"] as? String ?? "聊天记录加载失败"
+          return
+        }
+        let rows = result["items"] as? [Any] ?? []
+        let newItems = rows.enumerated().map {
+          PiliNativeChatMessage(map: piliDictionary($0.element), index: $0.offset)
+        }
+        if refresh {
+          self.chatMessages = newItems
+        } else {
+          let existing = Set(self.chatMessages.map(\.id))
+          self.chatMessages.append(contentsOf: newItems.filter { !existing.contains($0.id) })
+        }
+        self.chatHasMore = piliBool(result["hasMore"]) && !newItems.isEmpty
+        self.chatNextSeqno = piliOptionalInt(result["nextSeqno"])
+        self.chatError = nil
+      }
+    }
+  }
+
+  func sendChatMessage(_ text: String, completion: @escaping (Bool) -> Void) {
+    let message = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !message.isEmpty, let chat = selectedChat, let talkerID = chat.talkerID,
+          !chatSending else {
+      completion(false)
+      return
+    }
+    chatSending = true
+    chatError = nil
+    var arguments: [String: Any] = ["talkerId": talkerID, "message": message]
+    if let memberID = chat.memberID { arguments["memberId"] = memberID }
+    channel.invokeMethod("sendNativeChatMessage", arguments: arguments) { [weak self] response in
+      DispatchQueue.main.async {
+        guard let self else { return }
+        self.chatSending = false
+        let result = piliDictionary(response)
+        let success = result["state"] as? String == "success"
+        if success {
+          self.loadChat(refresh: true)
+        } else {
+          self.chatError = result["error"] as? String ?? "消息发送失败"
+        }
+        completion(success)
+      }
+    }
+  }
+
+  func sendChatImage(at url: URL) {
+    guard let chat = selectedChat, let talkerID = chat.talkerID, !chatSending else { return }
+    chatSending = true
+    chatError = nil
+    var arguments: [String: Any] = ["talkerId": talkerID, "path": url.path]
+    if let memberID = chat.memberID { arguments["memberId"] = memberID }
+    channel.invokeMethod("sendNativeChatImage", arguments: arguments) { [weak self] response in
+      DispatchQueue.main.async {
+        try? FileManager.default.removeItem(at: url)
+        guard let self else { return }
+        self.chatSending = false
+        let result = piliDictionary(response)
+        if result["state"] as? String == "success" {
+          self.loadChat(refresh: true)
+        } else {
+          self.chatError = result["error"] as? String ?? "图片消息发送失败"
+        }
+      }
+    }
+  }
+
+  func recallChatMessage(_ message: PiliNativeChatMessage) {
+    guard message.isOwner, message.msgKey > 0, let chat = selectedChat,
+          let talkerID = chat.talkerID, !chatSending else { return }
+    chatSending = true
+    var arguments: [String: Any] = ["talkerId": talkerID, "msgKey": message.msgKey]
+    if let memberID = chat.memberID { arguments["memberId"] = memberID }
+    channel.invokeMethod("recallNativeChatMessage", arguments: arguments) { [weak self] response in
+      DispatchQueue.main.async {
+        guard let self else { return }
+        self.chatSending = false
+        let result = piliDictionary(response)
+        if result["state"] as? String == "success" {
+          self.loadChat(refresh: true)
+        } else {
+          self.chatError = result["error"] as? String ?? "消息撤回失败"
+        }
+      }
     }
   }
 
@@ -2558,6 +2686,44 @@ private struct PiliNativeMessage: Identifiable {
     isMuted = piliBool(map["isMuted"])
     isPinned = piliBool(map["isPinned"])
     isLive = piliBool(map["isLive"])
+  }
+}
+
+private struct PiliNativeChatMessage: Identifiable {
+  let id: String
+  let msgKey: Int
+  let sequence: Int
+  let type: Int
+  let isOwner: Bool
+  let text: String
+  let image: String?
+  let cover: String?
+  let title: String?
+  let time: String
+  let imageWidth: Double?
+  let imageHeight: Double?
+  let emote: String?
+  let isSystem: Bool
+  let isRecalled: Bool
+  let isAutoReply: Bool
+
+  init(map: [String: Any], index: Int) {
+    id = piliString(map["id"]) ?? "chat-\(index)"
+    msgKey = piliInt(map["msgKey"])
+    sequence = piliInt(map["sequence"])
+    type = piliInt(map["type"])
+    isOwner = piliBool(map["isOwner"])
+    text = piliString(map["text"]) ?? ""
+    image = piliString(map["image"])
+    cover = piliString(map["cover"])
+    title = piliString(map["title"])
+    time = piliString(map["time"]) ?? ""
+    imageWidth = piliOptionalDouble(map["imageWidth"])
+    imageHeight = piliOptionalDouble(map["imageHeight"])
+    emote = piliString(map["emote"])
+    isSystem = piliBool(map["isSystem"])
+    isRecalled = piliBool(map["isRecalled"])
+    isAutoReply = piliBool(map["isAutoReply"])
   }
 }
 
@@ -4928,6 +5094,9 @@ private struct PiliNativeMessagesView: View {
       )
     }
     .navigationViewStyle(StackNavigationViewStyle())
+    .fullScreenCover(item: $model.selectedChat) { chat in
+      PiliNativeChatView(model: model, chat: chat)
+    }
   }
 
   private var folderBar: some View {
@@ -5163,6 +5332,352 @@ private struct PiliNativeMessageRow: View {
       }
     }
     .frame(width: 56, height: 56)
+  }
+}
+
+private struct PiliNativeChatView: View {
+  @ObservedObject var model: PiliNativeViewModel
+  let chat: PiliNativeMessage
+  @State private var draft = ""
+  @State private var showEmotes = false
+  @State private var showPhotoPicker = false
+  @State private var hasScrolledInitially = false
+  @State private var scrollAfterUpdate = false
+
+  private let quickEmotes = [
+    "[doge]", "[笑哭]", "[喜欢]", "[打call]", "[妙啊]", "[大哭]", "[鼓掌]", "[给心心]",
+  ]
+
+  private var orderedMessages: [PiliNativeChatMessage] {
+    Array(model.chatMessages.reversed())
+  }
+
+  var body: some View {
+    NavigationView {
+      chatContent
+        .background(Color(UIColor.systemGroupedBackground))
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+          ToolbarItem(placement: .navigationBarLeading) {
+            Button {
+              model.closeChat()
+            } label: {
+              Image(systemName: "chevron.left")
+                .font(.system(size: 17, weight: .semibold))
+            }
+          }
+          ToolbarItem(placement: .principal) {
+            HStack(spacing: 8) {
+              PiliRemoteImage(urlString: chat.avatar)
+                .frame(width: 32, height: 32)
+                .clipShape(Circle())
+              VStack(alignment: .leading, spacing: 1) {
+                Text(chat.author)
+                  .font(.subheadline.weight(.semibold))
+                  .lineLimit(1)
+                Text(chat.isLive ? "直播中" : "私信")
+                  .font(.caption2)
+                  .foregroundColor(chat.isLive ? piliAccent : .secondary)
+              }
+            }
+          }
+        }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+          composer
+        }
+    }
+    .navigationViewStyle(StackNavigationViewStyle())
+    .sheet(isPresented: $showPhotoPicker) {
+      PiliNativeChatPhotoPicker(isPresented: $showPhotoPicker) { url in
+        model.sendChatImage(at: url)
+        scrollAfterUpdate = true
+      }
+    }
+  }
+
+  @ViewBuilder
+  private var chatContent: some View {
+    if model.chatLoading && model.chatMessages.isEmpty {
+      PiliNativeLoadingView(title: "正在加载聊天记录")
+    } else if let error = model.chatError, model.chatMessages.isEmpty {
+      PiliNativeErrorView(message: error) { model.loadChat(refresh: true) }
+    } else {
+      ScrollViewReader { proxy in
+        ScrollView {
+          LazyVStack(spacing: 10) {
+            if model.chatLoadingMore {
+              ProgressView("正在加载更早消息")
+                .font(.caption)
+                .padding(.vertical, 12)
+            } else if model.chatHasMore {
+              Button("加载更早消息") { model.loadChat(refresh: false) }
+                .font(.caption)
+                .foregroundColor(piliAccent)
+                .padding(.vertical, 12)
+            }
+
+            if let error = model.chatError {
+              Label(error, systemImage: "exclamationmark.circle")
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .padding(10)
+                .frame(maxWidth: .infinity)
+                .background(.thinMaterial)
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            }
+
+            if orderedMessages.isEmpty {
+              PiliNativeEmptyView(
+                icon: "bubble.left.and.bubble.right",
+                title: "还没有聊天记录",
+                subtitle: "发一条消息开始聊天"
+              )
+              .frame(maxWidth: .infinity, minHeight: 420)
+            } else {
+              ForEach(orderedMessages) { message in
+                PiliNativeChatBubble(message: message) {
+                  model.recallChatMessage(message)
+                }
+                .id(message.id)
+                .onAppear {
+                  if message.id == model.chatMessages.last?.id {
+                    model.loadChat(refresh: false)
+                  }
+                }
+              }
+            }
+          }
+          .padding(.horizontal, 12)
+          .padding(.vertical, 10)
+        }
+        .refreshable { model.loadChat(refresh: true) }
+        .onChange(of: model.chatMessages.count) { _ in
+          guard let newest = model.chatMessages.first else { return }
+          if !hasScrolledInitially || scrollAfterUpdate {
+            hasScrolledInitially = true
+            scrollAfterUpdate = false
+            DispatchQueue.main.async {
+              withAnimation(.easeOut(duration: 0.2)) {
+                proxy.scrollTo(newest.id, anchor: .bottom)
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  private var composer: some View {
+    VStack(spacing: 0) {
+      if showEmotes {
+        ScrollView(.horizontal, showsIndicators: false) {
+          HStack(spacing: 8) {
+            ForEach(quickEmotes, id: \.self) { emote in
+              Button(emote) {
+                draft += emote
+              }
+              .font(.caption)
+              .padding(.horizontal, 10)
+              .padding(.vertical, 7)
+              .background(Color(UIColor.secondarySystemBackground))
+              .clipShape(Capsule())
+            }
+          }
+          .padding(.horizontal, 12)
+          .padding(.vertical, 8)
+        }
+        Divider()
+      }
+
+      HStack(alignment: .bottom, spacing: 9) {
+        Button {
+          showPhotoPicker = true
+        } label: {
+          Image(systemName: "photo.on.rectangle.angled")
+            .font(.system(size: 19))
+            .frame(width: 32, height: 36)
+        }
+        .disabled(model.chatSending)
+
+        Button {
+          showEmotes.toggle()
+        } label: {
+          Image(systemName: showEmotes ? "keyboard" : "face.smiling")
+            .font(.system(size: 19))
+            .frame(width: 30, height: 36)
+        }
+
+        TextField("发个消息聊聊呗~", text: $draft)
+          .textFieldStyle(PlainTextFieldStyle())
+          .padding(.horizontal, 13)
+          .padding(.vertical, 9)
+          .background(Color(UIColor.secondarySystemBackground))
+          .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+          .submitLabel(.send)
+          .onSubmit(sendDraft)
+
+        Button(action: sendDraft) {
+          if model.chatSending {
+            ProgressView().frame(width: 34, height: 36)
+          } else {
+            Image(systemName: "arrow.up.circle.fill")
+              .font(.system(size: 30))
+              .foregroundColor(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? .secondary : piliAccent)
+              .frame(width: 34, height: 36)
+          }
+        }
+        .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || model.chatSending)
+      }
+      .padding(.horizontal, 10)
+      .padding(.vertical, 8)
+    }
+    .background(.ultraThinMaterial)
+  }
+
+  private func sendDraft() {
+    let value = draft
+    guard !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+    model.sendChatMessage(value) { success in
+      if success {
+        draft = ""
+        scrollAfterUpdate = true
+      }
+    }
+  }
+}
+
+private struct PiliNativeChatBubble: View {
+  let message: PiliNativeChatMessage
+  let onRecall: () -> Void
+
+  private var imageSize: CGSize {
+    let width = max(message.imageWidth ?? 220, 1)
+    let height = max(message.imageHeight ?? 150, 1)
+    let displayWidth = min(width, 230)
+    return CGSize(width: displayWidth, height: min(max(displayWidth * height / width, 80), 320))
+  }
+
+  var body: some View {
+    if message.isSystem {
+      VStack(spacing: 6) {
+        if !message.time.isEmpty { Text(message.time).font(.caption2).foregroundColor(.secondary) }
+        VStack(alignment: .leading, spacing: 8) {
+          if let cover = message.cover {
+            PiliRemoteImage(urlString: cover)
+              .frame(maxWidth: 300, minHeight: 120, maxHeight: 180)
+              .clipped()
+              .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+          }
+          if let title = message.title { Text(title).font(.headline) }
+          if !message.text.isEmpty { Text(message.text).font(.subheadline) }
+        }
+        .padding(12)
+        .frame(maxWidth: 360, alignment: .leading)
+        .background(.thinMaterial)
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+      }
+      .frame(maxWidth: .infinity)
+    } else {
+      VStack(alignment: message.isOwner ? .trailing : .leading, spacing: 4) {
+        if !message.time.isEmpty {
+          Text(message.time)
+            .font(.caption2)
+            .foregroundColor(.secondary)
+        }
+        HStack {
+          if message.isOwner { Spacer(minLength: 55) }
+          bubbleContent
+          if !message.isOwner { Spacer(minLength: 55) }
+        }
+      }
+      .frame(maxWidth: .infinity, alignment: message.isOwner ? .trailing : .leading)
+      .contextMenu {
+        if message.isOwner && message.msgKey > 0 && !message.isRecalled {
+          Button(role: .destructive, action: onRecall) {
+            Label("撤回", systemImage: "arrow.uturn.backward")
+          }
+        }
+      }
+    }
+  }
+
+  private var bubbleContent: some View {
+    VStack(alignment: message.isOwner ? .trailing : .leading, spacing: 6) {
+      if let emote = message.emote {
+        PiliRemoteImage(urlString: emote)
+          .frame(width: 96, height: 96)
+      } else if let image = message.image {
+        PiliRemoteImage(urlString: image)
+          .frame(width: imageSize.width, height: imageSize.height)
+          .clipped()
+          .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+      } else {
+        Text(message.isRecalled ? "已撤回" : message.text)
+          .font(.body)
+          .foregroundColor(message.isOwner ? .white : .primary)
+          .textSelection(.enabled)
+      }
+      if message.isAutoReply {
+        Text("自动回复")
+          .font(.caption2)
+          .foregroundColor(message.isOwner ? .white.opacity(0.72) : .secondary)
+      }
+    }
+    .padding(message.image == nil && message.emote == nil ? 11 : 6)
+    .background(message.isOwner ? piliAccent : Color(UIColor.secondarySystemBackground))
+    .clipShape(
+      RoundedRectangle(cornerRadius: 17, style: .continuous)
+    )
+  }
+}
+
+private struct PiliNativeChatPhotoPicker: UIViewControllerRepresentable {
+  @Binding var isPresented: Bool
+  let onPicked: (URL) -> Void
+
+  func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
+
+  func makeUIViewController(context: Context) -> PHPickerViewController {
+    var configuration = PHPickerConfiguration(photoLibrary: .shared())
+    configuration.selectionLimit = 1
+    configuration.filter = .images
+    let controller = PHPickerViewController(configuration: configuration)
+    controller.delegate = context.coordinator
+    return controller
+  }
+
+  func updateUIViewController(_ uiViewController: PHPickerViewController, context: Context) {}
+
+  final class Coordinator: NSObject, PHPickerViewControllerDelegate {
+    var parent: PiliNativeChatPhotoPicker
+
+    init(parent: PiliNativeChatPhotoPicker) { self.parent = parent }
+
+    func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
+      guard let provider = results.first?.itemProvider,
+            provider.canLoadObject(ofClass: UIImage.self) else {
+        parent.isPresented = false
+        return
+      }
+      provider.loadObject(ofClass: UIImage.self) { object, _ in
+        guard let image = object as? UIImage,
+              let data = image.jpegData(compressionQuality: 0.92) else {
+          DispatchQueue.main.async { self.parent.isPresented = false }
+          return
+        }
+        let url = FileManager.default.temporaryDirectory
+          .appendingPathComponent("piliglass-chat-\(UUID().uuidString).jpg")
+        do {
+          try data.write(to: url, options: .atomic)
+          DispatchQueue.main.async {
+            self.parent.isPresented = false
+            self.parent.onPicked(url)
+          }
+        } catch {
+          DispatchQueue.main.async { self.parent.isPresented = false }
+        }
+      }
+    }
   }
 }
 
@@ -6399,6 +6914,13 @@ private func piliDouble(_ value: Any?) -> Double {
   if let value = value as? NSNumber { return value.doubleValue }
   if let value = value as? String { return Double(value) ?? 0 }
   return 0
+}
+
+private func piliOptionalDouble(_ value: Any?) -> Double? {
+  if value is NSNull || value == nil { return nil }
+  if let value = value as? NSNumber { return value.doubleValue }
+  if let value = value as? String { return Double(value) }
+  return nil
 }
 
 private func piliBool(_ value: Any?) -> Bool {

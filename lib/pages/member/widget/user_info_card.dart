@@ -24,7 +24,6 @@ import 'package:PiliPlus/pages/member/widget/header_layout_widget.dart';
 import 'package:PiliPlus/pages/member/widget/medal_widget.dart';
 import 'package:PiliPlus/pages/member_guard/view.dart';
 import 'package:PiliPlus/pages/member_upower_rank/view.dart';
-import 'package:PiliPlus/utils/accounts.dart';
 import 'package:PiliPlus/utils/app_scheme.dart';
 import 'package:PiliPlus/utils/bili_colors.dart';
 import 'package:PiliPlus/utils/bili_utils.dart';
@@ -41,7 +40,6 @@ import 'package:PiliPlus/utils/utils.dart';
 import 'package:cached_network_image_ce/cached_network_image.dart';
 import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
-import 'package:get/get.dart';
 import 'package:material_ui/material_ui.dart';
 
 class UserInfoCard extends StatelessWidget {
@@ -424,36 +422,6 @@ class UserInfoCard extends StatelessWidget {
         spacing: 10,
         mainAxisSize: .min,
         children: [
-          if (!isOwner)
-            IconButton.outlined(
-              onPressed: () {
-                if (Accounts.main.isLogin) {
-                  int mid = int.parse(card.mid!);
-                  Get.toNamed(
-                    '/whisperDetail',
-                    arguments: {
-                      'talkerId': mid,
-                      'name': card.name,
-                      'face': card.face,
-                      'mid': mid,
-                      'isLive': live?.liveStatus == 1,
-                    },
-                  );
-                }
-              },
-              icon: const Icon(Icons.mail_outline, size: 21),
-              style: ButtonStyle(
-                side: WidgetStatePropertyAll(
-                  BorderSide(
-                    width: 1.0,
-                    color: colorScheme.outline.withValues(alpha: 0.3),
-                  ),
-                ),
-                padding: const WidgetStatePropertyAll(.zero),
-                tapTargetSize: .shrinkWrap,
-                visualDensity: .compact,
-              ),
-            ),
           Expanded(
             child: FilledButton.tonal(
               onPressed: !isOwner && relation == -1 ? null : onFollow,

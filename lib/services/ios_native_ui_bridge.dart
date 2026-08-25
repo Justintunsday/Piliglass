@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:PiliPlus/grpc/bilibili/app/im/v1.pb.dart' as im_proto show Offset;
 import 'package:PiliPlus/grpc/bilibili/main/community/reply/v1.pb.dart'
@@ -6,6 +7,7 @@ import 'package:PiliPlus/grpc/bilibili/main/community/reply/v1.pb.dart'
 import 'package:PiliPlus/grpc/dm.dart';
 import 'package:PiliPlus/grpc/im.dart';
 import 'package:PiliPlus/grpc/reply.dart';
+import 'package:PiliPlus/grpc/bilibili/im/type.pb.dart' show MsgType;
 import 'package:PiliPlus/http/fav.dart';
 import 'package:PiliPlus/http/fan.dart';
 import 'package:PiliPlus/http/follow.dart';
@@ -52,6 +54,7 @@ import 'package:PiliPlus/utils/video_utils.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:get/get.dart';
+import 'package:fixnum/fixnum.dart' show Int64;
 import 'package:protobuf/protobuf.dart' show PbMap;
 
 /// Keeps the native iOS front-end attached to the existing Flutter services.
@@ -197,8 +200,14 @@ final class IOSNativeUIBridge {
         return _pollNativeLogin();
       case 'loadNativeMessages':
         return _loadNativeMessages(_arguments(call));
-      case 'openNativeSession':
-        return _openNativeSession(_arguments(call));
+      case 'loadNativeChat':
+        return _loadNativeChat(_arguments(call));
+      case 'sendNativeChatMessage':
+        return _sendNativeChatMessage(_arguments(call));
+      case 'sendNativeChatImage':
+        return _sendNativeChatImage(_arguments(call));
+      case 'recallNativeChatMessage':
+        return _recallNativeChatMessage(_arguments(call));
       case 'loadNativeComments':
         return _loadNativeComments(_arguments(call));
       case 'setNativeCommentLike':
@@ -1499,11 +1508,9 @@ final class IOSNativeUIBridge {
     '/loginPage',
     '/member',
     '/memberDynamics',
-    '/myReply',
     '/search',
     '/setting',
     '/subscription',
-    '/whisper',
   };
 
   Future<void> _openRoute(Map<dynamic, dynamic> arguments) async {
@@ -1866,24 +1873,232 @@ final class IOSNativeUIBridge {
     };
   }
 
-  Future<void> _openNativeSession(Map<dynamic, dynamic> arguments) async {
-    final talkerId = _asInt(arguments['talkerId']);
-    if (talkerId == null) {
-      await Get.toNamed('/whisper', preventDuplicates: false);
-      return;
+  Future<Map<String, dynamic>> _loadNativeChat(
+    Map<dynamic, dynamic> arguments,
+  ) async {
+    if (!Accounts.main.isLogin) {
+      return const {'state': 'error', 'error': '请先登录账号'};
     }
-    await Get.toNamed(
-      '/whisperDetail',
-      arguments: {
-        'talkerId': talkerId,
-        'name': arguments['name']?.toString() ?? '',
-        'face': arguments['avatar']?.toString() ?? '',
-        if (_asInt(arguments['memberId']) case final memberId?)
-          'mid': memberId,
-        'isLive': arguments['isLive'] == true,
-      },
-      preventDuplicates: false,
+    final talkerId = _asInt(arguments['talkerId']);
+    final endSeqno = _asInt(arguments['endSeqno']);
+    if (talkerId == null || talkerId <= 0) {
+      return const {'state': 'error', 'error': '私信会话参数无效'};
+    }
+    try {
+      final result = await ImGrpc.syncFetchSessionMsgs(
+        talkerId: talkerId,
+        beginSeqno: endSeqno == null ? null : Int64.ZERO,
+        endSeqno: endSeqno == null ? null : Int64(endSeqno),
+      );
+      return switch (result) {
+        Loading() => const {'state': 'loading'},
+        Error(:final errMsg) => {
+          'state': 'error',
+          'error': errMsg ?? '聊天记录加载失败',
+        },
+        Success(:final response) => () {
+          final messages = response.messages
+              .where((item) => item.msgType != MsgType.EN_MSG_TYPE_DRAW_BACK.value)
+              .toList();
+          final emotes = <String, String>{
+            for (final info in response.eInfos)
+              if (info.text.isNotEmpty &&
+                  (info.gifUrl.isNotEmpty || info.url.isNotEmpty))
+                info.text: info.gifUrl.isNotEmpty ? info.gifUrl : info.url,
+          };
+          if (messages.isNotEmpty) {
+            unawaited(() async {
+              await MsgHttp.ackSessionMsg(
+                talkerId: talkerId,
+                ackSeqno: messages.last.msgSeqno.toInt(),
+              );
+            }());
+          }
+          return {
+            'state': 'success',
+            'hasMore': response.hasMore != 0 && messages.isNotEmpty,
+            'nextSeqno': messages.isEmpty
+                ? null
+                : messages.last.msgSeqno.toInt(),
+            'items': messages.asMap().entries.map((entry) {
+              final item = entry.value;
+              final content = _decodeNativeChatContent(item.content);
+              final text = _nativeChatText(
+                type: item.msgType,
+                content: content,
+                raw: item.content,
+              );
+              final image = _nativeChatImage(item.msgType, content);
+              final cover = _nonEmpty(content['cover']?.toString()) ??
+                  _nonEmpty(content['thumb']?.toString()) ??
+                  _nonEmpty(content['pic_url']?.toString());
+              final title = _nonEmpty(content['title']?.toString()) ??
+                  _nonEmpty(content['main_title']?.toString());
+              return {
+                'id': item.msgKey.toString() != '0'
+                    ? item.msgKey.toString()
+                    : 'chat-${item.msgSeqno}-${entry.key}',
+                'msgKey': item.msgKey.toInt(),
+                'sequence': item.msgSeqno.toInt(),
+                'type': item.msgType,
+                'isOwner': item.senderUid.toInt() == Accounts.main.mid,
+                'text': text,
+                'image': _normalizeURL(image),
+                'cover': _normalizeURL(cover),
+                'title': title,
+                'time': DateFormatUtils.chatFormat(item.timestamp.toInt()),
+                'imageWidth': _asDouble(content['width']),
+                'imageHeight': _asDouble(content['height']),
+                'emote': _normalizeURL(emotes[text]),
+                'isSystem': const [10, 11, 13, 16, 18].contains(item.msgType),
+                'isRecalled': item.msgStatus == 1,
+                'isAutoReply': item.msgSource >= 8 && item.msgSource <= 11,
+              };
+            }).toList(),
+          };
+        }(),
+      };
+    } catch (error) {
+      return {'state': 'error', 'error': '聊天记录加载失败：$error'};
+    }
+  }
+
+  Future<Map<String, dynamic>> _sendNativeChatMessage(
+    Map<dynamic, dynamic> arguments,
+  ) async {
+    final talkerId = _asInt(arguments['talkerId']);
+    final receiverId = _asInt(arguments['memberId']) ?? talkerId;
+    final message = arguments['message']?.toString().trim() ?? '';
+    if (!Accounts.main.isLogin) {
+      return const {'state': 'error', 'error': '请先登录账号'};
+    }
+    if (talkerId == null || receiverId == null || message.isEmpty) {
+      return const {'state': 'error', 'error': '消息内容或会话参数无效'};
+    }
+    final result = await ImGrpc.sendMsg(
+      senderUid: Accounts.main.mid,
+      receiverId: receiverId,
+      content: jsonEncode({'content': message}),
+      msgType: MsgType.EN_MSG_TYPE_TEXT,
     );
+    return switch (result) {
+      Success() => const {'state': 'success'},
+      Error(:final errMsg) => {
+        'state': 'error',
+        'error': errMsg ?? '消息发送失败',
+      },
+      Loading() => const {'state': 'loading'},
+    };
+  }
+
+  Future<Map<String, dynamic>> _sendNativeChatImage(
+    Map<dynamic, dynamic> arguments,
+  ) async {
+    final talkerId = _asInt(arguments['talkerId']);
+    final receiverId = _asInt(arguments['memberId']) ?? talkerId;
+    final path = _nonEmpty(arguments['path']?.toString());
+    if (!Accounts.main.isLogin) {
+      return const {'state': 'error', 'error': '请先登录账号'};
+    }
+    if (talkerId == null || receiverId == null || path == null) {
+      return const {'state': 'error', 'error': '图片或会话参数无效'};
+    }
+    final upload = await MsgHttp.uploadBfs(path: path, biz: 'im');
+    switch (upload) {
+      case Loading():
+        return const {'state': 'loading'};
+      case Error(:final errMsg):
+        return {'state': 'error', 'error': errMsg ?? '图片上传失败'};
+      case Success(:final response):
+        final imageMessage = {
+          'url': response.imageUrl,
+          'height': response.imageHeight,
+          'width': response.imageWidth,
+          'imageType': 'jpg',
+          'original': 1,
+          'size': response.imgSize,
+        };
+        final send = await ImGrpc.sendMsg(
+          senderUid: Accounts.main.mid,
+          receiverId: receiverId,
+          content: jsonEncode(imageMessage),
+          msgType: MsgType.EN_MSG_TYPE_PIC,
+        );
+        return switch (send) {
+          Success() => const {'state': 'success'},
+          Error(:final errMsg) => {
+            'state': 'error',
+            'error': errMsg ?? '图片消息发送失败',
+          },
+          Loading() => const {'state': 'loading'},
+        };
+    }
+  }
+
+  Future<Map<String, dynamic>> _recallNativeChatMessage(
+    Map<dynamic, dynamic> arguments,
+  ) async {
+    final receiverId = _asInt(arguments['memberId']) ??
+        _asInt(arguments['talkerId']);
+    final msgKey = _asInt(arguments['msgKey']);
+    if (!Accounts.main.isLogin || receiverId == null || msgKey == null) {
+      return const {'state': 'error', 'error': '撤回参数无效'};
+    }
+    final result = await ImGrpc.sendMsg(
+      senderUid: Accounts.main.mid,
+      receiverId: receiverId,
+      content: '$msgKey',
+      msgType: MsgType.EN_MSG_TYPE_DRAW_BACK,
+    );
+    return switch (result) {
+      Success() => const {'state': 'success'},
+      Error(:final errMsg) => {
+        'state': 'error',
+        'error': errMsg ?? '消息撤回失败',
+      },
+      Loading() => const {'state': 'loading'},
+    };
+  }
+
+  Map<String, dynamic> _decodeNativeChatContent(String raw) {
+    try {
+      final value = jsonDecode(raw);
+      if (value is Map) {
+        return value.map((key, value) => MapEntry(key.toString(), value));
+      }
+    } catch (_) {}
+    return {'content': raw};
+  }
+
+  String _nativeChatText({
+    required int type,
+    required Map<String, dynamic> content,
+    required String raw,
+  }) {
+    if (type == MsgType.EN_MSG_TYPE_TIP_MESSAGE.value) {
+      try {
+        final nested = jsonDecode(content['content']?.toString() ?? '[]');
+        if (nested is List) {
+          return nested
+              .map((item) => item is Map ? item['text']?.toString() : null)
+              .whereType<String>()
+              .join('\n');
+        }
+      } catch (_) {}
+    }
+    return _nonEmpty(content['content']?.toString()) ??
+        _nonEmpty(content['text']?.toString()) ??
+        _nonEmpty(content['title']?.toString()) ??
+        _nonEmpty(content['headline']?.toString()) ??
+        (type == MsgType.EN_MSG_TYPE_PIC.value ? '[图片]' : raw);
+  }
+
+  String? _nativeChatImage(int type, Map<String, dynamic> content) {
+    if (type == MsgType.EN_MSG_TYPE_PIC.value ||
+        type == MsgType.EN_MSG_TYPE_CUSTOM_FACE.value) {
+      return _nonEmpty(content['url']?.toString());
+    }
+    return null;
   }
 
   Future<Map<String, dynamic>> _loadNativeMessages(
@@ -2899,6 +3114,12 @@ final class IOSNativeUIBridge {
     int value => value,
     num value => value.toInt(),
     String value => int.tryParse(value),
+    _ => null,
+  };
+
+  static double? _asDouble(dynamic value) => switch (value) {
+    num value => value.toDouble(),
+    String value => double.tryParse(value),
     _ => null,
   };
 
