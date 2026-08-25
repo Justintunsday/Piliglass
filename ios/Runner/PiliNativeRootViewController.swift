@@ -214,6 +214,7 @@ final class PiliNativeRootViewController: UIViewController {
   )
   private var hostingController: UIHostingController<PiliNativeRootView>?
   private var isNativeRootVisible = true
+  private var allowsVideoLandscape = false
 
   init(flutterViewController: FlutterViewController) {
     self.flutterViewController = flutterViewController
@@ -229,6 +230,9 @@ final class PiliNativeRootViewController: UIViewController {
     super.viewDidLoad()
     PiliOriginalIconFont.registerBundledFonts()
     view.backgroundColor = .systemBackground
+    model.onVideoOrientationPolicyChanged = { [weak self] allowsLandscape in
+      self?.updateVideoOrientationPolicy(allowsLandscape)
+    }
     installFlutterSurface()
     installNativeSurface()
     installChannel()
@@ -240,6 +244,26 @@ final class PiliNativeRootViewController: UIViewController {
 
   override var childForStatusBarHidden: UIViewController? {
     isNativeRootVisible ? hostingController : flutterViewController
+  }
+
+  override var shouldAutorotate: Bool { true }
+
+  override var supportedInterfaceOrientations: UIInterfaceOrientationMask {
+    allowsVideoLandscape ? .allButUpsideDown : .portrait
+  }
+
+  private func updateVideoOrientationPolicy(_ allowsLandscape: Bool) {
+    guard allowsVideoLandscape != allowsLandscape else { return }
+    allowsVideoLandscape = allowsLandscape
+    if #available(iOS 16.0, *) {
+      setNeedsUpdateOfSupportedInterfaceOrientations()
+      hostingController?.setNeedsUpdateOfSupportedInterfaceOrientations()
+    } else {
+      UIViewController.attemptRotationToDeviceOrientation()
+    }
+    if !allowsLandscape {
+      PiliNativePlayerViewController.restorePortraitOrientation()
+    }
   }
 
   private func installFlutterSurface() {
@@ -366,6 +390,8 @@ private final class PiliNativeViewModel: ObservableObject {
   @Published private(set) var settings: [PiliNativeSetting] = []
   @Published private(set) var settingsLoading = false
   @Published private(set) var settingsError: String?
+  @Published private(set) var defaultVideoQuality = 127
+  @Published private(set) var videoQualityOptions: [PiliNativeVideoQualityOption] = []
 
   @Published var isLibraryPresented = false
   @Published private(set) var libraryKind = ""
@@ -442,9 +468,11 @@ private final class PiliNativeViewModel: ObservableObject {
   private var composerParentRpid: Int?
   private var originalPlayerHeroTag = ""
   private var nativePlayerCID: Int?
+  private var nativePlayerQuality: Int?
   private var nativePlaybackGeneration = UUID()
   private var nativePlayerFullscreenCancellable: AnyCancellable?
   private var deviceOrientationObserver: NSObjectProtocol?
+  var onVideoOrientationPolicyChanged: ((Bool) -> Void)?
 
   init(
     channel: FlutterMethodChannel,
@@ -626,8 +654,10 @@ private final class PiliNativeViewModel: ObservableObject {
     originalPlayerFullscreen = false
     originalPlayerHeroTag = ""
     nativePlayerCID = nil
+    nativePlayerQuality = nil
     nativePlayerSession.configureOverlayMetadata(title: video.title, like: 0, reply: 0, share: 0)
     isVideoDetailPresented = true
+    onVideoOrientationPolicyChanged?(true)
     startVideoOrientationTracking()
 
     var arguments: [String: Any] = [:]
@@ -705,7 +735,7 @@ private final class PiliNativeViewModel: ObservableObject {
   private func loadNativePlayback(
     video: PiliNativeVideoDetail,
     cid: Int,
-    quality: Int = 80,
+    quality: Int? = nil,
     resumeAt: TimeInterval = 0
   ) {
     let generation = UUID()
@@ -716,8 +746,8 @@ private final class PiliNativeViewModel: ObservableObject {
     var arguments: [String: Any] = [
       "bvid": video.bvid,
       "cid": cid,
-      "quality": quality,
     ]
+    if let quality { arguments["quality"] = quality }
     if let aid = video.aid { arguments["aid"] = aid }
     channel.invokeMethod("loadNativePlayback", arguments: arguments) { [weak self] response in
       DispatchQueue.main.async {
@@ -784,12 +814,14 @@ private final class PiliNativeViewModel: ObservableObject {
           )
         }
         self.nativePlayerCID = cid
+        self.nativePlayerQuality = piliOptionalInt(result["quality"]) ?? quality
         self.originalPlayerReady = true
         self.originalPlayerError = nil
         self.nativePlayerSession.configure(
           segments: segments,
           durationMilliseconds: piliInt(result["duration"]),
-          quality: piliString(result["qualityText"]) ?? "\(quality)P",
+          quality: piliString(result["qualityText"])
+            ?? "\(piliOptionalInt(result["quality"]) ?? quality ?? 80)P",
           qualities: qualities,
           resumeAt: resumeAt
         )
@@ -877,6 +909,7 @@ private final class PiliNativeViewModel: ObservableObject {
 
   func originalPlayerDidClose() {
     stopVideoOrientationTracking()
+    onVideoOrientationPolicyChanged?(false)
     originalPlayerReady = false
     originalPlayerFullscreen = false
     flutterPlayerSurface.restore(hidden: true)
@@ -894,12 +927,14 @@ private final class PiliNativeViewModel: ObservableObject {
 
   func closeVideoDetail() {
     stopVideoOrientationTracking()
+    onVideoOrientationPolicyChanged?(false)
     nativePlaybackGeneration = UUID()
     originalPlayerReady = false
     originalPlayerFullscreen = false
     nativePlayerSession.isFullscreen = false
     nativePlayerSession.stop()
     nativePlayerCID = nil
+    nativePlayerQuality = nil
     flutterPlayerSurface.restore(hidden: true)
     isVideoDetailPresented = false
     channel.invokeMethod("closeNativeVideoPlayer", arguments: nil)
@@ -912,13 +947,18 @@ private final class PiliNativeViewModel: ObservableObject {
     }
     nativePlayerCID = cid
     videoActionMessage = "正在切换到 P\(part.index)"
-    loadNativePlayback(video: video, cid: cid)
+    loadNativePlayback(video: video, cid: cid, quality: nativePlayerQuality)
   }
 
   func retryNativePlayback() {
     guard let video = videoDetail, let cid = nativePlayerCID else { return }
     originalPlayerError = nil
-    loadNativePlayback(video: video, cid: cid, resumeAt: nativePlayerSession.currentTime)
+    loadNativePlayback(
+      video: video,
+      cid: cid,
+      quality: nativePlayerQuality,
+      resumeAt: nativePlayerSession.currentTime
+    )
   }
 
   func exitOriginalPlayerFullscreen() {
@@ -1142,10 +1182,7 @@ private final class PiliNativeViewModel: ObservableObject {
           self.settingsError = result["error"] as? String ?? "设置加载失败"
           return
         }
-        let rows = result["items"] as? [Any] ?? []
-        self.settings = rows.enumerated().map {
-          PiliNativeSetting(map: piliDictionary($0.element), index: $0.offset)
-        }
+        self.applySettingsSnapshot(result)
       }
     }
   }
@@ -1162,15 +1199,47 @@ private final class PiliNativeViewModel: ObservableObject {
         guard let self = self else { return }
         let result = piliDictionary(response)
         if result["state"] as? String == "success" {
-          let rows = result["items"] as? [Any] ?? []
-          self.settings = rows.enumerated().map {
-            PiliNativeSetting(map: piliDictionary($0.element), index: $0.offset)
-          }
+          self.applySettingsSnapshot(result)
         } else {
           self.settingsError = result["error"] as? String ?? "设置保存失败"
           self.loadSettings()
         }
       }
+    }
+  }
+
+  func setDefaultVideoQuality(_ value: Int) {
+    guard videoQualityOptions.contains(where: { $0.value == value }) else { return }
+    defaultVideoQuality = value
+    channel.invokeMethod(
+      "setNativeVideoQuality",
+      arguments: ["value": value]
+    ) { [weak self] response in
+      DispatchQueue.main.async {
+        guard let self else { return }
+        let result = piliDictionary(response)
+        if result["state"] as? String == "success" {
+          self.applySettingsSnapshot(result)
+        } else {
+          self.settingsError = result["error"] as? String ?? "默认画质保存失败"
+          self.loadSettings()
+        }
+      }
+    }
+  }
+
+  private func applySettingsSnapshot(_ result: [String: Any]) {
+    let rows = result["items"] as? [Any] ?? []
+    settings = rows.enumerated().map {
+      PiliNativeSetting(map: piliDictionary($0.element), index: $0.offset)
+    }
+    let qualityRows = result["videoQualities"] as? [Any] ?? []
+    videoQualityOptions = qualityRows.enumerated().compactMap {
+      PiliNativeVideoQualityOption(map: piliDictionary($0.element), index: $0.offset)
+    }
+    if let selected = piliOptionalInt(result["defaultVideoQuality"]),
+       videoQualityOptions.contains(where: { $0.value == selected }) {
+      defaultVideoQuality = selected
     }
   }
 
@@ -2151,6 +2220,21 @@ private struct PiliNativeVideoDetail {
   }
 }
 
+private struct PiliNativeVideoQualityOption: Identifiable {
+  let value: Int
+  let label: String
+  let shortLabel: String
+
+  var id: Int { value }
+
+  init?(map: [String: Any], index: Int) {
+    guard let value = piliOptionalInt(map["value"]) else { return nil }
+    self.value = value
+    label = piliString(map["label"]) ?? "画质 \(index + 1)"
+    shortLabel = piliString(map["shortLabel"]) ?? label
+  }
+}
+
 private struct PiliNativeSetting: Identifiable {
   let id: String
   let key: String
@@ -2234,6 +2318,7 @@ private struct PiliNativeDynamic: Identifiable {
   let cover: String?
   let coverWidth: CGFloat
   let coverHeight: CGFloat
+  let pictures: [PiliNativeCommentPicture]
   let aid: Int?
   let bvid: String?
   let commentOID: Int?
@@ -2255,6 +2340,19 @@ private struct PiliNativeDynamic: Identifiable {
     cover = piliString(map["cover"])
     coverWidth = CGFloat(max(0, piliDouble(map["coverWidth"])))
     coverHeight = CGFloat(max(0, piliDouble(map["coverHeight"])))
+    var mappedPictures = (map["pictures"] as? [Any])?.compactMap {
+      PiliNativeCommentPicture(value: $0)
+    } ?? []
+    if mappedPictures.isEmpty, let cover {
+      mappedPictures = [
+        PiliNativeCommentPicture(
+          url: cover,
+          width: coverWidth,
+          height: coverHeight
+        ),
+      ]
+    }
+    pictures = mappedPictures
     aid = piliOptionalInt(map["aid"])
     bvid = piliString(map["bvid"])
     commentOID = piliOptionalInt(map["commentOid"])
@@ -2355,6 +2453,12 @@ private struct PiliNativeCommentPicture: Hashable {
   let url: String
   let width: CGFloat
   let height: CGFloat
+
+  init(url: String, width: CGFloat, height: CGFloat) {
+    self.url = url
+    self.width = max(width, 0)
+    self.height = max(height, 0)
+  }
 
   init?(value: Any) {
     if let url = piliString(value) {
@@ -2807,13 +2911,11 @@ private struct PiliNativeDynamicRow: View {
               .foregroundColor(.primary)
               .lineLimit(4)
           }
-          if let cover = item.cover {
-            PiliNativeDynamicPictureView(
-              urlString: cover,
-              sourceWidth: item.coverWidth,
-              sourceHeight: item.coverHeight,
+          if !item.pictures.isEmpty {
+            PiliNativeDynamicPicturesView(
+              pictures: item.pictures,
               maxWidth: min(UIScreen.main.bounds.width - 96, 520),
-              maxHeight: 220
+              singleMaxHeight: 260
             )
           }
           HStack(spacing: 22) {
@@ -2890,6 +2992,52 @@ private struct PiliNativeDynamicPictureView: View {
     .frame(width: displaySize.width, height: displaySize.height)
     .background(Color(UIColor.tertiarySystemFill))
     .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+  }
+}
+
+private struct PiliNativeDynamicPicturesView: View {
+  let pictures: [PiliNativeCommentPicture]
+  let maxWidth: CGFloat
+  let singleMaxHeight: CGFloat
+
+  private var columnCount: Int {
+    pictures.count > 4 ? 3 : 2
+  }
+
+  var body: some View {
+    if let picture = pictures.first, pictures.count == 1 {
+      PiliNativeDynamicPictureView(
+        urlString: picture.url,
+        sourceWidth: picture.width,
+        sourceHeight: picture.height,
+        maxWidth: maxWidth,
+        maxHeight: singleMaxHeight
+      )
+    } else {
+      let spacing: CGFloat = 7
+      let cellWidth = max(1, (maxWidth - spacing * CGFloat(columnCount - 1)) / CGFloat(columnCount))
+      LazyVGrid(
+        columns: Array(
+          repeating: GridItem(.flexible(minimum: 1, maximum: cellWidth), spacing: spacing, alignment: .topLeading),
+          count: columnCount
+        ),
+        alignment: .leading,
+        spacing: spacing
+      ) {
+        ForEach(pictures, id: \.self) { picture in
+          PiliNativeDynamicPictureView(
+            urlString: picture.url,
+            sourceWidth: picture.width,
+            sourceHeight: picture.height,
+            maxWidth: cellWidth,
+            maxHeight: cellWidth * 1.35,
+            cornerRadius: 8
+          )
+          .frame(maxWidth: .infinity, alignment: .leading)
+        }
+      }
+      .frame(maxWidth: maxWidth, alignment: .leading)
+    }
   }
 }
 
@@ -3950,14 +4098,11 @@ private struct PiliNativeDynamicDetailView: View {
                   .fixedSize(horizontal: false, vertical: true)
                   .textSelection(.enabled)
               }
-              if let cover = item.cover {
-                PiliNativeDynamicPictureView(
-                  urlString: cover,
-                  sourceWidth: item.coverWidth,
-                  sourceHeight: item.coverHeight,
+              if !item.pictures.isEmpty {
+                PiliNativeDynamicPicturesView(
+                  pictures: item.pictures,
                   maxWidth: min(UIScreen.main.bounds.width - 32, 600),
-                  maxHeight: 420,
-                  cornerRadius: 12
+                  singleMaxHeight: 520
                 )
               }
 
@@ -5979,6 +6124,26 @@ private struct PiliNativeSettingsView: View {
                 }
               }
               .padding(.vertical, 4)
+            }
+
+            if !model.videoQualityOptions.isEmpty {
+              Section(
+                header: Text("视频默认值"),
+                footer: Text("进入视频时会优先请求该分辨率；账号或视频不支持时由原版接口自动回退到可用画质。")
+              ) {
+                Picker(
+                  selection: Binding(
+                    get: { model.defaultVideoQuality },
+                    set: { model.setDefaultVideoQuality($0) }
+                  ),
+                  label: Label("默认视频分辨率", systemImage: "rectangle.badge.hd")
+                ) {
+                  ForEach(model.videoQualityOptions) { quality in
+                    Text(quality.label).tag(quality.value)
+                  }
+                }
+                .pickerStyle(MenuPickerStyle())
+              }
             }
 
             if searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {

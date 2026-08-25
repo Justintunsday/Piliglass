@@ -22,6 +22,7 @@ import 'package:PiliPlus/models/common/dynamic/dynamics_type.dart';
 import 'package:PiliPlus/models/common/nav_bar_config.dart';
 import 'package:PiliPlus/models/common/search/search_type.dart';
 import 'package:PiliPlus/models/common/setting_type.dart';
+import 'package:PiliPlus/models/common/video/video_quality.dart';
 import 'package:PiliPlus/models/common/video/video_type.dart';
 import 'package:PiliPlus/models/search/result.dart';
 import 'package:PiliPlus/pages/about/view.dart';
@@ -171,6 +172,8 @@ final class IOSNativeUIBridge {
         return _nativeSettingsSnapshot();
       case 'setNativeSetting':
         return _setNativeSetting(_arguments(call));
+      case 'setNativeVideoQuality':
+        return _setNativeVideoQuality(_arguments(call));
       case 'openSettingsSection':
         return _openSettingsSection(_arguments(call));
       case 'searchVideos':
@@ -422,7 +425,12 @@ final class IOSNativeUIBridge {
     var aid = _asInt(arguments['aid']);
     final bvid = _nonEmpty(arguments['bvid']?.toString());
     if (aid == null && bvid != null) aid = IdUtils.bv2av(bvid);
-    final quality = _asInt(arguments['quality']) ?? 80;
+    final quality =
+        _asInt(arguments['quality']) ??
+        GStorage.setting.get(
+          SettingBoxKey.defaultVideoQa,
+          defaultValue: VideoQuality.super8k.code,
+        );
     if (cid == null || cid <= 0 || aid == null || aid <= 0) {
       return const {'state': 'error', 'error': '播放参数不完整'};
     }
@@ -1287,6 +1295,19 @@ final class IOSNativeUIBridge {
 
   Map<String, dynamic> _nativeSettingsSnapshot() => {
     'state': 'success',
+    'defaultVideoQuality': GStorage.setting.get(
+      SettingBoxKey.defaultVideoQa,
+      defaultValue: VideoQuality.super8k.code,
+    ),
+    'videoQualities': VideoQuality.values
+        .map(
+          (quality) => {
+            'value': quality.code,
+            'label': quality.desc,
+            'shortLabel': quality.shortDesc,
+          },
+        )
+        .toList(),
     'items': _nativeSettingDefinitions
         .map(
           (item) => {
@@ -1327,6 +1348,18 @@ final class IOSNativeUIBridge {
     } else if (key == SettingBoxKey.disableAudioCDN) {
       VideoUtils.disableAudioCDN = value;
     }
+    return _nativeSettingsSnapshot();
+  }
+
+  Future<Map<String, dynamic>> _setNativeVideoQuality(
+    Map<dynamic, dynamic> arguments,
+  ) async {
+    final value = _asInt(arguments['value']);
+    if (value == null ||
+        !VideoQuality.values.any((quality) => quality.code == value)) {
+      return const {'state': 'error', 'error': '不支持的视频分辨率'};
+    }
+    await GStorage.setting.put(SettingBoxKey.defaultVideoQa, value);
     return _nativeSettingsSnapshot();
   }
 
@@ -2498,7 +2531,8 @@ final class IOSNativeUIBridge {
       final archive =
           major?.archive ?? major?.ugcSeason ?? major?.pgc ?? major?.courses;
       final opus = major?.opus;
-      final opusPicture = opus?.pics?.firstOrNull;
+      final opusPictures = opus?.pics ?? const [];
+      final opusPicture = opusPictures.firstOrNull;
       final live = major?.liveRcmd ?? major?.live;
 
       final title = _firstNonEmpty([
@@ -2514,8 +2548,8 @@ final class IOSNativeUIBridge {
       ]);
       final cover = _firstNonEmpty([
         archive?.cover?.toString(),
-        opus?.pics?.isNotEmpty == true
-            ? (opus.pics.first.src ?? opus.pics.first.url)?.toString()
+        opusPictures.isNotEmpty
+            ? (opusPictures.first.url ?? opusPictures.first.src)?.toString()
             : null,
         live?.cover?.toString(),
         major?.medialist?.cover?.toString(),
@@ -2542,6 +2576,18 @@ final class IOSNativeUIBridge {
         'cover': _normalizeURL(cover),
         'coverWidth': _asInt(opusPicture?.width),
         'coverHeight': _asInt(opusPicture?.height),
+        'pictures': opusPictures
+            .map(
+              (picture) => {
+                'url': _normalizeURL(
+                  (picture.url ?? picture.src)?.toString(),
+                ),
+                'width': _asInt(picture.width) ?? 0,
+                'height': _asInt(picture.height) ?? 0,
+              },
+            )
+            .where((picture) => picture['url'] != null)
+            .toList(),
         'bvid': archive?.bvid?.toString(),
         'aid': _asInt(archive?.aid),
         'commentOid': _asInt(item.basic?.commentIdStr),
