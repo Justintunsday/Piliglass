@@ -380,11 +380,34 @@ final class IOSNativeUIBridge {
           'isVertical': response.dimension?.isVertical ?? false,
           'argueMessage': response.argueInfo?.argueMsg ?? '',
           'collectionTitle': response.ugcSeason?.title ?? '',
+          'collectionId': response.ugcSeason?.id,
           'collectionCount': response.ugcSeason?.sections?.fold<int>(
                 0,
                 (count, section) => count + (section.episodes?.length ?? 0),
               ) ??
               0,
+          'collectionItems': (response.ugcSeason?.sections ?? const [])
+              .expand((section) => section.episodes ?? const [])
+              .toList()
+              .asMap()
+              .entries
+              .map((entry) {
+                final item = entry.value;
+                return {
+                  'id': item.bvid ?? item.aid?.toString() ?? 'collection-${entry.key}',
+                  'aid': item.aid ?? item.arc?.aid,
+                  'bvid': item.bvid,
+                  'title': item.arc?.title ?? item.title ?? '未命名视频',
+                  'cover': _normalizeURL(item.arc?.pic),
+                  'owner': item.arc?.author?.name ?? '',
+                  'viewText': _compactNumber(item.arc?.stat?.view),
+                  'danmakuText': _compactNumber(item.arc?.stat?.danmaku),
+                  'durationText': _durationText(
+                    item.arc?.duration ?? item.page?.duration ?? 0,
+                  ),
+                };
+              })
+              .toList(),
           'redirectURL': response.redirectUrl,
           'tags': tags
               .where((item) => item.tagName?.isNotEmpty == true)

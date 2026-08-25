@@ -122,7 +122,7 @@ final class PiliNativeRootViewController: UIViewController {
   override var shouldAutorotate: Bool { true }
 
   override var supportedInterfaceOrientations: UIInterfaceOrientationMask {
-    allowsVideoLandscape ? .allButUpsideDown : .portrait
+    allowsVideoLandscape ? .landscape : .portrait
   }
 
   private func updateVideoOrientationPolicy(_ allowsLandscape: Bool) {
@@ -131,7 +131,16 @@ final class PiliNativeRootViewController: UIViewController {
     if #available(iOS 16.0, *) {
       setNeedsUpdateOfSupportedInterfaceOrientations()
       hostingController?.setNeedsUpdateOfSupportedInterfaceOrientations()
+      if let scene = view.window?.windowScene {
+        scene.requestGeometryUpdate(
+          .iOS(interfaceOrientations: allowsLandscape ? .landscape : .portrait)
+        )
+      }
     } else {
+      UIDevice.current.setValue(
+        (allowsLandscape ? UIInterfaceOrientation.landscapeRight : .portrait).rawValue,
+        forKey: "orientation"
+      )
       UIViewController.attemptRotationToDeviceOrientation()
     }
     if !allowsLandscape {
@@ -376,7 +385,6 @@ private final class PiliNativeViewModel: ObservableObject {
   private var nativePlayerQuality: Int?
   private var nativePlaybackGeneration = UUID()
   private var nativePlayerFullscreenCancellable: AnyCancellable?
-  private var deviceOrientationObserver: NSObjectProtocol?
   var onVideoOrientationPolicyChanged: ((Bool) -> Void)?
 
   init(
@@ -395,11 +403,25 @@ private final class PiliNativeViewModel: ObservableObject {
     nativePlayerSession.onDanmakuSendRequested = { [weak self] content, progress in
       self?.sendNativeDanmaku(content: content, progress: progress)
     }
+    nativePlayerSession.onVideoActionRequested = { [weak self] action in
+      guard let self, let video = self.videoDetail else { return }
+      if action == "comment" {
+        self.nativePlayerSession.isFullscreen = false
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+          self?.beginDynamicComment()
+        }
+      } else {
+        self.performVideoAction(action, video: video)
+      }
+    }
     nativePlayerFullscreenCancellable = nativePlayerSession.$isFullscreen
       .removeDuplicates()
       .receive(on: DispatchQueue.main)
       .sink { [weak self] fullscreen in
-        self?.originalPlayerFullscreen = fullscreen
+        guard let self else { return }
+        self.originalPlayerFullscreen = fullscreen
+        let useLandscape = fullscreen && self.videoDetail?.isVertical != true
+        self.onVideoOrientationPolicyChanged?(useLandscape)
       }
   }
 
@@ -554,8 +576,7 @@ private final class PiliNativeViewModel: ObservableObject {
     nativePlayerQuality = nil
     nativePlayerSession.configureOverlayMetadata(title: video.title, like: 0, reply: 0, share: 0)
     isVideoDetailPresented = true
-    onVideoOrientationPolicyChanged?(true)
-    startVideoOrientationTracking()
+    onVideoOrientationPolicyChanged?(false)
 
     var arguments: [String: Any] = [:]
     if let bvid = video.bvid { arguments["bvid"] = bvid }
@@ -597,7 +618,11 @@ private final class PiliNativeViewModel: ObservableObject {
           title: detail.title,
           like: detail.like,
           reply: detail.reply,
-          share: detail.share
+          favorite: detail.favorite,
+          share: detail.share,
+          ownerName: detail.owner,
+          ownerFaceURL: detail.ownerFace,
+          isVertical: detail.isVertical
         )
         self.videoDetailError = nil
         self.nativePlayerCID = detail.cid ?? detail.pages.first?.cid
@@ -813,11 +838,9 @@ private final class PiliNativeViewModel: ObservableObject {
     originalPlayerHeroTag = piliString(arguments["heroTag"]) ?? ""
     originalPlayerError = nil
     originalPlayerReady = true
-    synchronizeVideoOrientation()
   }
 
   func originalPlayerDidClose() {
-    stopVideoOrientationTracking()
     onVideoOrientationPolicyChanged?(false)
     originalPlayerReady = false
     originalPlayerFullscreen = false
@@ -835,7 +858,6 @@ private final class PiliNativeViewModel: ObservableObject {
   }
 
   func closeVideoDetail() {
-    stopVideoOrientationTracking()
     onVideoOrientationPolicyChanged?(false)
     nativePlaybackGeneration = UUID()
     originalPlayerReady = false
@@ -873,75 +895,6 @@ private final class PiliNativeViewModel: ObservableObject {
   func exitOriginalPlayerFullscreen() {
     originalPlayerFullscreen = false
     nativePlayerSession.isFullscreen = false
-  }
-
-  private func startVideoOrientationTracking() {
-    guard deviceOrientationObserver == nil else {
-      synchronizeVideoOrientation()
-      return
-    }
-    UIDevice.current.beginGeneratingDeviceOrientationNotifications()
-    deviceOrientationObserver = NotificationCenter.default.addObserver(
-      forName: UIDevice.orientationDidChangeNotification,
-      object: nil,
-      queue: .main
-    ) { [weak self] _ in
-      DispatchQueue.main.async {
-        self?.synchronizeVideoOrientation()
-      }
-    }
-    // The first notification can arrive before the detail cover is mounted.
-    DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) { [weak self] in
-      self?.synchronizeVideoOrientation()
-    }
-  }
-
-  private func stopVideoOrientationTracking() {
-    if let observer = deviceOrientationObserver {
-      NotificationCenter.default.removeObserver(observer)
-      deviceOrientationObserver = nil
-    }
-    UIDevice.current.endGeneratingDeviceOrientationNotifications()
-  }
-
-  private func synchronizeVideoOrientation() {
-    guard isVideoDetailPresented else { return }
-
-    let targetIsLandscape: Bool?
-    switch UIDevice.current.orientation {
-    case .landscapeLeft, .landscapeRight:
-      targetIsLandscape = true
-    case .portrait, .portraitUpsideDown:
-      targetIsLandscape = false
-    default:
-      let interfaceOrientation = UIApplication.shared.connectedScenes
-        .compactMap { $0 as? UIWindowScene }
-        .first(where: { $0.activationState == .foregroundActive })?
-        .interfaceOrientation
-      if interfaceOrientation?.isLandscape == true {
-        targetIsLandscape = true
-      } else if interfaceOrientation?.isPortrait == true {
-        targetIsLandscape = false
-      } else {
-        targetIsLandscape = nil
-      }
-    }
-
-    guard let targetIsLandscape else { return }
-    if targetIsLandscape {
-      guard !nativePlayerSession.isFullscreen else { return }
-      nativePlayerSession.isFullscreen = true
-      originalPlayerFullscreen = true
-    } else {
-      guard nativePlayerSession.isFullscreen || originalPlayerFullscreen else { return }
-      nativePlayerSession.isFullscreen = false
-      originalPlayerFullscreen = false
-      DispatchQueue.main.asyncAfter(deadline: .now() + 0.22) { [weak self] in
-        guard let self, self.isVideoDetailPresented,
-              !self.nativePlayerSession.isFullscreen else { return }
-        PiliNativePlayerViewController.restorePortraitOrientation()
-      }
-    }
   }
 
   func openVideoOwner(_ video: PiliNativeVideoDetail) {
@@ -1019,7 +972,11 @@ private final class PiliNativeViewModel: ObservableObject {
       title: current.title,
       like: current.like,
       reply: current.reply,
-      share: current.share
+      favorite: current.favorite,
+      share: current.share,
+      ownerName: current.owner,
+      ownerFaceURL: current.ownerFace,
+      isVertical: current.isVertical
     )
   }
 
@@ -1049,7 +1006,11 @@ private final class PiliNativeViewModel: ObservableObject {
           title: refreshed.title,
           like: refreshed.like,
           reply: refreshed.reply,
-          share: refreshed.share
+          favorite: refreshed.favorite,
+          share: refreshed.share,
+          ownerName: refreshed.owner,
+          ownerFaceURL: refreshed.ownerFace,
+          isVertical: refreshed.isVertical
         )
       }
     }
@@ -2491,7 +2452,9 @@ private struct PiliNativeVideoDetail {
   let isVertical: Bool
   let argueMessage: String
   let collectionTitle: String
+  let collectionID: Int?
   let collectionCount: Int
+  let collectionItems: [PiliNativeVideo]
   let tags: [PiliNativeVideoTag]
   let staff: [PiliNativeVideoStaff]
   let pages: [PiliNativeVideoPart]
@@ -2523,7 +2486,12 @@ private struct PiliNativeVideoDetail {
     isVertical = piliBool(map["isVertical"])
     argueMessage = piliString(map["argueMessage"]) ?? ""
     collectionTitle = piliString(map["collectionTitle"]) ?? ""
+    collectionID = piliOptionalInt(map["collectionId"])
     collectionCount = piliInt(map["collectionCount"])
+    let collectionRows = map["collectionItems"] as? [Any] ?? []
+    collectionItems = collectionRows.enumerated().map {
+      PiliNativeVideo(map: piliDictionary($0.element), index: $0.offset)
+    }
     let tagRows = map["tags"] as? [Any] ?? []
     tags = tagRows.enumerated().map {
       PiliNativeVideoTag(map: piliDictionary($0.element), index: $0.offset)
@@ -4033,6 +4001,7 @@ private struct PiliNativeVideoDetailView: View {
   @State private var selectedPart = 1
   @State private var descriptionExpanded = false
   @State private var selectedTab = PiliNativeVideoDetailTab.introduction
+  @State private var isCollectionPresented = false
 
   var body: some View {
     NavigationView {
@@ -4076,6 +4045,11 @@ private struct PiliNativeVideoDetailView: View {
     .navigationViewStyle(StackNavigationViewStyle())
     .sheet(isPresented: $model.isDynamicComposerPresented) {
       PiliNativeDynamicComposerView(model: model)
+    }
+    .sheet(isPresented: $isCollectionPresented) {
+      if let video = model.videoDetail {
+        PiliNativeVideoCollectionView(video: video, model: model)
+      }
     }
     .fullScreenCover(isPresented: $model.isCommentThreadPresented) {
       PiliNativeCommentThreadView(model: model)
@@ -4387,25 +4361,32 @@ private struct PiliNativeVideoDetailView: View {
   }
 
   private func nativeCollectionRow(_ video: PiliNativeVideoDetail) -> some View {
-    HStack(spacing: 13) {
-      Image(systemName: "rectangle.stack.fill")
-        .font(.title2)
-        .foregroundColor(piliAccent)
-        .frame(width: 48, height: 48)
-        .background(piliAccent.opacity(0.1))
-        .cornerRadius(12)
-      VStack(alignment: .leading, spacing: 4) {
-        Text(video.collectionTitle).font(.headline)
-        Text("合集共 \(video.collectionCount) 个视频")
+    Button(action: { isCollectionPresented = true }) {
+      HStack(spacing: 13) {
+        Image(systemName: "rectangle.stack.fill")
+          .font(.title2)
+          .foregroundColor(piliAccent)
+          .frame(width: 48, height: 48)
+          .background(piliAccent.opacity(0.1))
+          .cornerRadius(12)
+        VStack(alignment: .leading, spacing: 4) {
+          Text(video.collectionTitle)
+            .font(.headline)
+            .foregroundColor(.primary)
+          Text("合集共 \(video.collectionCount) 个视频")
+            .font(.caption)
+            .foregroundColor(.secondary)
+        }
+        Spacer()
+        Image(systemName: "chevron.right")
           .font(.caption)
           .foregroundColor(.secondary)
       }
-      Spacer()
-      Image(systemName: "chevron.right")
-        .font(.caption)
-        .foregroundColor(.secondary)
+      .contentShape(Rectangle())
+      .padding(16)
     }
-    .padding(16)
+    .buttonStyle(PlainButtonStyle())
+    .disabled(video.collectionItems.isEmpty)
   }
 
   private func nativeStaffSection(_ video: PiliNativeVideoDetail) -> some View {
@@ -4873,6 +4854,84 @@ private struct PiliNativeVideoDetailView: View {
       .background(Color(UIColor.systemBackground))
       .cornerRadius(16)
       .padding(.horizontal, 12)
+  }
+}
+
+private struct PiliNativeVideoCollectionView: View {
+  let video: PiliNativeVideoDetail
+  @ObservedObject var model: PiliNativeViewModel
+  @Environment(\.presentationMode) private var presentationMode
+
+  var body: some View {
+    NavigationView {
+      List {
+        Section(
+          header: Text("共 \(video.collectionItems.count) 个视频"),
+          footer: Text("选择后会继续使用当前原生播放器播放该合集视频。")
+        ) {
+          ForEach(video.collectionItems) { item in
+            Button(action: { select(item) }) {
+              HStack(spacing: 12) {
+                ZStack(alignment: .bottomTrailing) {
+                  PiliRemoteImage(urlString: item.cover)
+                    .aspectRatio(16 / 9, contentMode: .fill)
+                    .frame(width: 120, height: 68)
+                    .clipped()
+                  if !item.durationText.isEmpty {
+                    Text(item.durationText)
+                      .font(.caption2)
+                      .foregroundColor(.white)
+                      .padding(.horizontal, 5)
+                      .padding(.vertical, 2)
+                      .background(Color.black.opacity(0.72))
+                      .cornerRadius(4)
+                      .padding(4)
+                  }
+                }
+                .cornerRadius(8)
+                VStack(alignment: .leading, spacing: 6) {
+                  Text(item.title)
+                    .font(.subheadline.weight(.medium))
+                    .foregroundColor(.primary)
+                    .lineLimit(2)
+                  HStack(spacing: 8) {
+                    if item.bvid == video.bvid {
+                      Label("正在播放", systemImage: "waveform")
+                        .foregroundColor(piliAccent)
+                    } else if !item.viewText.isEmpty {
+                      Label(item.viewText, systemImage: "play.rectangle")
+                        .foregroundColor(.secondary)
+                    }
+                  }
+                  .font(.caption)
+                }
+                Spacer(minLength: 0)
+              }
+              .contentShape(Rectangle())
+              .padding(.vertical, 4)
+            }
+            .buttonStyle(PlainButtonStyle())
+          }
+        }
+      }
+      .listStyle(InsetGroupedListStyle())
+      .navigationBarTitle(video.collectionTitle, displayMode: .inline)
+      .navigationBarItems(
+        leading: Button("关闭") { presentationMode.wrappedValue.dismiss() }
+      )
+    }
+    .navigationViewStyle(StackNavigationViewStyle())
+  }
+
+  private func select(_ item: PiliNativeVideo) {
+    guard item.bvid != video.bvid else {
+      presentationMode.wrappedValue.dismiss()
+      return
+    }
+    presentationMode.wrappedValue.dismiss()
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+      model.openVideo(item)
+    }
   }
 }
 
@@ -6699,6 +6758,15 @@ private struct PiliNativeSettingsView: View {
               }
             }
 
+            Section(
+              header: Text("诊断"),
+              footer: Text("播放诊断日志已从播放器控制层移到这里，避免遮挡视频操作。")
+            ) {
+              NavigationLink(destination: PiliNativeDiagnosticLogSettingsView()) {
+                Label("播放器诊断日志", systemImage: "doc.text.magnifyingglass")
+              }
+            }
+
             if searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
               Section(
                 header: Text("原版设置分类"),
@@ -6793,6 +6861,50 @@ private struct PiliNativeSettingsView: View {
       },
       set: { model.setSetting(item.key, value: $0) }
     )
+  }
+}
+
+private struct PiliNativeDiagnosticLogSettingsView: View {
+  @State private var logText = ""
+  @State private var copied = false
+
+  var body: some View {
+    ScrollView {
+      Text(logText.isEmpty ? "暂时没有播放器日志" : logText)
+        .font(.system(size: 11, design: .monospaced))
+        .foregroundColor(.primary)
+        .textSelection(.enabled)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(14)
+    }
+    .background(Color(UIColor.secondarySystemBackground))
+    .navigationBarTitle("播放器诊断日志", displayMode: .inline)
+    .toolbar {
+      ToolbarItemGroup(placement: .navigationBarTrailing) {
+        Button(action: refresh) {
+          Image(systemName: "arrow.clockwise")
+        }
+        Button(action: copyLog) {
+          Image(systemName: copied ? "checkmark" : "doc.on.doc")
+        }
+        ShareLink(item: logText) {
+          Image(systemName: "square.and.arrow.up")
+        }
+      }
+    }
+    .onAppear(perform: refresh)
+  }
+
+  private func refresh() {
+    logText = PiliNativeDiagnosticLog.shared.snapshot()
+  }
+
+  private func copyLog() {
+    UIPasteboard.general.string = logText
+    copied = true
+    DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
+      copied = false
+    }
   }
 }
 

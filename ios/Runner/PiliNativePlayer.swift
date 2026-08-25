@@ -405,7 +405,11 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
   @Published private(set) var videoTitle = "正在播放"
   @Published private(set) var videoLikeCount = 0
   @Published private(set) var videoReplyCount = 0
+  @Published private(set) var videoFavoriteCount = 0
   @Published private(set) var videoShareCount = 0
+  @Published private(set) var videoOwnerName = ""
+  @Published private(set) var videoOwnerFaceURL = ""
+  @Published private(set) var videoIsVertical = false
   @Published private(set) var danmakuStatusMessage: String?
   @Published private(set) var danmakuComposerRequest = 0
 
@@ -416,6 +420,7 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
   var onDanmakuSegmentNeeded: ((Int) -> Void)?
   var onQualityRequested: ((Int, TimeInterval) -> Void)?
   var onDanmakuSendRequested: ((String, Int) -> Void)?
+  var onVideoActionRequested: ((String) -> Void)?
 
   private(set) var danmakuItems: [PiliNativeDanmakuItem] = []
   private var segments: [PiliNativePlayerSegment] = []
@@ -537,13 +542,30 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
     requestDanmaku(near: currentTime)
   }
 
-  func configureOverlayMetadata(title: String, like: Int, reply: Int, share: Int) {
+  func configureOverlayMetadata(
+    title: String,
+    like: Int,
+    reply: Int,
+    favorite: Int = 0,
+    share: Int,
+    ownerName: String = "",
+    ownerFaceURL: String? = nil,
+    isVertical: Bool = false
+  ) {
     videoTitle = title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
       ? "正在播放"
       : title
     videoLikeCount = max(0, like)
     videoReplyCount = max(0, reply)
+    videoFavoriteCount = max(0, favorite)
     videoShareCount = max(0, share)
+    videoOwnerName = ownerName
+    videoOwnerFaceURL = ownerFaceURL ?? ""
+    videoIsVertical = isVertical
+  }
+
+  func requestVideoAction(_ action: String) {
+    onVideoActionRequested?(action)
   }
 
   func requestDanmakuSend(_ content: String) {
@@ -1231,64 +1253,6 @@ private extension Array {
   }
 }
 
-private final class PiliNativeDiagnosticLogViewController: UIViewController {
-  private let textView = UITextView()
-
-  override func viewDidLoad() {
-    super.viewDidLoad()
-    title = "播放器日志"
-    view.backgroundColor = .systemBackground
-    textView.translatesAutoresizingMaskIntoConstraints = false
-    textView.isEditable = false
-    textView.isSelectable = true
-    textView.alwaysBounceVertical = true
-    textView.backgroundColor = .secondarySystemBackground
-    textView.textColor = .label
-    textView.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
-    textView.textContainerInset = UIEdgeInsets(top: 14, left: 10, bottom: 14, right: 10)
-    textView.text = PiliNativeDiagnosticLog.shared.snapshot()
-    view.addSubview(textView)
-    NSLayoutConstraint.activate([
-      textView.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
-      textView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-      textView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-      textView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-    ])
-    navigationItem.leftBarButtonItem = UIBarButtonItem(
-      barButtonSystemItem: .close,
-      target: self,
-      action: #selector(closeLog)
-    )
-    navigationItem.rightBarButtonItems = [
-      UIBarButtonItem(
-        barButtonSystemItem: .action,
-        target: self,
-        action: #selector(shareLog)
-      ),
-      UIBarButtonItem(title: "复制", style: .plain, target: self, action: #selector(copyLog)),
-    ]
-  }
-
-  @objc private func closeLog() { dismiss(animated: true) }
-
-  @objc private func copyLog() {
-    UIPasteboard.general.string = textView.text
-    navigationItem.prompt = "日志已复制"
-    DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
-      self?.navigationItem.prompt = nil
-    }
-  }
-
-  @objc private func shareLog() {
-    let controller = UIActivityViewController(
-      activityItems: [textView.text ?? ""],
-      applicationActivities: nil
-    )
-    controller.popoverPresentationController?.barButtonItem = navigationItem.rightBarButtonItems?.first
-    present(controller, animated: true)
-  }
-}
-
 final class PiliNativePlayerViewController: UIViewController, UIGestureRecognizerDelegate {
   private let session: PiliNativePlayerSession
   private let fullscreenPresentation: Bool
@@ -1303,7 +1267,6 @@ final class PiliNativePlayerViewController: UIViewController, UIGestureRecognize
   private let danmakuButton = UIButton(type: .system)
   private let danmakuSettingsButton = UIButton(type: .system)
   private let danmakuInputButton = UIButton(type: .system)
-  private let logButton = UIButton(type: .system)
   private let qualityButton = UIButton(type: .system)
   private let speedButton = UIButton(type: .system)
   private let fullscreenButton = UIButton(type: .system)
@@ -1311,9 +1274,13 @@ final class PiliNativePlayerViewController: UIViewController, UIGestureRecognize
   private let backButton = UIButton(type: .system)
   private let lockButton = UIButton(type: .system)
   private let titleLabel = UILabel()
+  private let ownerLabel = UILabel()
+  private let ownerImageView = UIImageView()
   private let likeLabel = UILabel()
   private let replyLabel = UILabel()
+  private let favoriteLabel = UILabel()
   private let shareLabel = UILabel()
+  private let menuButton = UIButton(type: .system)
   private let systemTimeLabel = UILabel()
   private let batteryLabel = UILabel()
   private let fullTimeLabel = UILabel()
@@ -1334,6 +1301,7 @@ final class PiliNativePlayerViewController: UIViewController, UIGestureRecognize
   private var cancellables = Set<AnyCancellable>()
   private var controlsHideTask: DispatchWorkItem?
   private var statusTimer: Timer?
+  private var ownerImageTask: URLSessionDataTask?
   private var wasPlayingBeforeScrub = false
   private var isScrubbing = false
   private var controlsLocked = false
@@ -1349,7 +1317,8 @@ final class PiliNativePlayerViewController: UIViewController, UIGestureRecognize
   required init?(coder: NSCoder) { fatalError("init(coder:) is unavailable") }
 
   override var supportedInterfaceOrientations: UIInterfaceOrientationMask {
-    fullscreenPresentation ? .landscape : .all
+    guard fullscreenPresentation else { return .portrait }
+    return session.videoIsVertical ? .portrait : .landscape
   }
 
   override var prefersStatusBarHidden: Bool { fullscreenPresentation }
@@ -1367,7 +1336,9 @@ final class PiliNativePlayerViewController: UIViewController, UIGestureRecognize
   override func viewDidAppear(_ animated: Bool) {
     super.viewDidAppear(animated)
     session.bindVideoSurface(canvas)
-    if fullscreenPresentation { requestOrientation(.landscape) }
+    if fullscreenPresentation {
+      requestOrientation(session.videoIsVertical ? .portrait : .landscape)
+    }
     if fullscreenPresentation, statusTimer == nil { startSystemStatusUpdates() }
     scheduleControlsHide()
   }
@@ -1441,7 +1412,6 @@ final class PiliNativePlayerViewController: UIViewController, UIGestureRecognize
     configureButton(lockButton, image: "lock.open.fill", action: #selector(toggleScreenLock))
     configureButton(danmakuSettingsButton, image: "slider.horizontal.3", action: #selector(toggleDanmakuSettings))
     configureTextButton(danmakuButton, title: "弹幕", action: #selector(toggleDanmaku))
-    configureTextButton(logButton, title: "日志", action: #selector(showDiagnosticLog))
     configureTextButton(qualityButton, title: "清晰度", action: nil)
     configureTextButton(speedButton, title: "1.0x", action: #selector(changeSpeed))
     configureTextButton(
@@ -1502,7 +1472,6 @@ final class PiliNativePlayerViewController: UIViewController, UIGestureRecognize
     topBar.spacing = 8
     topBar.addArrangedSubview(danmakuButton)
     topBar.addArrangedSubview(UIView())
-    topBar.addArrangedSubview(logButton)
     topBar.addArrangedSubview(qualityButton)
     topBar.addArrangedSubview(pipButton)
 
@@ -1534,19 +1503,19 @@ final class PiliNativePlayerViewController: UIViewController, UIGestureRecognize
   private func buildFullscreenControls() {
     topChrome.translatesAutoresizingMaskIntoConstraints = false
     bottomChrome.translatesAutoresizingMaskIntoConstraints = false
-    topChrome.backgroundColor = UIColor.black.withAlphaComponent(0.48)
-    bottomChrome.backgroundColor = UIColor.black.withAlphaComponent(0.52)
+    topChrome.backgroundColor = UIColor.black.withAlphaComponent(0.42)
+    bottomChrome.backgroundColor = UIColor.black.withAlphaComponent(0.5)
     controls.addSubview(topChrome)
     controls.addSubview(bottomChrome)
     NSLayoutConstraint.activate([
       topChrome.topAnchor.constraint(equalTo: controls.topAnchor),
       topChrome.leadingAnchor.constraint(equalTo: controls.leadingAnchor),
       topChrome.trailingAnchor.constraint(equalTo: controls.trailingAnchor),
-      topChrome.heightAnchor.constraint(equalToConstant: 64),
+      topChrome.heightAnchor.constraint(equalToConstant: 150),
       bottomChrome.leadingAnchor.constraint(equalTo: controls.leadingAnchor),
       bottomChrome.trailingAnchor.constraint(equalTo: controls.trailingAnchor),
       bottomChrome.bottomAnchor.constraint(equalTo: controls.bottomAnchor),
-      bottomChrome.heightAnchor.constraint(equalToConstant: 116),
+      bottomChrome.heightAnchor.constraint(equalToConstant: 142),
     ])
 
     titleLabel.font = .systemFont(ofSize: 15, weight: .semibold)
@@ -1557,13 +1526,16 @@ final class PiliNativePlayerViewController: UIViewController, UIGestureRecognize
     titleLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
 
     let metricStack = UIStackView(arrangedSubviews: [
-      metricView(icon: "hand.thumbsup.fill", label: likeLabel),
-      metricView(icon: "bubble.left.fill", label: replyLabel),
-      metricView(icon: "arrowshape.turn.up.right.fill", label: shareLabel),
+      metricView(icon: "hand.thumbsup", label: likeLabel, action: #selector(requestLike)),
+      metricView(icon: "bubble.left", label: replyLabel, action: #selector(requestComment)),
+      metricView(icon: "star", label: favoriteLabel, action: #selector(requestFavorite)),
+      metricView(icon: "arrowshape.turn.up.right", label: shareLabel, action: #selector(requestShare)),
     ])
     metricStack.axis = .horizontal
     metricStack.alignment = .center
-    metricStack.spacing = 12
+    metricStack.spacing = 8
+
+    configureButton(menuButton, image: "ellipsis", action: #selector(showMoreMenu))
 
     let wifiView = UIImageView(image: UIImage(systemName: "wifi"))
     wifiView.tintColor = .white
@@ -1573,10 +1545,26 @@ final class PiliNativePlayerViewController: UIViewController, UIGestureRecognize
       $0.textColor = .white
       $0.font = .monospacedDigitSystemFont(ofSize: 11, weight: .semibold)
     }
-    let statusStack = UIStackView(arrangedSubviews: [systemTimeLabel, wifiView, batteryLabel])
+    let statusStack = UIStackView(arrangedSubviews: [wifiView, batteryLabel])
     statusStack.axis = .horizontal
     statusStack.alignment = .center
     statusStack.spacing = 7
+    systemTimeLabel.textAlignment = .center
+
+    ownerImageView.translatesAutoresizingMaskIntoConstraints = false
+    ownerImageView.contentMode = .scaleAspectFill
+    ownerImageView.clipsToBounds = true
+    ownerImageView.layer.cornerRadius = 12
+    ownerImageView.backgroundColor = UIColor.white.withAlphaComponent(0.14)
+    ownerImageView.widthAnchor.constraint(equalToConstant: 24).isActive = true
+    ownerImageView.heightAnchor.constraint(equalToConstant: 24).isActive = true
+    ownerLabel.text = session.videoOwnerName
+    ownerLabel.textColor = .white
+    ownerLabel.font = .systemFont(ofSize: 13, weight: .semibold)
+    let ownerStack = UIStackView(arrangedSubviews: [ownerImageView, ownerLabel])
+    ownerStack.axis = .horizontal
+    ownerStack.alignment = .center
+    ownerStack.spacing = 8
 
     topBar.axis = .horizontal
     topBar.alignment = .center
@@ -1584,29 +1572,44 @@ final class PiliNativePlayerViewController: UIViewController, UIGestureRecognize
     topBar.addArrangedSubview(backButton)
     topBar.addArrangedSubview(titleLabel)
     topBar.addArrangedSubview(metricStack)
-    topBar.addArrangedSubview(statusStack)
+    topBar.addArrangedSubview(menuButton)
     topBar.translatesAutoresizingMaskIntoConstraints = false
+    systemTimeLabel.translatesAutoresizingMaskIntoConstraints = false
+    statusStack.translatesAutoresizingMaskIntoConstraints = false
+    ownerStack.translatesAutoresizingMaskIntoConstraints = false
     topChrome.addSubview(topBar)
+    topChrome.addSubview(systemTimeLabel)
+    topChrome.addSubview(statusStack)
+    topChrome.addSubview(ownerStack)
     NSLayoutConstraint.activate([
+      systemTimeLabel.topAnchor.constraint(equalTo: controls.safeAreaLayoutGuide.topAnchor, constant: 2),
+      systemTimeLabel.centerXAnchor.constraint(equalTo: topChrome.centerXAnchor),
+      statusStack.centerYAnchor.constraint(equalTo: systemTimeLabel.centerYAnchor),
+      statusStack.trailingAnchor.constraint(equalTo: controls.safeAreaLayoutGuide.trailingAnchor, constant: -10),
       topBar.leadingAnchor.constraint(equalTo: controls.safeAreaLayoutGuide.leadingAnchor, constant: 8),
       topBar.trailingAnchor.constraint(equalTo: controls.safeAreaLayoutGuide.trailingAnchor, constant: -10),
-      topBar.bottomAnchor.constraint(equalTo: topChrome.bottomAnchor, constant: -8),
-      topBar.heightAnchor.constraint(equalToConstant: 42),
+      topBar.topAnchor.constraint(equalTo: systemTimeLabel.bottomAnchor, constant: 3),
+      topBar.heightAnchor.constraint(equalToConstant: 38),
+      ownerStack.leadingAnchor.constraint(equalTo: controls.safeAreaLayoutGuide.leadingAnchor, constant: 50),
+      ownerStack.topAnchor.constraint(equalTo: topBar.bottomAnchor, constant: 1),
+      ownerStack.trailingAnchor.constraint(lessThanOrEqualTo: topChrome.trailingAnchor, constant: -16),
+      ownerStack.bottomAnchor.constraint(lessThanOrEqualTo: topChrome.bottomAnchor, constant: -6),
     ])
 
-    let progressRow = UIStackView(arrangedSubviews: [fullTimeLabel, slider])
-    progressRow.axis = .horizontal
-    progressRow.alignment = .center
-    progressRow.spacing = 10
-    fullTimeLabel.widthAnchor.constraint(greaterThanOrEqualToConstant: 94).isActive = true
+    fullTimeLabel.textAlignment = .left
 
     danmakuButton.setImage(UIImage(systemName: "checkmark.square.fill"), for: .normal)
     danmakuButton.tintColor = .white
     danmakuButton.setTitle(" 弹幕", for: .normal)
     danmakuInputButton.contentHorizontalAlignment = .left
-    danmakuInputButton.setTitleColor(UIColor.white.withAlphaComponent(0.78), for: .normal)
+    danmakuInputButton.setTitleColor(UIColor.darkGray, for: .normal)
+    danmakuInputButton.backgroundColor = UIColor.white.withAlphaComponent(0.88)
+    danmakuInputButton.layer.cornerRadius = 18
     danmakuInputButton.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-    danmakuInputButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 180).isActive = true
+    let danmakuInputWidth = danmakuInputButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 120)
+    danmakuInputWidth.priority = .defaultHigh
+    danmakuInputWidth.isActive = true
+    danmakuInputButton.heightAnchor.constraint(equalToConstant: 36).isActive = true
 
     let actionRow = UIStackView(arrangedSubviews: [
       playButton,
@@ -1622,15 +1625,16 @@ final class PiliNativePlayerViewController: UIViewController, UIGestureRecognize
 
     bottomBar.axis = .vertical
     bottomBar.alignment = .fill
-    bottomBar.spacing = 8
-    bottomBar.addArrangedSubview(progressRow)
+    bottomBar.spacing = 6
+    bottomBar.addArrangedSubview(fullTimeLabel)
+    bottomBar.addArrangedSubview(slider)
     bottomBar.addArrangedSubview(actionRow)
     bottomBar.translatesAutoresizingMaskIntoConstraints = false
     bottomChrome.addSubview(bottomBar)
     NSLayoutConstraint.activate([
       bottomBar.leadingAnchor.constraint(equalTo: controls.safeAreaLayoutGuide.leadingAnchor, constant: 14),
       bottomBar.trailingAnchor.constraint(equalTo: controls.safeAreaLayoutGuide.trailingAnchor, constant: -14),
-      bottomBar.topAnchor.constraint(equalTo: bottomChrome.topAnchor, constant: 10),
+      bottomBar.topAnchor.constraint(equalTo: bottomChrome.topAnchor, constant: 9),
       bottomBar.bottomAnchor.constraint(equalTo: controls.safeAreaLayoutGuide.bottomAnchor, constant: -8),
     ])
 
@@ -1646,15 +1650,17 @@ final class PiliNativePlayerViewController: UIViewController, UIGestureRecognize
     buildDanmakuSettingsPanel()
   }
 
-  private func metricView(icon: String, label: UILabel) -> UIView {
-    let image = UIImageView(image: UIImage(systemName: icon))
-    image.tintColor = .white
-    image.contentMode = .scaleAspectFit
-    image.widthAnchor.constraint(equalToConstant: 15).isActive = true
+  private func metricView(icon: String, label: UILabel, action: Selector) -> UIView {
+    let button = UIButton(type: .system)
+    button.tintColor = .white
+    button.setImage(UIImage(systemName: icon), for: .normal)
+    button.widthAnchor.constraint(equalToConstant: 24).isActive = true
+    button.heightAnchor.constraint(equalToConstant: 30).isActive = true
+    button.addTarget(self, action: action, for: .touchUpInside)
     label.textColor = .white
     label.font = .monospacedDigitSystemFont(ofSize: 11, weight: .medium)
     label.text = "0"
-    let stack = UIStackView(arrangedSubviews: [image, label])
+    let stack = UIStackView(arrangedSubviews: [button, label])
     stack.axis = .horizontal
     stack.alignment = .center
     stack.spacing = 4
@@ -1853,8 +1859,17 @@ final class PiliNativePlayerViewController: UIViewController, UIGestureRecognize
     session.$videoReplyCount.receive(on: DispatchQueue.main).sink { [weak self] value in
       self?.replyLabel.text = Self.formatMetric(value)
     }.store(in: &cancellables)
+    session.$videoFavoriteCount.receive(on: DispatchQueue.main).sink { [weak self] value in
+      self?.favoriteLabel.text = Self.formatMetric(value)
+    }.store(in: &cancellables)
     session.$videoShareCount.receive(on: DispatchQueue.main).sink { [weak self] value in
       self?.shareLabel.text = Self.formatMetric(value)
+    }.store(in: &cancellables)
+    session.$videoOwnerName.receive(on: DispatchQueue.main).sink { [weak self] name in
+      self?.ownerLabel.text = name
+    }.store(in: &cancellables)
+    session.$videoOwnerFaceURL.receive(on: DispatchQueue.main).sink { [weak self] url in
+      self?.loadOwnerImage(url)
     }.store(in: &cancellables)
     session.$danmakuStatusMessage.receive(on: DispatchQueue.main).sink { [weak self] message in
       self?.toastLabel.text = message.map { "  \($0)  " }
@@ -1870,6 +1885,21 @@ final class PiliNativePlayerViewController: UIViewController, UIGestureRecognize
         self.showDanmakuComposer()
       }
       .store(in: &cancellables)
+  }
+
+  private func loadOwnerImage(_ rawURL: String) {
+    ownerImageTask?.cancel()
+    ownerImageView.image = UIImage(systemName: "person.crop.circle.fill")
+    ownerImageView.tintColor = UIColor.white.withAlphaComponent(0.75)
+    guard let url = URL(string: rawURL), !rawURL.isEmpty else { return }
+    ownerImageTask = URLSession.shared.dataTask(with: url) { [weak self] data, _, _ in
+      guard let data, let image = UIImage(data: data) else { return }
+      DispatchQueue.main.async {
+        guard self?.session.videoOwnerFaceURL == rawURL else { return }
+        self?.ownerImageView.image = image
+      }
+    }
+    ownerImageTask?.resume()
   }
 
   private func configurePictureInPicture(player: AVPlayer?) {
@@ -1996,16 +2026,30 @@ final class PiliNativePlayerViewController: UIViewController, UIGestureRecognize
     present(alert, animated: true)
   }
 
-  @objc private func showDiagnosticLog() {
+  @objc private func requestLike() { session.requestVideoAction("like") }
+  @objc private func requestComment() { session.requestVideoAction("comment") }
+  @objc private func requestFavorite() { session.requestVideoAction("favorite") }
+  @objc private func requestShare() { session.requestVideoAction("share") }
+
+  @objc private func showMoreMenu() {
     controlsHideTask?.cancel()
-    let logController = PiliNativeDiagnosticLogViewController()
-    let navigationController = UINavigationController(rootViewController: logController)
-    navigationController.modalPresentationStyle = .pageSheet
-    if let sheet = navigationController.sheetPresentationController {
-      sheet.detents = [.medium(), .large()]
-      sheet.prefersGrabberVisible = true
+    let menu = UIAlertController(title: nil, message: nil, preferredStyle: .actionSheet)
+    if pictureInPictureController != nil {
+      menu.addAction(UIAlertAction(title: "画中画", style: .default) { [weak self] _ in
+        self?.togglePictureInPicture()
+      })
     }
-    present(navigationController, animated: true)
+    menu.addAction(UIAlertAction(title: "弹幕设置", style: .default) { [weak self] _ in
+      self?.setDanmakuSettingsVisible(true, animated: true)
+    })
+    menu.addAction(UIAlertAction(title: "取消", style: .cancel) { [weak self] _ in
+      self?.scheduleControlsHide()
+    })
+    if let popover = menu.popoverPresentationController {
+      popover.sourceView = menuButton
+      popover.sourceRect = menuButton.bounds
+    }
+    present(menu, animated: true)
   }
 
   @objc private func togglePictureInPicture() {
@@ -2136,8 +2180,9 @@ final class PiliNativePlayerViewController: UIViewController, UIGestureRecognize
     if #available(iOS 16.0, *), let scene = view.window?.windowScene {
       scene.requestGeometryUpdate(.iOS(interfaceOrientations: orientations))
       setNeedsUpdateOfSupportedInterfaceOrientations()
-    } else if orientations == .landscape {
-      UIDevice.current.setValue(UIInterfaceOrientation.landscapeRight.rawValue, forKey: "orientation")
+    } else {
+      let target: UIInterfaceOrientation = orientations == .portrait ? .portrait : .landscapeRight
+      UIDevice.current.setValue(target.rawValue, forKey: "orientation")
       UIViewController.attemptRotationToDeviceOrientation()
     }
   }
