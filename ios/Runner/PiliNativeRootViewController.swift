@@ -444,6 +444,7 @@ private final class PiliNativeViewModel: ObservableObject {
   private var nativePlayerCID: Int?
   private var nativePlaybackGeneration = UUID()
   private var nativePlayerFullscreenCancellable: AnyCancellable?
+  private var deviceOrientationObserver: NSObjectProtocol?
 
   init(
     channel: FlutterMethodChannel,
@@ -627,6 +628,7 @@ private final class PiliNativeViewModel: ObservableObject {
     nativePlayerCID = nil
     nativePlayerSession.configureOverlayMetadata(title: video.title, like: 0, reply: 0, share: 0)
     isVideoDetailPresented = true
+    startVideoOrientationTracking()
 
     var arguments: [String: Any] = [:]
     if let bvid = video.bvid { arguments["bvid"] = bvid }
@@ -870,9 +872,11 @@ private final class PiliNativeViewModel: ObservableObject {
     originalPlayerHeroTag = piliString(arguments["heroTag"]) ?? ""
     originalPlayerError = nil
     originalPlayerReady = true
+    synchronizeVideoOrientation()
   }
 
   func originalPlayerDidClose() {
+    stopVideoOrientationTracking()
     originalPlayerReady = false
     originalPlayerFullscreen = false
     flutterPlayerSurface.restore(hidden: true)
@@ -889,6 +893,7 @@ private final class PiliNativeViewModel: ObservableObject {
   }
 
   func closeVideoDetail() {
+    stopVideoOrientationTracking()
     nativePlaybackGeneration = UUID()
     originalPlayerReady = false
     originalPlayerFullscreen = false
@@ -919,6 +924,75 @@ private final class PiliNativeViewModel: ObservableObject {
   func exitOriginalPlayerFullscreen() {
     originalPlayerFullscreen = false
     nativePlayerSession.isFullscreen = false
+  }
+
+  private func startVideoOrientationTracking() {
+    guard deviceOrientationObserver == nil else {
+      synchronizeVideoOrientation()
+      return
+    }
+    UIDevice.current.beginGeneratingDeviceOrientationNotifications()
+    deviceOrientationObserver = NotificationCenter.default.addObserver(
+      forName: UIDevice.orientationDidChangeNotification,
+      object: nil,
+      queue: .main
+    ) { [weak self] _ in
+      DispatchQueue.main.async {
+        self?.synchronizeVideoOrientation()
+      }
+    }
+    // The first notification can arrive before the detail cover is mounted.
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) { [weak self] in
+      self?.synchronizeVideoOrientation()
+    }
+  }
+
+  private func stopVideoOrientationTracking() {
+    if let observer = deviceOrientationObserver {
+      NotificationCenter.default.removeObserver(observer)
+      deviceOrientationObserver = nil
+    }
+    UIDevice.current.endGeneratingDeviceOrientationNotifications()
+  }
+
+  private func synchronizeVideoOrientation() {
+    guard isVideoDetailPresented else { return }
+
+    let targetIsLandscape: Bool?
+    switch UIDevice.current.orientation {
+    case .landscapeLeft, .landscapeRight:
+      targetIsLandscape = true
+    case .portrait, .portraitUpsideDown:
+      targetIsLandscape = false
+    default:
+      let interfaceOrientation = UIApplication.shared.connectedScenes
+        .compactMap { $0 as? UIWindowScene }
+        .first(where: { $0.activationState == .foregroundActive })?
+        .interfaceOrientation
+      if interfaceOrientation?.isLandscape == true {
+        targetIsLandscape = true
+      } else if interfaceOrientation?.isPortrait == true {
+        targetIsLandscape = false
+      } else {
+        targetIsLandscape = nil
+      }
+    }
+
+    guard let targetIsLandscape else { return }
+    if targetIsLandscape {
+      guard !nativePlayerSession.isFullscreen else { return }
+      nativePlayerSession.isFullscreen = true
+      originalPlayerFullscreen = true
+    } else {
+      guard nativePlayerSession.isFullscreen || originalPlayerFullscreen else { return }
+      nativePlayerSession.isFullscreen = false
+      originalPlayerFullscreen = false
+      DispatchQueue.main.asyncAfter(deadline: .now() + 0.22) { [weak self] in
+        guard let self, self.isVideoDetailPresented,
+              !self.nativePlayerSession.isFullscreen else { return }
+        PiliNativePlayerViewController.restorePortraitOrientation()
+      }
+    }
   }
 
   func openVideoOwner(_ video: PiliNativeVideoDetail) {
@@ -5856,21 +5930,22 @@ private struct PiliNativeSettingsView: View {
   @State private var searchText = ""
 
   private let groups = [
+    "音视频与画质",
     "播放与弹幕",
     "视频详情",
     "推荐与搜索",
     "外观与界面",
     "通用功能",
   ]
-  private let advanced: [(String, String, String)] = [
-    ("privacy", "隐私设置", "hand.raised"),
-    ("recommend", "推荐流高级设置", "sparkles"),
-    ("video", "音视频与画质", "film"),
-    ("player", "播放器高级设置", "play.rectangle"),
-    ("style", "外观设置", "paintbrush"),
-    ("extra", "其他设置", "ellipsis.circle"),
-    ("webdav", "WebDAV", "externaldrive"),
-    ("about", "关于", "info.circle"),
+  private let advanced: [(String, String, String, String)] = [
+    ("privacy", "隐私设置", "hand.raised", "黑名单与账号隐私"),
+    ("recommend", "推荐流设置", "sparkles", "推荐来源、刷新保留与过滤器"),
+    ("video", "音视频设置", "film", "画质、音质、解码、缓冲与 CDN"),
+    ("player", "播放器设置", "play.rectangle", "全屏、手势、弹幕、字幕与进度条"),
+    ("style", "外观设置", "paintbrush", "布局、主题、字号、图片与帧率"),
+    ("extra", "其它设置", "ellipsis.circle", "评论、动态、代理、搜索与更新"),
+    ("webdav", "WebDAV 设置", "externaldrive", "配置同步与备份"),
+    ("about", "关于", "info.circle", "版本、项目与界面架构"),
   ]
 
   var body: some View {
@@ -5906,6 +5981,38 @@ private struct PiliNativeSettingsView: View {
               .padding(.vertical, 4)
             }
 
+            if searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+              Section(
+                header: Text("原版设置分类"),
+                footer: Text("入口顺序与原版项目保持一致；进入分类后仍直接修改原项目设置存储。")
+              ) {
+                ForEach(advanced.indices, id: \.self) { index in
+                  let item = advanced[index]
+                  NavigationLink(
+                    destination: PiliNativeSettingsSectionView(
+                      section: item.0,
+                      title: item.1,
+                      model: model
+                    )
+                  ) {
+                    HStack(spacing: 13) {
+                      Image(systemName: item.2)
+                        .frame(width: 24)
+                        .foregroundColor(piliAccent)
+                      VStack(alignment: .leading, spacing: 3) {
+                        Text(item.1).foregroundColor(.primary)
+                        Text(item.3)
+                          .font(.caption)
+                          .foregroundColor(.secondary)
+                      }
+                      Spacer()
+                    }
+                    .padding(.vertical, 2)
+                  }
+                }
+              }
+            }
+
             ForEach(groups, id: \.self) { group in
               if !settings(in: group).isEmpty {
                 Section(header: Text(group)) {
@@ -5938,31 +6045,6 @@ private struct PiliNativeSettingsView: View {
             }
             }
 
-            if searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-              Section(
-                header: Text("高级参数"),
-                footer: Text("画质、解码器、字体尺寸等非布尔参数继续调用原设置组件，避免类型转换造成配置失效。")
-              ) {
-                ForEach(advanced.indices, id: \.self) { index in
-                  let item = advanced[index]
-                  NavigationLink(
-                    destination: PiliNativeSettingsSectionView(
-                      section: item.0,
-                      title: item.1,
-                      model: model
-                    )
-                  ) {
-                    HStack(spacing: 13) {
-                      Image(systemName: item.2)
-                        .frame(width: 24)
-                        .foregroundColor(piliAccent)
-                      Text(item.1).foregroundColor(.primary)
-                      Spacer()
-                    }
-                  }
-                }
-              }
-            }
           }
         }
       }
@@ -6010,7 +6092,7 @@ private struct PiliNativeSettingsSectionView: View {
   private var group: String? {
     switch section {
     case "recommend": return "推荐与搜索"
-    case "video": return "视频详情"
+    case "video": return "音视频与画质"
     case "player": return "播放与弹幕"
     case "style": return "外观与界面"
     case "extra": return "通用功能"

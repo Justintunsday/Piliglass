@@ -883,6 +883,38 @@ final class IOSNativeUIBridge {
 
   static const List<Map<String, dynamic>> _nativeSettingDefinitions = [
     {
+      'key': SettingBoxKey.enableHA,
+      'title': '开启硬件解码',
+      'subtitle': '以较低功耗播放视频，若画面异常卡死可尝试关闭',
+      'group': '音视频与画质',
+      'icon': 'bolt.horizontal.circle',
+      'default': true,
+    },
+    {
+      'key': SettingBoxKey.p1080,
+      'title': '免登录 1080P',
+      'subtitle': '未登录时仍请求可用的 1080P 视频轨道',
+      'group': '音视频与画质',
+      'icon': 'rectangle.badge.hd',
+      'default': true,
+    },
+    {
+      'key': SettingBoxKey.cdnSpeedTest,
+      'title': 'CDN 测速',
+      'subtitle': '通过试载视频选择可用线路，会产生少量流量',
+      'group': '音视频与画质',
+      'icon': 'speedometer',
+      'default': true,
+    },
+    {
+      'key': SettingBoxKey.disableAudioCDN,
+      'title': '音频不跟随视频 CDN',
+      'subtitle': '音轨直接使用备用地址，可改善部分视频无声问题',
+      'group': '音视频与画质',
+      'icon': 'waveform.badge.plus',
+      'default': false,
+    },
+    {
       'key': SettingBoxKey.enableShowDanmaku,
       'title': '显示弹幕',
       'subtitle': '播放器中加载并显示弹幕',
@@ -1292,6 +1324,8 @@ final class IOSNativeUIBridge {
         ..lastRefreshAt = null;
     } else if (key == SettingBoxKey.checkDynamic) {
       mainController.checkDynamic = value;
+    } else if (key == SettingBoxKey.disableAudioCDN) {
+      VideoUtils.disableAudioCDN = value;
     }
     return _nativeSettingsSnapshot();
   }
