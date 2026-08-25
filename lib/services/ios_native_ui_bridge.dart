@@ -152,6 +152,8 @@ final class IOSNativeUIBridge {
         return _setNativePlayerFullscreen(_arguments(call));
       case 'loadVideoDetail':
         return _loadVideoDetail(_arguments(call));
+      case 'loadRelatedVideos':
+        return _loadRelatedVideos(_arguments(call));
       case 'loadNativePlayback':
         return _loadNativePlayback(_arguments(call));
       case 'loadNativeDanmaku':
@@ -420,6 +422,41 @@ final class IOSNativeUIBridge {
               )
               .toList(),
         },
+      },
+    };
+  }
+
+  Future<Map<String, dynamic>> _loadRelatedVideos(
+    Map<dynamic, dynamic> arguments,
+  ) async {
+    final bvid = _nonEmpty(arguments['bvid']?.toString());
+    if (bvid == null) {
+      return const {'state': 'error', 'error': '缺少视频编号'};
+    }
+
+    final result = await VideoHttp.relatedVideoList(bvid: bvid);
+    return switch (result) {
+      Loading() => const {'state': 'loading'},
+      Error(:final errMsg) => {
+        'state': 'error',
+        'error': errMsg ?? '相关推荐加载失败',
+      },
+      Success(:final response) => {
+        'state': 'success',
+        'items': (response ?? const []).asMap().entries.map((entry) {
+          final item = entry.value;
+          return {
+            'id': item.bvid ?? item.aid?.toString() ?? 'related-${entry.key}',
+            'aid': item.aid,
+            'bvid': item.bvid,
+            'title': item.title,
+            'cover': _normalizeURL(item.cover),
+            'owner': item.owner.name ?? '',
+            'viewText': _compactNumber(item.stat.view),
+            'danmakuText': _compactNumber(item.stat.danmu),
+            'durationText': _durationText(item.duration),
+          };
+        }).toList(),
       },
     };
   }

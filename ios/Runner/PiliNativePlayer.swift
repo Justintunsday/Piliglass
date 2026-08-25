@@ -407,6 +407,7 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
   @Published private(set) var videoReplyCount = 0
   @Published private(set) var videoShareCount = 0
   @Published private(set) var danmakuStatusMessage: String?
+  @Published private(set) var danmakuComposerRequest = 0
 
   @Published private(set) var pictureInPicturePlayer: AVPlayer?
 
@@ -550,6 +551,10 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
     guard !trimmed.isEmpty else { return }
     danmakuStatusMessage = "正在发送弹幕…"
     onDanmakuSendRequested?(trimmed, Int(max(0, currentTime) * 1000))
+  }
+
+  func requestDanmakuComposer() {
+    danmakuComposerRequest += 1
   }
 
   func reportDanmakuSendResult(_ message: String, sentContent: String? = nil) {
@@ -1855,6 +1860,16 @@ final class PiliNativePlayerViewController: UIViewController, UIGestureRecognize
       self?.toastLabel.text = message.map { "  \($0)  " }
       self?.toastLabel.isHidden = message == nil
     }.store(in: &cancellables)
+    session.$danmakuComposerRequest
+      .dropFirst()
+      .receive(on: DispatchQueue.main)
+      .sink { [weak self] _ in
+        guard let self,
+              self.presentedViewController == nil,
+              self.viewIfLoaded?.window != nil else { return }
+        self.showDanmakuComposer()
+      }
+      .store(in: &cancellables)
   }
 
   private func configurePictureInPicture(player: AVPlayer?) {
