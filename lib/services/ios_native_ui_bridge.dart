@@ -24,6 +24,7 @@ import 'package:PiliPlus/models/common/search/search_type.dart';
 import 'package:PiliPlus/models/common/setting_type.dart';
 import 'package:PiliPlus/models/common/video/video_quality.dart';
 import 'package:PiliPlus/models/common/video/video_type.dart';
+import 'package:PiliPlus/models/dynamics/result.dart';
 import 'package:PiliPlus/models/search/result.dart';
 import 'package:PiliPlus/pages/about/view.dart';
 import 'package:PiliPlus/pages/dynamics/controller.dart';
@@ -2522,89 +2523,93 @@ final class IOSNativeUIBridge {
     }
   }
 
-  Map<String, dynamic> _dynamicMap(dynamic item, int index) {
-    try {
-      final moduleDynamic = item.modules.moduleDynamic;
-      final major = moduleDynamic?.major;
-      final author = item.modules.moduleAuthor;
-
-      final archive =
-          major?.archive ?? major?.ugcSeason ?? major?.pgc ?? major?.courses;
-      final opus = major?.opus;
-      final opusPictures = opus?.pics ?? const [];
-      final opusPicture = opusPictures.firstOrNull;
-      final live = major?.liveRcmd ?? major?.live;
-
-      final title = _firstNonEmpty([
-        opus?.title?.toString(),
-        archive?.title?.toString(),
-        live?.title?.toString(),
-        major?.medialist?.title?.toString(),
-        major?.music?.title?.toString(),
-      ]);
-      final body = _firstNonEmpty([
-        moduleDynamic?.desc?.text?.toString(),
-        opus?.summary?.text?.toString(),
-      ]);
-      final cover = _firstNonEmpty([
-        archive?.cover?.toString(),
-        opusPictures.isNotEmpty
-            ? (opusPictures.first.url ?? opusPictures.first.src)?.toString()
-            : null,
-        live?.cover?.toString(),
-        major?.medialist?.cover?.toString(),
-        major?.music?.cover?.toString(),
-      ]);
-      final stat = item.modules.moduleStat;
-      final id = _firstNonEmpty([
-        item.idStr?.toString(),
-        item.fallback?.id?.toString(),
-      ]);
-
+  Map<String, dynamic> _dynamicMap(dynamic value, int index) {
+    if (value is! DynamicItemModel) {
       return {
-        // Keep the transport ID empty when the API did not provide one. Swift
-        // has its own UI identity and must never send `dynamic-$index` to a
-        // server endpoint that accepts numeric dynamic IDs only.
-        'id': id,
-        'type': item.type?.toString() ?? '',
-        'author': author?.name?.toString() ?? '',
-        'authorId': _asInt(author?.mid),
-        'avatar': _normalizeURL(author?.face?.toString()),
-        'time': author?.pubTime?.toString() ?? '',
-        'title': title ?? '',
-        'body': body ?? '',
-        'cover': _normalizeURL(cover),
-        'coverWidth': _asInt(opusPicture?.width),
-        'coverHeight': _asInt(opusPicture?.height),
-        'pictures': opusPictures
-            .map(
-              (picture) => {
-                'url': _normalizeURL(
-                  (picture.url ?? picture.src)?.toString(),
-                ),
-                'width': _asInt(picture.width) ?? 0,
-                'height': _asInt(picture.height) ?? 0,
-              },
-            )
-            .where((picture) => picture['url'] != null)
-            .toList(),
-        'bvid': archive?.bvid?.toString(),
-        'aid': _asInt(archive?.aid),
-        'commentOid': _asInt(item.basic?.commentIdStr),
-        'commentType': _asInt(item.basic?.commentType),
-        'like': _asInt(stat?.like?.count) ?? 0,
-        'liked': stat?.like?.status == true,
-        'comment': _asInt(stat?.comment?.count) ?? 0,
-        'forward': _asInt(stat?.forward?.count) ?? 0,
-      };
-    } catch (_) {
-      return {
-        'id': 'dynamic-$index',
+        'id': '',
         'author': '',
         'title': '',
-        'body': '暂不支持的动态类型',
+        'body': '',
+        'pictures': const <Map<String, dynamic>>[],
       };
     }
+    final item = value;
+    final modules = item.modules;
+    final moduleDynamic = modules.moduleDynamic;
+    final major = moduleDynamic?.major;
+    final author = modules.moduleAuthor;
+    final stat = modules.moduleStat;
+
+    // This follows the original dynamic widgets: text comes from desc/opus,
+    // while picture dynamics render every opus pic using `url`.
+    final archive =
+        major?.archive ?? major?.ugcSeason ?? major?.pgc ?? major?.courses;
+    final opus = major?.opus;
+    final pictures = <Map<String, dynamic>>[];
+    for (final picture in opus?.pics ?? const <OpusPicModel>[]) {
+      final url = _normalizeURL(picture.url ?? picture.src);
+      if (url == null) continue;
+      pictures.add({
+        'url': url,
+        'width': picture.width ?? 0,
+        'height': picture.height ?? 0,
+      });
+    }
+
+    final subscriptionLive =
+        major?.subscriptionNew?.liveRcmd?.content?.livePlayInfo;
+    final title = _firstNonEmpty([
+      opus?.title,
+      archive?.title,
+      major?.liveRcmd?.title,
+      major?.live?.title,
+      subscriptionLive?.title,
+      major?.medialist?.title,
+      major?.music?.title,
+      modules.moduleTag?.text,
+    ]);
+    final body = _firstNonEmpty([
+      moduleDynamic?.desc?.text,
+      opus?.summary?.text,
+    ]);
+    final cover = _firstNonEmpty([
+      archive?.cover,
+      pictures.isEmpty ? null : pictures.first['url']?.toString(),
+      major?.liveRcmd?.cover,
+      major?.live?.cover,
+      subscriptionLive?.cover,
+      major?.medialist?.cover,
+      major?.music?.cover,
+    ]);
+    final id = _firstNonEmpty([
+      item.idStr?.toString(),
+      item.fallback?.id,
+    ]);
+
+    return {
+      // Keep the transport ID empty when the API did not provide one. Swift
+      // has its own UI identity and must never send a synthetic ID to Bilibili.
+      'id': id,
+      'type': item.type ?? '',
+      'author': author?.name ?? '',
+      'authorId': author?.mid,
+      'avatar': _normalizeURL(author?.face),
+      'time': author?.pubTime ?? '',
+      'title': title ?? '',
+      'body': body ?? '',
+      'cover': _normalizeURL(cover),
+      'coverWidth': pictures.isEmpty ? 0 : pictures.first['width'],
+      'coverHeight': pictures.isEmpty ? 0 : pictures.first['height'],
+      'pictures': pictures,
+      'bvid': archive?.bvid,
+      'aid': archive?.aid,
+      'commentOid': _asInt(item.basic?.commentIdStr),
+      'commentType': item.basic?.commentType,
+      'like': stat?.like?.count ?? 0,
+      'liked': stat?.like?.status == true,
+      'comment': stat?.comment?.count ?? 0,
+      'forward': stat?.forward?.count ?? 0,
+    };
   }
 
   Map<String, dynamic> _accountMap() {
