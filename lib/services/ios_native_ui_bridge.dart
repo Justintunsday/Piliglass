@@ -183,6 +183,8 @@ final class IOSNativeUIBridge {
         return _loadNativeLibrary(_arguments(call));
       case 'loadNativeProfile':
         return _loadNativeProfile(_arguments(call));
+      case 'loadNativeProfileVideos':
+        return _loadNativeProfileVideos(_arguments(call));
       case 'setNativeProfileFollow':
         return _setNativeProfileFollow(_arguments(call));
       case 'startNativeLogin':
@@ -1545,6 +1547,8 @@ final class IOSNativeUIBridge {
       Success(:final response) => {
         'state': 'success',
         'total': response.numResults ?? 0,
+        'hasMore': (response.list?.isNotEmpty ?? false) &&
+            page * 20 < (response.numResults ?? 0),
         'items': (response.list ?? const [])
             .asMap()
             .entries
@@ -1668,6 +1672,56 @@ final class IOSNativeUIBridge {
             'message': follow ? '关注成功' : '已取消关注',
           }
         : const {'state': 'error', 'error': '关注状态修改失败'};
+  }
+
+  Future<Map<String, dynamic>> _loadNativeProfileVideos(
+    Map<dynamic, dynamic> arguments,
+  ) async {
+    final mid = _asInt(arguments['mid']);
+    final page = _asInt(arguments['page']) ?? 1;
+    if (mid == null || mid <= 0 || page <= 0) {
+      return const {'state': 'error', 'error': '用户投稿参数无效'};
+    }
+
+    final result = await MemberHttp.searchArchive(
+      mid: mid,
+      ps: 30,
+      pn: page,
+    );
+    return switch (result) {
+      Loading() => const {'state': 'loading'},
+      Error(:final errMsg, :final code) => {
+        'state': 'error',
+        'error': errMsg ?? '用户投稿加载失败',
+        'code': ?code,
+      },
+      Success(:final response) => () {
+        final videos = response.list?.vlist ?? const [];
+        final total = response.page?.count ?? videos.length;
+        return {
+          'state': 'success',
+          'page': page,
+          'total': total,
+          'hasMore': videos.isNotEmpty && page * 30 < total,
+          'items': videos.asMap().entries.map((entry) {
+            final item = entry.value;
+            final bvid = _nonEmpty(item.bvid);
+            return {
+              'id': bvid ?? item.aid?.toString() ??
+                  'profile-video-$page-${entry.key}',
+              'aid': item.aid,
+              'bvid': bvid,
+              'title': item.title,
+              'cover': _normalizeURL(item.cover),
+              'owner': item.owner.name ?? '',
+              'viewText': _compactNumber(item.stat.view),
+              'danmakuText': _compactNumber(item.stat.danmu),
+              'durationText': _durationText(item.duration),
+            };
+          }).toList(),
+        };
+      }(),
+    };
   }
 
   Future<Map<String, dynamic>> _startNativeLogin() async {
@@ -1874,6 +1928,7 @@ final class IOSNativeUIBridge {
     final oid = _asInt(arguments['oid']);
     final type = _asInt(arguments['type']) ?? 1;
     final page = _asInt(arguments['page']) ?? 1;
+    final offset = _nonEmpty(arguments['offset']?.toString());
     if (oid == null || oid <= 0) {
       return const {'state': 'error', 'error': '评论参数无效'};
     }
@@ -1885,12 +1940,15 @@ final class IOSNativeUIBridge {
       oid: oid,
       type: type,
       mode: Mode.MAIN_LIST_HOT,
-      offset: null,
+      offset: offset,
       cursorNext: null,
     );
     if (grpcResult case Success(:final response)) {
+      final nextOffset = response.hasPaginationReply()
+          ? _nonEmpty(response.paginationReply.nextOffset)
+          : null;
       final replies = <ReplyInfo>[
-        if (response.hasUpTop()) response.upTop,
+        if (page == 1 && response.hasUpTop()) response.upTop,
         ...response.replies,
       ];
       return {
@@ -1898,7 +1956,10 @@ final class IOSNativeUIBridge {
         'total': response.hasSubjectControl()
             ? response.subjectControl.count.toInt()
             : replies.length,
-        'hasMore': !response.cursor.isEnd,
+        'hasMore': replies.isNotEmpty &&
+            !response.cursor.isEnd &&
+            nextOffset != null,
+        'nextOffset': nextOffset,
         'items': replies.asMap().entries.map((entry) {
           return _grpcCommentMap(entry.value, entry.key);
         }).toList(),
@@ -1910,7 +1971,7 @@ final class IOSNativeUIBridge {
     final result = await ReplyHttp.replyList(
       isLogin: Accounts.main.isLogin,
       oid: oid,
-      nextOffset: '',
+      nextOffset: offset ?? '',
       type: type,
       page: page,
       sort: 1,
@@ -1923,14 +1984,20 @@ final class IOSNativeUIBridge {
         'code': ?code,
       },
       Success(:final response) => () {
+        final nextOffset = _nonEmpty(
+          response.cursor?.paginationReply?.nextOffset,
+        );
         final replies = <dynamic>[
-          ...?response.topReplies,
+          if (page == 1) ...?response.topReplies,
           ...?response.replies,
         ];
         return {
           'state': 'success',
           'total': response.cursor?.allCount ?? replies.length,
-          'hasMore': response.cursor?.isEnd != true,
+          'hasMore': replies.isNotEmpty &&
+              response.cursor?.isEnd != true &&
+              (Accounts.main.isLogin || nextOffset != null),
+          'nextOffset': nextOffset,
           'items': replies.asMap().entries.map((entry) {
             final item = entry.value;
             return {
@@ -2033,6 +2100,7 @@ final class IOSNativeUIBridge {
     final oid = _asInt(arguments['oid']);
     final type = _asInt(arguments['type']) ?? 17;
     final root = _asInt(arguments['root']);
+    final offset = _nonEmpty(arguments['offset']?.toString());
     if (oid == null || oid <= 0 || root == null || root <= 0) {
       return const {'state': 'error', 'error': '二级评论参数无效'};
     }
@@ -2042,16 +2110,26 @@ final class IOSNativeUIBridge {
       root: root,
       rpid: 0,
       mode: Mode.MAIN_LIST_TIME,
-      offset: null,
+      offset: offset,
     );
     return switch (result) {
-      Success(:final response) => {
-        'state': 'success',
-        'total': response.root.count.toInt(),
-        'items': response.root.replies.asMap().entries.map((entry) {
-          return _grpcCommentMap(entry.value, entry.key);
-        }).toList(),
-      },
+      Success(:final response) => () {
+        final replies = response.root.replies;
+        final nextOffset = response.hasPaginationReply()
+            ? _nonEmpty(response.paginationReply.nextOffset)
+            : null;
+        return {
+          'state': 'success',
+          'total': response.root.count.toInt(),
+          'hasMore': replies.isNotEmpty &&
+              !response.cursor.isEnd &&
+              nextOffset != null,
+          'nextOffset': nextOffset,
+          'items': replies.asMap().entries.map((entry) {
+            return _grpcCommentMap(entry.value, entry.key);
+          }).toList(),
+        };
+      }(),
       Error(:final errMsg, :final code) => {
         'state': 'error',
         'error': errMsg ?? '二级评论加载失败',

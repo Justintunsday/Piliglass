@@ -245,6 +245,8 @@ private final class PiliNativeViewModel: ObservableObject {
   @Published var isSearchPresented = false
   @Published private(set) var searchResults: [PiliNativeVideo] = []
   @Published private(set) var searchLoading = false
+  @Published private(set) var searchLoadingMore = false
+  @Published private(set) var searchHasMore = false
   @Published private(set) var searchError: String?
 
   @Published var isVideoDetailPresented = false
@@ -277,6 +279,10 @@ private final class PiliNativeViewModel: ObservableObject {
   @Published var isProfilePresented = false
   @Published private(set) var profile: PiliNativeProfile?
   @Published private(set) var profileLoading = false
+  @Published private(set) var profileVideosLoading = false
+  @Published private(set) var profileVideosLoadingMore = false
+  @Published private(set) var profileVideosHasMore = false
+  @Published private(set) var profileVideosError: String?
   @Published private(set) var profileError: String?
   @Published private(set) var profileActionLoading = false
   @Published private(set) var profileMessage: String?
@@ -295,6 +301,8 @@ private final class PiliNativeViewModel: ObservableObject {
   @Published private(set) var commentThreadRoot: PiliNativeComment?
   @Published private(set) var commentThreadItems: [PiliNativeComment] = []
   @Published private(set) var commentThreadLoading = false
+  @Published private(set) var commentThreadLoadingMore = false
+  @Published private(set) var commentThreadHasMore = false
   @Published private(set) var commentThreadError: String?
   @Published private(set) var commentThreadTotal = 0
 
@@ -318,6 +326,8 @@ private final class PiliNativeViewModel: ObservableObject {
 
   @Published private(set) var comments: [PiliNativeComment] = []
   @Published private(set) var commentsLoading = false
+  @Published private(set) var commentsLoadingMore = false
+  @Published private(set) var commentsHasMore = false
   @Published private(set) var commentsError: String?
   @Published private(set) var commentsTotal = 0
 
@@ -326,6 +336,8 @@ private final class PiliNativeViewModel: ObservableObject {
   let nativePlayerSession = PiliNativePlayerSession()
   private var snapshotInFlight = false
   @Published private(set) var pendingVideo: PiliNativeVideo?
+  private var searchKeyword = ""
+  private var searchPage = 1
   private var libraryPage = 1
   private var libraryMediaID: Int?
   private var libraryNextMax: Int?
@@ -333,8 +345,13 @@ private final class PiliNativeViewModel: ObservableObject {
   private var libraryParentKind: String?
   private var libraryParentTitle: String?
   private var profileMID: Int?
+  private var profileVideosPage = 1
   private var commentOID: Int?
   private var commentType = 1
+  private var commentPage = 1
+  private var commentOffset: String?
+  private var commentThreadPage = 1
+  private var commentThreadOffset: String?
   private var composerRootRpid: Int?
   private var composerParentRpid: Int?
   private var originalPlayerHeroTag = ""
@@ -1152,15 +1169,33 @@ private final class PiliNativeViewModel: ObservableObject {
   func search(_ keyword: String) {
     let value = keyword.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !value.isEmpty else { return }
+    searchKeyword = value
+    searchPage = 1
+    searchResults = []
+    searchHasMore = false
     searchLoading = true
+    searchLoadingMore = false
     searchError = nil
+    requestSearchPage(1, append: false)
+  }
+
+  func loadMoreSearchResults() {
+    guard searchHasMore, !searchLoading, !searchLoadingMore,
+          !searchKeyword.isEmpty else { return }
+    searchLoadingMore = true
+    requestSearchPage(searchPage, append: true)
+  }
+
+  private func requestSearchPage(_ page: Int, append: Bool) {
+    let keyword = searchKeyword
     channel.invokeMethod(
       "searchVideos",
-      arguments: ["keyword": value, "page": 1]
+      arguments: ["keyword": keyword, "page": page]
     ) { [weak self] response in
       DispatchQueue.main.async {
-        guard let self = self else { return }
+        guard let self = self, self.searchKeyword == keyword else { return }
         self.searchLoading = false
+        self.searchLoadingMore = false
         if let error = response as? FlutterError {
           self.searchError = error.message ?? "搜索失败"
           return
@@ -1171,9 +1206,24 @@ private final class PiliNativeViewModel: ObservableObject {
           return
         }
         let rows = result["items"] as? [Any] ?? []
-        self.searchResults = rows.enumerated().map {
-          PiliNativeVideo(map: piliDictionary($0.element), index: $0.offset)
+        let startIndex = append ? self.searchResults.count : 0
+        let newItems = rows.enumerated().map {
+          PiliNativeVideo(
+            map: piliDictionary($0.element),
+            index: startIndex + $0.offset
+          )
         }
+        if append {
+          let existingSourceIDs = Set(self.searchResults.map(\.sourceID))
+          self.searchResults.append(
+            contentsOf: newItems.filter { !existingSourceIDs.contains($0.sourceID) }
+          )
+        } else {
+          self.searchResults = newItems
+        }
+        self.searchHasMore = piliBool(result["hasMore"]) && !newItems.isEmpty
+        self.searchPage = page + 1
+        self.searchError = nil
       }
     }
   }
@@ -1331,18 +1381,56 @@ private final class PiliNativeViewModel: ObservableObject {
   func loadComments(oid: Int, type: Int, preserveExisting: Bool = false) {
     commentOID = oid
     commentType = type
+    commentPage = 1
+    commentOffset = nil
+    commentsHasMore = false
+    commentsLoadingMore = false
     if !preserveExisting { comments = [] }
     commentsError = nil
     if !preserveExisting { commentsTotal = 0 }
     commentsLoading = true
+    requestCommentPage(
+      oid: oid,
+      type: type,
+      page: 1,
+      offset: nil,
+      append: false
+    )
+  }
+
+  func loadMoreComments() {
+    guard let oid = commentOID,
+          commentsHasMore,
+          !commentsLoading,
+          !commentsLoadingMore else { return }
+    commentsLoadingMore = true
+    requestCommentPage(
+      oid: oid,
+      type: commentType,
+      page: commentPage,
+      offset: commentOffset,
+      append: true
+    )
+  }
+
+  private func requestCommentPage(
+    oid: Int,
+    type: Int,
+    page: Int,
+    offset: String?,
+    append: Bool
+  ) {
+    var arguments: [String: Any] = ["oid": oid, "type": type, "page": page]
+    if let offset, !offset.isEmpty { arguments["offset"] = offset }
     channel.invokeMethod(
       "loadNativeComments",
-      arguments: ["oid": oid, "type": type, "page": 1]
+      arguments: arguments
     ) { [weak self] response in
       DispatchQueue.main.async {
         guard let self = self else { return }
         guard self.commentOID == oid, self.commentType == type else { return }
         self.commentsLoading = false
+        self.commentsLoadingMore = false
         if let flutterError = response as? FlutterError {
           self.commentsError = flutterError.message ?? "评论加载失败"
           return
@@ -1353,10 +1441,26 @@ private final class PiliNativeViewModel: ObservableObject {
           return
         }
         let rows = result["items"] as? [Any] ?? []
-        self.comments = rows.enumerated().map {
-          PiliNativeComment(map: piliDictionary($0.element), index: $0.offset)
+        let startIndex = append ? self.comments.count : 0
+        let newItems = rows.enumerated().map {
+          PiliNativeComment(
+            map: piliDictionary($0.element),
+            index: startIndex + $0.offset
+          )
+        }
+        if append {
+          let existingIDs = Set(self.comments.map(\.id))
+          self.comments.append(
+            contentsOf: newItems.filter { !existingIDs.contains($0.id) }
+          )
+        } else {
+          self.comments = newItems
         }
         self.commentsTotal = piliInt(result["total"])
+        self.commentsHasMore = piliBool(result["hasMore"]) && !newItems.isEmpty
+        self.commentOffset = piliString(result["nextOffset"])
+        self.commentPage = page + 1
+        self.commentsError = nil
       }
     }
   }
@@ -1636,31 +1740,95 @@ private final class PiliNativeViewModel: ObservableObject {
     commentThreadItems = []
     commentThreadError = nil
     commentThreadTotal = comment.replyCount
+    commentThreadPage = 1
+    commentThreadOffset = nil
+    commentThreadHasMore = false
+    commentThreadLoadingMore = false
     isCommentThreadPresented = true
     loadCommentThread()
   }
 
   func loadCommentThread() {
     guard let oid = commentOID, let root = commentThreadRoot else { return }
+    commentThreadPage = 1
+    commentThreadOffset = nil
+    commentThreadHasMore = false
+    commentThreadLoadingMore = false
     commentThreadLoading = true
     commentThreadError = nil
+    requestCommentThreadPage(
+      oid: oid,
+      root: root,
+      page: 1,
+      offset: nil,
+      append: false
+    )
+  }
+
+  func loadMoreCommentThread() {
+    guard let oid = commentOID,
+          let root = commentThreadRoot,
+          commentThreadHasMore,
+          !commentThreadLoading,
+          !commentThreadLoadingMore else { return }
+    commentThreadLoadingMore = true
+    requestCommentThreadPage(
+      oid: oid,
+      root: root,
+      page: commentThreadPage,
+      offset: commentThreadOffset,
+      append: true
+    )
+  }
+
+  private func requestCommentThreadPage(
+    oid: Int,
+    root: PiliNativeComment,
+    page: Int,
+    offset: String?,
+    append: Bool
+  ) {
+    var arguments: [String: Any] = [
+      "oid": oid,
+      "type": commentType,
+      "root": root.rpid,
+      "page": page,
+    ]
+    if let offset, !offset.isEmpty { arguments["offset"] = offset }
     channel.invokeMethod(
       "loadNativeCommentReplies",
-      arguments: ["oid": oid, "type": commentType, "root": root.rpid]
+      arguments: arguments
     ) { [weak self] response in
       DispatchQueue.main.async {
         guard let self = self, self.commentThreadRoot?.rpid == root.rpid else { return }
         self.commentThreadLoading = false
+        self.commentThreadLoadingMore = false
         let result = piliDictionary(response)
         guard result["state"] as? String == "success" else {
           self.commentThreadError = result["error"] as? String ?? "二级评论加载失败"
           return
         }
         let rows = result["items"] as? [Any] ?? []
-        self.commentThreadItems = rows.enumerated().map {
-          PiliNativeComment(map: piliDictionary($0.element), index: $0.offset)
+        let startIndex = append ? self.commentThreadItems.count : 0
+        let newItems = rows.enumerated().map {
+          PiliNativeComment(
+            map: piliDictionary($0.element),
+            index: startIndex + $0.offset
+          )
+        }
+        if append {
+          let existingIDs = Set(self.commentThreadItems.map(\.id))
+          self.commentThreadItems.append(
+            contentsOf: newItems.filter { !existingIDs.contains($0.id) }
+          )
+        } else {
+          self.commentThreadItems = newItems
         }
         self.commentThreadTotal = piliInt(result["total"])
+        self.commentThreadHasMore = piliBool(result["hasMore"]) && !newItems.isEmpty
+        self.commentThreadOffset = piliString(result["nextOffset"])
+        self.commentThreadPage = page + 1
+        self.commentThreadError = nil
       }
     }
   }
@@ -1859,6 +2027,11 @@ private final class PiliNativeViewModel: ObservableObject {
     profile = nil
     profileError = nil
     profileMessage = nil
+    profileVideosPage = 1
+    profileVideosHasMore = false
+    profileVideosLoading = false
+    profileVideosLoadingMore = false
+    profileVideosError = nil
     isProfilePresented = true
     loadProfile()
   }
@@ -1881,6 +2054,75 @@ private final class PiliNativeViewModel: ObservableObject {
           return
         }
         self.profile = PiliNativeProfile(map: piliDictionary(result["profile"]))
+        self.loadProfileVideos(refresh: true)
+      }
+    }
+  }
+
+  func loadMoreProfileVideos() {
+    loadProfileVideos(refresh: false)
+  }
+
+  func reloadProfileVideos() {
+    loadProfileVideos(refresh: true)
+  }
+
+  private func loadProfileVideos(refresh: Bool) {
+    guard let memberID = profileMID, profile != nil else { return }
+    if refresh {
+      profileVideosPage = 1
+      profileVideosHasMore = false
+      profileVideosLoading = true
+      profileVideosLoadingMore = false
+      profileVideosError = nil
+    } else {
+      guard profileVideosHasMore,
+            !profileVideosLoading,
+            !profileVideosLoadingMore else { return }
+      profileVideosLoadingMore = true
+    }
+
+    let page = profileVideosPage
+    channel.invokeMethod(
+      "loadNativeProfileVideos",
+      arguments: ["mid": memberID, "page": page]
+    ) { [weak self] response in
+      DispatchQueue.main.async {
+        guard let self = self, self.profileMID == memberID else { return }
+        self.profileVideosLoading = false
+        self.profileVideosLoadingMore = false
+        if let flutterError = response as? FlutterError {
+          self.profileVideosError = flutterError.message ?? "用户投稿加载失败"
+          return
+        }
+        let result = piliDictionary(response)
+        guard result["state"] as? String == "success" else {
+          self.profileVideosError = result["error"] as? String ?? "用户投稿加载失败"
+          return
+        }
+        let rows = result["items"] as? [Any] ?? []
+        let startIndex = page == 1 ? 0 : (self.profile?.videos.count ?? 0)
+        let newItems = rows.enumerated().map {
+          PiliNativeVideo(
+            map: piliDictionary($0.element),
+            index: startIndex + $0.offset
+          )
+        }
+        if page == 1 {
+          self.profile?.videos = newItems
+        } else {
+          let existingSourceIDs = Set(self.profile?.videos.map(\.sourceID) ?? [])
+          self.profile?.videos.append(
+            contentsOf: newItems.filter { !existingSourceIDs.contains($0.sourceID) }
+          )
+        }
+        self.profile?.videoCount = max(
+          piliInt(result["total"]),
+          self.profile?.videos.count ?? 0
+        )
+        self.profileVideosHasMore = piliBool(result["hasMore"]) && !newItems.isEmpty
+        self.profileVideosPage = page + 1
+        self.profileVideosError = nil
       }
     }
   }
@@ -2389,9 +2631,9 @@ private struct PiliNativeProfile {
   let vip: Bool
   let isSelf: Bool
   var isFollowing: Bool
-  let videoCount: Int
+  var videoCount: Int
   let tags: [String]
-  let videos: [PiliNativeVideo]
+  var videos: [PiliNativeVideo]
 
   init(map: [String: Any]) {
     mid = piliInt(map["mid"])
@@ -3313,11 +3555,15 @@ private struct PiliNativeProfileView: View {
             .foregroundColor(piliAccent)
         }
       }
-      if profile.videos.isEmpty {
+      if profile.videos.isEmpty && model.profileVideosLoading {
+        ProgressView("正在加载用户投稿")
+          .font(.caption)
+          .frame(maxWidth: .infinity, minHeight: 150)
+      } else if profile.videos.isEmpty {
         PiliNativeEmptyView(
           icon: "video.slash",
           title: "暂无公开视频",
-          subtitle: "该用户还没有发布视频"
+          subtitle: model.profileVideosError ?? "该用户还没有发布视频"
         )
         .frame(height: 150)
       } else {
@@ -3326,6 +3572,37 @@ private struct PiliNativeProfileView: View {
             PiliNativeProfileVideoCard(video: video) {
               model.openProfileVideo(video)
             }
+            .onAppear {
+              if limit == nil, video.id == profile.videos.last?.id {
+                model.loadMoreProfileVideos()
+              }
+            }
+          }
+        }
+
+        if limit == nil {
+          if let error = model.profileVideosError {
+            VStack(spacing: 8) {
+              Text(error)
+                .font(.caption)
+                .foregroundColor(.secondary)
+              Button("重试加载", action: model.reloadProfileVideos)
+                .font(.caption)
+                .foregroundColor(piliAccent)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 10)
+          } else if model.profileVideosLoading || model.profileVideosLoadingMore {
+            ProgressView("正在加载更多视频")
+              .font(.caption)
+              .frame(maxWidth: .infinity)
+              .padding(.vertical, 10)
+          } else if model.profileVideosHasMore {
+            Button("加载更多视频", action: model.loadMoreProfileVideos)
+              .font(.caption)
+              .foregroundColor(piliAccent)
+              .frame(maxWidth: .infinity)
+              .padding(.vertical, 10)
           }
         }
       }
@@ -4012,7 +4289,7 @@ private struct PiliNativeCommentsSection: View {
           .frame(maxWidth: .infinity, alignment: .leading)
       }
 
-      if model.commentsLoading {
+      if model.commentsLoading && model.comments.isEmpty {
         HStack(spacing: 9) {
           ProgressView()
           Text("正在加载评论")
@@ -4039,9 +4316,27 @@ private struct PiliNativeCommentsSection: View {
             reply: { model.beginCommentReply(comment) },
             openReplies: { model.openCommentThread(comment) }
           )
+          .onAppear {
+            if comment.id == model.comments.last?.id {
+              model.loadMoreComments()
+            }
+          }
           if comment.id != model.comments.last?.id {
             Divider().padding(.leading, 50)
           }
+        }
+
+        if model.commentsLoadingMore {
+          ProgressView("正在加载更多评论")
+            .font(.caption)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 12)
+        } else if model.commentsHasMore {
+          Button("加载更多评论", action: model.loadMoreComments)
+            .font(.caption)
+            .foregroundColor(piliAccent)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 12)
         }
       }
     }
@@ -4154,9 +4449,27 @@ private struct PiliNativeCommentThreadView: View {
                     reply: { model.beginCommentReply(comment, root: root) }
                   )
                   .padding(.horizontal, 14)
+                  .onAppear {
+                    if comment.id == model.commentThreadItems.last?.id {
+                      model.loadMoreCommentThread()
+                    }
+                  }
                   if comment.id != model.commentThreadItems.last?.id {
                     Divider().padding(.leading, 64)
                   }
+                }
+
+                if model.commentThreadLoadingMore {
+                  ProgressView("正在加载更多回复")
+                    .font(.caption)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 14)
+                } else if model.commentThreadHasMore {
+                  Button("加载更多回复", action: model.loadMoreCommentThread)
+                    .font(.caption)
+                    .foregroundColor(piliAccent)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 14)
                 }
               }
             }
@@ -5326,9 +5639,9 @@ private struct PiliNativeSearchView: View {
 
         Divider()
 
-        if model.searchLoading {
+        if model.searchLoading && model.searchResults.isEmpty {
           PiliNativeLoadingView(title: "正在搜索")
-        } else if let error = model.searchError {
+        } else if let error = model.searchError, model.searchResults.isEmpty {
           PiliNativeErrorView(message: error, retry: submit)
         } else if model.searchResults.isEmpty {
           VStack(spacing: 10) {
@@ -5374,7 +5687,33 @@ private struct PiliNativeSearchView: View {
                   .contentShape(Rectangle())
                 }
                 .buttonStyle(PlainButtonStyle())
+                .onAppear {
+                  if video.id == model.searchResults.last?.id {
+                    model.loadMoreSearchResults()
+                  }
+                }
                 Divider().padding(.leading, 154)
+              }
+
+              if model.searchLoadingMore {
+                ProgressView("正在加载更多视频")
+                  .font(.caption)
+                  .padding(.vertical, 18)
+              } else if let error = model.searchError {
+                VStack(spacing: 8) {
+                  Text(error)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                  Button("重试加载", action: model.loadMoreSearchResults)
+                    .font(.caption)
+                    .foregroundColor(piliAccent)
+                }
+                .padding(.vertical, 14)
+              } else if model.searchHasMore {
+                Button("加载更多视频", action: model.loadMoreSearchResults)
+                  .font(.caption)
+                  .foregroundColor(piliAccent)
+                  .padding(.vertical, 18)
               }
             }
           }
