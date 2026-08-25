@@ -31,6 +31,9 @@ target 'Runner' do
   use_frameworks!
   use_modular_headers!
 
+  # Source-adapted Swiftgram messaging primitives used by the native iOS shell.
+  pod 'SwiftgramUI', :path => 'SwiftgramUI'
+
   flutter_install_all_ios_pods File.dirname(File.realpath(__FILE__))
 end
 

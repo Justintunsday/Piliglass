@@ -3,6 +3,7 @@ import CoreImage.CIFilterBuiltins
 import CoreText
 import Flutter
 import PhotosUI
+import SwiftgramUI
 import SwiftUI
 import UIKit
 
@@ -5236,86 +5237,50 @@ private struct PiliNativeMessageRow: View {
   }
 
   var body: some View {
-    HStack(alignment: .center, spacing: 12) {
+    SGChatListRow(
+      title: message.author.isEmpty ? "消息" : message.author,
+      subtitle: message.body,
+      context: message.context,
+      time: message.time,
+      isPinned: message.isPinned,
+      titleBadge: message.isLive ? "直播中" : "",
+      accentColor: piliAccent
+    ) {
       avatar
-
-      VStack(alignment: .leading, spacing: 5) {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
-          Text(message.author.isEmpty ? "消息" : message.author)
-            .font(.system(size: 16, weight: .semibold))
-            .foregroundColor(.primary)
-            .lineLimit(1)
-          if message.isLive {
-            Text("直播中")
-              .font(.system(size: 9, weight: .semibold))
-              .foregroundColor(.white)
-              .padding(.horizontal, 5)
-              .padding(.vertical, 2)
-              .background(piliAccent)
-              .clipShape(Capsule())
-          }
-          Spacer(minLength: 6)
-          Text(message.time)
-            .font(.caption)
-            .foregroundColor(.secondary)
-            .lineLimit(1)
-        }
-
-        HStack(alignment: .center, spacing: 8) {
-          VStack(alignment: .leading, spacing: 3) {
-            Text(message.body)
-              .font(.subheadline)
-              .foregroundColor(.secondary)
-              .lineLimit(message.context.isEmpty ? 2 : 1)
-            if !message.context.isEmpty {
-              Text(message.context)
-                .font(.caption)
-                .foregroundColor(Color(UIColor.tertiaryLabel))
-                .lineLimit(1)
-            }
-          }
-          .frame(maxWidth: .infinity, alignment: .leading)
-
-          if message.kind == "session", message.isMuted {
-            Image(systemName: "speaker.slash.fill")
-              .font(.caption)
-              .foregroundColor(Color(UIColor.tertiaryLabel))
-          } else if message.kind == "session", message.hasUnread {
-            Text(message.unreadCount > 0 ? "\(min(message.unreadCount, 99))" : "")
-              .font(.system(size: 11, weight: .bold))
-              .foregroundColor(.white)
-              .frame(minWidth: 20, minHeight: 20)
-              .padding(.horizontal, message.unreadCount > 9 ? 3 : 0)
-              .background(piliAccent)
-              .clipShape(Capsule())
-          } else if let cover = message.cover {
-            PiliRemoteImage(urlString: cover)
-              .frame(width: 42, height: 42)
-              .clipped()
-              .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
-          } else if !message.badge.isEmpty {
-            Text(message.badge)
-              .font(.system(size: 11, weight: .semibold))
-              .foregroundColor(.white)
-              .lineLimit(1)
-              .padding(.horizontal, 8)
-              .padding(.vertical, 4)
-              .background(accent)
-              .clipShape(Capsule())
-          }
-        }
-      }
+    } accessory: {
+      accessory
     }
-    .padding(.leading, 14)
-    .padding(.trailing, 12)
-    .padding(.vertical, 10)
-    .frame(minHeight: 76)
-    .background(
-      message.isPinned
-        ? Color(UIColor.secondarySystemBackground)
-        : Color(UIColor.systemBackground)
-    )
-    .contentShape(Rectangle())
+  }
+
+  @ViewBuilder
+  private var accessory: some View {
+    if message.kind == "session", message.isMuted {
+      Image(systemName: "speaker.slash.fill")
+        .font(.caption)
+        .foregroundColor(Color(UIColor.tertiaryLabel))
+    } else if message.kind == "session", message.hasUnread {
+      Text(message.unreadCount > 0 ? "\(min(message.unreadCount, 99))" : "")
+        .font(.system(size: 11, weight: .bold))
+        .foregroundColor(.white)
+        .frame(minWidth: 20, minHeight: 20)
+        .padding(.horizontal, message.unreadCount > 9 ? 3 : 0)
+        .background(piliAccent)
+        .clipShape(Capsule())
+    } else if let cover = message.cover {
+      PiliRemoteImage(urlString: cover)
+        .frame(width: 42, height: 42)
+        .clipped()
+        .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+    } else if !message.badge.isEmpty {
+      Text(message.badge)
+        .font(.system(size: 11, weight: .semibold))
+        .foregroundColor(.white)
+        .lineLimit(1)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(accent)
+        .clipShape(Capsule())
+    }
   }
 
   private var avatar: some View {
@@ -5323,7 +5288,7 @@ private struct PiliNativeMessageRow: View {
       Circle().fill(accent.opacity(0.14))
       if let avatar = message.avatar {
         PiliRemoteImage(urlString: avatar)
-          .frame(width: 56, height: 56)
+          .frame(width: SGMessageMetrics.chatListAvatarDiameter, height: SGMessageMetrics.chatListAvatarDiameter)
           .clipShape(Circle())
       } else {
         Image(systemName: fallbackIcon)
@@ -5331,7 +5296,7 @@ private struct PiliNativeMessageRow: View {
           .foregroundColor(accent)
       }
     }
-    .frame(width: 56, height: 56)
+    .frame(width: SGMessageMetrics.chatListAvatarDiameter, height: SGMessageMetrics.chatListAvatarDiameter)
   }
 }
 
@@ -5468,70 +5433,17 @@ private struct PiliNativeChatView: View {
   }
 
   private var composer: some View {
-    VStack(spacing: 0) {
-      if showEmotes {
-        ScrollView(.horizontal, showsIndicators: false) {
-          HStack(spacing: 8) {
-            ForEach(quickEmotes, id: \.self) { emote in
-              Button(emote) {
-                draft += emote
-              }
-              .font(.caption)
-              .padding(.horizontal, 10)
-              .padding(.vertical, 7)
-              .background(Color(UIColor.secondarySystemBackground))
-              .clipShape(Capsule())
-            }
-          }
-          .padding(.horizontal, 12)
-          .padding(.vertical, 8)
-        }
-        Divider()
-      }
-
-      HStack(alignment: .bottom, spacing: 9) {
-        Button {
+    SGChatInputPanel(
+      text: $draft,
+      showsEmotes: $showEmotes,
+      isSending: model.chatSending,
+      accentColor: piliAccent,
+      quickEmotes: quickEmotes,
+      onPhoto: {
           showPhotoPicker = true
-        } label: {
-          Image(systemName: "photo.on.rectangle.angled")
-            .font(.system(size: 19))
-            .frame(width: 32, height: 36)
-        }
-        .disabled(model.chatSending)
-
-        Button {
-          showEmotes.toggle()
-        } label: {
-          Image(systemName: showEmotes ? "keyboard" : "face.smiling")
-            .font(.system(size: 19))
-            .frame(width: 30, height: 36)
-        }
-
-        TextField("发个消息聊聊呗~", text: $draft)
-          .textFieldStyle(PlainTextFieldStyle())
-          .padding(.horizontal, 13)
-          .padding(.vertical, 9)
-          .background(Color(UIColor.secondarySystemBackground))
-          .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-          .submitLabel(.send)
-          .onSubmit(sendDraft)
-
-        Button(action: sendDraft) {
-          if model.chatSending {
-            ProgressView().frame(width: 34, height: 36)
-          } else {
-            Image(systemName: "arrow.up.circle.fill")
-              .font(.system(size: 30))
-              .foregroundColor(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? .secondary : piliAccent)
-              .frame(width: 34, height: 36)
-          }
-        }
-        .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || model.chatSending)
-      }
-      .padding(.horizontal, 10)
-      .padding(.vertical, 8)
-    }
-    .background(.ultraThinMaterial)
+      },
+      onSend: sendDraft
+    )
   }
 
   private func sendDraft() {
@@ -5601,33 +5513,37 @@ private struct PiliNativeChatBubble: View {
     }
   }
 
+  @ViewBuilder
   private var bubbleContent: some View {
-    VStack(alignment: message.isOwner ? .trailing : .leading, spacing: 6) {
-      if let emote = message.emote {
-        PiliRemoteImage(urlString: emote)
-          .frame(width: 96, height: 96)
-      } else if let image = message.image {
-        PiliRemoteImage(urlString: image)
-          .frame(width: imageSize.width, height: imageSize.height)
-          .clipped()
-          .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-      } else {
-        Text(message.isRecalled ? "已撤回" : message.text)
-          .font(.body)
-          .foregroundColor(message.isOwner ? .white : .primary)
-          .textSelection(.enabled)
-      }
-      if message.isAutoReply {
-        Text("自动回复")
-          .font(.caption2)
-          .foregroundColor(message.isOwner ? .white.opacity(0.72) : .secondary)
+    if let emote = message.emote {
+      PiliRemoteImage(urlString: emote)
+        .frame(width: 96, height: 96)
+    } else {
+      SGMessageBubble(
+        isOutgoing: message.isOwner,
+        backgroundColor: message.isOwner ? piliAccent : Color(UIColor.secondarySystemBackground)
+      ) {
+        VStack(alignment: message.isOwner ? .trailing : .leading, spacing: 6) {
+          if let image = message.image {
+            PiliRemoteImage(urlString: image)
+              .frame(width: imageSize.width, height: imageSize.height)
+              .clipped()
+              .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+          } else {
+            Text(message.isRecalled ? "已撤回" : message.text)
+              .font(.body)
+              .foregroundColor(message.isOwner ? .white : .primary)
+              .textSelection(.enabled)
+          }
+          if message.isAutoReply {
+            Text("自动回复")
+              .font(.caption2)
+              .foregroundColor(message.isOwner ? .white.opacity(0.72) : .secondary)
+          }
+        }
+        .padding(message.image == nil ? 11 : 6)
       }
     }
-    .padding(message.image == nil && message.emote == nil ? 11 : 6)
-    .background(message.isOwner ? piliAccent : Color(UIColor.secondarySystemBackground))
-    .clipShape(
-      RoundedRectangle(cornerRadius: 17, style: .continuous)
-    )
   }
 }
 

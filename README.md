@@ -32,6 +32,7 @@ PiliGlass 在保留 PiliPlus 网络协议、登录状态和功能实现的基础
 
 - 首页、动态、我的、用户主页、设置、视频详情和评论等界面由 SwiftUI/UIKit 呈现。
 - 播放详情页和控制层均保持 SwiftUI/UIKit 原生结构，不再嵌套 Flutter 播放页面。
+- 消息中心与聊天页直接调用本地 `SwiftgramUI` 原生模块；该模块从 Swiftgram/Telegram-iOS 的消息列表、气泡与输入栏源码裁剪适配，BiliBili 私信数据仍由 PiliGlass 桥接层提供，来源及 GPL 声明见 `ios/SwiftgramUI/NOTICE.md`。
 - iOS 播放内核采用 [AetherEngine](https://github.com/superuser404notfound/AetherEngine)：由 FFmpeg 解析视频轨道，并通过 Apple 原生 VideoToolbox/AVPlayer 显示链路输出；BiliBili DASH 独立音轨继续由 AVPlayer 播放并跟随视频时钟同步。
 - 保留画质选择、分 P、弹幕、字幕、倍速、手势、画中画和全屏控制，并针对 4K、HDR10 与杜比视界走原生 HDR/EDR 显示链路。实际可用画质及 HDR 效果仍取决于账号权限、视频源、设备解码与屏幕能力以及网络状况。
 - 登录、点赞、投币、收藏、评论、回复与动态互动继续复用原有请求层。
