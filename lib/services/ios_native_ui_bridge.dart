@@ -1,8 +1,10 @@
 import 'dart:async';
 
+import 'package:PiliPlus/grpc/bilibili/app/im/v1.pb.dart' as im_proto show Offset;
 import 'package:PiliPlus/grpc/bilibili/main/community/reply/v1.pb.dart'
     show Mode, ReplyInfo;
 import 'package:PiliPlus/grpc/dm.dart';
+import 'package:PiliPlus/grpc/im.dart';
 import 'package:PiliPlus/grpc/reply.dart';
 import 'package:PiliPlus/http/fav.dart';
 import 'package:PiliPlus/http/fan.dart';
@@ -50,6 +52,7 @@ import 'package:PiliPlus/utils/video_utils.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
 import 'package:get/get.dart';
+import 'package:protobuf/protobuf.dart' show PbMap;
 
 /// Keeps the native iOS front-end attached to the existing Flutter services.
 ///
@@ -67,6 +70,7 @@ final class IOSNativeUIBridge {
   bool _disposed = false;
   String? _nativeLoginAuthCode;
   bool _nativePlayerShellActive = false;
+  PbMap<int, im_proto.Offset>? _nativeSessionOffsets;
 
   late final RcmdController _homeController =
       Get.putOrFind<RcmdController>(RcmdController.new);
@@ -193,6 +197,8 @@ final class IOSNativeUIBridge {
         return _pollNativeLogin();
       case 'loadNativeMessages':
         return _loadNativeMessages(_arguments(call));
+      case 'openNativeSession':
+        return _openNativeSession(_arguments(call));
       case 'loadNativeComments':
         return _loadNativeComments(_arguments(call));
       case 'setNativeCommentLike':
@@ -1790,6 +1796,96 @@ final class IOSNativeUIBridge {
     }
   }
 
+  Future<Map<String, dynamic>> _loadNativeSessions({
+    required bool refresh,
+  }) async {
+    if (refresh) {
+      _nativeSessionOffsets = null;
+    }
+    final result = await ImGrpc.sessionMain(
+      offset: refresh ? null : _nativeSessionOffsets,
+    );
+    return switch (result) {
+      Loading() => const {'state': 'loading'},
+      Error(:final errMsg) => {
+        'state': 'error',
+        'error': errMsg ?? '私信会话加载失败',
+      },
+      Success(:final response) => () {
+        _nativeSessionOffsets = response.paginationParams.offsets;
+        return {
+          'state': 'success',
+          'hasMore': response.paginationParams.hasMore,
+          'items': response.sessions.asMap().entries.map((entry) {
+            final item = entry.value;
+            final avatarItem = item.sessionInfo.avatar;
+            final layers = avatarItem.fallbackLayers.layers;
+            String? avatar;
+            if (layers.isNotEmpty) {
+              final resource = layers.first.resource;
+              if (resource.hasResImage()) {
+                avatar = resource.resImage.imageSrc.remote.url;
+              } else if (resource.hasResAnimation()) {
+                avatar = resource.resAnimation.webpSrc.remote.url;
+              } else if (resource.hasResNativeDraw()) {
+                avatar = resource.resNativeDraw.drawSrc.remote.url;
+              }
+            }
+            final talkerId = item.id.hasPrivateId() &&
+                    item.id.privateId.hasTalkerUid()
+                ? item.id.privateId.talkerUid.toInt()
+                : null;
+            final memberId = avatarItem.hasMid() ? avatarItem.mid.toInt() : null;
+            final timestamp = item.hasTimestamp()
+                ? (item.timestamp ~/ 1000000).toInt()
+                : null;
+            final identity = talkerId?.toString() ??
+                '${item.id.whichId().name}-${item.sessionInfo.sessionName}';
+            return {
+              'id': 'session-$identity',
+              'kind': 'session',
+              'talkerId': talkerId,
+              'memberId': memberId,
+              'author': item.sessionInfo.sessionName,
+              'avatar': _normalizeURL(avatar),
+              'body': item.msgSummary.rawMsg,
+              'context': '',
+              'time': DateFormatUtils.dateFormat(timestamp),
+              'badge': '',
+              'unreadCount': item.hasUnread()
+                  ? item.unread.number.toInt()
+                  : 0,
+              'hasUnread': item.hasUnread() && item.unread.style.value != 0,
+              'isMuted': item.isMuted,
+              'isPinned': item.isPinned,
+              'isLive': item.sessionInfo.isLive,
+            };
+          }).toList(),
+        };
+      }(),
+    };
+  }
+
+  Future<void> _openNativeSession(Map<dynamic, dynamic> arguments) async {
+    final talkerId = _asInt(arguments['talkerId']);
+    if (talkerId == null) {
+      await Get.toNamed('/whisper', preventDuplicates: false);
+      return;
+    }
+    await Get.toNamed(
+      '/whisperDetail',
+      arguments: {
+        'talkerId': talkerId,
+        'name': arguments['name']?.toString() ?? '',
+        'face': arguments['avatar']?.toString() ?? '',
+        if (_asInt(arguments['memberId']) case final memberId?)
+          'mid': memberId,
+        'isLive': arguments['isLive'] == true,
+      },
+      preventDuplicates: false,
+    );
+  }
+
   Future<Map<String, dynamic>> _loadNativeMessages(
     Map<dynamic, dynamic> arguments,
   ) async {
@@ -1797,9 +1893,19 @@ final class IOSNativeUIBridge {
       return const {'state': 'error', 'error': '请先登录账号'};
     }
     final kind = arguments['kind']?.toString() ?? 'reply';
+    final cursor = _asInt(arguments['cursor']);
+    final cursorTime = _asInt(arguments['cursorTime']);
     try {
+      if (kind == 'sessions') {
+        return await _loadNativeSessions(
+          refresh: arguments['refresh'] != false,
+        );
+      }
       if (kind == 'reply') {
-        final result = await MsgHttp.msgFeedReplyMe();
+        final result = await MsgHttp.msgFeedReplyMe(
+          cursor: cursor,
+          cursorTime: cursorTime,
+        );
         return switch (result) {
           Loading() => const {'state': 'loading'},
           Error(:final errMsg) => {
@@ -1808,10 +1914,15 @@ final class IOSNativeUIBridge {
           },
           Success(:final response) => {
             'state': 'success',
+            'hasMore': (response.items?.isNotEmpty ?? false) &&
+                response.cursor?.isEnd != true,
+            'nextCursor': response.cursor?.id,
+            'nextCursorTime': response.cursor?.time,
             'items': (response.items ?? const []).asMap().entries.map((entry) {
               final item = entry.value;
               return {
                 'id': item.id?.toString() ?? 'reply-${entry.key}',
+                'kind': 'reply',
                 'author': item.user?.nickname ?? '用户',
                 'memberId': item.user?.mid,
                 'avatar': _normalizeURL(item.user?.avatar),
@@ -1827,7 +1938,10 @@ final class IOSNativeUIBridge {
         };
       }
       if (kind == 'at') {
-        final result = await MsgHttp.msgFeedAtMe();
+        final result = await MsgHttp.msgFeedAtMe(
+          cursor: cursor,
+          cursorTime: cursorTime,
+        );
         return switch (result) {
           Loading() => const {'state': 'loading'},
           Error(:final errMsg) => {
@@ -1836,10 +1950,15 @@ final class IOSNativeUIBridge {
           },
           Success(:final response) => {
             'state': 'success',
+            'hasMore': (response.items?.isNotEmpty ?? false) &&
+                response.cursor?.isEnd != true,
+            'nextCursor': response.cursor?.id,
+            'nextCursorTime': response.cursor?.time,
             'items': (response.items ?? const []).asMap().entries.map((entry) {
               final item = entry.value;
               return {
                 'id': item.id?.toString() ?? 'at-${entry.key}',
+                'kind': 'at',
                 'author': item.user?.nickname ?? '用户',
                 'memberId': item.user?.mid,
                 'avatar': _normalizeURL(item.user?.avatar),
@@ -1854,7 +1973,10 @@ final class IOSNativeUIBridge {
         };
       }
       if (kind == 'like') {
-        final result = await MsgHttp.msgFeedLikeMe();
+        final result = await MsgHttp.msgFeedLikeMe(
+          cursor: cursor,
+          cursorTime: cursorTime,
+        );
         return switch (result) {
           Loading() => const {'state': 'loading'},
           Error(:final errMsg) => {
@@ -1863,16 +1985,21 @@ final class IOSNativeUIBridge {
           },
           Success(:final response) => () {
             final items = [
-              ...?response.latest?.items,
+              if (cursor == null) ...?response.latest?.items,
               ...?response.total?.items,
             ];
             return {
               'state': 'success',
+              'hasMore': items.isNotEmpty &&
+                  response.total?.cursor?.isEnd != true,
+              'nextCursor': response.total?.cursor?.id,
+              'nextCursorTime': response.total?.cursor?.time,
               'items': items.asMap().entries.map((entry) {
                 final item = entry.value;
                 final users = item.users ?? const [];
                 return {
                   'id': item.id?.toString() ?? 'like-${entry.key}',
+                  'kind': 'like',
                   'author': users
                       .map((user) => user.nickname)
                       .whereType<String>()
@@ -1895,27 +2022,33 @@ final class IOSNativeUIBridge {
         };
       }
 
-      final result = await MsgHttp.msgFeedNotify();
+      final result = await MsgHttp.msgFeedNotify(cursor: cursor);
       return switch (result) {
         Loading() => const {'state': 'loading'},
         Error(:final errMsg) => {
           'state': 'error',
           'error': errMsg ?? '系统通知加载失败',
         },
-        Success(:final response) => {
-          'state': 'success',
-          'items': (response ?? const []).asMap().entries.map((entry) {
-            final item = entry.value;
-            return {
-              'id': item.id?.toString() ?? 'system-${entry.key}',
-              'author': item.title ?? '系统通知',
-              'body': item.content ?? '',
-              'context': '',
-              'time': item.timeAt ?? '',
-              'badge': '系统',
-            };
-          }).toList(),
-        },
+        Success(:final response) => () {
+          final items = response ?? const [];
+          return {
+            'state': 'success',
+            'hasMore': items.length >= 20,
+            'nextCursor': items.isEmpty ? null : items.last.cursor,
+            'items': items.asMap().entries.map((entry) {
+              final item = entry.value;
+              return {
+                'id': item.id?.toString() ?? 'system-${entry.key}',
+                'kind': 'system',
+                'author': item.title ?? '系统通知',
+                'body': item.content ?? '',
+                'context': '',
+                'time': item.timeAt ?? '',
+                'badge': '系统',
+              };
+            }).toList(),
+          };
+        }(),
       };
     } catch (error) {
       return {'state': 'error', 'error': '消息加载失败：$error'};

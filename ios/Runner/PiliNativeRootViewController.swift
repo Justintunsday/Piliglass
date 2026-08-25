@@ -307,9 +307,11 @@ private final class PiliNativeViewModel: ObservableObject {
   @Published private(set) var commentThreadTotal = 0
 
   @Published var isMessagesPresented = false
-  @Published private(set) var messageKind = "reply"
+  @Published private(set) var messageKind = "sessions"
   @Published private(set) var messages: [PiliNativeMessage] = []
   @Published private(set) var messagesLoading = false
+  @Published private(set) var messagesLoadingMore = false
+  @Published private(set) var messagesHasMore = false
   @Published private(set) var messagesError: String?
 
   @Published var isLoginPresented = false
@@ -352,6 +354,8 @@ private final class PiliNativeViewModel: ObservableObject {
   private var commentOffset: String?
   private var commentThreadPage = 1
   private var commentThreadOffset: String?
+  private var messageCursor: Int?
+  private var messageCursorTime: Int?
   private var composerRootRpid: Int?
   private var composerParentRpid: Int?
   private var originalPlayerHeroTag = ""
@@ -1124,9 +1128,9 @@ private final class PiliNativeViewModel: ObservableObject {
     case "/loginPage":
       presentNativeLogin()
     case "/whisper":
-      openOriginalFlutterRoute(route, parameters: parameters)
-    case "/myReply":
       presentMessages()
+    case "/myReply":
+      presentMessages(kind: "reply")
     case "/download":
       presentDownloads()
     case "/setting":
@@ -1293,23 +1297,46 @@ private final class PiliNativeViewModel: ObservableObject {
     }
   }
 
-  func presentMessages() {
+  func presentMessages(kind: String = "sessions") {
     isMessagesPresented = true
-    messageKind = "reply"
-    loadMessages(kind: "reply")
+    loadMessages(kind: kind, refresh: true)
   }
 
-  func loadMessages(kind: String? = nil) {
-    if let kind = kind { messageKind = kind }
-    messagesLoading = true
-    messagesError = nil
+  func loadMessages(kind: String? = nil, refresh: Bool = true) {
+    if let kind, kind != messageKind {
+      messageKind = kind
+      messages = []
+    }
+    if refresh {
+      messageCursor = nil
+      messageCursorTime = nil
+      messagesHasMore = false
+      messagesLoading = true
+      messagesLoadingMore = false
+      messagesError = nil
+    } else {
+      guard messagesHasMore, !messagesLoading, !messagesLoadingMore else { return }
+      messagesLoadingMore = true
+    }
+    requestMessagePage(kind: messageKind, append: !refresh)
+  }
+
+  func loadMoreMessages() {
+    loadMessages(refresh: false)
+  }
+
+  private func requestMessagePage(kind: String, append: Bool) {
+    var arguments: [String: Any] = ["kind": kind, "refresh": !append]
+    if let messageCursor { arguments["cursor"] = messageCursor }
+    if let messageCursorTime { arguments["cursorTime"] = messageCursorTime }
     channel.invokeMethod(
       "loadNativeMessages",
-      arguments: ["kind": messageKind]
+      arguments: arguments
     ) { [weak self] response in
       DispatchQueue.main.async {
-        guard let self = self else { return }
+        guard let self = self, self.messageKind == kind else { return }
         self.messagesLoading = false
+        self.messagesLoadingMore = false
         if let flutterError = response as? FlutterError {
           self.messagesError = flutterError.message ?? "消息加载失败"
           return
@@ -1320,9 +1347,25 @@ private final class PiliNativeViewModel: ObservableObject {
           return
         }
         let rows = result["items"] as? [Any] ?? []
-        self.messages = rows.enumerated().map {
-          PiliNativeMessage(map: piliDictionary($0.element), index: $0.offset)
+        let startIndex = append ? self.messages.count : 0
+        let newItems = rows.enumerated().map {
+          PiliNativeMessage(
+            map: piliDictionary($0.element),
+            index: startIndex + $0.offset
+          )
         }
+        if append {
+          let existingIDs = Set(self.messages.map(\.id))
+          self.messages.append(
+            contentsOf: newItems.filter { !existingIDs.contains($0.id) }
+          )
+        } else {
+          self.messages = newItems
+        }
+        self.messagesHasMore = piliBool(result["hasMore"]) && !newItems.isEmpty
+        self.messageCursor = piliOptionalInt(result["nextCursor"])
+        self.messageCursorTime = piliOptionalInt(result["nextCursorTime"])
+        self.messagesError = nil
       }
     }
   }
@@ -1332,6 +1375,28 @@ private final class PiliNativeViewModel: ObservableObject {
     isMessagesPresented = false
     DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) { [weak self] in
       self?.presentProfile(memberID)
+    }
+  }
+
+  func openMessage(_ message: PiliNativeMessage) {
+    guard message.kind == "session" else {
+      openMessageMember(message)
+      return
+    }
+    isMessagesPresented = false
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) { [weak self] in
+      guard let self else { return }
+      var arguments: [String: Any] = [
+        "name": message.author,
+        "avatar": message.avatar ?? "",
+        "isLive": message.isLive,
+      ]
+      if let talkerID = message.talkerID { arguments["talkerId"] = talkerID }
+      if let memberID = message.memberID { arguments["memberId"] = memberID }
+      self.channel.invokeMethod(
+        "openNativeSession",
+        arguments: arguments
+      )
     }
   }
 
@@ -2460,6 +2525,8 @@ private struct PiliNativeDynamic: Identifiable {
 
 private struct PiliNativeMessage: Identifiable {
   let id: String
+  let kind: String
+  let talkerID: Int?
   let memberID: Int?
   let author: String
   let avatar: String?
@@ -2468,9 +2535,16 @@ private struct PiliNativeMessage: Identifiable {
   let cover: String?
   let time: String
   let badge: String
+  let unreadCount: Int
+  let hasUnread: Bool
+  let isMuted: Bool
+  let isPinned: Bool
+  let isLive: Bool
 
   init(map: [String: Any], index: Int) {
     id = piliString(map["id"]) ?? "message-\(index)"
+    kind = piliString(map["kind"]) ?? "system"
+    talkerID = piliOptionalInt(map["talkerId"])
     memberID = piliOptionalInt(map["memberId"])
     author = piliString(map["author"]) ?? "消息"
     avatar = piliString(map["avatar"])
@@ -2479,6 +2553,11 @@ private struct PiliNativeMessage: Identifiable {
     cover = piliString(map["cover"])
     time = piliString(map["time"]) ?? ""
     badge = piliString(map["badge"]) ?? ""
+    unreadCount = piliOptionalInt(map["unreadCount"]) ?? 0
+    hasUnread = piliBool(map["hasUnread"])
+    isMuted = piliBool(map["isMuted"])
+    isPinned = piliBool(map["isPinned"])
+    isLive = piliBool(map["isLive"])
   }
 }
 
@@ -4811,113 +4890,279 @@ private struct PiliNativeCommentPictureView: View {
 private struct PiliNativeMessagesView: View {
   @ObservedObject var model: PiliNativeViewModel
   @Environment(\.presentationMode) private var presentationMode
-  private let kinds = [
+  @State private var searchText = ""
+
+  private let kinds: [(id: String, title: String)] = [
+    ("sessions", "私信"),
     ("reply", "回复"),
     ("at", "@我"),
     ("like", "点赞"),
     ("system", "系统"),
   ]
 
-  private var selection: Binding<String> {
-    Binding(
-      get: { model.messageKind },
-      set: { model.loadMessages(kind: $0) }
-    )
+  private var filteredMessages: [PiliNativeMessage] {
+    let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !query.isEmpty else { return model.messages }
+    return model.messages.filter { message in
+      [message.author, message.body, message.context, message.badge]
+        .contains { $0.localizedCaseInsensitiveContains(query) }
+    }
   }
 
   var body: some View {
     NavigationView {
       VStack(spacing: 0) {
-        Picker("消息类型", selection: selection) {
-          ForEach(kinds, id: \.0) { kind in
-            Text(kind.1).tag(kind.0)
-          }
-        }
-        .pickerStyle(SegmentedPickerStyle())
-        .padding(12)
-
+        folderBar
         Divider()
-
-        Group {
-          if model.messagesLoading && model.messages.isEmpty {
-            PiliNativeLoadingView(title: "正在加载消息")
-          } else if let error = model.messagesError, model.messages.isEmpty {
-            PiliNativeErrorView(message: error) { model.loadMessages() }
-          } else if model.messages.isEmpty {
-            ScrollView {
-              PiliNativeEmptyView(icon: "bell.slash", title: "暂无消息", subtitle: "新的互动消息会显示在这里")
-                .frame(maxWidth: .infinity, minHeight: 420)
-            }
-            .refreshable { model.loadMessages() }
-          } else {
-            List(model.messages) { message in
-              Button(action: { model.openMessageMember(message) }) {
-                PiliNativeMessageRow(message: message)
-              }
-              .buttonStyle(PlainButtonStyle())
-              .disabled(message.memberID == nil)
-            }
-            .listStyle(PlainListStyle())
-            .refreshable { model.loadMessages() }
-          }
-        }
+        messageContent
       }
-      .navigationBarTitle("消息中心", displayMode: .inline)
+      .background(Color(UIColor.systemBackground))
+      .navigationBarTitle("消息", displayMode: .large)
       .navigationBarItems(
         leading: Button("关闭") { presentationMode.wrappedValue.dismiss() }
       )
+      .searchable(
+        text: $searchText,
+        placement: .navigationBarDrawer(displayMode: .always),
+        prompt: "搜索消息"
+      )
     }
     .navigationViewStyle(StackNavigationViewStyle())
+  }
+
+  private var folderBar: some View {
+    ScrollView(.horizontal, showsIndicators: false) {
+      HStack(spacing: 4) {
+        ForEach(kinds, id: \.id) { kind in
+          Button {
+            guard kind.id != model.messageKind else { return }
+            searchText = ""
+            model.loadMessages(kind: kind.id, refresh: true)
+          } label: {
+            VStack(spacing: 8) {
+              Text(kind.title)
+                .font(.system(size: 14, weight: model.messageKind == kind.id ? .semibold : .regular))
+                .foregroundColor(model.messageKind == kind.id ? piliAccent : .secondary)
+                .padding(.horizontal, 12)
+              Capsule()
+                .fill(model.messageKind == kind.id ? piliAccent : Color.clear)
+                .frame(height: 3)
+            }
+            .padding(.top, 8)
+          }
+          .buttonStyle(PlainButtonStyle())
+          .accessibilityLabel("\(kind.title)消息")
+          .accessibilityValue(model.messageKind == kind.id ? "已选中" : "")
+        }
+      }
+      .padding(.horizontal, 8)
+    }
+    .background(Color(UIColor.systemBackground))
+  }
+
+  @ViewBuilder
+  private var messageContent: some View {
+    if model.messagesLoading && model.messages.isEmpty {
+      PiliNativeLoadingView(title: "正在加载消息")
+    } else if let error = model.messagesError, model.messages.isEmpty {
+      PiliNativeErrorView(message: error) {
+        model.loadMessages(refresh: true)
+      }
+    } else if filteredMessages.isEmpty {
+      ScrollView {
+        PiliNativeEmptyView(
+          icon: searchText.isEmpty ? "bubble.left.and.bubble.right" : "magnifyingglass",
+          title: searchText.isEmpty
+            ? (model.messageKind == "sessions" ? "暂无私信" : "暂无消息")
+            : "没有找到消息",
+          subtitle: searchText.isEmpty
+            ? (model.messageKind == "sessions" ? "新的会话会显示在这里" : "新的互动消息会显示在这里")
+            : "试试其他关键词"
+        )
+        .frame(maxWidth: .infinity, minHeight: 420)
+      }
+      .refreshable { model.loadMessages(refresh: true) }
+    } else {
+      ScrollView {
+        LazyVStack(spacing: 0) {
+          if let error = model.messagesError {
+            HStack(spacing: 8) {
+              Image(systemName: "exclamationmark.circle")
+              Text(error).lineLimit(2)
+              Spacer(minLength: 0)
+              Button("重试") { model.loadMoreMessages() }
+            }
+            .font(.caption)
+            .foregroundColor(.secondary)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 9)
+            .background(Color(UIColor.secondarySystemBackground))
+          }
+
+          ForEach(filteredMessages) { message in
+            Button {
+              model.openMessage(message)
+            } label: {
+              PiliNativeMessageRow(message: message)
+            }
+            .buttonStyle(PlainButtonStyle())
+            .contextMenu {
+              if message.memberID != nil {
+                Button {
+                  model.openMessageMember(message)
+                } label: {
+                  Label("查看用户", systemImage: "person.crop.circle")
+                }
+              }
+            }
+            .onAppear {
+              if searchText.isEmpty, message.id == model.messages.last?.id {
+                model.loadMoreMessages()
+              }
+            }
+
+            if message.id != filteredMessages.last?.id {
+              Divider().padding(.leading, 82)
+            }
+          }
+
+          if model.messagesLoadingMore {
+            ProgressView("正在加载更多消息")
+              .font(.caption)
+              .padding(.vertical, 18)
+          } else if model.messagesHasMore {
+            Button("加载更多消息", action: model.loadMoreMessages)
+              .font(.caption)
+              .foregroundColor(piliAccent)
+              .padding(.vertical, 18)
+          }
+        }
+      }
+      .refreshable { model.loadMessages(refresh: true) }
+    }
   }
 }
 
 private struct PiliNativeMessageRow: View {
   let message: PiliNativeMessage
 
+  private var accent: Color {
+    switch message.kind {
+    case "session": return piliAccent
+    case "reply": return .blue
+    case "at": return .orange
+    case "like": return piliAccent
+    default: return .purple
+    }
+  }
+
+  private var fallbackIcon: String {
+    switch message.kind {
+    case "session": return "person.crop.circle.fill"
+    case "reply": return "bubble.left.fill"
+    case "at": return "at"
+    case "like": return "hand.thumbsup.fill"
+    default: return "bell.fill"
+    }
+  }
+
   var body: some View {
-    HStack(alignment: .top, spacing: 11) {
-      PiliRemoteImage(urlString: message.avatar)
-        .frame(width: 44, height: 44)
-        .clipShape(Circle())
-      VStack(alignment: .leading, spacing: 6) {
-        HStack {
+    HStack(alignment: .center, spacing: 12) {
+      avatar
+
+      VStack(alignment: .leading, spacing: 5) {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
           Text(message.author.isEmpty ? "消息" : message.author)
-            .font(.subheadline)
-            .fontWeight(.semibold)
+            .font(.system(size: 16, weight: .semibold))
             .foregroundColor(.primary)
-          Spacer()
+            .lineLimit(1)
+          if message.isLive {
+            Text("直播中")
+              .font(.system(size: 9, weight: .semibold))
+              .foregroundColor(.white)
+              .padding(.horizontal, 5)
+              .padding(.vertical, 2)
+              .background(piliAccent)
+              .clipShape(Capsule())
+          }
+          Spacer(minLength: 6)
           Text(message.time)
-            .font(.caption2)
-            .foregroundColor(.secondary)
-        }
-        Text(message.body)
-          .font(.subheadline)
-          .foregroundColor(.primary)
-          .lineLimit(4)
-        if !message.context.isEmpty {
-          Text(message.context)
             .font(.caption)
             .foregroundColor(.secondary)
-            .lineLimit(2)
-            .padding(8)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color(UIColor.secondarySystemBackground))
-            .cornerRadius(7)
+            .lineLimit(1)
         }
-        if !message.badge.isEmpty {
-          Text(message.badge)
-            .font(.caption2)
-            .foregroundColor(piliAccent)
+
+        HStack(alignment: .center, spacing: 8) {
+          VStack(alignment: .leading, spacing: 3) {
+            Text(message.body)
+              .font(.subheadline)
+              .foregroundColor(.secondary)
+              .lineLimit(message.context.isEmpty ? 2 : 1)
+            if !message.context.isEmpty {
+              Text(message.context)
+                .font(.caption)
+                .foregroundColor(Color(UIColor.tertiaryLabel))
+                .lineLimit(1)
+            }
+          }
+          .frame(maxWidth: .infinity, alignment: .leading)
+
+          if message.kind == "session", message.isMuted {
+            Image(systemName: "speaker.slash.fill")
+              .font(.caption)
+              .foregroundColor(Color(UIColor.tertiaryLabel))
+          } else if message.kind == "session", message.hasUnread {
+            Text(message.unreadCount > 0 ? "\(min(message.unreadCount, 99))" : "")
+              .font(.system(size: 11, weight: .bold))
+              .foregroundColor(.white)
+              .frame(minWidth: 20, minHeight: 20)
+              .padding(.horizontal, message.unreadCount > 9 ? 3 : 0)
+              .background(piliAccent)
+              .clipShape(Capsule())
+          } else if let cover = message.cover {
+            PiliRemoteImage(urlString: cover)
+              .frame(width: 42, height: 42)
+              .clipped()
+              .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+          } else if !message.badge.isEmpty {
+            Text(message.badge)
+              .font(.system(size: 11, weight: .semibold))
+              .foregroundColor(.white)
+              .lineLimit(1)
+              .padding(.horizontal, 8)
+              .padding(.vertical, 4)
+              .background(accent)
+              .clipShape(Capsule())
+          }
         }
-      }
-      if let cover = message.cover {
-        PiliRemoteImage(urlString: cover)
-          .frame(width: 58, height: 58)
-          .clipped()
-          .cornerRadius(7)
       }
     }
-    .padding(.vertical, 5)
+    .padding(.leading, 14)
+    .padding(.trailing, 12)
+    .padding(.vertical, 10)
+    .frame(minHeight: 76)
+    .background(
+      message.isPinned
+        ? Color(UIColor.secondarySystemBackground)
+        : Color(UIColor.systemBackground)
+    )
+    .contentShape(Rectangle())
+  }
+
+  private var avatar: some View {
+    ZStack {
+      Circle().fill(accent.opacity(0.14))
+      if let avatar = message.avatar {
+        PiliRemoteImage(urlString: avatar)
+          .frame(width: 56, height: 56)
+          .clipShape(Circle())
+      } else {
+        Image(systemName: fallbackIcon)
+          .font(.system(size: 22, weight: .semibold))
+          .foregroundColor(accent)
+      }
+    }
+    .frame(width: 56, height: 56)
   }
 }
 
