@@ -1259,12 +1259,32 @@ private extension Array {
   }
 }
 
+private final class PiliNativePlayerGradientView: UIView {
+  override class var layerClass: AnyClass { CAGradientLayer.self }
+
+  func configure(colors: [UIColor], start: CGPoint, end: CGPoint) {
+    guard let gradient = layer as? CAGradientLayer else { return }
+    gradient.colors = colors.map(\.cgColor)
+    gradient.startPoint = start
+    gradient.endPoint = end
+  }
+}
+
+private final class PiliNativePlayerSlider: UISlider {
+  override func trackRect(forBounds bounds: CGRect) -> CGRect {
+    let original = super.trackRect(forBounds: bounds)
+    return CGRect(x: original.minX, y: original.midY - 1.5, width: original.width, height: 3)
+  }
+}
+
 final class PiliNativePlayerViewController: UIViewController, UIGestureRecognizerDelegate {
   private let session: PiliNativePlayerSession
   private let fullscreenPresentation: Bool
   private let canvas = AetherPlayerView()
   private let danmakuView = PiliNativeDanmakuView()
   private let controls = UIView()
+  private let embeddedTopShade = PiliNativePlayerGradientView()
+  private let embeddedBottomShade = PiliNativePlayerGradientView()
   private let topBar = UIStackView()
   private let bottomBar = UIStackView()
   private let topChrome = UIView()
@@ -1292,7 +1312,7 @@ final class PiliNativePlayerViewController: UIViewController, UIGestureRecognize
   private let fullTimeLabel = UILabel()
   private let currentLabel = UILabel()
   private let durationLabel = UILabel()
-  private let slider = UISlider()
+  private let slider = PiliNativePlayerSlider()
   private let spinner = UIActivityIndicatorView(style: .large)
   private let errorLabel = UILabel()
   private let toastLabel = UILabel()
@@ -1312,6 +1332,7 @@ final class PiliNativePlayerViewController: UIViewController, UIGestureRecognize
   private var isScrubbing = false
   private var controlsLocked = false
   private var settingsPanelVisible = false
+  private var audioOnlyMode = false
   private var videoSurfaceRevealed = false
   private var surfaceRevealTask: DispatchWorkItem?
 
@@ -1339,7 +1360,7 @@ final class PiliNativePlayerViewController: UIViewController, UIGestureRecognize
     canvas.layer.opacity = 0
     bindSession()
     session.bindVideoSurface(canvas)
-    pipButton.isHidden = !AVPictureInPictureController.isPictureInPictureSupported()
+    pipButton.isHidden = fullscreenPresentation && !AVPictureInPictureController.isPictureInPictureSupported()
     if fullscreenPresentation { startSystemStatusUpdates() }
   }
 
@@ -1419,7 +1440,11 @@ final class PiliNativePlayerViewController: UIViewController, UIGestureRecognize
 
     configureButton(playButton, image: "play.fill", action: #selector(togglePlayback))
     configureButton(fullscreenButton, image: fullscreenPresentation ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right", action: #selector(toggleFullscreen))
-    configureButton(pipButton, image: "pip.enter", action: #selector(togglePictureInPicture))
+    configureButton(
+      pipButton,
+      image: fullscreenPresentation ? "pip.enter" : "headphones",
+      action: fullscreenPresentation ? #selector(togglePictureInPicture) : #selector(toggleAudioOnly)
+    )
     configureButton(backButton, image: "chevron.left", action: #selector(exitFullscreen))
     configureButton(lockButton, image: "lock.open.fill", action: #selector(toggleScreenLock))
     configureButton(danmakuSettingsButton, image: "slider.horizontal.3", action: #selector(toggleDanmakuSettings))
@@ -1479,35 +1504,89 @@ final class PiliNativePlayerViewController: UIViewController, UIGestureRecognize
   }
 
   private func buildEmbeddedControls() {
+    embeddedTopShade.translatesAutoresizingMaskIntoConstraints = false
+    embeddedBottomShade.translatesAutoresizingMaskIntoConstraints = false
+    embeddedTopShade.configure(
+      colors: [UIColor.black.withAlphaComponent(0.58), UIColor.clear],
+      start: CGPoint(x: 0.5, y: 0),
+      end: CGPoint(x: 0.5, y: 1)
+    )
+    embeddedBottomShade.configure(
+      colors: [UIColor.clear, UIColor.black.withAlphaComponent(0.72)],
+      start: CGPoint(x: 0.5, y: 0),
+      end: CGPoint(x: 0.5, y: 1)
+    )
+    controls.addSubview(embeddedTopShade)
+    controls.addSubview(embeddedBottomShade)
+    NSLayoutConstraint.activate([
+      embeddedTopShade.topAnchor.constraint(equalTo: controls.topAnchor),
+      embeddedTopShade.leadingAnchor.constraint(equalTo: controls.leadingAnchor),
+      embeddedTopShade.trailingAnchor.constraint(equalTo: controls.trailingAnchor),
+      embeddedTopShade.heightAnchor.constraint(equalToConstant: 76),
+      embeddedBottomShade.leadingAnchor.constraint(equalTo: controls.leadingAnchor),
+      embeddedBottomShade.trailingAnchor.constraint(equalTo: controls.trailingAnchor),
+      embeddedBottomShade.bottomAnchor.constraint(equalTo: controls.bottomAnchor),
+      embeddedBottomShade.heightAnchor.constraint(equalToConstant: 88),
+    ])
+
+    configureButton(menuButton, image: "ellipsis", action: #selector(showEmbeddedMoreMenu))
+    menuButton.transform = CGAffineTransform(rotationAngle: .pi / 2)
+    pipButton.isHidden = false
+    backButton.setPreferredSymbolConfiguration(
+      UIImage.SymbolConfiguration(pointSize: 25, weight: .medium),
+      forImageIn: .normal
+    )
+    pipButton.setPreferredSymbolConfiguration(
+      UIImage.SymbolConfiguration(pointSize: 23, weight: .regular),
+      forImageIn: .normal
+    )
+    menuButton.setPreferredSymbolConfiguration(
+      UIImage.SymbolConfiguration(pointSize: 21, weight: .bold),
+      forImageIn: .normal
+    )
+
     topBar.axis = .horizontal
     topBar.alignment = .center
-    topBar.spacing = 8
-    topBar.addArrangedSubview(danmakuButton)
+    topBar.spacing = 10
+    topBar.addArrangedSubview(backButton)
     topBar.addArrangedSubview(UIView())
-    topBar.addArrangedSubview(qualityButton)
     topBar.addArrangedSubview(pipButton)
+    topBar.addArrangedSubview(menuButton)
 
     bottomBar.axis = .horizontal
     bottomBar.alignment = .center
-    bottomBar.spacing = 8
+    bottomBar.spacing = 10
+    playButton.setPreferredSymbolConfiguration(
+      UIImage.SymbolConfiguration(pointSize: 27, weight: .bold),
+      forImageIn: .normal
+    )
+    fullscreenButton.setPreferredSymbolConfiguration(
+      UIImage.SymbolConfiguration(pointSize: 22, weight: .semibold),
+      forImageIn: .normal
+    )
+    fullTimeLabel.font = .monospacedDigitSystemFont(ofSize: 14, weight: .semibold)
+    fullTimeLabel.setContentHuggingPriority(.required, for: .horizontal)
+    slider.setThumbImage(Self.embeddedSliderThumbImage(), for: .normal)
+    slider.setThumbImage(Self.embeddedSliderThumbImage(), for: .highlighted)
     bottomBar.addArrangedSubview(playButton)
-    bottomBar.addArrangedSubview(currentLabel)
     bottomBar.addArrangedSubview(slider)
-    bottomBar.addArrangedSubview(durationLabel)
-    bottomBar.addArrangedSubview(speedButton)
+    bottomBar.addArrangedSubview(fullTimeLabel)
     bottomBar.addArrangedSubview(fullscreenButton)
 
     [topBar, bottomBar].forEach {
       $0.translatesAutoresizingMaskIntoConstraints = false
-      controls.addSubview($0)
     }
+    embeddedTopShade.addSubview(topBar)
+    embeddedBottomShade.addSubview(bottomBar)
     NSLayoutConstraint.activate([
-      topBar.topAnchor.constraint(equalTo: controls.safeAreaLayoutGuide.topAnchor, constant: 6),
-      topBar.leadingAnchor.constraint(equalTo: controls.leadingAnchor, constant: 12),
-      topBar.trailingAnchor.constraint(equalTo: controls.trailingAnchor, constant: -12),
-      bottomBar.leadingAnchor.constraint(equalTo: controls.leadingAnchor, constant: 10),
-      bottomBar.trailingAnchor.constraint(equalTo: controls.trailingAnchor, constant: -10),
-      bottomBar.bottomAnchor.constraint(equalTo: controls.safeAreaLayoutGuide.bottomAnchor, constant: -6),
+      topBar.topAnchor.constraint(equalTo: embeddedTopShade.safeAreaLayoutGuide.topAnchor, constant: 8),
+      topBar.leadingAnchor.constraint(equalTo: embeddedTopShade.leadingAnchor, constant: 12),
+      topBar.trailingAnchor.constraint(equalTo: embeddedTopShade.trailingAnchor, constant: -12),
+      topBar.heightAnchor.constraint(equalToConstant: 42),
+      bottomBar.leadingAnchor.constraint(equalTo: embeddedBottomShade.leadingAnchor, constant: 12),
+      bottomBar.trailingAnchor.constraint(equalTo: embeddedBottomShade.trailingAnchor, constant: -12),
+      bottomBar.bottomAnchor.constraint(equalTo: embeddedBottomShade.safeAreaLayoutGuide.bottomAnchor, constant: -8),
+      bottomBar.heightAnchor.constraint(equalToConstant: 46),
       slider.widthAnchor.constraint(greaterThanOrEqualToConstant: 70),
     ])
   }
@@ -1924,7 +2003,7 @@ final class PiliNativePlayerViewController: UIViewController, UIGestureRecognize
     guard AVPictureInPictureController.isPictureInPictureSupported(),
           player != nil,
           let layer = session.engine.nativePlayerLayer else {
-      pipButton.isHidden = true
+      pipButton.isHidden = fullscreenPresentation
       return
     }
     // Reuse Aether's visible player layer. Creating a second hidden
@@ -1951,6 +2030,22 @@ final class PiliNativePlayerViewController: UIViewController, UIGestureRecognize
     button.addTarget(self, action: action, for: .touchUpInside)
   }
 
+  private static func embeddedSliderThumbImage() -> UIImage {
+    let size = CGSize(width: 26, height: 22)
+    return UIGraphicsImageRenderer(size: size).image { _ in
+      let body = CGRect(x: 2, y: 3, width: 22, height: 16)
+      let bodyPath = UIBezierPath(roundedRect: body, cornerRadius: 5)
+      UIColor.white.setFill()
+      bodyPath.fill()
+      UIColor.black.withAlphaComponent(0.16).setStroke()
+      bodyPath.lineWidth = 1
+      bodyPath.stroke()
+      UIColor.black.withAlphaComponent(0.76).setFill()
+      UIBezierPath(roundedRect: CGRect(x: 8, y: 7, width: 3, height: 8), cornerRadius: 1.5).fill()
+      UIBezierPath(roundedRect: CGRect(x: 15, y: 7, width: 3, height: 8), cornerRadius: 1.5).fill()
+    }
+  }
+
   private func configureTextButton(_ button: UIButton, title: String, action: Selector?) {
     button.setTitle(title, for: .normal)
     button.setTitleColor(.white, for: .normal)
@@ -1965,7 +2060,24 @@ final class PiliNativePlayerViewController: UIViewController, UIGestureRecognize
   @objc private func toggleDanmaku() { session.danmakuEnabled.toggle(); scheduleControlsHide() }
   @objc private func changeSpeed() { session.cyclePlaybackRate(); scheduleControlsHide() }
   @objc private func toggleFullscreen() { session.isFullscreen.toggle() }
-  @objc private func exitFullscreen() { session.isFullscreen = false }
+  @objc private func exitFullscreen() {
+    if fullscreenPresentation {
+      session.isFullscreen = false
+    } else {
+      session.requestVideoAction("close")
+    }
+  }
+
+  @objc private func toggleAudioOnly() {
+    audioOnlyMode.toggle()
+    canvas.isHidden = audioOnlyMode
+    danmakuView.isHidden = audioOnlyMode
+    pipButton.tintColor = audioOnlyMode
+      ? UIColor(red: 0.98, green: 0.38, blue: 0.56, alpha: 1)
+      : .white
+    showControllerToast(audioOnlyMode ? "已进入听视频模式" : "已恢复视频画面")
+    scheduleControlsHide()
+  }
 
   @objc private func toggleScreenLock() {
     controlsLocked.toggle()
@@ -2075,6 +2187,44 @@ final class PiliNativePlayerViewController: UIViewController, UIGestureRecognize
     present(menu, animated: true)
   }
 
+  @objc private func showEmbeddedMoreMenu() {
+    controlsHideTask?.cancel()
+    let menu = UIAlertController(title: nil, message: nil, preferredStyle: .actionSheet)
+    if pictureInPictureController != nil {
+      menu.addAction(UIAlertAction(title: "画中画", style: .default) { [weak self] _ in
+        self?.togglePictureInPicture()
+      })
+    }
+    menu.addAction(
+      UIAlertAction(
+        title: session.danmakuEnabled ? "关闭弹幕" : "打开弹幕",
+        style: .default
+      ) { [weak self] _ in
+        self?.session.danmakuEnabled.toggle()
+        self?.scheduleControlsHide()
+      }
+    )
+    for quality in session.qualities {
+      menu.addAction(
+        UIAlertAction(
+          title: quality.label == session.qualityLabel ? "✓ \(quality.label)" : quality.label,
+          style: .default
+        ) { [weak self] _ in
+          self?.session.selectQuality(quality.value)
+          self?.scheduleControlsHide()
+        }
+      )
+    }
+    menu.addAction(UIAlertAction(title: "取消", style: .cancel) { [weak self] _ in
+      self?.scheduleControlsHide()
+    })
+    if let popover = menu.popoverPresentationController {
+      popover.sourceView = menuButton
+      popover.sourceRect = menuButton.bounds
+    }
+    present(menu, animated: true)
+  }
+
   @objc private func togglePictureInPicture() {
     guard let controller = pictureInPictureController else { return }
     controller.isPictureInPictureActive ? controller.stopPictureInPicture() : controller.startPictureInPicture()
@@ -2130,6 +2280,23 @@ final class PiliNativePlayerViewController: UIViewController, UIGestureRecognize
     DispatchQueue.main.asyncAfter(deadline: .now() + 3, execute: task)
   }
 
+  private func showControllerToast(_ message: String) {
+    toastLabel.layer.removeAllAnimations()
+    toastLabel.text = "  \(message)  "
+    toastLabel.alpha = 1
+    toastLabel.isHidden = false
+    UIView.animate(
+      withDuration: 0.2,
+      delay: 1.35,
+      options: [.curveEaseOut, .allowUserInteraction]
+    ) { [weak self] in
+      self?.toastLabel.alpha = 0
+    } completion: { [weak self] _ in
+      self?.toastLabel.isHidden = true
+      self?.toastLabel.alpha = 1
+    }
+  }
+
   private func revealVideoSurfaceAfterPreRender() {
     guard !videoSurfaceRevealed else { return }
     surfaceRevealTask?.cancel()
@@ -2154,7 +2321,7 @@ final class PiliNativePlayerViewController: UIViewController, UIGestureRecognize
   }
 
   private var chromeViews: [UIView] {
-    fullscreenPresentation ? [topChrome, bottomChrome] : [topBar, bottomBar]
+    fullscreenPresentation ? [topChrome, bottomChrome] : [embeddedTopShade, embeddedBottomShade]
   }
 
   private func setDanmakuSettingsVisible(_ visible: Bool, animated: Bool) {

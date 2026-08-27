@@ -416,7 +416,12 @@ private final class PiliNativeViewModel: ObservableObject {
       self?.sendNativeDanmaku(content: content, progress: progress)
     }
     nativePlayerSession.onVideoActionRequested = { [weak self] action in
-      guard let self, let video = self.videoDetail else { return }
+      guard let self else { return }
+      if action == "close" {
+        self.closeVideoDetail()
+        return
+      }
+      guard let video = self.videoDetail else { return }
       if action == "comment" {
         self.nativePlayerSession.isFullscreen = false
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
