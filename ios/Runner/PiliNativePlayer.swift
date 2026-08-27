@@ -384,6 +384,11 @@ struct PiliNativeDanmakuItem: Identifiable {
   let color: UIColor
   let content: String
   let weight: Int
+  var mergeCount = 1
+
+  var displayContent: String {
+    mergeCount > 1 ? "\(content)  ×\(mergeCount)" : content
+  }
 }
 
 @MainActor
@@ -424,6 +429,7 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
   var onVideoActionRequested: ((String) -> Void)?
 
   private(set) var danmakuItems: [PiliNativeDanmakuItem] = []
+  private var rawDanmakuItems: [PiliNativeDanmakuItem] = []
   private var segments: [PiliNativePlayerSegment] = []
   private var segmentOffsets: [TimeInterval] = []
   private var requestedDanmakuSegments = Set<Int>()
@@ -538,6 +544,7 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
 
   func prepareDanmaku() {
     requestedDanmakuSegments.removeAll()
+    rawDanmakuItems.removeAll()
     danmakuItems.removeAll()
     danmakuRevision += 1
     requestDanmaku(near: currentTime)
@@ -586,7 +593,7 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
 
   func reportDanmakuSendResult(_ message: String, sentContent: String? = nil) {
     if let sentContent, !sentContent.isEmpty {
-      danmakuItems.append(
+      rawDanmakuItems.append(
         PiliNativeDanmakuItem(
           id: "local-\(UUID().uuidString)",
           progress: currentTime + 0.25,
@@ -597,9 +604,7 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
           weight: Int.max
         )
       )
-      danmakuItems.sort { lhs, rhs in
-        lhs.progress == rhs.progress ? lhs.weight > rhs.weight : lhs.progress < rhs.progress
-      }
+      rebuildMergedDanmaku()
       danmakuRevision += 1
     }
     danmakuStatusMessage = message
@@ -611,12 +616,47 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
 
   func appendDanmaku(_ items: [PiliNativeDanmakuItem]) {
     guard !items.isEmpty else { return }
-    let existing = Set(danmakuItems.map(\.id))
-    danmakuItems.append(contentsOf: items.filter { !existing.contains($0.id) })
-    danmakuItems.sort { lhs, rhs in
+    let existing = Set(rawDanmakuItems.map(\.id))
+    rawDanmakuItems.append(contentsOf: items.filter { !existing.contains($0.id) })
+    rebuildMergedDanmaku()
+    danmakuRevision += 1
+  }
+
+  private func rebuildMergedDanmaku() {
+    let sorted = rawDanmakuItems.sorted { lhs, rhs in
       lhs.progress == rhs.progress ? lhs.weight > rhs.weight : lhs.progress < rhs.progress
     }
-    danmakuRevision += 1
+    var merged: [PiliNativeDanmakuItem] = []
+    var latestOrdinaryIndex: [String: Int] = [:]
+
+    for var item in sorted {
+      // Advanced/code danmaku carry animation payloads in their content. They
+      // must stay independent or merging destroys their timing and coordinates.
+      guard (1...6).contains(item.mode) else {
+        merged.append(item)
+        continue
+      }
+      let normalized = item.content
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+        .split(whereSeparator: \.isWhitespace)
+        .joined(separator: " ")
+      guard !normalized.isEmpty else { continue }
+      let modeGroup: Int
+      switch item.mode {
+      case 4, 5, 6: modeGroup = item.mode
+      default: modeGroup = 1
+      }
+      let key = "\(modeGroup)|\(normalized)"
+      if let index = latestOrdinaryIndex[key],
+         item.progress - merged[index].progress <= 1.5 {
+        merged[index].mergeCount += max(1, item.mergeCount)
+        continue
+      }
+      item.mergeCount = max(1, item.mergeCount)
+      latestOrdinaryIndex[key] = merged.count
+      merged.append(item)
+    }
+    danmakuItems = merged
   }
 
   func togglePlayback() {
@@ -1109,6 +1149,22 @@ private final class PiliNativeDanmakuView: UIView {
   private var opacityMultiplier: CGFloat = 1
   private var blockedCategories = Set<Int>()
 
+  private struct AdvancedPayload {
+    let x: CGFloat
+    let y: CGFloat
+    let endX: CGFloat
+    let endY: CGFloat
+    let startAlpha: CGFloat
+    let endAlpha: CGFloat
+    let duration: TimeInterval
+    let translationDuration: TimeInterval
+    let translationDelay: TimeInterval
+    let text: String
+    let rotationZ: CGFloat
+    let rotationY: CGFloat
+    let easeIn: Bool
+  }
+
   override init(frame: CGRect) {
     super.init(frame: frame)
     isUserInteractionEnabled = false
@@ -1162,6 +1218,10 @@ private final class PiliNativeDanmakuView: UIView {
   private func display(_ item: PiliNativeDanmakuItem) {
     guard bounds.width > 0, bounds.height > 0 else { return }
     if shouldBlock(item) { return }
+    if item.mode >= 7 {
+      displayAdvanced(item)
+      return
+    }
     let label = UILabel()
     label.numberOfLines = 1
     let shadow = NSShadow()
@@ -1169,7 +1229,7 @@ private final class PiliNativeDanmakuView: UIView {
     shadow.shadowOffset = .zero
     shadow.shadowBlurRadius = 2
     label.attributedText = NSAttributedString(
-      string: item.content,
+      string: item.displayContent,
       attributes: [
         .font: UIFont.systemFont(ofSize: min(max(item.fontSize * 0.72, 13), 25), weight: .semibold),
         .foregroundColor: item.color,
@@ -1213,6 +1273,131 @@ private final class PiliNativeDanmakuView: UIView {
         label.removeFromSuperview()
       }
     }
+  }
+
+  private func displayAdvanced(_ item: PiliNativeDanmakuItem) {
+    let payload = parseAdvancedPayload(item.content)
+    let text = (payload?.text ?? item.content)
+      .replacingOccurrences(of: "/n", with: "\n")
+      .replacingOccurrences(of: "\\n", with: "\n")
+      .trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !text.isEmpty else { return }
+
+    let label = UILabel()
+    label.numberOfLines = 0
+    label.textAlignment = .center
+    let shadow = NSShadow()
+    shadow.shadowColor = UIColor.black.withAlphaComponent(0.92)
+    shadow.shadowOffset = .zero
+    shadow.shadowBlurRadius = 2
+    label.attributedText = NSAttributedString(
+      string: text,
+      attributes: [
+        .font: UIFont.systemFont(ofSize: min(max(item.fontSize * 0.72, 13), 28), weight: .semibold),
+        .foregroundColor: item.color,
+        .shadow: shadow,
+      ]
+    )
+    let maximumSize = CGSize(width: max(80, bounds.width * 0.82), height: max(50, bounds.height * 0.6))
+    let fitted = label.sizeThatFits(maximumSize)
+    label.bounds.size = CGSize(
+      width: min(maximumSize.width, max(1, fitted.width)),
+      height: min(maximumSize.height, max(1, fitted.height))
+    )
+
+    func center(x: CGFloat, y: CGFloat) -> CGPoint {
+      let absoluteX = x * bounds.width
+      let absoluteY = y * bounds.height
+      return CGPoint(
+        x: min(max(label.bounds.width / 2, absoluteX), bounds.width - label.bounds.width / 2),
+        y: min(max(label.bounds.height / 2, absoluteY), bounds.height - label.bounds.height / 2)
+      )
+    }
+    label.center = center(x: payload?.x ?? 0.5, y: payload?.y ?? 0.5)
+    label.alpha = (payload?.startAlpha ?? 0.96) * opacityMultiplier
+    var transform = CATransform3DIdentity
+    transform.m34 = -1 / 500
+    transform = CATransform3DRotate(transform, (payload?.rotationY ?? 0) * .pi / 180, 0, 1, 0)
+    transform = CATransform3DRotate(transform, (payload?.rotationZ ?? 0) * .pi / 180, 0, 0, 1)
+    label.layer.transform = transform
+    addSubview(label)
+
+    UIView.animate(
+      withDuration: payload?.duration ?? 4.5,
+      delay: 0,
+      options: [.curveLinear, .allowUserInteraction]
+    ) {
+      label.alpha = (payload?.endAlpha ?? 0.96) * self.opacityMultiplier
+    }
+    if let payload, payload.x != payload.endX || payload.y != payload.endY {
+      UIView.animate(
+        withDuration: payload.translationDuration,
+        delay: payload.translationDelay,
+        options: [payload.easeIn ? .curveEaseIn : .curveLinear, .allowUserInteraction]
+      ) {
+        label.center = center(x: payload.endX, y: payload.endY)
+      }
+    }
+    let lifetime = max(
+      payload?.duration ?? 4.5,
+      (payload?.translationDelay ?? 0) + (payload?.translationDuration ?? 0)
+    )
+    DispatchQueue.main.asyncAfter(deadline: .now() + lifetime) {
+      label.removeFromSuperview()
+    }
+  }
+
+  private func parseAdvancedPayload(_ content: String) -> AdvancedPayload? {
+    let normalizedContent = content.replacingOccurrences(of: "\n", with: "\\n")
+    guard let data = normalizedContent.data(using: .utf8),
+          let values = try? JSONSerialization.jsonObject(with: data) as? [Any],
+          values.count >= 5 else { return nil }
+    func number(_ index: Int, fallback: Double) -> Double {
+      guard values.indices.contains(index) else { return fallback }
+      if let value = values[index] as? NSNumber { return value.doubleValue }
+      let raw = String(describing: values[index]).replacingOccurrences(of: "%", with: "")
+      return Double(raw) ?? fallback
+    }
+    func relativePair(_ startIndex: Int, _ endIndex: Int, reference: Double) -> (CGFloat, CGFloat) {
+      func relative(_ index: Int, fallback: Double) -> Double {
+        guard values.indices.contains(index) else { return fallback }
+        let rawValue = values[index]
+        let parsed = number(index, fallback: fallback)
+        if parsed > 1 || (rawValue is String && !String(describing: rawValue).contains(".")) {
+          return parsed / reference
+        }
+        return parsed
+      }
+      let start = relative(startIndex, fallback: 0)
+      let end = values.indices.contains(endIndex)
+        ? relative(endIndex, fallback: start)
+        : start
+      return (CGFloat(start), CGFloat(end))
+    }
+    let alphaParts = String(describing: values[2]).split(separator: "-")
+    let startAlpha = Double(alphaParts.first ?? "1") ?? 1
+    let endAlpha = Double(alphaParts.dropFirst().first ?? alphaParts.first ?? "1") ?? startAlpha
+    var duration = number(3, fallback: 4.5)
+    if duration <= 0 { duration = 4.5 }
+    let (startX, endX) = relativePair(0, 7, reference: 1920)
+    let (startY, endY) = relativePair(1, 8, reference: 1080)
+    let translationMilliseconds = number(9, fallback: duration * 1000)
+    let delayMilliseconds = number(10, fallback: 0)
+    return AdvancedPayload(
+      x: startX,
+      y: startY,
+      endX: endX,
+      endY: endY,
+      startAlpha: CGFloat(min(max(startAlpha, 0), 1)),
+      endAlpha: CGFloat(min(max(endAlpha, 0), 1)),
+      duration: min(max(duration, 0.1), 30),
+      translationDuration: min(max(translationMilliseconds / 1000, 0.01), 30),
+      translationDelay: min(max(delayMilliseconds / 1000, 0), 30),
+      text: String(describing: values[4]),
+      rotationZ: CGFloat(number(5, fallback: 0)),
+      rotationY: CGFloat(number(6, fallback: 0)),
+      easeIn: Int(number(13, fallback: 0)) == 1
+    )
   }
 
   private func shouldBlock(_ item: PiliNativeDanmakuItem) -> Bool {
@@ -1270,13 +1455,6 @@ private final class PiliNativePlayerGradientView: UIView {
   }
 }
 
-private final class PiliNativePlayerSlider: UISlider {
-  override func trackRect(forBounds bounds: CGRect) -> CGRect {
-    let original = super.trackRect(forBounds: bounds)
-    return CGRect(x: original.minX, y: original.midY - 1.5, width: original.width, height: 3)
-  }
-}
-
 final class PiliNativePlayerViewController: UIViewController, UIGestureRecognizerDelegate {
   private let session: PiliNativePlayerSession
   private let fullscreenPresentation: Bool
@@ -1312,7 +1490,7 @@ final class PiliNativePlayerViewController: UIViewController, UIGestureRecognize
   private let fullTimeLabel = UILabel()
   private let currentLabel = UILabel()
   private let durationLabel = UILabel()
-  private let slider = PiliNativePlayerSlider()
+  private let slider = UISlider()
   private let spinner = UIActivityIndicatorView(style: .large)
   private let errorLabel = UILabel()
   private let toastLabel = UILabel()
@@ -1566,8 +1744,6 @@ final class PiliNativePlayerViewController: UIViewController, UIGestureRecognize
     )
     fullTimeLabel.font = .monospacedDigitSystemFont(ofSize: 14, weight: .semibold)
     fullTimeLabel.setContentHuggingPriority(.required, for: .horizontal)
-    slider.setThumbImage(Self.embeddedSliderThumbImage(), for: .normal)
-    slider.setThumbImage(Self.embeddedSliderThumbImage(), for: .highlighted)
     bottomBar.addArrangedSubview(playButton)
     bottomBar.addArrangedSubview(slider)
     bottomBar.addArrangedSubview(fullTimeLabel)
@@ -2028,22 +2204,6 @@ final class PiliNativePlayerViewController: UIViewController, UIGestureRecognize
     button.widthAnchor.constraint(equalToConstant: 32).isActive = true
     button.heightAnchor.constraint(equalToConstant: 32).isActive = true
     button.addTarget(self, action: action, for: .touchUpInside)
-  }
-
-  private static func embeddedSliderThumbImage() -> UIImage {
-    let size = CGSize(width: 26, height: 22)
-    return UIGraphicsImageRenderer(size: size).image { _ in
-      let body = CGRect(x: 2, y: 3, width: 22, height: 16)
-      let bodyPath = UIBezierPath(roundedRect: body, cornerRadius: 5)
-      UIColor.white.setFill()
-      bodyPath.fill()
-      UIColor.black.withAlphaComponent(0.16).setStroke()
-      bodyPath.lineWidth = 1
-      bodyPath.stroke()
-      UIColor.black.withAlphaComponent(0.76).setFill()
-      UIBezierPath(roundedRect: CGRect(x: 8, y: 7, width: 3, height: 8), cornerRadius: 1.5).fill()
-      UIBezierPath(roundedRect: CGRect(x: 15, y: 7, width: 3, height: 8), cornerRadius: 1.5).fill()
-    }
   }
 
   private func configureTextButton(_ button: UIButton, title: String, action: Selector?) {

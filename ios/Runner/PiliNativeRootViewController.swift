@@ -246,8 +246,6 @@ private final class PiliNativeViewModel: ObservableObject {
   @Published private(set) var homeLoading = true
   @Published private(set) var homeError: String?
   @Published private(set) var homeLoadingMore = false
-  @Published private(set) var continueWatching: PiliNativeLibraryItem?
-  @Published private(set) var continueWatchingLoading = false
   @Published private(set) var hotVideos: [PiliNativeVideo] = []
   @Published private(set) var hotLoading = false
   @Published private(set) var hotLoadingMore = false
@@ -370,7 +368,6 @@ private final class PiliNativeViewModel: ObservableObject {
   let flutterPlayerSurface: PiliNativeFlutterPlayerSurface
   let nativePlayerSession = PiliNativePlayerSession()
   private var snapshotInFlight = false
-  private var continueWatchingRequested = false
   private var hotPage = 1
   private var livePage = 1
   @Published private(set) var pendingVideo: PiliNativeVideo?
@@ -576,36 +573,6 @@ private final class PiliNativeViewModel: ObservableObject {
         self.applySnapshot(piliDictionary(response))
       }
     }
-  }
-
-  func loadContinueWatching(force: Bool = false) {
-    guard account.isLogin else {
-      continueWatching = nil
-      continueWatchingRequested = false
-      return
-    }
-    guard !continueWatchingLoading,
-          force || !continueWatchingRequested else { return }
-    continueWatchingRequested = true
-    continueWatchingLoading = true
-    channel.invokeMethod("loadNativeContinueWatching", arguments: nil) { [weak self] response in
-      DispatchQueue.main.async {
-        guard let self else { return }
-        self.continueWatchingLoading = false
-        if response is FlutterError { return }
-        let result = piliDictionary(response)
-        guard result["state"] as? String == "success" else { return }
-        let item = piliDictionary(result["item"])
-        self.continueWatching = item.isEmpty
-          ? nil
-          : PiliNativeLibraryItem(map: item, index: 0)
-      }
-    }
-  }
-
-  func openContinueWatching() {
-    guard let item = continueWatching else { return }
-    openLibraryItem(item)
   }
 
   func loadHomeZone(_ zone: String, refresh: Bool = false) {
@@ -3300,16 +3267,14 @@ private enum PiliNativeHomeZone: Int, CaseIterable, Identifiable {
 private struct PiliNativeHomeView: View {
   @ObservedObject var model: PiliNativeViewModel
   @State private var selectedZone = PiliNativeHomeZone.recommend
-  @State private var hidesContinueWatching = false
   private let columns = [
-    GridItem(.flexible(minimum: 0), spacing: 10, alignment: .top),
-    GridItem(.flexible(minimum: 0), spacing: 10, alignment: .top),
+    GridItem(.flexible(minimum: 0), spacing: 12, alignment: .top),
+    GridItem(.flexible(minimum: 0), spacing: 12, alignment: .top),
   ]
 
   var body: some View {
     NavigationView {
       VStack(spacing: 0) {
-        homeHeader
         zoneSelector
         TabView(selection: $selectedZone) {
           livePage.tag(PiliNativeHomeZone.live)
@@ -3319,90 +3284,58 @@ private struct PiliNativeHomeView: View {
         .tabViewStyle(PageTabViewStyle(indexDisplayMode: .never))
         .animation(.easeInOut(duration: 0.2), value: selectedZone)
       }
-      .background(Color(UIColor.systemBackground))
-      .navigationBarHidden(true)
+      .background(Color(UIColor.systemGroupedBackground))
+      .navigationBarTitle("PiliGlass", displayMode: .inline)
+      .navigationBarItems(
+        leading: Button(action: { model.isSearchPresented = true }) {
+          Image(systemName: "magnifyingglass")
+        }
+        .accessibilityLabel("搜索"),
+        trailing: HStack(spacing: 18) {
+          if model.account.isLogin {
+            Button(action: { model.isMessagesPresented = true }) {
+              Image(systemName: "bell")
+            }
+            .accessibilityLabel("消息")
+          }
+          Button(action: selectMine) {
+            if let face = model.account.face {
+              PiliRemoteImage(urlString: face)
+                .frame(width: 28, height: 28)
+                .clipShape(Circle())
+            } else {
+              Image(systemName: "person.crop.circle")
+            }
+          }
+          .accessibilityLabel("我的")
+        }
+      )
     }
     .navigationViewStyle(StackNavigationViewStyle())
     .onChange(of: selectedZone) { zone in
       model.loadHomeZone(zone.key)
     }
-    .onChange(of: model.account.isLogin) { _ in
-      hidesContinueWatching = false
-      model.loadContinueWatching(force: true)
-    }
-    .onAppear { model.loadContinueWatching() }
-  }
-
-  private var homeHeader: some View {
-    HStack(spacing: 12) {
-      Button(action: { model.isSearchPresented = true }) {
-        HStack(spacing: 9) {
-          Image(systemName: "magnifyingglass")
-            .font(.system(size: 19, weight: .medium))
-          Text("搜索感兴趣的视频")
-            .font(.system(size: 16))
-          Spacer(minLength: 0)
-        }
-        .foregroundColor(.secondary)
-        .padding(.horizontal, 14)
-        .frame(height: 44)
-        .background(Color(UIColor.secondarySystemGroupedBackground))
-        .clipShape(Capsule())
-      }
-      .buttonStyle(PlainButtonStyle())
-
-      Button(action: { model.isMessagesPresented = true }) {
-        Image(systemName: "sparkles")
-          .font(.system(size: 24, weight: .semibold))
-          .foregroundColor(piliAccent)
-          .frame(width: 32, height: 44)
-      }
-      .buttonStyle(PlainButtonStyle())
-      .accessibilityLabel("消息")
-
-      Button(action: selectMine) {
-        if let face = model.account.face {
-          PiliRemoteImage(urlString: face)
-            .frame(width: 42, height: 42)
-            .clipShape(Circle())
-        } else {
-          Circle()
-            .fill(Color(UIColor.secondarySystemGroupedBackground))
-            .frame(width: 42, height: 42)
-            .overlay(
-              Image(systemName: "person.fill")
-                .foregroundColor(Color(UIColor.tertiaryLabel))
-            )
-        }
-      }
-      .buttonStyle(PlainButtonStyle())
-      .accessibilityLabel("我的")
-    }
-    .padding(.horizontal, 14)
-    .padding(.top, 12)
-    .padding(.bottom, 8)
-    .background(Color(UIColor.systemBackground))
   }
 
   private var zoneSelector: some View {
-    HStack(spacing: 44) {
+    HStack(spacing: 48) {
       ForEach(PiliNativeHomeZone.allCases) { zone in
         Button(action: { selectedZone = zone }) {
-          VStack(spacing: 6) {
+          VStack(spacing: 7) {
             Text(zone.title)
-              .font(.system(size: 18, weight: selectedZone == zone ? .semibold : .regular))
+              .font(.system(size: 16, weight: selectedZone == zone ? .semibold : .regular))
               .foregroundColor(selectedZone == zone ? piliAccent : .primary)
             Capsule()
               .fill(selectedZone == zone ? piliAccent : Color.clear)
-              .frame(width: 30, height: 4)
+              .frame(width: 28, height: 3)
           }
         }
         .buttonStyle(PlainButtonStyle())
       }
     }
     .frame(maxWidth: .infinity)
-    .padding(.top, 2)
-    .padding(.bottom, 4)
+    .padding(.top, 9)
+    .padding(.bottom, 7)
     .background(Color(UIColor.systemBackground))
   }
 
@@ -3413,14 +3346,7 @@ private struct PiliNativeHomeView: View {
       PiliNativeErrorView(message: error) { model.refresh("home") }
     } else {
       ScrollView {
-        LazyVGrid(columns: columns, spacing: 10) {
-          if let item = model.continueWatching, !hidesContinueWatching {
-            PiliNativeContinueWatchingCard(
-              item: item,
-              action: model.openContinueWatching,
-              close: { hidesContinueWatching = true }
-            )
-          }
+        LazyVGrid(columns: columns, spacing: 14) {
           ForEach(model.homeVideos) { video in
             PiliNativeVideoCard(video: video) { model.openVideo(video) }
               .onAppear {
@@ -3429,14 +3355,12 @@ private struct PiliNativeHomeView: View {
           }
         }
         .padding(.horizontal, 12)
-        .padding(.top, 10)
+        .padding(.top, 12)
         if model.homeLoadingMore { ProgressView().padding(.vertical, 20) }
         else { Color.clear.frame(height: 24) }
       }
-      .refreshable {
-        model.refresh("home")
-        model.loadContinueWatching(force: true)
-      }
+      .background(Color(UIColor.systemGroupedBackground))
+      .refreshable { model.refresh("home") }
     }
   }
 
@@ -3447,7 +3371,7 @@ private struct PiliNativeHomeView: View {
       PiliNativeErrorView(message: error) { model.loadHomeZone("live", refresh: true) }
     } else {
       ScrollView {
-        LazyVGrid(columns: columns, spacing: 10) {
+        LazyVGrid(columns: columns, spacing: 14) {
           ForEach(model.liveRooms) { room in
             PiliNativeLiveRoomCard(room: room) { model.openLiveRoom(room) }
               .onAppear {
@@ -3456,10 +3380,11 @@ private struct PiliNativeHomeView: View {
           }
         }
         .padding(.horizontal, 12)
-        .padding(.top, 10)
+        .padding(.top, 12)
         if model.liveLoadingMore { ProgressView().padding(.vertical, 20) }
         else { Color.clear.frame(height: 24) }
       }
+      .background(Color(UIColor.systemGroupedBackground))
       .refreshable { model.loadHomeZone("live", refresh: true) }
       .onAppear { model.loadHomeZone("live") }
     }
@@ -3472,7 +3397,7 @@ private struct PiliNativeHomeView: View {
       PiliNativeErrorView(message: error) { model.loadHomeZone("hot", refresh: true) }
     } else {
       ScrollView {
-        LazyVGrid(columns: columns, spacing: 10) {
+        LazyVGrid(columns: columns, spacing: 14) {
           ForEach(model.hotVideos) { video in
             PiliNativeVideoCard(video: video) { model.openVideo(video) }
               .onAppear {
@@ -3481,10 +3406,11 @@ private struct PiliNativeHomeView: View {
           }
         }
         .padding(.horizontal, 12)
-        .padding(.top, 10)
+        .padding(.top, 12)
         if model.hotLoadingMore { ProgressView().padding(.vertical, 20) }
         else { Color.clear.frame(height: 24) }
       }
+      .background(Color(UIColor.systemGroupedBackground))
       .refreshable { model.loadHomeZone("hot", refresh: true) }
       .onAppear { model.loadHomeZone("hot") }
     }
@@ -3513,40 +3439,47 @@ private struct PiliNativeVideoCard: View {
 
           if !video.durationText.isEmpty {
             Text(video.durationText)
-              .font(.system(size: 11, weight: .medium))
+              .font(.caption2)
               .foregroundColor(.white)
               .padding(.horizontal, 5)
               .padding(.vertical, 3)
-              .background(Color.black.opacity(0.62))
-              .clipShape(RoundedRectangle(cornerRadius: 4, style: .continuous))
-              .padding(6)
+              .background(Color.black.opacity(0.68))
+              .cornerRadius(4)
+              .padding(5)
           }
         }
-        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .cornerRadius(9)
 
         Text(video.title)
-          .font(.system(size: 15.5, weight: .regular))
+          .font(.subheadline)
+          .fontWeight(.medium)
           .foregroundColor(.primary)
           .lineLimit(2)
           .multilineTextAlignment(.leading)
           .fixedSize(horizontal: false, vertical: true)
-          .frame(height: 39, alignment: .topLeading)
+          .frame(height: 40, alignment: .topLeading)
           .frame(maxWidth: .infinity, alignment: .leading)
 
-        HStack(spacing: 7) {
+        HStack(spacing: 4) {
+          Image(systemName: "person")
           Text(video.owner)
             .lineLimit(1)
             .truncationMode(.tail)
-          Spacer(minLength: 2)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+
+        HStack(spacing: 4) {
           if !video.viewText.isEmpty {
-            Label(video.viewText, systemImage: "play.circle")
+            Image(systemName: "play.rectangle")
+            Text(video.viewText).lineLimit(1)
           }
           if !video.danmakuText.isEmpty {
-            Label(video.danmakuText, systemImage: "text.bubble")
+            Image(systemName: "text.bubble")
+            Text(video.danmakuText).lineLimit(1)
           }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .font(.system(size: 11))
+        .font(.caption2)
         .foregroundColor(.secondary)
       }
       .frame(maxWidth: .infinity, alignment: .leading)
@@ -3621,57 +3554,6 @@ private struct PiliNativeLiveRoomCard: View {
     }
     .buttonStyle(PlainButtonStyle())
     .accessibilityLabel("直播，\(room.title)，\(room.owner)")
-  }
-}
-
-private struct PiliNativeContinueWatchingCard: View {
-  let item: PiliNativeLibraryItem
-  let action: () -> Void
-  let close: () -> Void
-
-  var body: some View {
-    ZStack(alignment: .topTrailing) {
-      Button(action: action) {
-        HStack(spacing: 10) {
-          Image(systemName: "clock.arrow.circlepath")
-            .font(.system(size: 19, weight: .semibold))
-            .foregroundColor(.white)
-            .frame(width: 38, height: 38)
-            .background(piliAccent)
-            .clipShape(Circle())
-          VStack(alignment: .leading, spacing: 3) {
-            Text("上次看到这里")
-              .font(.system(size: 13))
-              .foregroundColor(.secondary)
-            Text(item.title)
-              .font(.system(size: 15, weight: .medium))
-              .foregroundColor(.primary)
-              .lineLimit(1)
-            if !item.progressText.isEmpty {
-              Text(item.progressText)
-                .font(.system(size: 10))
-                .foregroundColor(piliAccent)
-            }
-          }
-          Spacer(minLength: 18)
-        }
-        .padding(.horizontal, 12)
-        .frame(maxWidth: .infinity, minHeight: 106)
-        .background(Color(UIColor.secondarySystemGroupedBackground))
-        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-      }
-      .buttonStyle(PlainButtonStyle())
-
-      Button(action: close) {
-        Image(systemName: "xmark.circle.fill")
-          .font(.system(size: 19))
-          .foregroundColor(Color(UIColor.tertiaryLabel))
-          .padding(10)
-      }
-      .buttonStyle(PlainButtonStyle())
-    }
-    .padding(.top, 24)
-    .accessibilityLabel("继续观看，\(item.title)")
   }
 }
 
@@ -4619,22 +4501,24 @@ private struct PiliNativeVideoDetailView: View {
         .frame(maxHeight: .infinity, alignment: .bottom)
       }
 
-      VStack {
-        HStack {
-          Button(action: close) {
-            Image(systemName: "chevron.left")
-              .font(.system(size: 16, weight: .bold))
-              .foregroundColor(.white)
-              .frame(width: 36, height: 36)
-              .background(Color.black.opacity(0.55))
-              .clipShape(Circle())
+      if !model.originalPlayerReady {
+        VStack {
+          HStack {
+            Button(action: close) {
+              Image(systemName: "chevron.left")
+                .font(.system(size: 16, weight: .bold))
+                .foregroundColor(.white)
+                .frame(width: 36, height: 36)
+                .background(Color.black.opacity(0.55))
+                .clipShape(Circle())
+            }
+            .buttonStyle(PlainButtonStyle())
+            Spacer()
           }
-          .buttonStyle(PlainButtonStyle())
           Spacer()
         }
-        Spacer()
+        .padding(12)
       }
-      .padding(12)
     }
     .aspectRatio(16 / 9, contentMode: .fit)
   }

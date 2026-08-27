@@ -156,8 +156,6 @@ final class IOSNativeUIBridge {
         return _loadVideoDetail(_arguments(call));
       case 'loadNativeHomeZone':
         return _loadNativeHomeZone(_arguments(call));
-      case 'loadNativeContinueWatching':
-        return _loadNativeContinueWatching();
       case 'loadRelatedVideos':
         return _loadRelatedVideos(_arguments(call));
       case 'loadNativePlayback':
@@ -326,27 +324,6 @@ final class IOSNativeUIBridge {
       };
     }
     return _snapshot()['home'] as Map<String, dynamic>;
-  }
-
-  Future<Map<String, dynamic>> _loadNativeContinueWatching() async {
-    if (!Accounts.main.isLogin) {
-      return const {'state': 'success', 'item': null};
-    }
-    final result = await _loadNativeHistory(const {});
-    if (result['state'] != 'success') return result;
-    final items = result['items'];
-    Map<dynamic, dynamic>? item;
-    if (items is List) {
-      for (final candidate in items) {
-        if (candidate is Map &&
-            _nonEmpty(candidate['bvid']?.toString()) != null &&
-            (_asDouble(candidate['progress']) ?? 0) < 0.995) {
-          item = candidate;
-          break;
-        }
-      }
-    }
-    return {'state': 'success', 'item': item};
   }
 
   Future<Map<String, dynamic>> _openVideo(
