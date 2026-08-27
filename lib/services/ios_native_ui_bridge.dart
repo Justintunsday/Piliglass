@@ -14,6 +14,7 @@ import 'package:PiliPlus/http/follow.dart';
 import 'package:PiliPlus/http/dynamics.dart';
 import 'package:PiliPlus/http/danmaku.dart';
 import 'package:PiliPlus/http/login.dart';
+import 'package:PiliPlus/http/live.dart';
 import 'package:PiliPlus/http/loading_state.dart';
 import 'package:PiliPlus/http/member.dart';
 import 'package:PiliPlus/http/msg.dart';
@@ -29,6 +30,7 @@ import 'package:PiliPlus/models/common/setting_type.dart';
 import 'package:PiliPlus/models/common/video/video_quality.dart';
 import 'package:PiliPlus/models/common/video/video_type.dart';
 import 'package:PiliPlus/models/dynamics/result.dart';
+import 'package:PiliPlus/models_new/live/live_feed_index/card_data_list_item.dart';
 import 'package:PiliPlus/models/search/result.dart';
 import 'package:PiliPlus/pages/about/view.dart';
 import 'package:PiliPlus/pages/dynamics/controller.dart';
@@ -152,6 +154,8 @@ final class IOSNativeUIBridge {
         return _setNativePlayerFullscreen(_arguments(call));
       case 'loadVideoDetail':
         return _loadVideoDetail(_arguments(call));
+      case 'loadNativeHomeZone':
+        return _loadNativeHomeZone(_arguments(call));
       case 'loadRelatedVideos':
         return _loadRelatedVideos(_arguments(call));
       case 'loadNativePlayback':
@@ -257,6 +261,69 @@ final class IOSNativeUIBridge {
       await _dynamicsTabController.onLoadMore();
     }
     return _snapshot();
+  }
+
+  Future<Map<String, dynamic>> _loadNativeHomeZone(
+    Map<dynamic, dynamic> arguments,
+  ) async {
+    final zone = arguments['zone']?.toString() ?? 'recommend';
+    final page = _asInt(arguments['page']) ?? 1;
+    if (zone == 'hot') {
+      final result = await VideoHttp.hotVideoList(pn: page, ps: 20);
+      return switch (result) {
+        Loading() => const {'state': 'loading'},
+        Error(:final errMsg, :final code) => {
+          'state': 'error',
+          'error': errMsg ?? '热门视频加载失败',
+          'code': ?code,
+        },
+        Success(:final response) => {
+          'state': 'success',
+          'hasMore': response.length >= 20,
+          'items': response
+              .asMap()
+              .entries
+              .map((entry) => _videoMap(entry.value, entry.key))
+              .toList(),
+        },
+      };
+    }
+    if (zone == 'live') {
+      final result = await LiveHttp.liveFeedIndex(pn: page);
+      return switch (result) {
+        Loading() => const {'state': 'loading'},
+        Error(:final errMsg, :final code) => {
+          'state': 'error',
+          'error': errMsg ?? '直播专区加载失败',
+          'code': ?code,
+        },
+        Success(:final response) => {
+          'state': 'success',
+          'hasMore': response.hasMore != 0,
+          'items': (response.cardList ?? const [])
+              .map((card) => card.cardData?.smallCardV1)
+              .whereType<CardLiveItem>()
+              .toList()
+              .asMap()
+              .entries
+              .map((entry) {
+                final item = entry.value;
+                return {
+                  'id': item.roomid?.toString() ?? 'live-${entry.key}',
+                  'roomId': item.roomid,
+                  'title': item.title ?? '直播间',
+                  'cover': _normalizeURL(item.systemCover),
+                  'owner': item.uname ?? '',
+                  'ownerFace': _normalizeURL(item.face),
+                  'area': item.areaName ?? '直播',
+                  'viewText': item.watchedShow?.textLarge ?? '',
+                };
+              })
+              .toList(),
+        },
+      };
+    }
+    return _snapshot()['home'] as Map<String, dynamic>;
   }
 
   Future<Map<String, dynamic>> _openVideo(
@@ -1566,6 +1633,7 @@ final class IOSNativeUIBridge {
     '/history',
     '/later',
     '/loginPage',
+    '/liveRoom',
     '/member',
     '/memberDynamics',
     '/search',
@@ -1583,6 +1651,11 @@ final class IOSNativeUIBridge {
       parameters = rawParameters.map(
         (key, value) => MapEntry(key.toString(), value.toString()),
       );
+    }
+    if (route == '/liveRoom') {
+      final roomId = _asInt(parameters?['roomId']);
+      PageUtils.toLiveRoom(roomId);
+      return;
     }
     await Get.toNamed(
       route,
@@ -3015,6 +3088,7 @@ final class IOSNativeUIBridge {
         'danmakuText': _compactNumber(_asInt(stat.danmu)),
         'duration': duration,
         'durationText': _durationText(duration),
+        'pubdateText': DateFormatUtils.format(_asInt(item.pubdate)),
       };
     } catch (_) {
       return {
