@@ -399,6 +399,7 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
   @Published private(set) var danmakuRevision = 0
   @Published var danmakuEnabled = true
   @Published var isFullscreen = false
+  @Published var fullscreenCommentsVisible = false
   @Published private(set) var playbackRate: Float = 1
   @Published private(set) var isHDR = false
   @Published private(set) var hdrBrightnessActive = false
@@ -568,6 +569,10 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
     onVideoActionRequested?(action)
   }
 
+  func toggleFullscreenComments() {
+    fullscreenCommentsVisible.toggle()
+  }
+
   func requestDanmakuSend(_ content: String) {
     let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmed.isEmpty else { return }
@@ -698,6 +703,7 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
     hdrBrightnessActive = false
     pictureInPicturePlayer = nil
     isTryingVideoCandidates = false
+    fullscreenCommentsVisible = false
   }
 
   func fail(_ message: String) {
@@ -1306,6 +1312,8 @@ final class PiliNativePlayerViewController: UIViewController, UIGestureRecognize
   private var isScrubbing = false
   private var controlsLocked = false
   private var settingsPanelVisible = false
+  private var videoSurfaceRevealed = false
+  private var surfaceRevealTask: DispatchWorkItem?
 
   init(session: PiliNativePlayerSession, fullscreen: Bool) {
     self.session = session
@@ -1327,6 +1335,8 @@ final class PiliNativePlayerViewController: UIViewController, UIGestureRecognize
   override func viewDidLoad() {
     super.viewDidLoad()
     buildInterface()
+    canvas.backgroundColor = .clear
+    canvas.layer.opacity = 0
     bindSession()
     session.bindVideoSurface(canvas)
     pipButton.isHidden = !AVPictureInPictureController.isPictureInPictureSupported()
@@ -1353,11 +1363,13 @@ final class PiliNativePlayerViewController: UIViewController, UIGestureRecognize
   override func viewWillDisappear(_ animated: Bool) {
     super.viewWillDisappear(animated)
     controlsHideTask?.cancel()
+    surfaceRevealTask?.cancel()
     statusTimer?.invalidate()
     statusTimer = nil
   }
 
   func detachVideoSurface() {
+    surfaceRevealTask?.cancel()
     session.unbindVideoSurface(canvas)
   }
 
@@ -1787,6 +1799,10 @@ final class PiliNativePlayerViewController: UIViewController, UIGestureRecognize
   }
 
   private func bindSession() {
+    session.$isReady.receive(on: DispatchQueue.main).sink { [weak self] ready in
+      guard ready else { return }
+      self?.revealVideoSurfaceAfterPreRender()
+    }.store(in: &cancellables)
     session.$isPlaying.receive(on: DispatchQueue.main).sink { [weak self] playing in
       self?.playButton.setImage(UIImage(systemName: playing ? "pause.fill" : "play.fill"), for: .normal)
     }.store(in: &cancellables)
@@ -2027,7 +2043,14 @@ final class PiliNativePlayerViewController: UIViewController, UIGestureRecognize
   }
 
   @objc private func requestLike() { session.requestVideoAction("like") }
-  @objc private func requestComment() { session.requestVideoAction("comment") }
+  @objc private func requestComment() {
+    if fullscreenPresentation {
+      session.toggleFullscreenComments()
+      scheduleControlsHide()
+    } else {
+      session.requestVideoAction("comment")
+    }
+  }
   @objc private func requestFavorite() { session.requestVideoAction("favorite") }
   @objc private func requestShare() { session.requestVideoAction("share") }
 
@@ -2105,6 +2128,29 @@ final class PiliNativePlayerViewController: UIViewController, UIGestureRecognize
     }
     controlsHideTask = task
     DispatchQueue.main.asyncAfter(deadline: .now() + 3, execute: task)
+  }
+
+  private func revealVideoSurfaceAfterPreRender() {
+    guard !videoSurfaceRevealed else { return }
+    surfaceRevealTask?.cancel()
+    let task = DispatchWorkItem { [weak self] in
+      guard let self, !self.videoSurfaceRevealed else { return }
+      self.videoSurfaceRevealed = true
+      let fade = CABasicAnimation(keyPath: "opacity")
+      fade.fromValue = 0
+      fade.toValue = 1
+      fade.duration = 0.24
+      fade.timingFunction = CAMediaTimingFunction(name: .easeOut)
+      CATransaction.begin()
+      CATransaction.setDisableActions(true)
+      self.canvas.layer.opacity = 1
+      CATransaction.commit()
+      self.canvas.layer.add(fade, forKey: "piliglass.first-frame-fade")
+    }
+    surfaceRevealTask = task
+    // Give Aether two display frames to attach its active rendering layer. The
+    // SwiftUI host keeps the cover visible underneath during this pre-render.
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.05, execute: task)
   }
 
   private var chromeViews: [UIView] {

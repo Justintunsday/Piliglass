@@ -432,6 +432,9 @@ private final class PiliNativeViewModel: ObservableObject {
       .sink { [weak self] fullscreen in
         guard let self else { return }
         self.originalPlayerFullscreen = fullscreen
+        if !fullscreen {
+          self.nativePlayerSession.fullscreenCommentsVisible = false
+        }
         let useLandscape = fullscreen && self.videoDetail?.isVertical != true
         self.onVideoOrientationPolicyChanged?(useLandscape)
       }
@@ -1011,6 +1014,22 @@ private final class PiliNativeViewModel: ObservableObject {
   func exitOriginalPlayerFullscreen() {
     originalPlayerFullscreen = false
     nativePlayerSession.isFullscreen = false
+    nativePlayerSession.fullscreenCommentsVisible = false
+  }
+
+  func handleVideoDeviceOrientation(_ orientation: UIDeviceOrientation) {
+    guard isVideoDetailPresented,
+          videoDetail != nil,
+          originalPlayerReady,
+          !orientation.isFlat else { return }
+    if orientation.isLandscape {
+      if !nativePlayerSession.isFullscreen {
+        nativePlayerSession.isFullscreen = true
+      }
+    } else if orientation == .portrait,
+              nativePlayerSession.isFullscreen {
+      nativePlayerSession.isFullscreen = false
+    }
   }
 
   func openVideoOwner(_ video: PiliNativeVideoDetail) {
@@ -3158,7 +3177,14 @@ private struct PiliNativeRootView: View {
         .piliEdgeSwipeBack { model.isLoginPresented = false }
     }
     .onAppear {
+      UIDevice.current.beginGeneratingDeviceOrientationNotifications()
       model.requestSnapshot()
+    }
+    .onDisappear {
+      UIDevice.current.endGeneratingDeviceOrientationNotifications()
+    }
+    .onReceive(NotificationCenter.default.publisher(for: UIDevice.orientationDidChangeNotification)) { _ in
+      model.handleVideoDeviceOrientation(UIDevice.current.orientation)
     }
     .onReceive(NotificationCenter.default.publisher(for: .piliPresentNativeProfile)) { note in
       if let memberID = note.object as? Int {
@@ -4495,6 +4521,14 @@ private struct PiliNativeVideoDetailView: View {
       }
     }
     .navigationViewStyle(StackNavigationViewStyle())
+    .onAppear {
+      model.handleVideoDeviceOrientation(UIDevice.current.orientation)
+    }
+    .onChange(of: model.originalPlayerReady) { ready in
+      if ready {
+        model.handleVideoDeviceOrientation(UIDevice.current.orientation)
+      }
+    }
     .sheet(isPresented: $model.isDynamicComposerPresented) {
       PiliNativeDynamicComposerView(model: model)
         .piliEdgeSwipeBack { model.isDynamicComposerPresented = false }
@@ -4509,9 +4543,14 @@ private struct PiliNativeVideoDetailView: View {
       PiliNativeCommentThreadView(model: model)
         .piliEdgeSwipeBack { model.isCommentThreadPresented = false }
     }
-    .fullScreenCover(isPresented: $model.originalPlayerFullscreen) {
-      PiliNativeOriginalPlayerFullscreenView(model: model)
+    .overlay {
+      if model.originalPlayerFullscreen {
+        PiliNativeOriginalPlayerFullscreenView(model: model)
+          .transition(.opacity)
+          .zIndex(100)
+      }
     }
+    .animation(.easeOut(duration: 0.2), value: model.originalPlayerFullscreen)
   }
 
   private func close() {
@@ -5428,13 +5467,107 @@ private struct PiliNativePortraitDanmakuBar: View {
 
 private struct PiliNativeOriginalPlayerFullscreenView: View {
   @ObservedObject var model: PiliNativeViewModel
+  @ObservedObject private var session: PiliNativePlayerSession
+
+  init(model: PiliNativeViewModel) {
+    self.model = model
+    _session = ObservedObject(wrappedValue: model.nativePlayerSession)
+  }
 
   var body: some View {
-    ZStack {
-      Color.black.ignoresSafeArea()
-      PiliNativePlayerView(session: model.nativePlayerSession, fullscreen: true)
-        .ignoresSafeArea()
+    GeometryReader { proxy in
+      ZStack(alignment: .trailing) {
+        Color.black
+        PiliRemoteImage(urlString: model.videoDetail?.cover ?? model.pendingVideo?.cover)
+          .aspectRatio(contentMode: .fit)
+          .frame(maxWidth: .infinity, maxHeight: .infinity)
+        PiliNativePlayerView(session: session, fullscreen: true)
+
+        if session.fullscreenCommentsVisible {
+          Color.black.opacity(0.16)
+            .contentShape(Rectangle())
+            .onTapGesture { session.fullscreenCommentsVisible = false }
+            .transition(.opacity)
+          fullscreenCommentsOverlay(in: proxy)
+        }
+      }
+      .frame(width: proxy.size.width, height: proxy.size.height)
     }
+    .background(Color.black)
+    .ignoresSafeArea()
+    .animation(.easeInOut(duration: 0.24), value: session.fullscreenCommentsVisible)
+    .onDisappear { session.fullscreenCommentsVisible = false }
+  }
+
+  @ViewBuilder
+  private func fullscreenCommentsOverlay(in proxy: GeometryProxy) -> some View {
+    if proxy.size.width > proxy.size.height {
+      HStack(spacing: 0) {
+        Spacer(minLength: 0)
+        PiliNativeFullscreenCommentsDrawer(
+          model: model,
+          close: { session.fullscreenCommentsVisible = false }
+        )
+        .frame(width: min(420, max(260, proxy.size.width * 0.30)))
+        .padding(.trailing, proxy.safeAreaInsets.trailing)
+        .transition(.move(edge: .trailing).combined(with: .opacity))
+      }
+    } else {
+      VStack(spacing: 0) {
+        Spacer(minLength: 0)
+        PiliNativeFullscreenCommentsDrawer(
+          model: model,
+          close: { session.fullscreenCommentsVisible = false }
+        )
+        .frame(height: min(440, proxy.size.height * 0.46))
+        .padding(.bottom, proxy.safeAreaInsets.bottom)
+        .transition(.move(edge: .bottom).combined(with: .opacity))
+      }
+    }
+  }
+}
+
+private struct PiliNativeFullscreenCommentsDrawer: View {
+  @ObservedObject var model: PiliNativeViewModel
+  let close: () -> Void
+
+  var body: some View {
+    VStack(spacing: 0) {
+      HStack(spacing: 10) {
+        Text("评论")
+          .font(.headline)
+        if model.commentsTotal > 0 {
+          Text(String(model.commentsTotal))
+            .font(.caption)
+            .foregroundColor(.secondary)
+        }
+        Spacer(minLength: 0)
+        Button(action: model.beginDynamicComment) {
+          Image(systemName: "square.and.pencil")
+        }
+        .accessibilityLabel("写评论")
+        Button(action: close) {
+          Image(systemName: "xmark.circle.fill")
+            .font(.title3)
+        }
+        .accessibilityLabel("收起评论")
+      }
+      .foregroundColor(.primary)
+      .padding(.horizontal, 16)
+      .frame(height: 52)
+      Divider()
+
+      ScrollView {
+        PiliNativeCommentsSection(model: model, showsHeader: false)
+          .padding(.horizontal, 14)
+          .padding(.vertical, 12)
+      }
+    }
+    .background(Color(UIColor.systemBackground).opacity(0.97))
+    .clipShape(
+      RoundedRectangle(cornerRadius: 18, style: .continuous)
+    )
+    .shadow(color: Color.black.opacity(0.28), radius: 18, x: -5, y: 0)
   }
 }
 
