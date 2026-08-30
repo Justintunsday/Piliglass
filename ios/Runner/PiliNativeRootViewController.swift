@@ -1095,7 +1095,6 @@ private final class PiliNativeViewModel: ObservableObject {
 
   func performVideoAction(_ action: String, video: PiliNativeVideoDetail) {
     guard !videoActionLoading else { return }
-    videoActionRevision += 1
     let generation = videoDetailGeneration
     videoActionLoading = true
     videoActionMessage = nil
@@ -1123,9 +1122,11 @@ private final class PiliNativeViewModel: ObservableObject {
         if action == "share", let rawURL = piliString(result["shareURL"]), let url = URL(string: rawURL) {
           self.presentShareSheet(title: video.title, url: url)
         } else {
+          self.videoActionRevision += 1
           self.applyVideoActionResult(action, result: result)
           DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
-            self?.refreshCurrentVideoDetail()
+            guard let self, self.videoDetailGeneration == generation else { return }
+            self.refreshCurrentVideoDetail()
           }
         }
         self.videoActionMessage = result["message"] as? String ?? "操作成功"
