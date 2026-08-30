@@ -1668,6 +1668,7 @@ final class IOSNativeUIBridge {
 
   Future<Map<String, dynamic>> _runPlaybackSourceTest({required bool force}) async {
     if (!force && _cdnLatency.isFresh && _cdnLatency.measurements.isNotEmpty) {
+      await _cdnLatency.test(_latencyCandidates(_latencySampleURLs));
       return _nativeSettingsSnapshot();
     }
     try {

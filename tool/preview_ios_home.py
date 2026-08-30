@@ -48,6 +48,28 @@ private struct PreviewAccount {
   let face: String? = "0"
 }
 private final class PiliNativeViewModel: ObservableObject {
+  let playbackSource = "auto"
+  let automaticPlaybackSource: String? = "ali"
+  let playbackSources = [
+    PiliNativePlaybackSourceOption(value: "auto", label: "自动（选择延迟最低的线路）", latencyMS: nil, latencyState: "untested"),
+    PiliNativePlaybackSourceOption(value: "baseUrl", label: "基础URL（不推荐）", latencyMS: 240, latencyState: "ok"),
+    PiliNativePlaybackSourceOption(value: "backupUrl", label: "备用URL", latencyMS: 130, latencyState: "ok"),
+    PiliNativePlaybackSourceOption(value: "ali", label: "ali（阿里云）", latencyMS: 42, latencyState: "ok"),
+    PiliNativePlaybackSourceOption(value: "cos", label: "cos（腾讯云）", latencyMS: 66, latencyState: "ok"),
+    PiliNativePlaybackSourceOption(value: "hw", label: "hw（华为云，融合CDN）", latencyMS: nil, latencyState: "timeout"),
+    PiliNativePlaybackSourceOption(value: "akamai", label: "akamai（Akamai海外）", latencyMS: nil, latencyState: "unavailable"),
+  ]
+  let playbackSourceSaving = false, playbackLatencyTesting = false
+  let playbackLatencyError: String? = nil
+  let playbackSourceError: String? = nil
+  let playbackSourceMessage: String? = nil
+  let settingsError: String? = nil
+  let liveCDN = ""
+  let settings = [PreviewSetting(key: "disableAudioCDN", value: false)]
+  func setPlaybackSource(_ value: String) {}
+  func testPlaybackSources(force: Bool = false) {}
+  func setLiveCDN(_ value: String) {}
+  func setSetting(_ key: String, value: Bool) {}
   @Published var selectedIndex = 0
   @Published var isSearchPresented = false
   @Published var isMessagesPresented = false
@@ -85,6 +107,10 @@ private struct PiliRemoteImage: View {
     Image(uiImage: image).resizable()
   }
 }
+private struct PreviewSetting {
+  let key: String
+  let value: Bool
+}
 private struct PiliNativeLoadingView: View {
   let title: String
   var body: some View { ProgressView(title) }
@@ -102,11 +128,17 @@ private struct HomePreviewApp: App {
   @StateObject private var model = PiliNativeViewModel()
   var body: some Scene {
     WindowGroup {
+      Group {
+      if ProcessInfo.processInfo.arguments.contains("--settings") {
+        NavigationStack { PiliNativePlaybackSourceSettingsView(model: model) }
+      } else {
       TabView(selection: $model.selectedIndex) {
         PiliNativeHomeView(model: model)
           .tabItem { Label("首页", systemImage: "house.fill") }.tag(0)
         Text("动态").tabItem { Label("动态", systemImage: "sparkles") }.tag(1)
         Text("我的").tabItem { Label("我的", systemImage: "person.fill") }.tag(2)
+      }
+      }
       }
       .tint(piliAccent)
       .environment(\.dynamicTypeSize, ProcessInfo.processInfo.arguments.contains("--large-text") ? .accessibility1 : .large)
@@ -126,6 +158,14 @@ private func inspectLayout() {
     [view] + view.subviews.flatMap { descendants($0) }
   }
   let views = descendants(window)
+  if ProcessInfo.processInfo.arguments.contains("--settings") {
+    let report = ["fixture": "Playback settings with simulated latency results"]
+    let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+    if let data = try? JSONSerialization.data(withJSONObject: report) {
+      try? data.write(to: documents.appendingPathComponent("layout.json"))
+    }
+    return
+  }
   let scrolls = views.compactMap { $0 as? UIScrollView }.filter {
     let frame = $0.convert($0.bounds, to: window)
     return $0.contentSize.height > $0.bounds.height + 100 &&
@@ -162,7 +202,12 @@ def main():
     start = source.index("private enum PiliNativeHomeZone:")
     end = source.index("private struct PiliNativeDynamicsView:", start)
     swift = OUTPUT / "HomePreview.swift"
-    swift.write_text(FIXTURES + source[start:end] + APP)
+    option_start = source.index("private struct PiliNativePlaybackSourceOption:")
+    option_end = source.index("private struct PiliNativeSetting:", option_start)
+    settings_start = source.index("private struct PiliNativePlaybackSourceSettingsView:")
+    settings_end = source.index("private struct PiliNativeDiagnosticLogSettingsView:", settings_start)
+    swift.write_text(FIXTURES + source[start:end] + source[option_start:option_end]
+                     + source[settings_start:settings_end] + APP)
     app = OUTPUT / "HomePreview.app"
     app.mkdir(exist_ok=True)
     info = {
@@ -199,6 +244,9 @@ def main():
         ("dark", "dark", []),
         ("large-text", "light", ["--large-text"]),
         ("last-row", "light", ["--bottom"]),
+        ("settings-light", "light", ["--settings"]),
+        ("settings-dark", "dark", ["--settings"]),
+        ("settings-large-text", "light", ["--settings", "--large-text"]),
     ]:
         subprocess.run(["xcrun", "simctl", "terminate", udid, BUNDLE_ID], capture_output=True)
         report_file.unlink(missing_ok=True)
@@ -216,7 +264,7 @@ def main():
         time.sleep(1)
         run("xcrun", "simctl", "io", udid, "screenshot", str(OUTPUT / f"{name}.png"))
         print(f"{name}: {json.dumps(report)}", flush=True)
-        if not report["drawsBehindTabBar"]:
+        if "drawsBehindTabBar" in report and not report["drawsBehindTabBar"]:
             raise RuntimeError(f"{name}: the feed is clipped above the tab bar")
 
 

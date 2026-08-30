@@ -39,13 +39,16 @@ Future<void> main() async {
 
   final failed = NativeCDNLatency(probe: (_) => Future.error(const HttpException('offline')));
   check(await failed.choose(urls) == null, 'All failures preserve default fallback');
+  await failed.test(urls);
   check(await failed.choose({'bad': 'http://['}) == null, 'Malformed URL must not hang startup');
+  await failed.test({'bad': 'http://['});
   check(await failed.choose({}) == null, 'An empty candidate list must complete');
 
   final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
   String? receivedRange;
   String? receivedQuery;
   final subscription = server.listen((request) async {
+    try {
     receivedRange = request.headers.value(HttpHeaders.rangeHeader);
     receivedQuery = request.uri.query;
     if (request.uri.path == '/slow') {
@@ -56,6 +59,11 @@ Future<void> main() async {
         ? ContentType.html : ContentType.binary;
     request.response.add([0]);
     await request.response.close();
+    } on SocketException {
+      // The timeout case deliberately aborts the client before we reply.
+    } on HttpException {
+      // A disconnected response can also surface as an HTTP exception.
+    }
   });
   Uri endpoint(String path) => Uri.parse('http://127.0.0.1:${server.port}$path');
   try {

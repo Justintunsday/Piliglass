@@ -797,7 +797,7 @@ private final class PiliNativeViewModel: ObservableObject {
         // A delayed initial response must not undo a user's like/favorite.
         if self.videoActionRevision == revision, piliBool(result["relationLoaded"]) {
           detail.liked = piliBool(result["liked"])
-          detail.coinCount = piliInt(result["coinCount"]) ?? 0
+          detail.coinCount = piliInt(result["coinCount"])
           detail.favorited = piliBool(result["favorited"])
           detail.relationLoaded = true
         }
@@ -3424,7 +3424,7 @@ private struct PiliNativeHomeView: View {
       .navigationTitle("PiliGlass")
       .navigationBarTitleDisplayMode(.inline)
       .toolbar {
-        ToolbarItem(placement: .principal) {
+        ToolbarItem(placement: .navigationBarLeading) {
           Button(action: { model.isSearchPresented = true }) {
             HStack(spacing: 10) {
               Image(systemName: "magnifyingglass")
@@ -3432,12 +3432,15 @@ private struct PiliNativeHomeView: View {
                 .foregroundStyle(.secondary)
               Spacer(minLength: 0)
             }
-            .frame(minWidth: 160, idealWidth: 260, maxWidth: .infinity)
+            .frame(minWidth: 120, idealWidth: 220, maxWidth: .infinity)
             .contentShape(Rectangle())
           }
           .tint(.primary)
           .accessibilityLabel("搜索视频")
           .accessibilityHint("当前为\(selectedZone.title)，左右滑动可切换分区")
+          .accessibilityAction(named: Text("切换到直播")) { selectedZone = .live }
+          .accessibilityAction(named: Text("切换到推荐")) { selectedZone = .recommend }
+          .accessibilityAction(named: Text("切换到热门")) { selectedZone = .hot }
         }
         ToolbarItemGroup(placement: .navigationBarTrailing) {
           if model.account.isLogin {
@@ -7548,6 +7551,7 @@ private struct PiliNativePlaybackSourceSettingsView: View {
               if source.value != "auto" {
                 Text(model.playbackLatencyTesting ? "检测中" : source.latencyText)
                   .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                  .fixedSize(horizontal: true, vertical: false)
               }
               Image(systemName: "checkmark")
                 .foregroundStyle(piliAccent)
