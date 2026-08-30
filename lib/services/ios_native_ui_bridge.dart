@@ -27,6 +27,7 @@ import 'package:PiliPlus/models/common/dynamic/dynamics_type.dart';
 import 'package:PiliPlus/models/common/nav_bar_config.dart';
 import 'package:PiliPlus/models/common/search/search_type.dart';
 import 'package:PiliPlus/models/common/setting_type.dart';
+import 'package:PiliPlus/models/common/video/cdn_type.dart';
 import 'package:PiliPlus/models/common/video/video_quality.dart';
 import 'package:PiliPlus/models/common/video/video_type.dart';
 import 'package:PiliPlus/models/dynamics/result.dart';
@@ -49,6 +50,7 @@ import 'package:PiliPlus/utils/accounts/account.dart';
 import 'package:PiliPlus/utils/date_utils.dart';
 import 'package:PiliPlus/utils/extension/get_ext.dart';
 import 'package:PiliPlus/utils/id_utils.dart';
+import 'package:PiliPlus/utils/native_playback_source.dart';
 import 'package:PiliPlus/utils/page_utils.dart';
 import 'package:PiliPlus/utils/storage.dart';
 import 'package:PiliPlus/utils/storage_key.dart';
@@ -188,6 +190,8 @@ final class IOSNativeUIBridge {
         return _setNativeSetting(_arguments(call));
       case 'setNativeVideoQuality':
         return _setNativeVideoQuality(_arguments(call));
+      case 'setNativePlaybackSource':
+        return _setNativePlaybackSource(_arguments(call));
       case 'openSettingsSection':
         return _openSettingsSection(_arguments(call));
       case 'searchVideos':
@@ -605,21 +609,20 @@ final class IOSNativeUIBridge {
         }) {
           final rawUrls = urls.where((url) => url.isNotEmpty).toList();
           if (rawUrls.isEmpty) return const [];
-          final result = <String>[];
-
-          // AVFoundation is more sensitive to CDN host rewrites than mpv.
-          // Try the signed URL returned by Bilibili first, then the user's
-          // preferred CDN and every backup URL from the playurl response.
-          void add(String url) {
-            if (url.isNotEmpty && !result.contains(url)) result.add(url);
-          }
-
-          add(rawUrls.first);
-          add(VideoUtils.getCdnUrl(rawUrls, isAudio: isAudio));
-          for (final url in rawUrls.skip(1)) {
-            add(url);
-          }
-          return result;
+          final independentAudio = isAudio && VideoUtils.disableAudioCDN;
+          // Automatic mode retains signed-URL-first playback. An explicit
+          // original-project CDN preference must actually be tried first.
+          return nativePlaybackUrls(
+            rawUrls,
+            preferredUrl: VideoUtils.getCdnUrl(
+              rawUrls,
+              isAudio: isAudio,
+              defaultCDNService:
+                  independentAudio ? CDNService.backupUrl : null,
+            ),
+            preferSelectedSource: independentAudio ||
+                GStorage.setting.get(SettingBoxKey.CDNService) != null,
+          );
         }
 
         final qualityValues = response.acceptQuality ?? const <int>[];
@@ -757,9 +760,10 @@ final class IOSNativeUIBridge {
         final segments = sourceSegments
             .where((segment) => segment.playUrls.isNotEmpty)
             .map((segment) {
-              final url = VideoUtils.getCdnUrl(segment.playUrls);
+              final urls = nativeTrackUrls(segment.playUrls);
               return {
-                'url': url,
+                'url': urls.firstOrNull ?? '',
+                'videoURLs': urls,
                 'duration': segment.length ?? 0,
                 'size': segment.size ?? 0,
               };
@@ -1440,6 +1444,14 @@ final class IOSNativeUIBridge {
 
   Map<String, dynamic> _nativeSettingsSnapshot() => {
     'state': 'success',
+    'playbackSource':
+        GStorage.setting.get(SettingBoxKey.CDNService) ?? 'auto',
+    'playbackSources': [
+      {'value': 'auto', 'label': '自动（优先原始地址）'},
+      for (final cdn in CDNService.values)
+        {'value': cdn.name, 'label': cdn.desc},
+    ],
+    'liveCDN': GStorage.setting.get(SettingBoxKey.liveCdnUrl) ?? '',
     'defaultVideoQuality': GStorage.setting.get(
       SettingBoxKey.defaultVideoQa,
       defaultValue: VideoQuality.super8k.code,
@@ -1505,6 +1517,47 @@ final class IOSNativeUIBridge {
       return const {'state': 'error', 'error': '不支持的视频分辨率'};
     }
     await GStorage.setting.put(SettingBoxKey.defaultVideoQa, value);
+    return _nativeSettingsSnapshot();
+  }
+
+  Future<Map<String, dynamic>> _setNativePlaybackSource(
+    Map<dynamic, dynamic> arguments,
+  ) async {
+    final value = arguments['value'];
+    if (value is! String) {
+      return const {'state': 'error', 'error': '播放源参数无效'};
+    }
+    switch (arguments['kind']) {
+      case 'video':
+        if (value == 'auto') {
+          await GStorage.setting.delete(SettingBoxKey.CDNService);
+          VideoUtils.cdnService = CDNService.backupUrl;
+        } else {
+          final source = CDNService.values
+              .where((cdn) => cdn.name == value)
+              .firstOrNull;
+          if (source == null) {
+            return const {'state': 'error', 'error': '不支持的播放源'};
+          }
+          await GStorage.setting.put(SettingBoxKey.CDNService, source.name);
+          VideoUtils.cdnService = source;
+        }
+      case 'live':
+        final String? origin;
+        try {
+          origin = normalizeLiveCDN(value);
+        } on FormatException catch (error) {
+          return {'state': 'error', 'error': error.message};
+        }
+        if (origin == null) {
+          await GStorage.setting.delete(SettingBoxKey.liveCdnUrl);
+        } else {
+          await GStorage.setting.put(SettingBoxKey.liveCdnUrl, origin);
+        }
+        VideoUtils.liveCdnUrl = origin;
+      default:
+        return const {'state': 'error', 'error': '不支持的播放源类型'};
+    }
     return _nativeSettingsSnapshot();
   }
 

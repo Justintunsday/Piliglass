@@ -289,6 +289,12 @@ private final class PiliNativeViewModel: ObservableObject {
   @Published private(set) var settingsError: String?
   @Published private(set) var defaultVideoQuality = 127
   @Published private(set) var videoQualityOptions: [PiliNativeVideoQualityOption] = []
+  @Published private(set) var playbackSource = "auto"
+  @Published private(set) var playbackSources: [PiliNativePlaybackSourceOption] = []
+  @Published private(set) var liveCDN = ""
+  @Published private(set) var playbackSourceSaving = false
+  @Published private(set) var playbackSourceMessage: String?
+  @Published private(set) var playbackSourceError: String?
 
   @Published var isLibraryPresented = false
   @Published private(set) var libraryKind = ""
@@ -1238,7 +1244,49 @@ private final class PiliNativeViewModel: ObservableObject {
     }
   }
 
+  func setPlaybackSource(_ value: String) {
+    guard playbackSources.contains(where: { $0.value == value }) else { return }
+    savePlaybackSource(kind: "video", value: value)
+  }
+
+  func setLiveCDN(_ value: String) {
+    savePlaybackSource(kind: "live", value: value)
+  }
+
+  private func savePlaybackSource(kind: String, value: String) {
+    guard !playbackSourceSaving else { return }
+    playbackSourceSaving = true
+    playbackSourceMessage = nil
+    playbackSourceError = nil
+    channel.invokeMethod(
+      "setNativePlaybackSource",
+      arguments: ["kind": kind, "value": value]
+    ) { [weak self] response in
+      DispatchQueue.main.async {
+        guard let self else { return }
+        self.playbackSourceSaving = false
+        if let error = response as? FlutterError {
+          self.playbackSourceError = error.message ?? "播放源保存失败"
+          return
+        }
+        let result = piliDictionary(response)
+        if result["state"] as? String == "success" {
+          self.applySettingsSnapshot(result)
+          self.playbackSourceMessage = "已保存，下次打开视频或直播时生效。"
+        } else {
+          self.playbackSourceError = result["error"] as? String ?? "播放源保存失败"
+        }
+      }
+    }
+  }
+
   private func applySettingsSnapshot(_ result: [String: Any]) {
+    playbackSources = (result["playbackSources"] as? [[String: Any]] ?? []).compactMap {
+      guard let value = piliString($0["value"]), let label = piliString($0["label"]) else { return nil }
+      return PiliNativePlaybackSourceOption(value: value, label: label)
+    }
+    playbackSource = piliString(result["playbackSource"]) ?? "auto"
+    liveCDN = piliString(result["liveCDN"]) ?? ""
     let rows = result["items"] as? [Any] ?? []
     settings = rows.enumerated().map {
       PiliNativeSetting(map: piliDictionary($0.element), index: $0.offset)
@@ -2686,6 +2734,12 @@ private struct PiliNativeVideoQualityOption: Identifiable {
     label = piliString(map["label"]) ?? "画质 \(index + 1)"
     shortLabel = piliString(map["shortLabel"]) ?? label
   }
+}
+
+private struct PiliNativePlaybackSourceOption: Identifiable {
+  var id: String { value }
+  let value: String
+  let label: String
 }
 
 private struct PiliNativeSetting: Identifiable {
@@ -7272,6 +7326,14 @@ private struct PiliNativeSettingsView: View {
               }
             }
 
+            if searchText.isEmpty || "播放源 CDN 视频 直播 线路".localizedCaseInsensitiveContains(searchText) {
+              Section(header: Text("播放源与线路")) {
+                NavigationLink(destination: PiliNativePlaybackSourceSettingsView(model: model)) {
+                  Label("播放源设置", systemImage: "network")
+                }
+              }
+            }
+
             Section(
               header: Text("诊断"),
               footer: Text("播放诊断日志已从播放器控制层移到这里，避免遮挡视频操作。")
@@ -7378,6 +7440,72 @@ private struct PiliNativeSettingsView: View {
   }
 }
 
+private struct PiliNativePlaybackSourceSettingsView: View {
+  @ObservedObject var model: PiliNativeViewModel
+  @State private var liveHost = ""
+
+  var body: some View {
+    Form {
+      Section(
+        header: Text("视频播放源"),
+        footer: Text("自动模式优先使用 B 站原始地址。手动选择 CDN 后优先使用所选线路，失败时仍会尝试原始和备用地址。部分 CDN 可能失效，可切回自动。")
+      ) {
+        Picker("播放线路", selection: Binding(
+          get: { model.playbackSource },
+          set: { model.setPlaybackSource($0) }
+        )) {
+          ForEach(model.playbackSources) { source in
+            Text(source.label).tag(source.value)
+          }
+        }
+        .pickerStyle(.navigationLink)
+        .disabled(model.playbackSourceSaving || model.playbackSources.isEmpty)
+
+        if let audio = model.settings.first(where: { $0.key == "disableAudioCDN" }) {
+          Toggle("音频不跟随视频 CDN", isOn: Binding(
+            get: { model.settings.first(where: { $0.key == audio.key })?.value ?? audio.value },
+            set: { model.setSetting(audio.key, value: $0) }
+          ))
+          .tint(piliAccent)
+        }
+      }
+
+      Section(
+        header: Text("直播 CDN"),
+        footer: Text("填写可信的 CDN 域名或 http(s) 地址，不含视频路径或参数；留空使用默认线路。与原版直播播放器共用配置。")
+      ) {
+        TextField("默认（可输入 CDN 域名）", text: $liveHost)
+          .keyboardType(.URL)
+          .textInputAutocapitalization(.never)
+          .autocorrectionDisabled()
+          .accessibilityLabel("直播 CDN 地址")
+        Button("保存直播线路") { model.setLiveCDN(liveHost) }
+          .disabled(model.playbackSourceSaving)
+        Button("恢复默认直播线路") { model.setLiveCDN("") }
+          .disabled(model.playbackSourceSaving)
+      }
+
+      Section(footer: Text("设置会保存在本机，下次打开视频或直播时生效，不会打断当前播放。")) {
+        if model.playbackSourceSaving {
+          ProgressView("正在保存")
+        }
+        if let error = model.playbackSourceError {
+          Text(error).foregroundColor(.red)
+        } else if let message = model.playbackSourceMessage {
+          Text(message).foregroundColor(.secondary)
+        }
+        if let error = model.settingsError {
+          Text(error).foregroundColor(.red)
+        }
+      }
+    }
+    .navigationTitle("播放源设置")
+    .navigationBarTitleDisplayMode(.inline)
+    .onAppear { liveHost = model.liveCDN }
+    .onChange(of: model.liveCDN) { liveHost = $0 }
+  }
+}
+
 private struct PiliNativeDiagnosticLogSettingsView: View {
   @State private var logText = ""
   @State private var copied = false
@@ -7444,6 +7572,13 @@ private struct PiliNativeSettingsSectionView: View {
 
   var body: some View {
     Form {
+      if section == "video" {
+        Section(header: Text("播放源与线路")) {
+          NavigationLink(destination: PiliNativePlaybackSourceSettingsView(model: model)) {
+            Label("播放源设置", systemImage: "network")
+          }
+        }
+      }
       if let group = group {
         Section(
           header: Text(group),
