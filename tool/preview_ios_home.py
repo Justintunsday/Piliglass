@@ -139,9 +139,9 @@ private func inspectLayout() {
   let offset = ProcessInfo.processInfo.arguments.contains("--bottom") ? bottom : min(280, bottom)
   scroll.setContentOffset(CGPoint(x: 0, y: offset), animated: false)
   let report: [String: Any] = [
-    "scrollFrame": NSStringFromCGRect(scrollFrame),
-    "tabBarFrame": NSStringFromCGRect(barFrame),
-    "contentSize": NSStringFromCGSize(scroll.contentSize),
+    "scrollFrame": NSCoder.string(for: scrollFrame),
+    "tabBarFrame": NSCoder.string(for: barFrame),
+    "contentSize": NSCoder.string(for: scroll.contentSize),
     "bottomScrollOffset": bottom,
     "drawsBehindTabBar": scrollFrame.maxY >= barFrame.maxY - 1,
     "scrollOffset": offset,
