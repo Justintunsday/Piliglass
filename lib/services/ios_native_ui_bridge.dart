@@ -9,6 +9,8 @@ import 'package:PiliPlus/grpc/im.dart';
 import 'package:PiliPlus/grpc/reply.dart';
 import 'package:PiliPlus/grpc/bilibili/im/type.pb.dart' show MsgType;
 import 'package:PiliPlus/http/fav.dart';
+import 'package:PiliPlus/http/browser_ua.dart';
+import 'package:PiliPlus/http/constants.dart';
 import 'package:PiliPlus/http/fan.dart';
 import 'package:PiliPlus/http/follow.dart';
 import 'package:PiliPlus/http/dynamics.dart';
@@ -51,6 +53,7 @@ import 'package:PiliPlus/utils/date_utils.dart';
 import 'package:PiliPlus/utils/extension/get_ext.dart';
 import 'package:PiliPlus/utils/id_utils.dart';
 import 'package:PiliPlus/utils/native_playback_source.dart';
+import 'package:PiliPlus/utils/native_cdn_latency.dart';
 import 'package:PiliPlus/utils/page_utils.dart';
 import 'package:PiliPlus/utils/storage.dart';
 import 'package:PiliPlus/utils/storage_key.dart';
@@ -73,6 +76,15 @@ final class IOSNativeUIBridge {
 
   final MainController mainController;
   final List<Worker> _workers = <Worker>[];
+  final _cdnLatency = NativeCDNLatency(
+    probe: (url) => probeMediaLatency(url, headers: {
+      'user-agent': BrowserUa.pc,
+      'referer': HttpString.baseUrl,
+    }),
+  );
+  List<String> _latencySampleURLs = [];
+  DateTime? _latencySampleTime;
+  Future<Map<String, dynamic>>? _latencyTest;
   Timer? _snapshotTimer;
   bool _disposed = false;
   String? _nativeLoginAuthCode;
@@ -156,6 +168,8 @@ final class IOSNativeUIBridge {
         return _setNativePlayerFullscreen(_arguments(call));
       case 'loadVideoDetail':
         return _loadVideoDetail(_arguments(call));
+      case 'loadVideoDetailExtras':
+        return _loadVideoDetailExtras(_arguments(call));
       case 'loadNativeHomeZone':
         return _loadNativeHomeZone(_arguments(call));
       case 'loadRelatedVideos':
@@ -192,6 +206,8 @@ final class IOSNativeUIBridge {
         return _setNativeVideoQuality(_arguments(call));
       case 'setNativePlaybackSource':
         return _setNativePlaybackSource(_arguments(call));
+      case 'testNativePlaybackSources':
+        return _testNativePlaybackSources(_arguments(call));
       case 'openSettingsSection':
         return _openSettingsSection(_arguments(call));
       case 'searchVideos':
@@ -380,6 +396,42 @@ final class IOSNativeUIBridge {
     }
   }
 
+  Future<Map<String, dynamic>> _loadVideoDetailExtras(
+    Map<dynamic, dynamic> arguments,
+  ) async {
+    final bvid = _nonEmpty(arguments['bvid']?.toString());
+    if (bvid == null) return const {'state': 'error'};
+    final extras = <String, dynamic>{'state': 'success', 'bvid': bvid};
+    // Neither optional endpoint delays the CID/play URL needed for playback.
+    await Future.wait([
+      () async {
+        try {
+          final result = await UserHttp.videoTags(bvid: bvid);
+          final tags = result.dataOrNull;
+          if (tags != null) {
+            extras['tags'] = tags.where((item) => item.tagName?.isNotEmpty == true)
+                .map((item) => {'id': item.tagId, 'name': item.tagName, 'type': item.tagType}).toList();
+          }
+        } catch (_) { /* Optional metadata remains retryable via refresh. */ }
+      }(),
+      () async {
+        if (!Accounts.main.isLogin) return;
+        try {
+          final result = await VideoHttp.videoRelation(bvid: bvid);
+          final relation = result.dataOrNull;
+          if (relation != null) {
+            extras.addAll({
+              'relationLoaded': true, 'liked': relation.like ?? false,
+              'coinCount': relation.coin?.toInt() ?? 0,
+              'favorited': relation.favorite ?? false,
+            });
+          }
+        } catch (_) { /* A relationship failure must not stop playback. */ }
+      }(),
+    ]);
+    return extras;
+  }
+
   Future<Map<String, dynamic>> _loadVideoDetail(
     Map<dynamic, dynamic> arguments,
   ) async {
@@ -390,14 +442,15 @@ final class IOSNativeUIBridge {
       return const {'state': 'error', 'error': '缺少视频编号'};
     }
 
-    final tagRequest = UserHttp.videoTags(bvid: bvid);
-    final relationRequest = Accounts.main.isLogin
+    final fast = arguments['fast'] == true;
+    final tagRequest = !fast ? UserHttp.videoTags(bvid: bvid) : null;
+    final relationRequest = !fast && Accounts.main.isLogin
         ? VideoHttp.videoRelation(bvid: bvid)
         : null;
     final result = await VideoHttp.videoIntro(bvid: bvid);
     var tags = const [];
     try {
-      tags = (await tagRequest).dataOrNull ?? const [];
+      tags = tagRequest == null ? const [] : (await tagRequest).dataOrNull ?? const [];
     } catch (_) {
       // Tags are optional; a tag endpoint failure must not hide the intro.
     }
@@ -602,7 +655,19 @@ final class IOSNativeUIBridge {
         'error': errMsg ?? '播放地址获取失败',
         'code': ?code,
       },
-      Success(:final response) => () {
+      Success(:final response) => await () async {
+        String? automaticSource;
+        final automatic = GStorage.setting.get(SettingBoxKey.CDNService) == null;
+        Future<void> prepareSource(Iterable<String> urls) async {
+          _latencySampleURLs = urls.where((url) => url.isNotEmpty).toList();
+          _latencySampleTime = DateTime.now();
+          if (automatic) {
+            automaticSource = await _cdnLatency.choose(
+              _latencyCandidates(_latencySampleURLs),
+            );
+          }
+        }
+
         List<String> nativeTrackUrls(
           Iterable<String> urls, {
           bool isAudio = false,
@@ -610,18 +675,19 @@ final class IOSNativeUIBridge {
           final rawUrls = urls.where((url) => url.isNotEmpty).toList();
           if (rawUrls.isEmpty) return const [];
           final independentAudio = isAudio && VideoUtils.disableAudioCDN;
-          // Automatic mode retains signed-URL-first playback. An explicit
-          // original-project CDN preference must actually be tried first.
+          // A measured automatic source or an explicit user choice wins.
+          // All original signed URLs remain available as fallbacks.
           return nativePlaybackUrls(
             rawUrls,
             preferredUrl: VideoUtils.getCdnUrl(
               rawUrls,
               isAudio: isAudio,
               defaultCDNService:
-                  independentAudio ? CDNService.backupUrl : null,
+                  independentAudio ? CDNService.backupUrl :
+                  automaticSource == null ? null : CDNService.values.byName(automaticSource!),
             ),
             preferSelectedSource: independentAudio ||
-                GStorage.setting.get(SettingBoxKey.CDNService) != null,
+                !automatic || automaticSource != null,
           );
         }
 
@@ -684,6 +750,7 @@ final class IOSNativeUIBridge {
           }
           candidates.sort((a, b) => codecRank(a).compareTo(codecRank(b)));
           final selectedVideo = candidates.first;
+          await prepareSource(selectedVideo.playUrls);
           final videoUrls = <String>[];
           for (final candidate in candidates) {
             for (final url in nativeTrackUrls(candidate.playUrls)) {
@@ -757,6 +824,9 @@ final class IOSNativeUIBridge {
         }
 
         final sourceSegments = response.durl ?? const [];
+        if (sourceSegments.isNotEmpty) {
+          await prepareSource(sourceSegments.first.playUrls);
+        }
         final segments = sourceSegments
             .where((segment) => segment.playUrls.isNotEmpty)
             .map((segment) {
@@ -1447,10 +1517,16 @@ final class IOSNativeUIBridge {
     'playbackSource':
         GStorage.setting.get(SettingBoxKey.CDNService) ?? 'auto',
     'playbackSources': [
-      {'value': 'auto', 'label': '自动（优先原始地址）'},
+      {'value': 'auto', 'label': '自动（选择延迟最低的线路）'},
       for (final cdn in CDNService.values)
-        {'value': cdn.name, 'label': cdn.desc},
+        {
+          'value': cdn.name,
+          'label': cdn.desc,
+          'latencyMS': _cdnLatency.isFresh ? _cdnLatency.measurements[cdn.name]?.milliseconds : null,
+          'latencyState': _cdnLatency.isFresh ? _cdnLatency.measurements[cdn.name]?.status ?? 'untested' : 'untested',
+        },
     ],
+    'automaticPlaybackSource': _cdnLatency.bestSource(_latencyCandidates(_latencySampleURLs)),
     'liveCDN': GStorage.setting.get(SettingBoxKey.liveCdnUrl) ?? '',
     'defaultVideoQuality': GStorage.setting.get(
       SettingBoxKey.defaultVideoQa,
@@ -1559,6 +1635,62 @@ final class IOSNativeUIBridge {
         return const {'state': 'error', 'error': '不支持的播放源类型'};
     }
     return _nativeSettingsSnapshot();
+  }
+
+  Map<String, String> _latencyCandidates(Iterable<String> urls) {
+    final raw = urls.where((url) => url.isNotEmpty).toList();
+    if (raw.isEmpty) return const {};
+    final candidates = <String, String>{};
+    for (final cdn in [CDNService.baseUrl, CDNService.backupUrl,
+      CDNService.ali, CDNService.cos, CDNService.hw, CDNService.akamai]) {
+      final url = VideoUtils.getCdnUrl(raw, defaultCDNService: cdn);
+      final uri = Uri.tryParse(url);
+      if (uri == null || (uri.scheme != 'https' && uri.scheme != 'http') || uri.host.isEmpty) continue;
+      // Don't label an unchanged fallback URL as a different CDN's result.
+      if (cdn.host != null && uri.host != cdn.host) continue;
+      candidates[cdn.name] = url;
+    }
+    return candidates;
+  }
+
+  Future<Map<String, dynamic>> _testNativePlaybackSources(
+    Map<dynamic, dynamic> arguments,
+  ) async {
+    if (_latencyTest != null) return _latencyTest!;
+    final request = _runPlaybackSourceTest(force: arguments['force'] == true);
+    _latencyTest = request;
+    try {
+      return await request;
+    } finally {
+      _latencyTest = null;
+    }
+  }
+
+  Future<Map<String, dynamic>> _runPlaybackSourceTest({required bool force}) async {
+    if (!force && _cdnLatency.isFresh && _cdnLatency.measurements.isNotEmpty) {
+      return _nativeSettingsSnapshot();
+    }
+    try {
+      if (_latencySampleURLs.isEmpty || _latencySampleTime == null ||
+          DateTime.now().difference(_latencySampleTime!) > const Duration(minutes: 1)) {
+        // Same public sample as the original project's CDN settings dialog.
+        final sample = await VideoHttp.videoUrl(
+          cid: 196018899, bvid: 'BV1fK4y1t7hj',
+          tryLook: !Accounts.get(AccountType.video).isLogin,
+          videoType: VideoType.ugc,
+        ).timeout(const Duration(seconds: 6));
+        _latencySampleURLs = sample.dataOrNull?.dash?.video?.firstOrNull?.playUrls.toList() ?? [];
+        _latencySampleTime = DateTime.now();
+      }
+      final candidates = _latencyCandidates(_latencySampleURLs);
+      if (candidates.isEmpty) {
+        return const {'state': 'error', 'error': '暂时无法取得测试视频，请播放一个视频后重试'};
+      }
+      await _cdnLatency.test(candidates, force: force);
+      return _nativeSettingsSnapshot();
+    } catch (_) {
+      return const {'state': 'error', 'error': '线路检测失败，请检查网络后重试'};
+    }
   }
 
   Future<void> _openSettingsSection(Map<dynamic, dynamic> arguments) async {

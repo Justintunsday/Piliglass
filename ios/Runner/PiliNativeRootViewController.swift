@@ -293,6 +293,9 @@ private final class PiliNativeViewModel: ObservableObject {
   @Published private(set) var playbackSources: [PiliNativePlaybackSourceOption] = []
   @Published private(set) var liveCDN = ""
   @Published private(set) var playbackSourceSaving = false
+  @Published private(set) var playbackLatencyTesting = false
+  @Published private(set) var playbackLatencyError: String?
+  @Published private(set) var automaticPlaybackSource: String?
   @Published private(set) var playbackSourceMessage: String?
   @Published private(set) var playbackSourceError: String?
 
@@ -402,6 +405,8 @@ private final class PiliNativeViewModel: ObservableObject {
   private var nativePlayerCID: Int?
   private var nativePlayerQuality: Int?
   private var nativePlaybackGeneration = UUID()
+  private var videoDetailGeneration = UUID()
+  private var videoActionRevision = 0
   private var nativePlayerFullscreenCancellable: AnyCancellable?
   var onVideoOrientationPolicyChanged: ((Bool) -> Void)?
 
@@ -727,11 +732,16 @@ private final class PiliNativeViewModel: ObservableObject {
   }
 
   private func requestVideoDetail(_ arguments: [String: Any]) {
+    let generation = UUID()
+    videoDetailGeneration = generation
+    var arguments = arguments
+    arguments["fast"] = true
     videoDetailLoading = true
     videoDetailError = nil
     channel.invokeMethod("loadVideoDetail", arguments: arguments) { [weak self] response in
       DispatchQueue.main.async {
-        guard let self = self else { return }
+        guard let self, self.videoDetailGeneration == generation,
+              self.isVideoDetailPresented else { return }
         self.videoDetailLoading = false
         if let flutterError = response as? FlutterError {
           self.videoDetailError = flutterError.message ?? "视频详情加载失败"
@@ -765,6 +775,33 @@ private final class PiliNativeViewModel: ObservableObject {
           self.loadComments(oid: aid, type: 1)
         }
         self.loadRelatedVideos(bvid: detail.bvid)
+        self.loadVideoDetailExtras(bvid: detail.bvid, generation: generation)
+      }
+    }
+  }
+
+  private func loadVideoDetailExtras(bvid: String, generation: UUID) {
+    let revision = videoActionRevision
+    channel.invokeMethod("loadVideoDetailExtras", arguments: ["bvid": bvid]) { [weak self] response in
+      DispatchQueue.main.async {
+        guard let self, self.videoDetailGeneration == generation,
+              self.isVideoDetailPresented,
+              var detail = self.videoDetail, detail.bvid == bvid else { return }
+        let result = piliDictionary(response)
+        guard result["state"] as? String == "success" else { return }
+        if let tags = result["tags"] as? [Any] {
+          detail.tags = tags.enumerated().map {
+            PiliNativeVideoTag(map: piliDictionary($0.element), index: $0.offset)
+          }
+        }
+        // A delayed initial response must not undo a user's like/favorite.
+        if self.videoActionRevision == revision, piliBool(result["relationLoaded"]) {
+          detail.liked = piliBool(result["liked"])
+          detail.coinCount = piliInt(result["coinCount"]) ?? 0
+          detail.favorited = piliBool(result["favorited"])
+          detail.relationLoaded = true
+        }
+        self.videoDetail = detail
       }
     }
   }
@@ -988,6 +1025,7 @@ private final class PiliNativeViewModel: ObservableObject {
   }
 
   func closeVideoDetail() {
+    videoDetailGeneration = UUID()
     onVideoOrientationPolicyChanged?(false)
     nativePlaybackGeneration = UUID()
     originalPlayerReady = false
@@ -1057,6 +1095,8 @@ private final class PiliNativeViewModel: ObservableObject {
 
   func performVideoAction(_ action: String, video: PiliNativeVideoDetail) {
     guard !videoActionLoading else { return }
+    videoActionRevision += 1
+    let generation = videoDetailGeneration
     videoActionLoading = true
     videoActionMessage = nil
     channel.invokeMethod(
@@ -1068,7 +1108,8 @@ private final class PiliNativeViewModel: ObservableObject {
       ]
     ) { [weak self] response in
       DispatchQueue.main.async {
-        guard let self = self else { return }
+        guard let self, self.videoDetailGeneration == generation,
+              self.videoDetail?.bvid == video.bvid else { return }
         self.videoActionLoading = false
         if let error = response as? FlutterError {
           self.videoActionMessage = error.message ?? "操作失败"
@@ -1253,6 +1294,25 @@ private final class PiliNativeViewModel: ObservableObject {
     savePlaybackSource(kind: "live", value: value)
   }
 
+  func testPlaybackSources(force: Bool = false) {
+    guard !playbackLatencyTesting else { return }
+    playbackLatencyTesting = true
+    playbackLatencyError = nil
+    channel.invokeMethod("testNativePlaybackSources", arguments: ["force": force]) { [weak self] response in
+      DispatchQueue.main.async {
+        guard let self else { return }
+        self.playbackLatencyTesting = false
+        let result = piliDictionary(response)
+        if result["state"] as? String == "success" {
+          self.applySettingsSnapshot(result)
+        } else {
+          self.playbackLatencyError = (response as? FlutterError)?.message
+            ?? result["error"] as? String ?? "线路检测失败，请重试"
+        }
+      }
+    }
+  }
+
   private func savePlaybackSource(kind: String, value: String) {
     guard !playbackSourceSaving else { return }
     playbackSourceSaving = true
@@ -1283,8 +1343,13 @@ private final class PiliNativeViewModel: ObservableObject {
   private func applySettingsSnapshot(_ result: [String: Any]) {
     playbackSources = (result["playbackSources"] as? [[String: Any]] ?? []).compactMap {
       guard let value = piliString($0["value"]), let label = piliString($0["label"]) else { return nil }
-      return PiliNativePlaybackSourceOption(value: value, label: label)
+      return PiliNativePlaybackSourceOption(
+        value: value, label: label,
+        latencyMS: piliOptionalInt($0["latencyMS"]),
+        latencyState: piliString($0["latencyState"]) ?? "untested"
+      )
     }
+    automaticPlaybackSource = piliString(result["automaticPlaybackSource"])
     playbackSource = piliString(result["playbackSource"]) ?? "auto"
     liveCDN = piliString(result["liveCDN"]) ?? ""
     let rows = result["items"] as? [Any] ?? []
@@ -2661,7 +2726,7 @@ private struct PiliNativeVideoDetail {
   var liked: Bool
   var coinCount: Int
   var favorited: Bool
-  let relationLoaded: Bool
+  var relationLoaded: Bool
   let copyrightText: String
   let isVertical: Bool
   let argueMessage: String
@@ -2669,7 +2734,7 @@ private struct PiliNativeVideoDetail {
   let collectionID: Int?
   let collectionCount: Int
   let collectionItems: [PiliNativeVideo]
-  let tags: [PiliNativeVideoTag]
+  var tags: [PiliNativeVideoTag]
   let staff: [PiliNativeVideoStaff]
   let pages: [PiliNativeVideoPart]
 
@@ -2740,6 +2805,17 @@ private struct PiliNativePlaybackSourceOption: Identifiable {
   var id: String { value }
   let value: String
   let label: String
+  let latencyMS: Int?
+  let latencyState: String
+
+  var latencyText: String {
+    if let latencyMS { return "\(latencyMS) ms" }
+    switch latencyState {
+    case "timeout": return "超时"
+    case "unavailable": return "不可用"
+    default: return "未检测"
+    }
+  }
 }
 
 private struct PiliNativeSetting: Identifiable {
@@ -3348,14 +3424,20 @@ private struct PiliNativeHomeView: View {
       .navigationTitle("PiliGlass")
       .navigationBarTitleDisplayMode(.inline)
       .toolbar {
-        ToolbarItem(placement: .navigationBarLeading) {
+        ToolbarItem(placement: .principal) {
           Button(action: { model.isSearchPresented = true }) {
-            Label("搜索", systemImage: "magnifyingglass")
+            HStack(spacing: 10) {
+              Image(systemName: "magnifyingglass")
+              Text("搜索视频")
+                .foregroundStyle(.secondary)
+              Spacer(minLength: 0)
+            }
+            .frame(minWidth: 160, idealWidth: 260, maxWidth: .infinity)
+            .contentShape(Rectangle())
           }
           .tint(.primary)
-        }
-        ToolbarItem(placement: .principal) {
-          zoneSelector
+          .accessibilityLabel("搜索视频")
+          .accessibilityHint("当前为\(selectedZone.title)，左右滑动可切换分区")
         }
         ToolbarItemGroup(placement: .navigationBarTrailing) {
           if model.account.isLogin {
@@ -3381,16 +3463,6 @@ private struct PiliNativeHomeView: View {
     .onChange(of: selectedZone) { zone in
       model.loadHomeZone(zone.key)
     }
-  }
-
-  private var zoneSelector: some View {
-    Picker("首页分区", selection: $selectedZone) {
-      ForEach(PiliNativeHomeZone.allCases) { zone in
-        Text(zone.title).tag(zone)
-      }
-    }
-    .pickerStyle(.segmented)
-    .frame(minWidth: 144, idealWidth: 190, maxWidth: 240)
   }
 
   private func feed<Content: View>(
@@ -7448,18 +7520,44 @@ private struct PiliNativePlaybackSourceSettingsView: View {
     Form {
       Section(
         header: Text("视频播放源"),
-        footer: Text("自动模式优先使用 B 站原始地址。手动选择 CDN 后优先使用所选线路，失败时仍会尝试原始和备用地址。部分 CDN 可能失效，可切回自动。")
+        footer: Text("自动选择已测线路中延迟最低且可用的一条；首次播放并行检测，首个可用线路即可开始加载。检测结果缓存 3 分钟，失败时保留原始和备用地址。延迟为测试视频的首字节耗时，不代表下载速度。")
       ) {
-        Picker("播放线路", selection: Binding(
-          get: { model.playbackSource },
-          set: { model.setPlaybackSource($0) }
-        )) {
-          ForEach(model.playbackSources) { source in
-            Text(source.label).tag(source.value)
+        Button(action: { model.testPlaybackSources(force: true) }) {
+          HStack {
+            Label("检测线路延迟", systemImage: "speedometer")
+            Spacer()
+            if model.playbackLatencyTesting { ProgressView() }
           }
         }
-        .pickerStyle(.navigationLink)
-        .disabled(model.playbackSourceSaving || model.playbackSources.isEmpty)
+        .disabled(model.playbackLatencyTesting)
+        if let error = model.playbackLatencyError {
+          Text(error).font(.footnote).foregroundStyle(.red)
+        }
+        ForEach(model.playbackSources) { source in
+          Button(action: { model.setPlaybackSource(source.value) }) {
+            HStack(spacing: 10) {
+              VStack(alignment: .leading, spacing: 4) {
+                Text(source.label).foregroundStyle(.primary)
+                if source.value == "auto",
+                   let selected = model.playbackSources.first(where: { $0.value == model.automaticPlaybackSource }) {
+                  Text("当前最优：\(selected.label) · \(selected.latencyText)")
+                    .font(.caption).foregroundStyle(.secondary)
+                }
+              }
+              Spacer(minLength: 4)
+              if source.value != "auto" {
+                Text(model.playbackLatencyTesting ? "检测中" : source.latencyText)
+                  .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+              }
+              Image(systemName: "checkmark")
+                .foregroundStyle(piliAccent)
+                .opacity(model.playbackSource == source.value ? 1 : 0)
+            }
+            .contentShape(Rectangle())
+          }
+          .disabled(model.playbackSourceSaving)
+          .accessibilityAddTraits(model.playbackSource == source.value ? .isSelected : [])
+        }
 
         if let audio = model.settings.first(where: { $0.key == "disableAudioCDN" }) {
           Toggle("音频不跟随视频 CDN", isOn: Binding(
@@ -7501,7 +7599,10 @@ private struct PiliNativePlaybackSourceSettingsView: View {
     }
     .navigationTitle("播放源设置")
     .navigationBarTitleDisplayMode(.inline)
-    .onAppear { liveHost = model.liveCDN }
+    .onAppear {
+      liveHost = model.liveCDN
+      model.testPlaybackSources()
+    }
     .onChange(of: model.liveCDN) { liveHost = $0 }
   }
 }

@@ -905,6 +905,9 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
   ) async {
     var videoLoaded = false
     do {
+      // The decoders are independent: prepare DASH audio while the video
+      // decoder opens, then join before starting the synchronized clock.
+      async let audioLoad: Void = loadAudioTrack(for: segment, localTime: localTime)
       var lastError: Error = PiliNativePlayerBuildError.noPlayableCandidate
       isTryingVideoCandidates = true
       defer { isTryingVideoCandidates = false }
@@ -947,7 +950,7 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
       // Open the separate DASH audio representation through Aether's dedicated
       // audio-only decoder and our seekable HTTP reader. This keeps the entire
       // audio path away from AVPlayer's rejected remote-asset probe.
-      try await loadAudioTrack(for: segment, localTime: localTime)
+      try await audioLoad
       guard !Task.isCancelled, itemBuildGeneration == generation else { return }
 
       videoItemReady = true

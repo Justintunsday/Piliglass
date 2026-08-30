@@ -79,6 +79,11 @@ jobs:
         shell: pwsh
         run: lib/scripts/patch.ps1 iOS
 
+      - name: Verify playback sources and latency selection
+        run: |
+          dart tool/check_native_playback_source.dart
+          dart tool/check_native_cdn_latency.dart
+
       - name: Build iOS
         run: |
           flutter build ios --verbose --release --no-codesign --dart-define-from-file=pili_release.json --no-pub
@@ -99,9 +104,6 @@ jobs:
           # make AltSign happy...
           find Payload/Runner.app/Frameworks -type d -name "*.framework" -exec codesign --force --sign - --preserve-metadata=identifier,entitlements {} \;
           zip -r9 PiliPlus_ios_${{env.version}}.ipa Payload/Runner.app
-
-      - name: Verify playback source ordering and live host validation
-        run: dart tool/check_native_playback_source.dart
 
       - name: Restore cache-safe Flutter dependencies
         if: always()
