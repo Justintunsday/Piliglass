@@ -3266,6 +3266,7 @@ private enum PiliNativeHomeZone: Int, CaseIterable, Identifiable {
 
 private struct PiliNativeHomeView: View {
   @ObservedObject var model: PiliNativeViewModel
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
   @State private var selectedZone = PiliNativeHomeZone.recommend
   private let columns = [
     GridItem(.flexible(minimum: 0), spacing: 12, alignment: .top),
@@ -3273,30 +3274,41 @@ private struct PiliNativeHomeView: View {
   ]
 
   var body: some View {
-    NavigationView {
-      VStack(spacing: 0) {
-        zoneSelector
+    NavigationStack {
+      GeometryReader { geometry in
+        // Capture the bar insets before expanding the pager. The scroll views
+        // draw behind the system glass; only their content needs these insets.
         TabView(selection: $selectedZone) {
-          livePage.tag(PiliNativeHomeZone.live)
-          recommendPage.tag(PiliNativeHomeZone.recommend)
-          hotPage.tag(PiliNativeHomeZone.hot)
+          livePage(contentInsets: geometry.safeAreaInsets)
+            .tag(PiliNativeHomeZone.live)
+          recommendPage(contentInsets: geometry.safeAreaInsets)
+            .tag(PiliNativeHomeZone.recommend)
+          hotPage(contentInsets: geometry.safeAreaInsets)
+            .tag(PiliNativeHomeZone.hot)
         }
         .tabViewStyle(PageTabViewStyle(indexDisplayMode: .never))
-        .animation(.easeInOut(duration: 0.2), value: selectedZone)
+        .ignoresSafeArea(.container, edges: .vertical)
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: selectedZone)
       }
-      .background(Color(UIColor.systemGroupedBackground))
-      .navigationBarTitle("PiliGlass", displayMode: .inline)
-      .navigationBarItems(
-        leading: Button(action: { model.isSearchPresented = true }) {
-          Image(systemName: "magnifyingglass")
+      .background(Color(UIColor.systemBackground))
+      .navigationTitle("PiliGlass")
+      .navigationBarTitleDisplayMode(.inline)
+      .toolbar {
+        ToolbarItem(placement: .navigationBarLeading) {
+          Button(action: { model.isSearchPresented = true }) {
+            Label("搜索", systemImage: "magnifyingglass")
+          }
+          .tint(.primary)
         }
-        .accessibilityLabel("搜索"),
-        trailing: HStack(spacing: 18) {
+        ToolbarItem(placement: .principal) {
+          zoneSelector
+        }
+        ToolbarItemGroup(placement: .navigationBarTrailing) {
           if model.account.isLogin {
             Button(action: { model.isMessagesPresented = true }) {
-              Image(systemName: "bell")
+              Label("消息", systemImage: "bell")
             }
-            .accessibilityLabel("消息")
+            .tint(.primary)
           }
           Button(action: selectMine) {
             if let face = model.account.face {
@@ -3307,45 +3319,49 @@ private struct PiliNativeHomeView: View {
               Image(systemName: "person.crop.circle")
             }
           }
+          .tint(.primary)
           .accessibilityLabel("我的")
         }
-      )
+      }
     }
-    .navigationViewStyle(StackNavigationViewStyle())
     .onChange(of: selectedZone) { zone in
       model.loadHomeZone(zone.key)
     }
   }
 
   private var zoneSelector: some View {
-    HStack(spacing: 48) {
+    Picker("首页分区", selection: $selectedZone) {
       ForEach(PiliNativeHomeZone.allCases) { zone in
-        Button(action: { selectedZone = zone }) {
-          VStack(spacing: 7) {
-            Text(zone.title)
-              .font(.system(size: 16, weight: selectedZone == zone ? .semibold : .regular))
-              .foregroundColor(selectedZone == zone ? piliAccent : .primary)
-            Capsule()
-              .fill(selectedZone == zone ? piliAccent : Color.clear)
-              .frame(width: 28, height: 3)
-          }
-        }
-        .buttonStyle(PlainButtonStyle())
+        Text(zone.title).tag(zone)
       }
     }
-    .frame(maxWidth: .infinity)
-    .padding(.top, 9)
-    .padding(.bottom, 7)
-    .background(Color(UIColor.systemBackground))
+    .pickerStyle(.segmented)
+    .frame(minWidth: 144, idealWidth: 190, maxWidth: 240)
   }
 
-  @ViewBuilder private var recommendPage: some View {
+  private func feed<Content: View>(
+    contentInsets: EdgeInsets,
+    @ViewBuilder content: () -> Content
+  ) -> some View {
+    ScrollView {
+      VStack(spacing: 0) {
+        content()
+      }
+      .padding(.horizontal, 12)
+      .padding(.top, contentInsets.top + 12)
+      .padding(.bottom, contentInsets.bottom + 24)
+    }
+  }
+
+  @ViewBuilder private func recommendPage(contentInsets: EdgeInsets) -> some View {
     if model.homeLoading && model.homeVideos.isEmpty {
       PiliNativeLoadingView(title: "正在加载推荐")
+        .padding(contentInsets)
     } else if let error = model.homeError, model.homeVideos.isEmpty {
       PiliNativeErrorView(message: error) { model.refresh("home") }
+        .padding(contentInsets)
     } else {
-      ScrollView {
+      feed(contentInsets: contentInsets) {
         LazyVGrid(columns: columns, spacing: 14) {
           ForEach(model.homeVideos) { video in
             PiliNativeVideoCard(video: video) { model.openVideo(video) }
@@ -3354,23 +3370,21 @@ private struct PiliNativeHomeView: View {
               }
           }
         }
-        .padding(.horizontal, 12)
-        .padding(.top, 12)
         if model.homeLoadingMore { ProgressView().padding(.vertical, 20) }
-        else { Color.clear.frame(height: 24) }
       }
-      .background(Color(UIColor.systemGroupedBackground))
       .refreshable { model.refresh("home") }
     }
   }
 
-  @ViewBuilder private var livePage: some View {
+  @ViewBuilder private func livePage(contentInsets: EdgeInsets) -> some View {
     if model.liveLoading && model.liveRooms.isEmpty {
       PiliNativeLoadingView(title: "正在加载直播")
+        .padding(contentInsets)
     } else if let error = model.liveError, model.liveRooms.isEmpty {
       PiliNativeErrorView(message: error) { model.loadHomeZone("live", refresh: true) }
+        .padding(contentInsets)
     } else {
-      ScrollView {
+      feed(contentInsets: contentInsets) {
         LazyVGrid(columns: columns, spacing: 14) {
           ForEach(model.liveRooms) { room in
             PiliNativeLiveRoomCard(room: room) { model.openLiveRoom(room) }
@@ -3379,24 +3393,22 @@ private struct PiliNativeHomeView: View {
               }
           }
         }
-        .padding(.horizontal, 12)
-        .padding(.top, 12)
         if model.liveLoadingMore { ProgressView().padding(.vertical, 20) }
-        else { Color.clear.frame(height: 24) }
       }
-      .background(Color(UIColor.systemGroupedBackground))
       .refreshable { model.loadHomeZone("live", refresh: true) }
       .onAppear { model.loadHomeZone("live") }
     }
   }
 
-  @ViewBuilder private var hotPage: some View {
+  @ViewBuilder private func hotPage(contentInsets: EdgeInsets) -> some View {
     if model.hotLoading && model.hotVideos.isEmpty {
       PiliNativeLoadingView(title: "正在加载热门")
+        .padding(contentInsets)
     } else if let error = model.hotError, model.hotVideos.isEmpty {
       PiliNativeErrorView(message: error) { model.loadHomeZone("hot", refresh: true) }
+        .padding(contentInsets)
     } else {
-      ScrollView {
+      feed(contentInsets: contentInsets) {
         LazyVGrid(columns: columns, spacing: 14) {
           ForEach(model.hotVideos) { video in
             PiliNativeVideoCard(video: video) { model.openVideo(video) }
@@ -3405,12 +3417,8 @@ private struct PiliNativeHomeView: View {
               }
           }
         }
-        .padding(.horizontal, 12)
-        .padding(.top, 12)
         if model.hotLoadingMore { ProgressView().padding(.vertical, 20) }
-        else { Color.clear.frame(height: 24) }
       }
-      .background(Color(UIColor.systemGroupedBackground))
       .refreshable { model.loadHomeZone("hot", refresh: true) }
       .onAppear { model.loadHomeZone("hot") }
     }
@@ -3423,6 +3431,20 @@ private struct PiliNativeHomeView: View {
   }
 }
 
+private struct PiliNativeHomeCover: View {
+  let urlString: String?
+
+  var body: some View {
+    Color(UIColor.tertiarySystemFill)
+      .aspectRatio(16 / 9, contentMode: .fit)
+      .overlay {
+        PiliRemoteImage(urlString: urlString)
+          .scaledToFill()
+      }
+      .clipped()
+  }
+}
+
 private struct PiliNativeVideoCard: View {
   let video: PiliNativeVideo
   let action: () -> Void
@@ -3431,11 +3453,7 @@ private struct PiliNativeVideoCard: View {
     Button(action: action) {
       VStack(alignment: .leading, spacing: 7) {
         ZStack(alignment: .bottomTrailing) {
-          PiliRemoteImage(urlString: video.cover)
-            .aspectRatio(16 / 9, contentMode: .fill)
-            .frame(maxWidth: .infinity)
-            .clipped()
-            .background(Color(UIColor.tertiarySystemFill))
+          PiliNativeHomeCover(urlString: video.cover)
 
           if !video.durationText.isEmpty {
             Text(video.durationText)
@@ -3448,16 +3466,15 @@ private struct PiliNativeVideoCard: View {
               .padding(5)
           }
         }
-        .cornerRadius(9)
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
 
         Text(video.title)
           .font(.subheadline)
           .fontWeight(.medium)
           .foregroundColor(.primary)
-          .lineLimit(2)
+          .lineLimit(2, reservesSpace: true)
           .multilineTextAlignment(.leading)
           .fixedSize(horizontal: false, vertical: true)
-          .frame(height: 40, alignment: .topLeading)
           .frame(maxWidth: .infinity, alignment: .leading)
 
         HStack(spacing: 4) {
@@ -3467,6 +3484,8 @@ private struct PiliNativeVideoCard: View {
             .truncationMode(.tail)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .font(.caption)
+        .foregroundColor(.secondary)
 
         HStack(spacing: 4) {
           if !video.viewText.isEmpty {
@@ -3499,11 +3518,7 @@ private struct PiliNativeLiveRoomCard: View {
     Button(action: action) {
       VStack(alignment: .leading, spacing: 7) {
         ZStack(alignment: .bottom) {
-          PiliRemoteImage(urlString: room.cover)
-            .aspectRatio(16 / 9, contentMode: .fill)
-            .frame(maxWidth: .infinity)
-            .clipped()
-            .background(Color(UIColor.tertiarySystemFill))
+          PiliNativeHomeCover(urlString: room.cover)
           LinearGradient(
             colors: [.clear, Color.black.opacity(0.62)],
             startPoint: .top,
@@ -3530,14 +3545,15 @@ private struct PiliNativeLiveRoomCard: View {
           .padding(.horizontal, 7)
           .padding(.bottom, 6)
         }
-        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
 
         Text(room.title)
-          .font(.system(size: 15.5, weight: .regular))
+          .font(.subheadline)
+          .fontWeight(.medium)
           .foregroundColor(.primary)
-          .lineLimit(2)
+          .lineLimit(2, reservesSpace: true)
+          .multilineTextAlignment(.leading)
           .fixedSize(horizontal: false, vertical: true)
-          .frame(height: 39, alignment: .topLeading)
           .frame(maxWidth: .infinity, alignment: .leading)
 
         HStack(spacing: 7) {
@@ -3547,7 +3563,7 @@ private struct PiliNativeLiveRoomCard: View {
             Label(room.viewText, systemImage: "person.circle")
           }
         }
-        .font(.system(size: 11))
+        .font(.caption)
         .foregroundColor(.secondary)
       }
       .frame(maxWidth: .infinity, alignment: .leading)

@@ -1,0 +1,30 @@
+name: Preview iOS home layout
+
+on:
+  push:
+    paths:
+      - "ios/Runner/PiliNativeRootViewController.swift"
+      - "tool/preview_ios_home.py"
+      - ".github/workflows/ios-home-preview.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  preview:
+    runs-on: macos-26
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - name: Render production home views with offline fixtures
+        run: python3 tool/preview_ios_home.py
+      - name: Upload screenshots and layout measurements
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ios-home-preview
+          path: |
+            build/home-preview/*.png
+            build/home-preview/*.json
+          if-no-files-found: warn
