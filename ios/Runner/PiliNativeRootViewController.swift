@@ -7540,17 +7540,17 @@ private struct PiliNativePlaybackSourceSettingsView: View {
           Button(action: { model.setPlaybackSource(source.value) }) {
             HStack(spacing: 10) {
               VStack(alignment: .leading, spacing: 4) {
-                Text(source.label).foregroundStyle(.primary)
+                Text(source.label).foregroundStyle(Color.primary)
                 if source.value == "auto",
                    let selected = model.playbackSources.first(where: { $0.value == model.automaticPlaybackSource }) {
                   Text("当前最优：\(selected.label) · \(selected.latencyText)")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.caption).foregroundStyle(Color.secondary)
                 }
               }
               Spacer(minLength: 4)
               if source.value != "auto" {
                 Text(model.playbackLatencyTesting ? "检测中" : source.latencyText)
-                  .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                  .font(.caption.monospacedDigit()).foregroundStyle(Color.secondary)
                   .fixedSize(horizontal: true, vertical: false)
               }
               Image(systemName: "checkmark")
