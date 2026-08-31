@@ -819,12 +819,12 @@ private final class PiliNativeViewModel: ObservableObject {
 
   private func loadNativeDanmaku(segmentIndex: Int) {
     guard let cid = nativePlayerCID else { return }
+    let generation = nativePlayerSession.danmakuGeneration
     channel.invokeMethod(
       "loadNativeDanmaku",
       arguments: ["cid": cid, "segmentIndex": segmentIndex]
     ) { [weak self] response in
-      DispatchQueue.main.async {
-        guard let self = self, self.nativePlayerCID == cid else { return }
+      DispatchQueue.global(qos: .userInitiated).async {
         let result = piliDictionary(response)
         guard result["state"] as? String == "success" else { return }
         let items = (result["items"] as? [Any] ?? []).compactMap { row -> PiliNativeDanmakuItem? in
@@ -847,7 +847,11 @@ private final class PiliNativeViewModel: ObservableObject {
             weight: piliInt(map["weight"])
           )
         }
-        self.nativePlayerSession.appendDanmaku(items)
+        DispatchQueue.main.async {
+          guard let self, self.nativePlayerCID == cid,
+                self.nativePlayerSession.danmakuGeneration == generation else { return }
+          self.nativePlayerSession.appendDanmaku(items)
+        }
       }
     }
   }
@@ -4780,7 +4784,7 @@ private struct PiliNativeVideoDetailView: View {
 
   private var nativeCommentsPage: some View {
     ScrollView {
-      LazyVStack(alignment: .leading, spacing: 14) {
+      VStack(alignment: .leading, spacing: 14) {
         HStack {
           Text("热门评论")
             .font(.headline)
@@ -5493,7 +5497,7 @@ private struct PiliNativeCommentsSection: View {
   var showsHeader = true
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 13) {
+    LazyVStack(alignment: .leading, spacing: 13) {
       if showsHeader {
         HStack {
           Text("评论")
@@ -5539,20 +5543,22 @@ private struct PiliNativeCommentsSection: View {
           .frame(maxWidth: .infinity, minHeight: 70)
       } else {
         ForEach(model.comments) { comment in
-          PiliNativeCommentRow(
-            comment: comment,
-            openMember: { model.openCommentMember(comment) },
-            toggleLike: { model.toggleCommentLike(comment) },
-            reply: { model.beginCommentReply(comment) },
-            openReplies: { model.openCommentThread(comment) }
-          )
-          .onAppear {
-            if comment.id == model.comments.last?.id {
-              model.loadMoreComments()
+          VStack(alignment: .leading, spacing: 13) {
+            PiliNativeCommentRow(
+              comment: comment,
+              openMember: { model.openCommentMember(comment) },
+              toggleLike: { model.toggleCommentLike(comment) },
+              reply: { model.beginCommentReply(comment) },
+              openReplies: { model.openCommentThread(comment) }
+            )
+            .onAppear {
+              if comment.id == model.comments.last?.id {
+                model.loadMoreComments()
+              }
             }
-          }
-          if comment.id != model.comments.last?.id {
-            Divider().padding(.leading, 50)
+            if comment.id != model.comments.last?.id {
+              Divider().padding(.leading, 50)
+            }
           }
         }
 
@@ -5760,7 +5766,12 @@ private struct PiliNativeCommentRichText: UIViewRepresentable {
   let textStyle: UIFont.TextStyle
   let textColor: UIColor
 
-  private static let imageCache = NSCache<NSURL, UIImage>()
+  private static let imageCache: NSCache<NSURL, UIImage> = {
+    let cache = NSCache<NSURL, UIImage>()
+    cache.countLimit = 256
+    cache.totalCostLimit = 32 * 1024 * 1024
+    return cache
+  }()
 
   init(
     message: String,
@@ -5798,13 +5809,28 @@ private struct PiliNativeCommentRichText: UIViewRepresentable {
     var parent: PiliNativeCommentRichText
     weak var label: UILabel?
     private var requestedURLs = Set<String>()
+    private struct RenderInput: Equatable {
+      let message: String
+      let emotes: [String: PiliNativeCommentEmote]
+      let font: UIFont
+      let color: UIColor
+    }
+    private var renderedInput: RenderInput?
 
     init(parent: PiliNativeCommentRichText) {
       self.parent = parent
     }
 
-    func render(in label: UILabel) {
+    func render(in label: UILabel, force: Bool = false) {
       let font = UIFont.preferredFont(forTextStyle: parent.textStyle)
+      let input = RenderInput(
+        message: parent.message, emotes: parent.emotes, font: font,
+        color: parent.textColor.resolvedColor(with: label.traitCollection)
+      )
+      // Playback/UI updates do not change the comment text. Avoid rebuilding
+      // regexes, text attachments and label layout on every such update.
+      guard force || input != renderedInput else { return }
+      renderedInput = input
       let attributes: [NSAttributedString.Key: Any] = [
         .font: font,
         .foregroundColor: parent.textColor,
@@ -5910,10 +5936,11 @@ private struct PiliNativeCommentRichText: UIViewRepresentable {
           DispatchQueue.main.async { self.requestedURLs.remove(emote.url) }
           return
         }
-        PiliNativeCommentRichText.imageCache.setObject(image, forKey: url as NSURL)
+        let cost = (image.cgImage?.bytesPerRow ?? 0) * (image.cgImage?.height ?? 0)
+        PiliNativeCommentRichText.imageCache.setObject(image, forKey: url as NSURL, cost: cost)
         DispatchQueue.main.async {
           guard let label = self.label else { return }
-          self.render(in: label)
+          self.render(in: label, force: true)
           label.invalidateIntrinsicContentSize()
         }
       }.resume()

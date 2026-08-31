@@ -4,8 +4,10 @@ on:
   push:
     paths:
       - "ios/Runner/PiliNativeRootViewController.swift"
+      - "ios/Runner/PiliNativePlayer.swift"
       - "tool/preview_ios_home.py"
       - "tool/preview_ios_navigation.py"
+      - "tool/check_ios_video_load.py"
       - ".github/workflows/ios-home-preview.yml"
   workflow_dispatch:
 
@@ -22,6 +24,17 @@ jobs:
         run: python3 tool/preview_ios_home.py
       - name: Test menu pushes and interactive back gestures
         run: python3 tool/preview_ios_navigation.py
+      - name: Check dense danmaku and lazy comment rendering
+        run: python3 tool/check_ios_video_load.py
+      - name: Upload video load check results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ios-video-load-check
+          path: |
+            build/video-load-check/*.json
+            build/video-load-check/*.png
+          if-no-files-found: warn
       - name: Upload screenshots and layout measurements
         if: always()
         uses: actions/upload-artifact@v7

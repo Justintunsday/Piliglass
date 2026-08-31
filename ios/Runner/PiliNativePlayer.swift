@@ -391,6 +391,45 @@ struct PiliNativeDanmakuItem: Identifiable {
   }
 }
 
+/// Confined to the session's serial worker queue. Never sort or normalize a
+/// complete segment on the UI thread.
+private final class PiliNativeDanmakuBuffer {
+  private var rawItems: [PiliNativeDanmakuItem] = []
+  private var ids = Set<String>()
+
+  func append(_ items: [PiliNativeDanmakuItem]) -> [PiliNativeDanmakuItem]? {
+    let incoming = items.filter { ids.insert($0.id).inserted }
+    guard !incoming.isEmpty else { return nil }
+    rawItems.append(contentsOf: incoming)
+    let sorted = rawItems.sorted { lhs, rhs in
+      lhs.progress == rhs.progress ? lhs.weight > rhs.weight : lhs.progress < rhs.progress
+    }
+    var merged: [PiliNativeDanmakuItem] = []
+    merged.reserveCapacity(sorted.count)
+    var latestOrdinaryIndex: [String: Int] = [:]
+    for var item in sorted {
+      // Advanced/code payloads must retain their own timing and coordinates.
+      guard (1...6).contains(item.mode) else {
+        merged.append(item)
+        continue
+      }
+      let normalized = item.content.trimmingCharacters(in: .whitespacesAndNewlines)
+        .split(whereSeparator: \.isWhitespace).joined(separator: " ")
+      guard !normalized.isEmpty else { continue }
+      let modeGroup = (4...6).contains(item.mode) ? item.mode : 1
+      let key = "\(modeGroup)|\(normalized)"
+      if let index = latestOrdinaryIndex[key], item.progress - merged[index].progress <= 1.5 {
+        merged[index].mergeCount += max(1, item.mergeCount)
+      } else {
+        item.mergeCount = max(1, item.mergeCount)
+        latestOrdinaryIndex[key] = merged.count
+        merged.append(item)
+      }
+    }
+    return merged
+  }
+}
+
 @MainActor
 final class PiliNativePlayerSession: NSObject, ObservableObject {
   @Published private(set) var isReady = false
@@ -429,7 +468,9 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
   var onVideoActionRequested: ((String) -> Void)?
 
   private(set) var danmakuItems: [PiliNativeDanmakuItem] = []
-  private var rawDanmakuItems: [PiliNativeDanmakuItem] = []
+  private let danmakuQueue = DispatchQueue(label: "dev.piliglass.danmaku", qos: .userInitiated)
+  private var danmakuBuffer = PiliNativeDanmakuBuffer()
+  private(set) var danmakuGeneration = UUID()
   private var segments: [PiliNativePlayerSegment] = []
   private var segmentOffsets: [TimeInterval] = []
   private var requestedDanmakuSegments = Set<Int>()
@@ -544,7 +585,8 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
 
   func prepareDanmaku() {
     requestedDanmakuSegments.removeAll()
-    rawDanmakuItems.removeAll()
+    danmakuGeneration = UUID()
+    danmakuBuffer = PiliNativeDanmakuBuffer()
     danmakuItems.removeAll()
     danmakuRevision += 1
     requestDanmaku(near: currentTime)
@@ -593,7 +635,7 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
 
   func reportDanmakuSendResult(_ message: String, sentContent: String? = nil) {
     if let sentContent, !sentContent.isEmpty {
-      rawDanmakuItems.append(
+      appendDanmaku([
         PiliNativeDanmakuItem(
           id: "local-\(UUID().uuidString)",
           progress: currentTime + 0.25,
@@ -603,9 +645,7 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
           content: sentContent,
           weight: Int.max
         )
-      )
-      rebuildMergedDanmaku()
-      danmakuRevision += 1
+      ])
     }
     danmakuStatusMessage = message
     DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in
@@ -616,47 +656,16 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
 
   func appendDanmaku(_ items: [PiliNativeDanmakuItem]) {
     guard !items.isEmpty else { return }
-    let existing = Set(rawDanmakuItems.map(\.id))
-    rawDanmakuItems.append(contentsOf: items.filter { !existing.contains($0.id) })
-    rebuildMergedDanmaku()
-    danmakuRevision += 1
-  }
-
-  private func rebuildMergedDanmaku() {
-    let sorted = rawDanmakuItems.sorted { lhs, rhs in
-      lhs.progress == rhs.progress ? lhs.weight > rhs.weight : lhs.progress < rhs.progress
+    let buffer = danmakuBuffer
+    let generation = danmakuGeneration
+    danmakuQueue.async { [weak self] in
+      guard let merged = buffer.append(items) else { return }
+      DispatchQueue.main.async {
+        guard let self, self.danmakuGeneration == generation else { return }
+        self.danmakuItems = merged
+        self.danmakuRevision += 1
+      }
     }
-    var merged: [PiliNativeDanmakuItem] = []
-    var latestOrdinaryIndex: [String: Int] = [:]
-
-    for var item in sorted {
-      // Advanced/code danmaku carry animation payloads in their content. They
-      // must stay independent or merging destroys their timing and coordinates.
-      guard (1...6).contains(item.mode) else {
-        merged.append(item)
-        continue
-      }
-      let normalized = item.content
-        .trimmingCharacters(in: .whitespacesAndNewlines)
-        .split(whereSeparator: \.isWhitespace)
-        .joined(separator: " ")
-      guard !normalized.isEmpty else { continue }
-      let modeGroup: Int
-      switch item.mode {
-      case 4, 5, 6: modeGroup = item.mode
-      default: modeGroup = 1
-      }
-      let key = "\(modeGroup)|\(normalized)"
-      if let index = latestOrdinaryIndex[key],
-         item.progress - merged[index].progress <= 1.5 {
-        merged[index].mergeCount += max(1, item.mergeCount)
-        continue
-      }
-      item.mergeCount = max(1, item.mergeCount)
-      latestOrdinaryIndex[key] = merged.count
-      merged.append(item)
-    }
-    danmakuItems = merged
   }
 
   func togglePlayback() {
@@ -731,6 +740,8 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
     segments.removeAll()
     segmentOffsets.removeAll()
     requestedDanmakuSegments.removeAll()
+    danmakuGeneration = UUID()
+    danmakuBuffer = PiliNativeDanmakuBuffer()
     danmakuItems.removeAll()
     danmakuRevision += 1
     isReady = false
@@ -1178,15 +1189,37 @@ private final class PiliNativeDanmakuView: UIView {
   required init?(coder: NSCoder) { fatalError("init(coder:) is unavailable") }
 
   func render(time: TimeInterval, items: [PiliNativeDanmakuItem], revision: Int) {
-    if revision != lastRevision || lastTime < 0 || time < lastTime || time - lastTime > 1.2 {
+    if items.isEmpty {
+      if !subviews.isEmpty { clear() }
+      cursor = 0
+      lastTime = time
+      lastRevision = revision
+      return
+    }
+    if lastTime < 0 || time < lastTime || time - lastTime > 1.2 {
       reset(at: time, items: items, revision: revision)
+    } else if revision != lastRevision {
+      // A prefetched segment must not clear animations already on screen.
+      cursor = items.partitioningIndex { $0.progress > lastTime + 0.08 }
+      lastRevision = revision
     }
     let earliest = max(lastTime, time - 0.25)
-    while cursor < items.count, items[cursor].progress <= time + 0.08 {
-      let item = items[cursor]
-      if item.progress >= earliest { display(item) }
-      cursor += 1
+    let end = items.partitioningIndex { $0.progress > time + 0.08 }
+    // Bound both scanning and UILabel/animation allocation during a burst.
+    // Keep the full timeline for seeking, but never queue late animations.
+    let start = max(cursor, items.partitioningIndex { $0.progress >= earliest })
+    let capacity = max(0, min(8, 60 - subviews.count))
+    var displayed = 0
+    if start < end, capacity > 0 {
+      for index in start..<min(end, start + 160) {
+        let item = items[index]
+        if shouldBlock(item) { continue }
+        display(item)
+        displayed += 1
+        if displayed >= capacity { break }
+      }
     }
+    cursor = end
     lastTime = time
   }
 
