@@ -131,6 +131,12 @@ final class PlayerControlsTests: XCTestCase {
     app.launchArguments = embedded ? ["embedded"] : []
     app.launch()
     XCTAssertTrue(state.waitForExistence(timeout: 10))
+    if !embedded {
+      let landscape = NSPredicate { _, _ in self.app.frame.width > self.app.frame.height }
+      expectation(for: landscape, evaluatedWith: app)
+      waitForExpectations(timeout: 10)
+      XCTAssertTrue(app.buttons["720P"].waitForExistence(timeout: 8))
+    }
   }
   func screenshot(_ name: String) {
     let attachment = XCTAttachment(screenshot: app.screenshot())
@@ -157,8 +163,12 @@ final class PlayerControlsTests: XCTestCase {
     XCTAssertTrue(state.label.contains("playing=false"))
     XCTAssertTrue(state.label.contains("rates=[2.0, 1.5]"), "A paused video must not boost")
     let slider = app.sliders["播放进度"]
-    if !slider.isHittable { right.tap() }
-    XCTAssertTrue(slider.exists, "Keep the native accessible UISlider")
+    // A rejected long press on a paused video may toggle the chrome as a
+    // single tap. Resume then pause to explicitly reveal it before scrubbing.
+    left.doubleTap()
+    left.doubleTap()
+    XCTAssertTrue(state.label.contains("playing=false"))
+    XCTAssertTrue(slider.waitForExistence(timeout: 8), "Keep the native accessible UISlider")
     slider.adjust(toNormalizedSliderPosition: 0.75)
     XCTAssertTrue(state.label.contains("playing=false"), "Scrubbing must preserve pause")
   }
@@ -185,7 +195,9 @@ def production_swift():
     speed = source[source.index('  func cyclePlaybackRate() {'):source.index('  func selectQuality(')]
     controls = source[source.index('private final class PiliNativePlayerGradientView:'):
                       source.index('struct PiliNativePlayerView:')]
-    return FIXTURES.replace('// PRODUCTION_SPEED_METHODS', speed) + controls
+    preferences = source[source.index('enum PiliNativePlayerPreferences {'):
+                         source.index('@MainActor\nfinal class PiliNativePlayerSession')]
+    return FIXTURES.replace('// PRODUCTION_SPEED_METHODS', speed) + preferences + controls
 
 
 if __name__ == '__main__':

@@ -110,10 +110,16 @@ private struct PiliNativeDynamicsView: View {
   @ObservedObject var model: PiliNativeViewModel
   var body: some View { Text("动态").navigationTitle("动态") }
 }
-private struct PiliNativeSettingsSectionView: View {
-  let section: String, title: String
-  @ObservedObject var model: PiliNativeViewModel
-  var body: some View { Text(title).navigationTitle(title) }
+private struct PiliNativeDanmakuPreferencesPage: View {
+  let model: PiliNativeViewModel
+  let profile: PiliNativeDanmakuProfile
+  @Environment(\.dismiss) var dismiss
+  var body: some View {
+    NavigationStack {
+      Text("显示与屏蔽规则").navigationTitle("\(profile.title)弹幕设置")
+        .toolbar { Button("完成") { dismiss() } }
+    }
+  }
 }
 private struct PiliNativeDiagnosticLogSettingsView: View {
   var body: some View { Text("诊断").navigationTitle("诊断") }
@@ -215,6 +221,44 @@ final class MenuNavigationTests: XCTestCase {
     XCTAssertTrue(app.tabBars.firstMatch.isHittable)
   }
 
+  func testCurrentSettingsAndPersistentGestures() {
+    openMine()
+    app.buttons["设置"].tap()
+    assertPage("设置")
+    XCTAssertFalse(app.staticTexts["原版设置分类"].exists)
+    XCTAssertFalse(app.staticTexts["WebDAV 设置"].exists)
+    screenshot("current-client-settings")
+    app.buttons.containing(.staticText, identifier: "播放器设置").firstMatch.tap()
+    assertPage("播放器设置")
+    let gesture = app.switches["双击暂停或继续"]
+    XCTAssertTrue(gesture.waitForExistence(timeout: 8))
+    let initial = gesture.value as? String
+    gesture.tap()
+    let updated = gesture.value as? String
+    XCTAssertNotEqual(initial, updated)
+    XCTAssertFalse(app.switches["双击快退/快进"].exists)
+    screenshot("native-player-preferences")
+    edgeBack()
+    app.buttons.containing(.staticText, identifier: "播放器设置").firstMatch.tap()
+    XCTAssertTrue(gesture.waitForExistence(timeout: 8))
+    XCTAssertEqual(gesture.value as? String, updated)
+    gesture.tap()
+  }
+
+  func testSeparateDanmakuSettingsEntries() {
+    openMine()
+    app.buttons["设置"].tap()
+    for title in ["简易播放器弹幕设置", "完整播放器弹幕设置"] {
+      let entry = app.buttons.containing(.staticText, identifier: title).firstMatch
+      if !entry.isHittable { app.swipeUp() }
+      XCTAssertTrue(entry.waitForExistence(timeout: 8))
+      entry.tap()
+      XCTAssertTrue(app.navigationBars[title].waitForExistence(timeout: 8))
+      app.buttons["完成"].tap()
+      XCTAssertTrue(app.navigationBars["设置"].waitForExistence(timeout: 8))
+    }
+  }
+
   func testLibraryKeepsRestoredCloseAndFolderBack() {
     openMine()
     app.buttons["我的收藏"].tap()
@@ -288,6 +332,10 @@ final class MenuNavigationTests: XCTestCase {
 
 def production_swift():
     source = (ROOT / "ios/Runner/PiliNativeRootViewController.swift").read_text(encoding='utf-8')
+    player = (ROOT / "ios/Runner/PiliNativePlayer.swift").read_text(encoding='utf-8')
+    preferences = player[player.index('enum PiliNativePlayerPreferences {'):
+                         player.index('@MainActor\nfinal class PiliNativePlayerSession')]
+    profiles = player[player.index('enum PiliNativeDanmakuProfile:'):player.index('struct PiliNativeDanmakuSettingsView:')]
 
     def section(start, end):
         a = source.index(start)
@@ -317,10 +365,12 @@ def production_swift():
   @ObservedObject var model: PiliNativeViewModel
   var body: some View {{ Text("{title}").navigationTitle("{title}").navigationBarTitleDisplayMode(.inline) }}
 }}\n'''
-    return fixtures + section('private struct PiliEdgeSwipeBackModifier:',
+    return fixtures + preferences + profiles + section('private struct PiliEdgeSwipeBackModifier:',
                               'private struct PiliNativeDynamicsView:') + section(
         'private struct PiliNativeLibraryView:', '// MARK: - Native settings') + section(
-        'private struct PiliNativeSettingsView:', 'private struct PiliNativeDiagnosticLogSettingsView:') + section(
+        'private struct PiliNativeSettingsView:', 'private struct PiliNativeDanmakuPreferencesPage:') + section(
+        'private struct PiliNativePlaybackSourceSettingsView:', 'private struct PiliNativeDiagnosticLogSettingsView:') + section(
+        'private struct PiliNativeAboutSettingsView:', '// MARK: - Native search') + section(
         'private struct PiliNativePlaybackSourceOption:', 'private struct PiliNativeSetting:') + section(
         'private struct PiliNativeSearchView:', '// MARK: - Shared native views') + stubs
 

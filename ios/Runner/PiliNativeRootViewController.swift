@@ -599,6 +599,7 @@ private final class PiliNativeViewModel: ObservableObject {
     }
     nativePlaybackGeneration = UUID()
     nativePlayerSession.stop()
+    nativePlayerSession.applyDefaultPlaybackRate()
     flutterPlayerSurface.restore(hidden: true)
     pendingVideo = video
     videoDetail = nil
@@ -747,6 +748,7 @@ private final class PiliNativeViewModel: ObservableObject {
   ) {
     let generation = UUID()
     nativePlaybackGeneration = generation
+    let autoplay = quality == nil ? PiliNativePlayerPreferences.autoplay : nativePlayerSession.isPlaying
     originalPlayerError = nil
     originalPlayerReady = true
     nativePlayerSession.beginLoading()
@@ -830,7 +832,8 @@ private final class PiliNativeViewModel: ObservableObject {
           quality: piliString(result["qualityText"])
             ?? "\(piliOptionalInt(result["quality"]) ?? quality ?? 80)P",
           qualities: qualities,
-          resumeAt: resumeAt
+          resumeAt: resumeAt,
+          autoplay: autoplay
         )
         self.nativePlayerSession.prepareDanmaku()
         if resumeAt > 0 {
@@ -1181,8 +1184,10 @@ private final class PiliNativeViewModel: ObservableObject {
         if result["state"] as? String == "success" {
           self.applySettingsSnapshot(result)
         } else {
-          self.settingsError = result["error"] as? String ?? "设置保存失败"
+          let message = (response as? FlutterError)?.message
+            ?? (result["error"] as? String) ?? "设置保存失败"
           self.loadSettings()
+          self.settingsError = message
         }
       }
     }
@@ -1201,8 +1206,10 @@ private final class PiliNativeViewModel: ObservableObject {
         if result["state"] as? String == "success" {
           self.applySettingsSnapshot(result)
         } else {
-          self.settingsError = result["error"] as? String ?? "默认画质保存失败"
+          let message = (response as? FlutterError)?.message
+            ?? (result["error"] as? String) ?? "默认画质保存失败"
           self.loadSettings()
+          self.settingsError = message
         }
       }
     }
@@ -3161,6 +3168,23 @@ private extension EnvironmentValues {
     get { self[PiliVideoTransitionNamespaceKey.self] }
     set { self[PiliVideoTransitionNamespaceKey.self] = newValue }
   }
+
+  func makeDanmakuSettingsSession(_ profile: PiliNativeDanmakuProfile) -> PiliNativePlayerSession {
+    let editor = PiliNativePlayerSession(settingsProfile: profile)
+    editor.onDanmakuSettingsRequested = { [weak self] arguments, completion in
+      guard let self, let request = self.nativePlayerSession.onDanmakuSettingsRequested else {
+        completion(["state": "error", "error": "弹幕设置暂时不可用"])
+        return
+      }
+      request(arguments) { [weak self] result in
+        completion(result)
+        if result["state"] as? String == "success", arguments["action"] as? String != "load" {
+          self?.nativePlayerSession.loadDanmakuSettings()
+        }
+      }
+    }
+    return editor
+  }
 }
 
 private struct PiliVideoTransitionSource: ViewModifier {
@@ -4338,6 +4362,8 @@ private enum PiliNativeVideoDetailTab: String, CaseIterable, Identifiable {
 }
 
 private struct PiliNativeVideoDetailView: View {
+  @AppStorage(PiliNativePlayerPreferences.relatedKey) private var showRelated = true
+  @AppStorage(PiliNativePlayerPreferences.expandIntroKey) private var expandIntro = false
   @ObservedObject var model: PiliNativeViewModel
   @Environment(\.presentationMode) private var presentationMode
   @State private var selectedPart = 1
@@ -4365,10 +4391,11 @@ private struct PiliNativeVideoDetailView: View {
                   nativeCommentsPage
                 }
               }
+              .onAppear { descriptionExpanded = expandIntro }
               .onChange(of: video.bvid) { _ in
                 selectedPart = 1
                 selectedTab = .introduction
-                descriptionExpanded = false
+                descriptionExpanded = expandIntro
               }
             } else {
               PiliNativeErrorView(message: "没有可显示的视频信息", retry: model.retryVideoDetail)
@@ -4387,6 +4414,7 @@ private struct PiliNativeVideoDetailView: View {
     .navigationViewStyle(StackNavigationViewStyle())
     .onAppear {
       model.handleVideoDeviceOrientation(UIDevice.current.orientation)
+      descriptionExpanded = expandIntro
     }
     .onChange(of: model.originalPlayerReady) { ready in
       if ready {
@@ -4545,7 +4573,7 @@ private struct PiliNativeVideoDetailView: View {
         if !video.tags.isEmpty {
           nativeTagsSection(video)
         }
-        nativeRelatedSection
+        if showRelated { nativeRelatedSection }
       }
       .padding(.bottom, 34)
     }
@@ -4828,7 +4856,7 @@ private struct PiliNativeVideoDetailView: View {
     Button(action: {
       selectedPart = 1
       selectedTab = .introduction
-      descriptionExpanded = false
+      descriptionExpanded = expandIntro
       model.openVideo(video)
     }) {
       HStack(alignment: .top, spacing: 12) {
@@ -7170,186 +7198,173 @@ private struct PiliNativeLibraryRow: View {
 private struct PiliNativeSettingsView: View {
   @ObservedObject var model: PiliNativeViewModel
   @State private var searchText = ""
+  @State private var danmakuProfile: PiliNativeDanmakuProfile?
+  @AppStorage(PiliNativePlayerPreferences.relatedKey) private var showRelated = true
+  @AppStorage(PiliNativePlayerPreferences.expandIntroKey) private var expandIntro = false
 
-  private let groups = [
-    "音视频与画质",
-    "播放与弹幕",
-    "视频详情",
-    "推荐与搜索",
-    "外观与界面",
-    "通用功能",
-  ]
-  private let advanced: [(String, String, String, String)] = [
-    ("privacy", "隐私设置", "hand.raised", "黑名单与账号隐私"),
-    ("recommend", "推荐流设置", "sparkles", "推荐来源、刷新保留与过滤器"),
-    ("video", "音视频设置", "film", "画质、音质、解码、缓冲与 CDN"),
-    ("player", "播放器设置", "play.rectangle", "全屏、手势、弹幕、字幕与进度条"),
-    ("style", "外观设置", "paintbrush", "布局、主题、字号、图片与帧率"),
-    ("extra", "其它设置", "ellipsis.circle", "评论、动态、代理、搜索与更新"),
-    ("webdav", "WebDAV 设置", "externaldrive", "配置同步与备份"),
-    ("about", "关于", "info.circle", "版本、项目与界面架构"),
-  ]
+  private func matches(_ text: String) -> Bool {
+    let keyword = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+    return keyword.isEmpty || text.localizedCaseInsensitiveContains(keyword)
+  }
 
   var body: some View {
-    Group {
-      Group {
-        if model.settingsLoading && model.settings.isEmpty {
-          PiliNativeLoadingView(title: "正在加载设置")
-        } else if let error = model.settingsError, model.settings.isEmpty {
-          PiliNativeErrorView(message: error, retry: model.loadSettings)
-        } else {
-          Form {
-            if let error = model.settingsError {
-              Section {
-                Text(error).font(.caption).foregroundColor(.red)
-              }
-            }
-
-            Section(
-              footer: Text("这些开关直接读写原项目的同一份设置数据，播放和请求内核会继续使用修改后的值。")
-            ) {
-              HStack(spacing: 12) {
-                Image(systemName: "iphone.gen3")
-                  .font(.title2)
-                  .foregroundColor(piliAccent)
-                VStack(alignment: .leading, spacing: 3) {
-                  Text("iOS 原生设置")
-                    .font(.headline)
-                  Text("已原生化 \(model.settings.count) 个常用开关")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                }
-              }
-              .padding(.vertical, 4)
-            }
-
-            if !model.videoQualityOptions.isEmpty {
-              Section(
-                header: Text("视频默认值"),
-                footer: Text("进入视频时会优先请求该分辨率；账号或视频不支持时由原版接口自动回退到可用画质。")
-              ) {
-                Picker(
-                  selection: Binding(
-                    get: { model.defaultVideoQuality },
-                    set: { model.setDefaultVideoQuality($0) }
-                  ),
-                  label: Label("默认视频分辨率", systemImage: "rectangle.badge.hd")
-                ) {
-                  ForEach(model.videoQualityOptions) { quality in
-                    Text(quality.label).tag(quality.value)
-                  }
-                }
-                .pickerStyle(MenuPickerStyle())
-              }
-            }
-
-            if searchText.isEmpty || "播放源 CDN 视频 直播 线路".localizedCaseInsensitiveContains(searchText) {
-              Section(header: Text("播放源与线路")) {
-                NavigationLink(destination: PiliNativePlaybackSourceSettingsView(model: model)) {
-                  Label("播放源设置", systemImage: "network")
-                }
-              }
-            }
-
-            Section(
-              header: Text("诊断"),
-              footer: Text("播放诊断日志已从播放器控制层移到这里，避免遮挡视频操作。")
-            ) {
-              NavigationLink(destination: PiliNativeDiagnosticLogSettingsView()) {
-                Label("播放器诊断日志", systemImage: "doc.text.magnifyingglass")
-              }
-            }
-
-            if searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-              Section(
-                header: Text("原版设置分类"),
-                footer: Text("入口顺序与原版项目保持一致；进入分类后仍直接修改原项目设置存储。")
-              ) {
-                ForEach(advanced.indices, id: \.self) { index in
-                  let item = advanced[index]
-                  NavigationLink(
-                    destination: PiliNativeSettingsSectionView(
-                      section: item.0,
-                      title: item.1,
-                      model: model
-                    )
-                  ) {
-                    HStack(spacing: 13) {
-                      Image(systemName: item.2)
-                        .frame(width: 24)
-                        .foregroundColor(piliAccent)
-                      VStack(alignment: .leading, spacing: 3) {
-                        Text(item.1).foregroundColor(.primary)
-                        Text(item.3)
-                          .font(.caption)
-                          .foregroundColor(.secondary)
-                      }
-                      Spacer()
-                    }
-                    .padding(.vertical, 2)
-                  }
-                }
-              }
-            }
-
-            ForEach(groups, id: \.self) { group in
-              if !settings(in: group).isEmpty {
-                Section(header: Text(group)) {
-                  ForEach(settings(in: group)) { item in
-                  Toggle(isOn: binding(for: item)) {
-                    HStack(alignment: .top, spacing: 11) {
-                      Image(systemName: item.icon)
-                        .frame(width: 22)
-                        .foregroundColor(piliAccent)
-                      VStack(alignment: .leading, spacing: 3) {
-                        HStack(spacing: 5) {
-                          Text(item.title)
-                          if item.needsRestart {
-                            Text("重启生效")
-                              .font(.caption2)
-                              .foregroundColor(piliAccent)
-                          }
-                        }
-                        if !item.subtitle.isEmpty {
-                          Text(item.subtitle)
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                        }
-                      }
-                    }
-                  }
-                  .toggleStyle(SwitchToggleStyle(tint: piliAccent))
-                }
-              }
-            }
-            }
-
-          }
-          .refreshable { model.loadSettings() }
+    Form {
+      if let error = model.settingsError {
+        Section {
+          Text(error).font(.footnote).foregroundStyle(.red)
+          Button("重新加载网络设置", action: model.loadSettings)
         }
       }
-      .navigationBarTitle("设置", displayMode: .inline)
-      .searchable(text: $searchText, prompt: "搜索设置")
+      if matches("播放器 播放 自动播放 默认倍速 双击 暂停 长按 2x 锁定 电量 控件") {
+        Section("播放器") {
+          NavigationLink(destination: PiliNativePlayerSettingsView()) {
+            settingLabel("播放器设置", subtitle: "播放默认值、手势与横屏控件", icon: "play.rectangle")
+          }
+        }
+      }
+      if matches("播放源 CDN 视频 直播 线路 画质 分辨率 音频") {
+        Section("画质与线路") {
+          if !model.videoQualityOptions.isEmpty {
+            Picker("默认视频分辨率", selection: Binding(
+              get: { model.defaultVideoQuality }, set: { model.setDefaultVideoQuality($0) }
+            )) {
+              ForEach(model.videoQualityOptions) { quality in
+                Text(quality.label).tag(quality.value)
+              }
+            }
+          }
+          NavigationLink(destination: PiliNativePlaybackSourceSettingsView(model: model)) {
+            settingLabel("播放源设置", subtitle: "自动选线、延迟检测与直播 CDN", icon: "network")
+          }
+        }
+      }
+      if matches("弹幕 简易 完整 筛选 屏蔽 关键词 正则 用户 字体 不透明度 显示区域 滚动") {
+        Section {
+          Button { danmakuProfile = .simple } label: {
+            settingLabel("简易播放器弹幕设置", subtitle: "竖屏播放区的显示与屏蔽规则", icon: "text.bubble")
+          }
+          Button { danmakuProfile = .full } label: {
+            settingLabel("完整播放器弹幕设置", subtitle: "全屏播放区的显示与屏蔽规则", icon: "text.bubble.fill")
+          }
+        } header: { Text("弹幕") } footer: {
+          Text("两套设置独立保存，与播放器内的弹幕面板共用同一份配置。")
+        }
+      }
+      if matches("视频详情 相关推荐 简介") {
+        Section("视频详情") {
+          Toggle("显示相关推荐", isOn: $showRelated)
+          Toggle("默认展开视频简介", isOn: $expandIntro)
+        }
+      }
+      let items = model.settings.filter { $0.key != "disableAudioCDN" && matches($0.title + " " + $0.subtitle) }
+      if !items.isEmpty {
+        Section("推荐与网络") {
+          ForEach(items) { item in
+            Toggle(isOn: Binding(
+              get: { model.settings.first(where: { $0.key == item.key })?.value ?? item.value },
+              set: { model.setSetting(item.key, value: $0) }
+            )) {
+              settingLabel(item.title, subtitle: item.subtitle, icon: item.icon)
+            }
+          }
+        }
+      }
+      if model.settingsLoading { Section { ProgressView("正在加载网络设置") } }
+      if matches("诊断 日志 播放器 排查") {
+        Section("诊断") {
+          NavigationLink(destination: PiliNativeDiagnosticLogSettingsView()) {
+            settingLabel("播放器诊断日志", subtitle: "查看、复制或分享播放日志", icon: "doc.text.magnifyingglass")
+          }
+        }
+      }
+      if matches("关于 版本 项目 PiliGlass") {
+        Section {
+          NavigationLink(destination: PiliNativeAboutSettingsView()) {
+            Label("关于 PiliGlass", systemImage: "info.circle")
+          }
+        } footer: {
+          Text("仅提供当前客户端已接入的设置。旧播放器专用选项和未实现的入口已移除。")
+        }
+      }
     }
+    .tint(piliAccent)
+    .navigationTitle("设置")
+    .navigationBarTitleDisplayMode(.inline)
+    .searchable(text: $searchText, prompt: "搜索设置")
     .onAppear(perform: model.loadSettings)
-  }
-
-  private func settings(in group: String) -> [PiliNativeSetting] {
-    let keyword = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-    return model.settings.filter { item in
-      guard item.group == group else { return false }
-      return keyword.isEmpty || item.title.localizedCaseInsensitiveContains(keyword)
-        || item.subtitle.localizedCaseInsensitiveContains(keyword)
+    .refreshable { model.loadSettings() }
+    .sheet(item: $danmakuProfile) { profile in
+      PiliNativeDanmakuPreferencesPage(model: model, profile: profile)
     }
   }
 
-  private func binding(for item: PiliNativeSetting) -> Binding<Bool> {
-    Binding(
-      get: {
-        model.settings.first(where: { $0.key == item.key })?.value ?? item.value
-      },
-      set: { model.setSetting(item.key, value: $0) }
-    )
+  private func settingLabel(_ title: String, subtitle: String, icon: String) -> some View {
+    HStack(spacing: 12) {
+      Image(systemName: icon).frame(width: 24).foregroundStyle(piliAccent)
+      VStack(alignment: .leading, spacing: 4) {
+        Text(title).foregroundStyle(Color.primary)
+        Text(subtitle).font(.caption).foregroundStyle(Color.secondary)
+      }
+    }.padding(.vertical, 3)
+  }
+}
+
+private struct PiliNativePlayerSettingsView: View {
+  @AppStorage(PiliNativePlayerPreferences.autoplayKey) private var autoplay = true
+  @AppStorage(PiliNativePlayerPreferences.defaultRateKey) private var defaultRate = 1.0
+  @AppStorage(PiliNativePlayerPreferences.doubleTapKey) private var doubleTapPause = true
+  @AppStorage(PiliNativePlayerPreferences.holdSpeedKey) private var holdDoubleSpeed = true
+  @AppStorage(PiliNativePlayerPreferences.lockKey) private var showLock = true
+  @AppStorage(PiliNativePlayerPreferences.statusKey) private var showStatus = true
+  @AppStorage(PiliNativePlayerPreferences.hideDelayKey) private var hideDelay = 3.0
+
+  var body: some View {
+    Form {
+      Section {
+        Toggle("打开视频自动播放", isOn: $autoplay)
+        Picker("默认播放倍速", selection: $defaultRate) {
+          ForEach([0.75, 1.0, 1.25, 1.5, 2.0], id: \.self) { rate in
+            Text("\(rate, specifier: "%g")×").tag(rate)
+          }
+        }
+      } header: { Text("播放默认值") } footer: {
+        Text("下次打开视频时使用这些默认值，不会更改正在播放的视频。")
+      }
+      Section {
+        Toggle("双击暂停或继续", isOn: $doubleTapPause)
+        Toggle("长按临时 2× 加速", isOn: $holdDoubleSpeed)
+      } header: { Text("播放手势") } footer: {
+        Text("简易和完整播放器共用。长按仅在播放时生效，松手后恢复原倍速；锁定时不响应手势。")
+      }
+      Section("横屏控件") {
+        Toggle("显示锁定按钮", isOn: $showLock)
+        Toggle("显示时间与电量", isOn: $showStatus)
+        Picker("播放控件自动隐藏", selection: $hideDelay) {
+          ForEach([3.0, 5.0, 8.0], id: \.self) { delay in
+            Text("\(Int(delay)) 秒后").tag(delay)
+          }
+        }
+      }
+      Section {
+        Label("播放进度使用系统原生滑块", systemImage: "slider.horizontal.3")
+      }
+    }
+    .tint(piliAccent)
+    .navigationTitle("播放器设置")
+    .navigationBarTitleDisplayMode(.inline)
+  }
+}
+
+private struct PiliNativeDanmakuPreferencesPage: View {
+  @Environment(\.dismiss) private var dismiss
+  @StateObject private var session: PiliNativePlayerSession
+
+  init(model: PiliNativeViewModel, profile: PiliNativeDanmakuProfile) {
+    _session = StateObject(wrappedValue: model.makeDanmakuSettingsSession(profile))
+  }
+
+  var body: some View {
+    PiliNativeDanmakuSettingsView(session: session) { dismiss() }
   }
 }
 
@@ -7493,110 +7508,27 @@ private struct PiliNativeDiagnosticLogSettingsView: View {
   }
 }
 
-private struct PiliNativeSettingsSectionView: View {
-  let section: String
-  let title: String
-  @ObservedObject var model: PiliNativeViewModel
-  @State private var webDAVServer = ""
-  @State private var webDAVUser = ""
-  @State private var webDAVPassword = ""
-  @State private var webDAVMessage = ""
-
-  private var group: String? {
-    switch section {
-    case "recommend": return "推荐与搜索"
-    case "video": return "音视频与画质"
-    case "player": return "播放与弹幕"
-    case "style": return "外观与界面"
-    case "extra": return "通用功能"
-    default: return nil
-    }
+private struct PiliNativeAboutSettingsView: View {
+  private var version: String {
+    let info = Bundle.main.infoDictionary ?? [:]
+    let version = (info["CFBundleShortVersionString"] as? String) ?? "未知"
+    let build = (info["CFBundleVersion"] as? String) ?? "未知"
+    return "\(version) (\(build))"
   }
 
   var body: some View {
     Form {
-      if section == "video" {
-        Section(header: Text("播放源与线路")) {
-          NavigationLink(destination: PiliNativePlaybackSourceSettingsView(model: model)) {
-            Label("播放源设置", systemImage: "network")
-          }
-        }
+      Section {
+        Label("PiliGlass", systemImage: "play.tv.fill").font(.title2)
+        LabeledContent("版本", value: version)
       }
-      if let group = group {
-        Section(
-          header: Text(group),
-          footer: Text("修改会直接写入原项目设置存储。")
-        ) {
-          ForEach(model.settings.filter { $0.group == group }) { item in
-            Toggle(isOn: binding(for: item)) {
-              VStack(alignment: .leading, spacing: 3) {
-                Text(item.title)
-                if !item.subtitle.isEmpty {
-                  Text(item.subtitle)
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                }
-              }
-            }
-            .toggleStyle(SwitchToggleStyle(tint: piliAccent))
-          }
-        }
-      } else if section == "webdav" {
-        Section(header: Text("服务器")) {
-          TextField("https://example.com/dav", text: $webDAVServer)
-            .textContentType(.URL)
-            .autocapitalization(.none)
-          TextField("用户名", text: $webDAVUser)
-            .textContentType(.username)
-            .autocapitalization(.none)
-          SecureField("密码", text: $webDAVPassword)
-            .textContentType(.password)
-          Button("保存本机配置") {
-            webDAVMessage = "原生配置已暂存；同步功能将在后续版本接入"
-          }
-          if !webDAVMessage.isEmpty {
-            Text(webDAVMessage)
-              .font(.caption)
-              .foregroundColor(.secondary)
-          }
-        }
-      } else if section == "about" {
-        Section {
-          HStack(spacing: 14) {
-            Image(systemName: "play.tv.fill")
-              .font(.system(size: 38))
-              .foregroundColor(piliAccent)
-            VStack(alignment: .leading, spacing: 4) {
-              Text("PiliGlass")
-                .font(.headline)
-              Text("iOS Native Frontend")
-                .font(.caption)
-                .foregroundColor(.secondary)
-            }
-          }
-          .padding(.vertical, 8)
-        }
-        Section(header: Text("界面架构")) {
-          Label("SwiftUI 原生导航与列表", systemImage: "swift")
-          Label("Flutter 保留登录与网络协议", systemImage: "network")
-          Label("UIKit 自定义播放器与弹幕层", systemImage: "rectangle.on.rectangle")
-        }
-      } else {
-        Section(header: Text("隐私与账号")) {
-          Label("登录凭据保存在应用沙盒", systemImage: "lock.shield")
-          Label("请求继续使用原项目 CSRF 签名", systemImage: "checkmark.shield")
-          Label("原生页面不接触明文 Cookie", systemImage: "eye.slash")
-        }
+      Section("项目") {
+        Link("PiliGlass 项目主页", destination: URL(string: "https://github.com/Justintunsday/Piliglass")!)
+        Link("PiliPala 原版项目", destination: URL(string: "https://github.com/guozhigq/pilipala")!)
       }
     }
-    .navigationBarTitle(title, displayMode: .inline)
-  }
-
-  private func binding(for item: PiliNativeSetting) -> Binding<Bool> {
-    Binding(
-      get: { model.settings.first(where: { $0.key == item.key })?.value ?? item.value },
-      set: { model.setSetting(item.key, value: $0) }
-    )
+    .navigationTitle("关于 PiliGlass")
+    .navigationBarTitleDisplayMode(.inline)
   }
 }
 

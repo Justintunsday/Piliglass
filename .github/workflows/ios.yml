@@ -11,6 +11,7 @@ on:
       - "pubspec.yaml"
       - "pubspec.lock"
       - "tool/check_native_danmaku.py"
+      - "tool/check_native_settings.py"
       - ".github/workflows/ios.yml"
   pull_request:
     paths:
@@ -20,6 +21,7 @@ on:
       - "pubspec.yaml"
       - "pubspec.lock"
       - "tool/check_native_danmaku.py"
+      - "tool/check_native_settings.py"
       - ".github/workflows/ios.yml"
   workflow_call:
     inputs:
@@ -88,6 +90,8 @@ jobs:
 
       - name: Verify native danmaku settings with isolated accounts
         run: python3 tool/check_native_danmaku.py
+      - name: Verify current native settings and reject obsolete options
+        run: python3 tool/check_native_settings.py
 
       - name: Build iOS
         run: |

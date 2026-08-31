@@ -377,9 +377,10 @@ struct PiliNativePlayerQuality: Identifiable, Equatable {
   var id: Int { value }
 }
 
-enum PiliNativeDanmakuProfile: String {
+enum PiliNativeDanmakuProfile: String, Identifiable {
   case simple
   case full
+  var id: String { rawValue }
 
   var title: String { self == .full ? "完整播放器" : "简易播放器" }
 }
@@ -407,6 +408,11 @@ struct PiliNativeDanmakuSettingsView: View {
   var body: some View {
     NavigationStack {
       Form {
+        Section {
+          Toggle("显示弹幕", isOn: $session.danmakuEnabled)
+        } footer: {
+          Text("只影响\(session.danmakuProfile.title)，两套显示与屏蔽设置独立保存。")
+        }
         Section {
           Toggle("屏蔽顶部弹幕", isOn: blocked(5))
           Toggle("屏蔽底部弹幕", isOn: blocked(4))
@@ -754,6 +760,36 @@ private final class PiliNativeDanmakuBuffer {
   }
 }
 
+// Native preferences intentionally do not reuse obsolete Flutter player keys.
+enum PiliNativePlayerPreferences {
+  static let autoplayKey = "pili.native.player.autoplay"
+  static let defaultRateKey = "pili.native.player.defaultRate"
+  static let doubleTapKey = "pili.native.player.doubleTapPause"
+  static let holdSpeedKey = "pili.native.player.holdDoubleSpeed"
+  static let lockKey = "pili.native.player.showLock"
+  static let statusKey = "pili.native.player.showStatus"
+  static let hideDelayKey = "pili.native.player.hideDelay"
+  static let relatedKey = "pili.native.detail.showRelated"
+  static let expandIntroKey = "pili.native.detail.expandIntro"
+
+  private static func enabled(_ key: String) -> Bool {
+    (UserDefaults.standard.object(forKey: key) as? Bool) ?? true
+  }
+  static var autoplay: Bool { enabled(autoplayKey) }
+  static var doubleTapPause: Bool { enabled(doubleTapKey) }
+  static var holdDoubleSpeed: Bool { enabled(holdSpeedKey) }
+  static var showLock: Bool { enabled(lockKey) }
+  static var showStatus: Bool { enabled(statusKey) }
+  static var defaultRate: Float {
+    let rate = (UserDefaults.standard.object(forKey: defaultRateKey) as? Double) ?? 1
+    return [0.75, 1, 1.25, 1.5, 2].contains(rate) ? Float(rate) : 1
+  }
+  static var hideDelay: Double {
+    let delay = (UserDefaults.standard.object(forKey: hideDelayKey) as? Double) ?? 3
+    return [3, 5, 8].contains(delay) ? delay : 3
+  }
+}
+
 @MainActor
 final class PiliNativePlayerSession: NSObject, ObservableObject {
   @Published private(set) var isReady = false
@@ -861,6 +897,11 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
     engine.videoGravity = .resizeAspect
     PiliNativeDiagnosticLog.shared.append("Native player session initialised")
     installObservers()
+  }
+
+  convenience init(settingsProfile: PiliNativeDanmakuProfile) {
+    self.init()
+    danmakuProfile = settingsProfile
   }
 
   deinit {
@@ -1191,6 +1232,11 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
     let values: [Float] = [1, 1.25, 1.5, 2, 0.75]
     let current = values.firstIndex(where: { abs($0 - playbackRate) < 0.01 }) ?? 0
     setPlaybackRate(values[(current + 1) % values.count])
+  }
+
+  func applyDefaultPlaybackRate() {
+    endTemporaryDoubleSpeed()
+    setPlaybackRate(PiliNativePlayerPreferences.defaultRate)
   }
 
   private func setPlaybackRate(_ rate: Float) {
@@ -1992,6 +2038,7 @@ final class PiliNativePlayerViewController: UIViewController, UIGestureRecognize
   private let menuButton = UIButton(type: .system)
   private let systemTimeLabel = UILabel()
   private let batteryLabel = UILabel()
+  private let statusStack = UIStackView()
   private let fullTimeLabel = UILabel()
   private let currentLabel = UILabel()
   private let durationLabel = UILabel()
@@ -2088,7 +2135,8 @@ final class PiliNativePlayerViewController: UIViewController, UIGestureRecognize
 
   func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
     if gestureRecognizer is UILongPressGestureRecognizer {
-      return session.isReady && session.isPlaying && !controlsLocked
+      return PiliNativePlayerPreferences.holdDoubleSpeed
+        && session.isReady && session.isPlaying && !controlsLocked
         && !settingsPanelVisible && !isScrubbing
     }
     return true
@@ -2357,7 +2405,8 @@ final class PiliNativePlayerViewController: UIViewController, UIGestureRecognize
       $0.textColor = .white
       $0.font = .monospacedDigitSystemFont(ofSize: 11, weight: .semibold)
     }
-    let statusStack = UIStackView(arrangedSubviews: [wifiView, batteryLabel])
+    statusStack.addArrangedSubview(wifiView)
+    statusStack.addArrangedSubview(batteryLabel)
     statusStack.axis = .horizontal
     statusStack.alignment = .center
     statusStack.spacing = 7
@@ -2526,6 +2575,11 @@ final class PiliNativePlayerViewController: UIViewController, UIGestureRecognize
   }
 
   private func bindSession() {
+    applyControlPreferences()
+    NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)
+      .receive(on: DispatchQueue.main)
+      .sink { [weak self] _ in self?.applyControlPreferences() }
+      .store(in: &cancellables)
     session.$danmakuSettings.receive(on: DispatchQueue.main).sink { [weak self] settings in
       self?.danmakuView.applySettings(settings)
     }.store(in: &cancellables)
@@ -2859,14 +2913,16 @@ final class PiliNativePlayerViewController: UIViewController, UIGestureRecognize
   }
 
   @objc private func doubleTapPlayback(_ gesture: UITapGestureRecognizer) {
-    guard gesture.state == .ended, !controlsLocked, !settingsPanelVisible, !isScrubbing else { return }
+    guard PiliNativePlayerPreferences.doubleTapPause,
+          gesture.state == .ended, !controlsLocked, !settingsPanelVisible, !isScrubbing else { return }
     togglePlayback()
   }
 
   @objc private func holdDoubleSpeed(_ gesture: UILongPressGestureRecognizer) {
     switch gesture.state {
     case .began:
-      guard !controlsLocked, !settingsPanelVisible, !isScrubbing else { return }
+      guard PiliNativePlayerPreferences.holdDoubleSpeed,
+            !controlsLocked, !settingsPanelVisible, !isScrubbing else { return }
       controlsHideTask?.cancel()
       session.beginTemporaryDoubleSpeed()
     case .ended, .cancelled, .failed:
@@ -2909,7 +2965,16 @@ final class PiliNativePlayerViewController: UIViewController, UIGestureRecognize
       }
     }
     controlsHideTask = task
-    DispatchQueue.main.asyncAfter(deadline: .now() + 3, execute: task)
+    DispatchQueue.main.asyncAfter(deadline: .now() + PiliNativePlayerPreferences.hideDelay, execute: task)
+  }
+
+  private func applyControlPreferences() {
+    if !PiliNativePlayerPreferences.holdDoubleSpeed { session.endTemporaryDoubleSpeed() }
+    if !PiliNativePlayerPreferences.showLock && controlsLocked { toggleScreenLock() }
+    lockButton.isHidden = !PiliNativePlayerPreferences.showLock
+    systemTimeLabel.isHidden = !PiliNativePlayerPreferences.showStatus
+    statusStack.isHidden = !PiliNativePlayerPreferences.showStatus
+    scheduleControlsHide()
   }
 
   private func showControllerToast(_ message: String) {

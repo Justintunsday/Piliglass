@@ -27,22 +27,17 @@ import 'package:PiliPlus/models/common/account_type.dart';
 import 'package:PiliPlus/models/common/dynamic/dynamics_type.dart';
 import 'package:PiliPlus/models/common/nav_bar_config.dart';
 import 'package:PiliPlus/models/common/search/search_type.dart';
-import 'package:PiliPlus/models/common/setting_type.dart';
 import 'package:PiliPlus/models/common/video/cdn_type.dart';
 import 'package:PiliPlus/models/common/video/video_quality.dart';
 import 'package:PiliPlus/models/common/video/video_type.dart';
 import 'package:PiliPlus/models/dynamics/result.dart';
 import 'package:PiliPlus/models/search/result.dart';
-import 'package:PiliPlus/pages/about/view.dart';
 import 'package:PiliPlus/pages/dynamics/controller.dart';
 import 'package:PiliPlus/pages/dynamics_tab/controller.dart';
 import 'package:PiliPlus/pages/main/controller.dart';
 import 'package:PiliPlus/pages/mine/controller.dart';
 import 'package:PiliPlus/pages/rcmd/controller.dart';
-import 'package:PiliPlus/pages/setting/common_setting.dart';
 import 'package:PiliPlus/pages/video/introduction/ugc/controller.dart';
-import 'package:PiliPlus/pages/webdav/view.dart';
-import 'package:PiliPlus/services/service_locator.dart';
 import 'package:PiliPlus/services/native_danmaku_settings.dart';
 import 'package:PiliPlus/services/download/download_service.dart';
 import 'package:PiliPlus/utils/app_scheme.dart';
@@ -208,8 +203,6 @@ final class IOSNativeUIBridge {
         return _setNativePlaybackSource(_arguments(call));
       case 'testNativePlaybackSources':
         return _testNativePlaybackSources(_arguments(call));
-      case 'openSettingsSection':
-        return _openSettingsSection(_arguments(call));
       case 'searchVideos':
         return _searchVideos(_arguments(call));
       case 'loadNativeLibrary':
@@ -582,7 +575,8 @@ final class IOSNativeUIBridge {
       bvid: bvid,
       cid: cid,
       qn: quality,
-      tryLook: !Accounts.get(AccountType.video).isLogin,
+      tryLook: !Accounts.get(AccountType.video).isLogin &&
+          GStorage.setting.get(SettingBoxKey.p1080, defaultValue: true) == true,
       videoType: VideoType.ugc,
     );
     return switch (result) {
@@ -1048,27 +1042,11 @@ final class IOSNativeUIBridge {
 
   static const List<Map<String, dynamic>> _nativeSettingDefinitions = [
     {
-      'key': SettingBoxKey.enableHA,
-      'title': '开启硬件解码',
-      'subtitle': '以较低功耗播放视频，若画面异常卡死可尝试关闭',
-      'group': '音视频与画质',
-      'icon': 'bolt.horizontal.circle',
-      'default': true,
-    },
-    {
       'key': SettingBoxKey.p1080,
       'title': '免登录 1080P',
       'subtitle': '未登录时仍请求可用的 1080P 视频轨道',
       'group': '音视频与画质',
       'icon': 'rectangle.badge.hd',
-      'default': true,
-    },
-    {
-      'key': SettingBoxKey.cdnSpeedTest,
-      'title': 'CDN 测速',
-      'subtitle': '通过试载视频选择可用线路，会产生少量流量',
-      'group': '音视频与画质',
-      'icon': 'speedometer',
       'default': true,
     },
     {
@@ -1080,233 +1058,9 @@ final class IOSNativeUIBridge {
       'default': false,
     },
     {
-      'key': SettingBoxKey.enableShowDanmaku,
-      'title': '显示弹幕',
-      'subtitle': '播放器中加载并显示弹幕',
-      'group': '播放与弹幕',
-      'icon': 'text.bubble',
-      'default': true,
-    },
-    {
-      'key': SettingBoxKey.enableTapDm,
-      'title': '点击弹幕',
-      'subtitle': '点击弹幕后悬停并显示操作菜单',
-      'group': '播放与弹幕',
-      'icon': 'hand.tap',
-      'default': true,
-    },
-    {
-      'key': SettingBoxKey.autoPlayEnable,
-      'title': '自动播放',
-      'subtitle': '进入播放页后自动开始播放',
-      'group': '播放与弹幕',
-      'icon': 'play.circle',
-      'default': false,
-    },
-    {
-      'key': SettingBoxKey.enableQuickDouble,
-      'title': '双击快退/快进',
-      'subtitle': '左侧双击快退，右侧双击快进',
-      'group': '播放与弹幕',
-      'icon': 'gobackward.10',
-      'default': true,
-    },
-    {
-      'key': SettingBoxKey.enableSlideVolumeBrightness,
-      'title': '滑动调节亮度和音量',
-      'subtitle': '在播放器左右区域上下滑动',
-      'group': '播放与弹幕',
-      'icon': 'slider.vertical.3',
-      'default': true,
-    },
-    {
-      'key': SettingBoxKey.enableSlideFS,
-      'title': '滑动进入或退出全屏',
-      'subtitle': '在播放器中间区域上下滑动',
-      'group': '播放与弹幕',
-      'icon': 'arrow.up.and.down',
-      'default': true,
-    },
-    {
-      'key': SettingBoxKey.showFsLockBtn,
-      'title': '全屏显示锁定按钮',
-      'subtitle': '锁定后避免误触播放器控件',
-      'group': '播放与弹幕',
-      'icon': 'lock',
-      'default': true,
-    },
-    {
-      'key': SettingBoxKey.showFsScreenshotBtn,
-      'title': '全屏显示截图按钮',
-      'subtitle': '在完整播放器中显示截图入口',
-      'group': '播放与弹幕',
-      'icon': 'camera',
-      'default': true,
-    },
-    {
-      'key': SettingBoxKey.showBatteryLevel,
-      'title': '全屏显示电池电量',
-      'subtitle': '横屏播放时展示当前电量',
-      'group': '播放与弹幕',
-      'icon': 'battery.50',
-      'default': true,
-    },
-    {
-      'key': SettingBoxKey.enableAutoEnter,
-      'title': '播放时自动全屏',
-      'subtitle': '视频开始播放时自动进入全屏',
-      'group': '播放与弹幕',
-      'icon': 'arrow.up.left.and.arrow.down.right',
-      'default': false,
-    },
-    {
-      'key': SettingBoxKey.enableAutoExit,
-      'title': '结束后退出全屏',
-      'subtitle': '视频播放完成时恢复竖屏详情页',
-      'group': '播放与弹幕',
-      'icon': 'arrow.down.right.and.arrow.up.left',
-      'default': true,
-    },
-    {
-      'key': SettingBoxKey.continuePlayInBackground,
-      'title': '后台继续播放',
-      'subtitle': 'App 进入后台后不自动暂停',
-      'group': '播放与弹幕',
-      'icon': 'waveform',
-      'default': false,
-    },
-    {
-      'key': SettingBoxKey.enableBackgroundPlay,
-      'title': '后台音频服务',
-      'subtitle': '提升后台播放与系统控制兼容性',
-      'group': '播放与弹幕',
-      'icon': 'airplayaudio',
-      'default': true,
-    },
-    {
-      'key': SettingBoxKey.showFSActionItem,
-      'title': '全屏显示互动按钮',
-      'subtitle': '显示点赞、投币和收藏等操作',
-      'group': '播放与弹幕',
-      'icon': 'hand.thumbsup',
-      'default': true,
-    },
-    {
-      'key': SettingBoxKey.enableOnlineTotal,
-      'title': '显示同时观看人数',
-      'subtitle': '在播放器标题区域显示在线人数',
-      'group': '播放与弹幕',
-      'icon': 'person.2',
-      'default': false,
-    },
-    {
-      'key': SettingBoxKey.enableLongShowControl,
-      'title': '延长控件显示时间',
-      'subtitle': '将播放控件显示时间延长到 30 秒',
-      'group': '播放与弹幕',
-      'icon': 'timer',
-      'default': false,
-    },
-    {
-      'key': SettingBoxKey.tempPlayerConf,
-      'title': '播放器设置仅当前生效',
-      'subtitle': '部分播放设置退出当前视频后恢复',
-      'group': '播放与弹幕',
-      'icon': 'gearshape.2',
-      'default': false,
-    },
-    {
-      'key': SettingBoxKey.showViewPoints,
-      'title': '显示视频分段信息',
-      'subtitle': '在详情和进度中显示视频章节',
-      'group': '视频详情',
-      'icon': 'list.number',
-      'default': true,
-    },
-    {
-      'key': SettingBoxKey.showRelatedVideo,
-      'title': '显示相关视频',
-      'subtitle': '在视频详情中显示相关推荐',
-      'group': '视频详情',
-      'icon': 'rectangle.stack',
-      'default': true,
-    },
-    {
-      'key': SettingBoxKey.showVideoReply,
-      'title': '显示视频评论',
-      'subtitle': '在视频详情中加载评论',
-      'group': '视频详情',
-      'icon': 'bubble.left.and.bubble.right',
-      'default': true,
-    },
-    {
-      'key': SettingBoxKey.showBangumiReply,
-      'title': '显示番剧评论',
-      'subtitle': '在番剧详情中加载评论',
-      'group': '视频详情',
-      'icon': 'tv',
-      'default': true,
-    },
-    {
-      'key': SettingBoxKey.alwaysExpandIntroPanel,
-      'title': '默认展开简介',
-      'subtitle': '进入详情时完整展示视频简介',
-      'group': '视频详情',
-      'icon': 'text.alignleft',
-      'default': false,
-    },
-    {
-      'key': SettingBoxKey.expandIntroPanelH,
-      'title': '横屏自动展开简介',
-      'subtitle': '横屏详情页默认展开完整简介',
-      'group': '视频详情',
-      'icon': 'rectangle.expand.vertical',
-      'default': false,
-    },
-    {
-      'key': SettingBoxKey.showArgueMsg,
-      'title': '显示视频警告信息',
-      'subtitle': '展示视频争议或警告说明',
-      'group': '视频详情',
-      'icon': 'exclamationmark.triangle',
-      'default': true,
-    },
-    {
-      'key': SettingBoxKey.reverseFromFirst,
-      'title': '倒序播放从首集开始',
-      'subtitle': '分 P 或合集倒序时自动切到首集',
-      'group': '视频详情',
-      'icon': 'arrow.up.arrow.down',
-      'default': true,
-    },
-    {
-      'key': SettingBoxKey.continuePlayingPart,
-      'title': '显示继续播放分 P 提示',
-      'subtitle': '进入视频时提示上次播放的分 P',
-      'group': '视频详情',
-      'icon': 'bookmark',
-      'default': true,
-    },
-    {
-      'key': SettingBoxKey.showSeekPreview,
-      'title': '拖动时显示预览图',
-      'subtitle': '拖动进度时显示视频缩略图',
-      'group': '视频详情',
-      'icon': 'photo.on.rectangle',
-      'default': true,
-    },
-    {
-      'key': SettingBoxKey.showDmChart,
-      'title': '显示高能进度条',
-      'subtitle': '根据弹幕数量展示高能趋势',
-      'group': '视频详情',
-      'icon': 'chart.line.uptrend.xyaxis',
-      'default': false,
-    },
-    {
       'key': SettingBoxKey.appRcmd,
       'title': '使用 App 端推荐',
-      'subtitle': '修改后下次启动生效',
+      'subtitle': '使用 App 推荐接口；修改后重启客户端生效',
       'group': '推荐与搜索',
       'icon': 'sparkles',
       'default': true,
@@ -1319,126 +1073,6 @@ final class IOSNativeUIBridge {
       'group': '推荐与搜索',
       'icon': 'arrow.clockwise',
       'default': true,
-    },
-    {
-      'key': SettingBoxKey.savedRcmdTip,
-      'title': '显示上次看到位置',
-      'subtitle': '在推荐流中标记上次刷新位置',
-      'group': '推荐与搜索',
-      'icon': 'mappin',
-      'default': true,
-    },
-    {
-      'key': SettingBoxKey.searchSuggestion,
-      'title': '搜索建议',
-      'subtitle': '输入搜索词时显示建议',
-      'group': '推荐与搜索',
-      'icon': 'magnifyingglass',
-      'default': true,
-    },
-    {
-      'key': SettingBoxKey.recordSearchHistory,
-      'title': '记录搜索历史',
-      'subtitle': '在本机保存搜索历史',
-      'group': '推荐与搜索',
-      'icon': 'clock.arrow.circlepath',
-      'default': true,
-    },
-    {
-      'key': SettingBoxKey.removeSafeArea,
-      'title': '播放页移除安全边距',
-      'subtitle': '让横屏播放内容延伸到屏幕边缘',
-      'group': '外观与界面',
-      'icon': 'rectangle.inset.filled',
-      'default': false,
-    },
-    {
-      'key': SettingBoxKey.darkVideoPage,
-      'title': '播放页使用深色主题',
-      'subtitle': '视频详情页固定使用深色外观',
-      'group': '外观与界面',
-      'icon': 'moon',
-      'default': false,
-    },
-    {
-      'key': SettingBoxKey.floatingNavBar,
-      'title': '悬浮底栏',
-      'subtitle': '使用悬浮样式的主导航栏',
-      'group': '外观与界面',
-      'icon': 'dock.rectangle',
-      'default': false,
-      'needsRestart': true,
-    },
-    {
-      'key': SettingBoxKey.hideTopBar,
-      'title': '首页顶栏随滚动收起',
-      'subtitle': '滚动首页列表时隐藏顶部栏',
-      'group': '外观与界面',
-      'icon': 'arrow.up.to.line',
-      'default': true,
-      'needsRestart': true,
-    },
-    {
-      'key': SettingBoxKey.hideBottomBar,
-      'title': '首页底栏随滚动收起',
-      'subtitle': '滚动首页列表时隐藏底部栏',
-      'group': '外观与界面',
-      'icon': 'arrow.down.to.line',
-      'default': true,
-      'needsRestart': true,
-    },
-    {
-      'key': SettingBoxKey.dynamicsShowAllFollowedUp,
-      'title': '动态页显示全部关注 UP',
-      'subtitle': '不只显示最近更新的 UP 主',
-      'group': '外观与界面',
-      'icon': 'person.3',
-      'default': false,
-      'needsRestart': true,
-    },
-    {
-      'key': SettingBoxKey.expandDynLivePanel,
-      'title': '展开正在直播列表',
-      'subtitle': '动态页默认展开直播中的 UP 主',
-      'group': '外观与界面',
-      'icon': 'dot.radiowaves.left.and.right',
-      'default': false,
-      'needsRestart': true,
-    },
-    {
-      'key': SettingBoxKey.showDecorate,
-      'title': '显示头像与动态装饰',
-      'subtitle': '展示头像框、评论和动态装饰',
-      'group': '通用功能',
-      'icon': 'person.crop.circle.badge.checkmark',
-      'default': true,
-      'needsRestart': true,
-    },
-    {
-      'key': SettingBoxKey.showMedal,
-      'title': '显示粉丝勋章',
-      'subtitle': '在支持的评论和直播区域展示勋章',
-      'group': '通用功能',
-      'icon': 'medal',
-      'default': true,
-      'needsRestart': true,
-    },
-    {
-      'key': SettingBoxKey.enableLivePhoto,
-      'title': '预览 Live Photo',
-      'subtitle': '以动态形式预览 Live Photo',
-      'group': '通用功能',
-      'icon': 'livephoto',
-      'default': true,
-      'needsRestart': true,
-    },
-    {
-      'key': SettingBoxKey.openInBrowser,
-      'title': '使用外部浏览器打开链接',
-      'subtitle': '网页链接交给系统默认浏览器处理',
-      'group': '通用功能',
-      'icon': 'safari',
-      'default': false,
     },
     {
       'key': SettingBoxKey.checkDynamic,
@@ -1504,16 +1138,11 @@ final class IOSNativeUIBridge {
     }
     final value = arguments['value'] as bool;
     await GStorage.setting.put(key, value);
-    if (key == SettingBoxKey.enableBackgroundPlay) {
-      videoPlayerServiceHandler?.enableBackgroundPlay = value;
-    } else if (key == SettingBoxKey.enableSaveLastData) {
+    if (key == SettingBoxKey.enableSaveLastData) {
       _homeController
         ..enableSaveLastData = value
         ..lastRefreshAt = null;
-    } else if (key == SettingBoxKey.savedRcmdTip) {
-      _homeController
-        ..savedRcmdTip = value
-        ..lastRefreshAt = null;
+
     } else if (key == SettingBoxKey.checkDynamic) {
       mainController.checkDynamic = value;
     } else if (key == SettingBoxKey.disableAudioCDN) {
@@ -1629,26 +1258,6 @@ final class IOSNativeUIBridge {
       return _nativeSettingsSnapshot();
     } catch (_) {
       return const {'state': 'error', 'error': '线路检测失败，请检查网络后重试'};
-    }
-  }
-
-  Future<void> _openSettingsSection(Map<dynamic, dynamic> arguments) async {
-    final section = arguments['section']?.toString();
-    final type = switch (section) {
-      'privacy' => SettingType.privacySetting,
-      'recommend' => SettingType.recommendSetting,
-      'video' => SettingType.videoSetting,
-      'player' => SettingType.playSetting,
-      'style' => SettingType.styleSetting,
-      'extra' => SettingType.extraSetting,
-      _ => null,
-    };
-    if (type != null) {
-      await Get.to(() => CommonSetting(settingType: type));
-    } else if (section == 'webdav') {
-      await Get.to(() => const WebDavSettingPage());
-    } else if (section == 'about') {
-      await Get.to(() => const AboutPage());
     }
   }
 
