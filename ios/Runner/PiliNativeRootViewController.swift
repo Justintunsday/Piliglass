@@ -246,17 +246,6 @@ private final class PiliNativeViewModel: ObservableObject {
   @Published private(set) var homeLoading = true
   @Published private(set) var homeError: String?
   @Published private(set) var homeLoadingMore = false
-  @Published private(set) var hotVideos: [PiliNativeVideo] = []
-  @Published private(set) var hotLoading = false
-  @Published private(set) var hotLoadingMore = false
-  @Published private(set) var hotHasMore = true
-  @Published private(set) var hotError: String?
-  @Published private(set) var liveRooms: [PiliNativeLiveRoom] = []
-  @Published private(set) var liveLoading = false
-  @Published private(set) var liveLoadingMore = false
-  @Published private(set) var liveHasMore = true
-  @Published private(set) var liveError: String?
-
   @Published private(set) var dynamics: [PiliNativeDynamic] = []
   @Published private(set) var dynamicsLoading = true
   @Published private(set) var dynamicsError: String?
@@ -377,8 +366,6 @@ private final class PiliNativeViewModel: ObservableObject {
   let flutterPlayerSurface: PiliNativeFlutterPlayerSurface
   let nativePlayerSession = PiliNativePlayerSession()
   private var snapshotInFlight = false
-  private var hotPage = 1
-  private var livePage = 1
   @Published private(set) var pendingVideo: PiliNativeVideo?
   private var searchKeyword = ""
   private var searchPage = 1
@@ -584,110 +571,6 @@ private final class PiliNativeViewModel: ObservableObject {
         self.applySnapshot(piliDictionary(response))
       }
     }
-  }
-
-  func loadHomeZone(_ zone: String, refresh: Bool = false) {
-    guard zone == "hot" || zone == "live" else { return }
-    if zone == "hot" {
-      if refresh {
-        hotPage = 1
-        hotHasMore = true
-        hotError = nil
-      } else if !hotVideos.isEmpty {
-        return
-      }
-      guard !hotLoading && !hotLoadingMore else { return }
-      hotLoading = hotVideos.isEmpty || refresh
-    } else {
-      if refresh {
-        livePage = 1
-        liveHasMore = true
-        liveError = nil
-      } else if !liveRooms.isEmpty {
-        return
-      }
-      guard !liveLoading && !liveLoadingMore else { return }
-      liveLoading = liveRooms.isEmpty || refresh
-    }
-    requestHomeZone(zone, page: 1, append: false)
-  }
-
-  func loadMoreHomeZone(_ zone: String) {
-    if zone == "hot" {
-      guard hotHasMore, !hotLoading, !hotLoadingMore else { return }
-      hotLoadingMore = true
-      requestHomeZone(zone, page: hotPage, append: true)
-    } else if zone == "live" {
-      guard liveHasMore, !liveLoading, !liveLoadingMore else { return }
-      liveLoadingMore = true
-      requestHomeZone(zone, page: livePage, append: true)
-    }
-  }
-
-  private func requestHomeZone(_ zone: String, page: Int, append: Bool) {
-    channel.invokeMethod(
-      "loadNativeHomeZone",
-      arguments: ["zone": zone, "page": page]
-    ) { [weak self] response in
-      DispatchQueue.main.async {
-        guard let self else { return }
-        if zone == "hot" {
-          self.hotLoading = false
-          self.hotLoadingMore = false
-        } else {
-          self.liveLoading = false
-          self.liveLoadingMore = false
-        }
-        if let error = response as? FlutterError {
-          if zone == "hot" {
-            self.hotError = error.message ?? "热门视频加载失败"
-          } else {
-            self.liveError = error.message ?? "直播专区加载失败"
-          }
-          return
-        }
-        let result = piliDictionary(response)
-        guard result["state"] as? String == "success" else {
-          let message = result["error"] as? String ?? "专区加载失败"
-          if zone == "hot" { self.hotError = message } else { self.liveError = message }
-          return
-        }
-        let rows = result["items"] as? [Any] ?? []
-        if zone == "hot" {
-          let start = append ? self.hotVideos.count : 0
-          let items = rows.enumerated().map {
-            PiliNativeVideo(map: piliDictionary($0.element), index: start + $0.offset)
-          }
-          if append {
-            let existing = Set(self.hotVideos.map(\.sourceID))
-            self.hotVideos.append(contentsOf: items.filter { !existing.contains($0.sourceID) })
-          } else {
-            self.hotVideos = items
-          }
-          self.hotHasMore = piliBool(result["hasMore"]) && !items.isEmpty
-          self.hotPage = page + 1
-          self.hotError = nil
-        } else {
-          let start = append ? self.liveRooms.count : 0
-          let items = rows.enumerated().map {
-            PiliNativeLiveRoom(map: piliDictionary($0.element), index: start + $0.offset)
-          }
-          if append {
-            let existing = Set(self.liveRooms.map(\.sourceID))
-            self.liveRooms.append(contentsOf: items.filter { !existing.contains($0.sourceID) })
-          } else {
-            self.liveRooms = items
-          }
-          self.liveHasMore = piliBool(result["hasMore"]) && !items.isEmpty
-          self.livePage = page + 1
-          self.liveError = nil
-        }
-      }
-    }
-  }
-
-  func openLiveRoom(_ room: PiliNativeLiveRoom) {
-    openOriginalFlutterRoute("/liveRoom", parameters: ["roomId": String(room.roomID)])
   }
 
   func openVideo(_ video: PiliNativeVideo) {
@@ -2635,30 +2518,6 @@ private struct PiliNativeVideo: Identifiable {
   }
 }
 
-private struct PiliNativeLiveRoom: Identifiable {
-  let id: String
-  let sourceID: String
-  let roomID: Int
-  let title: String
-  let cover: String?
-  let owner: String
-  let ownerFace: String?
-  let area: String
-  let viewText: String
-
-  init(map: [String: Any], index: Int) {
-    sourceID = piliString(map["id"]) ?? "live-\(index)"
-    id = "\(sourceID)-\(index)"
-    roomID = piliInt(map["roomId"])
-    title = piliString(map["title"]) ?? "直播间"
-    cover = piliString(map["cover"])
-    owner = piliString(map["owner"]) ?? "主播"
-    ownerFace = piliString(map["ownerFace"])
-    area = piliString(map["area"]) ?? "直播"
-    viewText = piliString(map["viewText"]) ?? ""
-  }
-}
-
 private struct PiliNativeVideoPart: Identifiable {
   let id: String
   let index: Int
@@ -3373,87 +3232,61 @@ private struct PiliNativeRootView: View {
   }
 }
 
-private enum PiliNativeHomeZone: Int, CaseIterable, Identifiable {
-  case live
-  case recommend
-  case hot
-
-  var id: Int { rawValue }
-  var title: String {
-    switch self {
-    case .live: return "直播"
-    case .recommend: return "推荐"
-    case .hot: return "热门"
-    }
-  }
-  var key: String {
-    switch self {
-    case .live: return "live"
-    case .recommend: return "recommend"
-    case .hot: return "hot"
-    }
-  }
-}
-
 private struct PiliNativeHomeView: View {
   @ObservedObject var model: PiliNativeViewModel
-  @Environment(\.accessibilityReduceMotion) private var reduceMotion
-  @State private var selectedZone = PiliNativeHomeZone.recommend
   private let columns = [
     GridItem(.flexible(minimum: 0), spacing: 12, alignment: .top),
     GridItem(.flexible(minimum: 0), spacing: 12, alignment: .top),
   ]
 
   var body: some View {
-    NavigationStack {
-      GeometryReader { geometry in
-        // Capture the bar insets before expanding the pager. The scroll views
-        // draw behind the system glass; only their content needs these insets.
-        TabView(selection: $selectedZone) {
-          livePage(contentInsets: geometry.safeAreaInsets)
-            .tag(PiliNativeHomeZone.live)
-          recommendPage(contentInsets: geometry.safeAreaInsets)
-            .tag(PiliNativeHomeZone.recommend)
-          hotPage(contentInsets: geometry.safeAreaInsets)
-            .tag(PiliNativeHomeZone.hot)
+    NavigationView {
+      Group {
+        if model.homeLoading && model.homeVideos.isEmpty {
+          PiliNativeLoadingView(title: "正在加载推荐")
+        } else if let error = model.homeError, model.homeVideos.isEmpty {
+          PiliNativeErrorView(message: error) { model.refresh("home") }
+        } else {
+          ScrollView {
+            LazyVGrid(columns: columns, spacing: 14) {
+              ForEach(model.homeVideos) { video in
+                PiliNativeVideoCard(video: video) {
+                  model.openVideo(video)
+                }
+                .onAppear {
+                  if video.id == model.homeVideos.last?.id {
+                    model.loadMore("home")
+                  }
+                }
+              }
+            }
+            .padding(.horizontal, 12)
+            .padding(.top, 12)
+
+            if model.homeLoadingMore {
+              ProgressView().padding(.vertical, 20)
+            } else {
+              Color.clear.frame(height: 24)
+            }
+          }
+          .background(Color(UIColor.systemGroupedBackground))
+          .refreshable { model.refresh("home") }
         }
-        .tabViewStyle(PageTabViewStyle(indexDisplayMode: .never))
-        .ignoresSafeArea(.container, edges: .vertical)
-        .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: selectedZone)
       }
-      .background(Color(UIColor.systemBackground))
-      .modifier(PiliNativeHomeScrollEdgeModifier())
-      .navigationTitle("PiliGlass")
-      .navigationBarTitleDisplayMode(.inline)
-      // Remove the full-width bar backing, not the native glass controls.
-      .toolbarBackground(.hidden, for: .navigationBar)
-      .toolbar {
-        ToolbarItem(placement: .navigationBarLeading) {
-          Button(action: { model.isSearchPresented = true }) {
-            HStack(spacing: 10) {
-              Image(systemName: "magnifyingglass")
-              Text("搜索视频")
-                .foregroundStyle(.secondary)
-              Spacer(minLength: 0)
-            }
-            .frame(minWidth: 120, idealWidth: 220, maxWidth: .infinity)
-            .contentShape(Rectangle())
-          }
-          .tint(.primary)
-          .accessibilityLabel("搜索视频")
-          .accessibilityHint("当前为\(selectedZone.title)，左右滑动可切换分区")
-          .accessibilityAction(named: Text("切换到直播")) { selectedZone = .live }
-          .accessibilityAction(named: Text("切换到推荐")) { selectedZone = .recommend }
-          .accessibilityAction(named: Text("切换到热门")) { selectedZone = .hot }
+      .navigationBarTitle("PiliGlass", displayMode: .inline)
+      .navigationBarItems(
+        leading: Button(action: { model.isSearchPresented = true }) {
+          Image(systemName: "magnifyingglass")
         }
-        ToolbarItemGroup(placement: .navigationBarTrailing) {
+        .accessibilityLabel("搜索"),
+        trailing: HStack(spacing: 18) {
           if model.account.isLogin {
-            Button(action: { model.isMessagesPresented = true }) {
-              Label("消息", systemImage: "bell")
+            Button(action: { model.openRoute("/whisper") }) {
+              Image(systemName: "bell")
             }
-            .tint(.primary)
+            .accessibilityLabel("消息")
           }
-          Button(action: selectMine) {
+          Button(action: { selectMine() }) {
             if let face = model.account.face {
               PiliRemoteImage(urlString: face)
                 .frame(width: 28, height: 28)
@@ -3462,132 +3295,17 @@ private struct PiliNativeHomeView: View {
               Image(systemName: "person.crop.circle")
             }
           }
-          .tint(.primary)
           .accessibilityLabel("我的")
         }
-      }
+      )
     }
-    .onChange(of: selectedZone) { zone in
-      model.loadHomeZone(zone.key)
-    }
-  }
-
-  private func feed<Content: View>(
-    contentInsets: EdgeInsets,
-    @ViewBuilder content: () -> Content
-  ) -> some View {
-    ScrollView {
-      VStack(spacing: 0) {
-        content()
-      }
-      .padding(.horizontal, 12)
-      .padding(.top, contentInsets.top + 12)
-      .padding(.bottom, contentInsets.bottom + 24)
-    }
-  }
-
-  @ViewBuilder private func recommendPage(contentInsets: EdgeInsets) -> some View {
-    if model.homeLoading && model.homeVideos.isEmpty {
-      PiliNativeLoadingView(title: "正在加载推荐")
-        .padding(contentInsets)
-    } else if let error = model.homeError, model.homeVideos.isEmpty {
-      PiliNativeErrorView(message: error) { model.refresh("home") }
-        .padding(contentInsets)
-    } else {
-      feed(contentInsets: contentInsets) {
-        LazyVGrid(columns: columns, spacing: 14) {
-          ForEach(model.homeVideos) { video in
-            PiliNativeVideoCard(video: video) { model.openVideo(video) }
-              .onAppear {
-                if video.id == model.homeVideos.last?.id { model.loadMore("home") }
-              }
-          }
-        }
-        if model.homeLoadingMore { ProgressView().padding(.vertical, 20) }
-      }
-      .refreshable { model.refresh("home") }
-    }
-  }
-
-  @ViewBuilder private func livePage(contentInsets: EdgeInsets) -> some View {
-    if model.liveLoading && model.liveRooms.isEmpty {
-      PiliNativeLoadingView(title: "正在加载直播")
-        .padding(contentInsets)
-    } else if let error = model.liveError, model.liveRooms.isEmpty {
-      PiliNativeErrorView(message: error) { model.loadHomeZone("live", refresh: true) }
-        .padding(contentInsets)
-    } else {
-      feed(contentInsets: contentInsets) {
-        LazyVGrid(columns: columns, spacing: 14) {
-          ForEach(model.liveRooms) { room in
-            PiliNativeLiveRoomCard(room: room) { model.openLiveRoom(room) }
-              .onAppear {
-                if room.id == model.liveRooms.last?.id { model.loadMoreHomeZone("live") }
-              }
-          }
-        }
-        if model.liveLoadingMore { ProgressView().padding(.vertical, 20) }
-      }
-      .refreshable { model.loadHomeZone("live", refresh: true) }
-      .onAppear { model.loadHomeZone("live") }
-    }
-  }
-
-  @ViewBuilder private func hotPage(contentInsets: EdgeInsets) -> some View {
-    if model.hotLoading && model.hotVideos.isEmpty {
-      PiliNativeLoadingView(title: "正在加载热门")
-        .padding(contentInsets)
-    } else if let error = model.hotError, model.hotVideos.isEmpty {
-      PiliNativeErrorView(message: error) { model.loadHomeZone("hot", refresh: true) }
-        .padding(contentInsets)
-    } else {
-      feed(contentInsets: contentInsets) {
-        LazyVGrid(columns: columns, spacing: 14) {
-          ForEach(model.hotVideos) { video in
-            PiliNativeVideoCard(video: video) { model.openVideo(video) }
-              .onAppear {
-                if video.id == model.hotVideos.last?.id { model.loadMoreHomeZone("hot") }
-              }
-          }
-        }
-        if model.hotLoadingMore { ProgressView().padding(.vertical, 20) }
-      }
-      .refreshable { model.loadHomeZone("hot", refresh: true) }
-      .onAppear { model.loadHomeZone("hot") }
-    }
+    .navigationViewStyle(StackNavigationViewStyle())
   }
 
   private func selectMine() {
     if let index = model.tabTitles.firstIndex(where: { $0.contains("我") || $0.contains("账号") }) {
       model.userSelectedTab(index)
     }
-  }
-}
-
-private struct PiliNativeHomeScrollEdgeModifier: ViewModifier {
-  @ViewBuilder
-  func body(content: Content) -> some View {
-    if #available(iOS 26.0, *) {
-      // Include the paging container as well as its vertical feeds. Keep a
-      // soft blur at both edges instead of an automatic opaque hard boundary.
-      content.scrollEdgeEffectStyle(.soft, for: [.top, .bottom])
-    } else {
-      content
-    }
-  }
-}
-
-private struct PiliNativeHomeCover: View {
-  let urlString: String?
-
-  var body: some View {
-    Color(UIColor.tertiarySystemFill)
-      .aspectRatio(16 / 9, contentMode: .fit)
-      .overlay {
-        PiliRemoteImage(urlString: urlString)
-          .scaledToFill()
-      }
-      .clipped()
   }
 }
 
@@ -3599,8 +3317,11 @@ private struct PiliNativeVideoCard: View {
     Button(action: action) {
       VStack(alignment: .leading, spacing: 7) {
         ZStack(alignment: .bottomTrailing) {
-          PiliNativeHomeCover(urlString: video.cover)
-
+          PiliRemoteImage(urlString: video.cover)
+            .aspectRatio(16 / 9, contentMode: .fill)
+            .frame(maxWidth: .infinity)
+            .clipped()
+            .background(Color(UIColor.tertiarySystemFill))
           if !video.durationText.isEmpty {
             Text(video.durationText)
               .font(.caption2)
@@ -3612,15 +3333,16 @@ private struct PiliNativeVideoCard: View {
               .padding(5)
           }
         }
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .cornerRadius(9)
 
         Text(video.title)
           .font(.subheadline)
           .fontWeight(.medium)
           .foregroundColor(.primary)
-          .lineLimit(2, reservesSpace: true)
+          .lineLimit(2)
           .multilineTextAlignment(.leading)
           .fixedSize(horizontal: false, vertical: true)
+          .frame(height: 40, alignment: .topLeading)
           .frame(maxWidth: .infinity, alignment: .leading)
 
         HStack(spacing: 4) {
@@ -3630,8 +3352,6 @@ private struct PiliNativeVideoCard: View {
             .truncationMode(.tail)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .font(.caption)
-        .foregroundColor(.secondary)
 
         HStack(spacing: 4) {
           if !video.viewText.isEmpty {
@@ -3653,69 +3373,6 @@ private struct PiliNativeVideoCard: View {
     .frame(maxWidth: .infinity, alignment: .leading)
     .buttonStyle(PlainButtonStyle())
     .accessibilityLabel("\(video.title)，\(video.owner)")
-  }
-}
-
-private struct PiliNativeLiveRoomCard: View {
-  let room: PiliNativeLiveRoom
-  let action: () -> Void
-
-  var body: some View {
-    Button(action: action) {
-      VStack(alignment: .leading, spacing: 7) {
-        ZStack(alignment: .bottom) {
-          PiliNativeHomeCover(urlString: room.cover)
-          LinearGradient(
-            colors: [.clear, Color.black.opacity(0.62)],
-            startPoint: .top,
-            endPoint: .bottom
-          )
-          .frame(height: 44)
-          .frame(maxWidth: .infinity, alignment: .bottom)
-          HStack(spacing: 6) {
-            Text("直播")
-              .fontWeight(.semibold)
-              .foregroundColor(piliAccent)
-              .padding(.horizontal, 5)
-              .padding(.vertical, 2)
-              .background(Color.white.opacity(0.94))
-              .clipShape(Capsule())
-            Text(room.area).lineLimit(1)
-            Spacer(minLength: 2)
-            if !room.viewText.isEmpty {
-              Label(room.viewText, systemImage: "person.fill")
-            }
-          }
-          .font(.system(size: 10, weight: .medium))
-          .foregroundColor(.white)
-          .padding(.horizontal, 7)
-          .padding(.bottom, 6)
-        }
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-
-        Text(room.title)
-          .font(.subheadline)
-          .fontWeight(.medium)
-          .foregroundColor(.primary)
-          .lineLimit(2, reservesSpace: true)
-          .multilineTextAlignment(.leading)
-          .fixedSize(horizontal: false, vertical: true)
-          .frame(maxWidth: .infinity, alignment: .leading)
-
-        HStack(spacing: 7) {
-          Text(room.owner).lineLimit(1)
-          Spacer(minLength: 2)
-          if !room.viewText.isEmpty {
-            Label(room.viewText, systemImage: "person.circle")
-          }
-        }
-        .font(.caption)
-        .foregroundColor(.secondary)
-      }
-      .frame(maxWidth: .infinity, alignment: .leading)
-    }
-    .buttonStyle(PlainButtonStyle())
-    .accessibilityLabel("直播，\(room.title)，\(room.owner)")
   }
 }
 

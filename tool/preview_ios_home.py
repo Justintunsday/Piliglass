@@ -35,14 +35,6 @@ private struct PiliNativeVideo: Identifiable {
   let danmakuText = "256"
   let durationText = "08:24"
 }
-private struct PiliNativeLiveRoom: Identifiable {
-  let id: Int
-  var cover: String? { String(id) }
-  let title = "一起看看今天的风景"
-  let owner = "直播预览"
-  let area = "生活"
-  let viewText = "1.2万"
-}
 private struct PreviewAccount {
   let isLogin = true
   let face: String? = "0"
@@ -76,20 +68,14 @@ private final class PiliNativeViewModel: ObservableObject {
   let account = PreviewAccount()
   let tabTitles = ["首页", "动态", "我的"]
   let homeVideos = (0..<30).map { PiliNativeVideo(id: $0) }
-  let hotVideos = (30..<60).map { PiliNativeVideo(id: $0) }
-  let liveRooms = (0..<30).map { PiliNativeLiveRoom(id: $0) }
-  let homeLoading = false, hotLoading = false, liveLoading = false
-  let homeLoadingMore = false, hotLoadingMore = false, liveLoadingMore = false
+  let homeLoading = false
+  let homeLoadingMore = false
   let homeError: String? = nil
-  let hotError: String? = nil
-  let liveError: String? = nil
   func userSelectedTab(_ index: Int) { selectedIndex = index }
-  func loadHomeZone(_ zone: String, refresh: Bool = false) {}
-  func loadMoreHomeZone(_ zone: String) {}
   func refresh(_ section: String) {}
   func loadMore(_ section: String) {}
   func openVideo(_ video: PiliNativeVideo) {}
-  func openLiveRoom(_ room: PiliNativeLiveRoom) {}
+  func openRoute(_ route: String) {}
 }
 private struct PiliRemoteImage: View {
   let urlString: String?
@@ -175,15 +161,16 @@ private func inspectLayout() async {
         let tabBar = views.compactMap({ $0 as? UITabBar }).first else { return }
   let scrollFrame = scroll.convert(scroll.bounds, to: window)
   let barFrame = tabBar.convert(tabBar.bounds, to: window)
-  let bottom = max(0, scroll.contentSize.height - scroll.bounds.height + scroll.adjustedContentInset.bottom)
+  let top = -scroll.adjustedContentInset.top
+  let bottom = max(top, scroll.contentSize.height - scroll.bounds.height + scroll.adjustedContentInset.bottom)
   let arguments = ProcessInfo.processInfo.arguments
   let offset: CGFloat
   if arguments.contains("--bottom") {
     offset = bottom
   } else if arguments.contains("--pull-top") {
-    offset = -72
+    offset = top - 72
   } else if arguments.contains("--top") || arguments.contains("--return-top") {
-    offset = 0
+    offset = top
   } else {
     offset = min(280, bottom)
   }
@@ -197,6 +184,7 @@ private func inspectLayout() async {
     "scrollFrame": NSCoder.string(for: scrollFrame),
     "tabBarFrame": NSCoder.string(for: barFrame),
     "contentSize": NSCoder.string(for: scroll.contentSize),
+    "topScrollOffset": top,
     "bottomScrollOffset": bottom,
     "drawsBehindTabBar": scrollFrame.maxY >= barFrame.maxY - 1,
     "scrollOffset": offset,
@@ -214,7 +202,7 @@ def main():
         raise SystemExit("The home preview requires macOS and Xcode.")
     OUTPUT.mkdir(parents=True, exist_ok=True)
     source = (ROOT / "ios/Runner/PiliNativeRootViewController.swift").read_text()
-    start = source.index("private enum PiliNativeHomeZone:")
+    start = source.index("private struct PiliNativeHomeView:")
     end = source.index("private struct PiliNativeDynamicsView:", start)
     swift = OUTPUT / "HomePreview.swift"
     option_start = source.index("private struct PiliNativePlaybackSourceOption:")
