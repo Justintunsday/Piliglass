@@ -289,6 +289,7 @@ private final class PiliNativeViewModel: ObservableObject {
   @Published private(set) var playbackSourceError: String?
 
   @Published var isLibraryPresented = false
+  @Published var isLibraryDetailPresented = false
   @Published private(set) var libraryKind = ""
   @Published private(set) var libraryTitle = ""
   @Published private(set) var librarySubtitle = ""
@@ -373,6 +374,7 @@ private final class PiliNativeViewModel: ObservableObject {
   private var libraryMediaID: Int?
   private var libraryNextMax: Int?
   private var libraryNextViewAt: Int?
+  private var libraryRequestGeneration = UUID()
   private var libraryParentKind: String?
   private var libraryParentTitle: String?
   private var profileMID: Int?
@@ -2213,6 +2215,7 @@ private final class PiliNativeViewModel: ObservableObject {
     libraryMediaID = nil
     libraryParentKind = nil
     libraryParentTitle = nil
+    isLibraryDetailPresented = false
     isLibraryPresented = true
     loadLibrary(refresh: true)
   }
@@ -2220,6 +2223,8 @@ private final class PiliNativeViewModel: ObservableObject {
   func loadLibrary(refresh: Bool) {
     guard !libraryKind.isEmpty else { return }
     if refresh {
+      libraryRequestGeneration = UUID()
+      libraryLoadingMore = false
       libraryPage = 1
       libraryNextMax = nil
       libraryNextViewAt = nil
@@ -2239,10 +2244,11 @@ private final class PiliNativeViewModel: ObservableObject {
     if let nextMax = libraryNextMax { arguments["max"] = nextMax }
     if let nextViewAt = libraryNextViewAt { arguments["viewAt"] = nextViewAt }
 
+    let generation = libraryRequestGeneration
+    let wasLoadingMore = !refresh
     channel.invokeMethod("loadNativeLibrary", arguments: arguments) { [weak self] response in
       DispatchQueue.main.async {
-        guard let self = self else { return }
-        let wasLoadingMore = self.libraryLoadingMore
+        guard let self, self.libraryRequestGeneration == generation else { return }
         self.libraryLoading = false
         self.libraryLoadingMore = false
         if let error = response as? FlutterError {
@@ -2284,6 +2290,7 @@ private final class PiliNativeViewModel: ObservableObject {
       librarySubtitle = item.subtitle
       libraryMediaID = folderID
       libraryItems = []
+      isLibraryDetailPresented = true
       loadLibrary(refresh: true)
       return
     }
@@ -2296,6 +2303,7 @@ private final class PiliNativeViewModel: ObservableObject {
       librarySubtitle = item.subtitle
       libraryMediaID = folderID
       libraryItems = []
+      isLibraryDetailPresented = true
       loadLibrary(refresh: true)
       return
     }
@@ -2334,11 +2342,9 @@ private final class PiliNativeViewModel: ObservableObject {
     openLibraryFallback(item: item)
   }
 
-  var libraryCanGoBack: Bool {
-    libraryParentKind != nil
-  }
-
   func returnToLibraryRoot() {
+    guard libraryParentKind != nil else { return }
+    isLibraryDetailPresented = false
     libraryKind = libraryParentKind ?? "favorites"
     libraryTitle = libraryParentTitle ?? "我的收藏"
     librarySubtitle = ""
@@ -2346,7 +2352,7 @@ private final class PiliNativeViewModel: ObservableObject {
     libraryParentKind = nil
     libraryParentTitle = nil
     libraryItems = []
-    loadLibrary(refresh: true)
+    if isLibraryPresented { loadLibrary(refresh: true) }
   }
 
   private func openLibraryFallback(item: PiliNativeLibraryItem) {
@@ -3124,52 +3130,45 @@ private struct PiliNativeRootView: View {
   }
 
   var body: some View {
-    TabView(selection: selection) {
-      ForEach(Array(model.tabTitles.enumerated()), id: \.offset) { item in
-        content(for: item.element)
-          .tabItem {
-            tabIcon(for: item.element, selected: model.selectedIndex == item.offset)
-            Text(tabLabel(for: item.element))
-          }
-          .tag(item.offset)
+    NavigationStack {
+      TabView(selection: selection) {
+        ForEach(Array(model.tabTitles.enumerated()), id: \.offset) { item in
+          content(for: item.element)
+            .tabItem {
+              tabIcon(for: item.element, selected: model.selectedIndex == item.offset)
+              Text(tabLabel(for: item.element))
+            }
+            .tag(item.offset)
+        }
       }
-    }
-    .accentColor(piliAccent)
-    .sheet(isPresented: $model.isSearchPresented) {
-      PiliNativeSearchView(model: model)
-        .piliEdgeSwipeBack { model.isSearchPresented = false }
-    }
-    .sheet(isPresented: $model.isSettingsPresented) {
-      PiliNativeSettingsView(model: model)
-        .piliEdgeSwipeBack { model.isSettingsPresented = false }
-    }
-    .sheet(isPresented: $model.isLibraryPresented) {
-      PiliNativeLibraryView(model: model)
-        .piliEdgeSwipeBack { model.isLibraryPresented = false }
-    }
-    .sheet(isPresented: $model.isMessagesPresented) {
-      PiliNativeMessagesView(model: model)
-        .piliEdgeSwipeBack { model.isMessagesPresented = false }
-    }
-    .sheet(isPresented: $model.isDownloadsPresented) {
-      PiliNativeDownloadsView(model: model)
-        .piliEdgeSwipeBack { model.isDownloadsPresented = false }
+      .accentColor(piliAccent)
+      .navigationDestination(isPresented: $model.isSearchPresented) {
+        PiliNativeSearchView(model: model)
+      }
+      .navigationDestination(isPresented: $model.isSettingsPresented) {
+        PiliNativeSettingsView(model: model)
+      }
+      .navigationDestination(isPresented: $model.isLibraryPresented) {
+        PiliNativeLibraryView(model: model)
+      }
+      .navigationDestination(isPresented: $model.isMessagesPresented) {
+        PiliNativeMessagesView(model: model)
+      }
+      .navigationDestination(isPresented: $model.isDownloadsPresented) {
+        PiliNativeDownloadsView(model: model)
+      }
+      .navigationDestination(isPresented: $model.isProfilePresented) {
+        PiliNativeProfileView(model: model)
+      }
+      .navigationDestination(isPresented: $model.isDynamicDetailPresented) {
+        PiliNativeDynamicDetailView(model: model)
+      }
+      .navigationDestination(isPresented: $model.isLoginPresented) {
+        PiliNativeLoginView(model: model)
+      }
     }
     .fullScreenCover(isPresented: $model.isVideoDetailPresented) {
       PiliNativeVideoDetailView(model: model)
-        .piliEdgeSwipeBack { model.closeVideoDetail() }
-    }
-    .fullScreenCover(isPresented: $model.isProfilePresented) {
-      PiliNativeProfileView(model: model)
-        .piliEdgeSwipeBack { model.isProfilePresented = false }
-    }
-    .fullScreenCover(isPresented: $model.isDynamicDetailPresented) {
-      PiliNativeDynamicDetailView(model: model)
-        .piliEdgeSwipeBack { model.isDynamicDetailPresented = false }
-    }
-    .fullScreenCover(isPresented: $model.isLoginPresented) {
-      PiliNativeLoginView(model: model)
-        .piliEdgeSwipeBack { model.isLoginPresented = false }
     }
     .onAppear {
       UIDevice.current.beginGeneratingDeviceOrientationNotifications()
@@ -3240,7 +3239,7 @@ private struct PiliNativeHomeView: View {
   ]
 
   var body: some View {
-    NavigationView {
+    Group {
       Group {
         if model.homeLoading && model.homeVideos.isEmpty {
           PiliNativeLoadingView(title: "正在加载推荐")
@@ -3307,7 +3306,6 @@ private struct PiliNativeHomeView: View {
         }
       )
     }
-    .navigationViewStyle(StackNavigationViewStyle())
   }
 
   private func selectMine() {
@@ -3388,7 +3386,7 @@ private struct PiliNativeDynamicsView: View {
   @ObservedObject var model: PiliNativeViewModel
 
   var body: some View {
-    NavigationView {
+    Group {
       Group {
         if !model.account.isLogin {
           PiliNativeLoggedOutView(
@@ -3429,7 +3427,6 @@ private struct PiliNativeDynamicsView: View {
         }
       )
     }
-    .navigationViewStyle(StackNavigationViewStyle())
   }
 }
 
@@ -3635,7 +3632,7 @@ private struct PiliNativeMineView: View {
   ]
 
   var body: some View {
-    NavigationView {
+    Group {
       List {
         Section {
           Button(action: openAccount) {
@@ -3729,7 +3726,6 @@ private struct PiliNativeMineView: View {
         }
       )
     }
-    .navigationViewStyle(StackNavigationViewStyle())
   }
 
   private func openAccount() {
@@ -3801,7 +3797,6 @@ private struct PiliNativeAccountStat: View {
 
 private struct PiliNativeProfileView: View {
   @ObservedObject var model: PiliNativeViewModel
-  @Environment(\.presentationMode) private var presentationMode
   @State private var selectedSection = 0
   private let columns = [
     GridItem(.flexible(minimum: 0), spacing: 12, alignment: .top),
@@ -3809,7 +3804,7 @@ private struct PiliNativeProfileView: View {
   ]
 
   var body: some View {
-    NavigationView {
+    Group {
       Group {
         if model.profileLoading && model.profile == nil {
           PiliNativeLoadingView(title: "正在加载个人空间")
@@ -3832,14 +3827,7 @@ private struct PiliNativeProfileView: View {
         }
       }
       .navigationBarTitle("个人主页", displayMode: .inline)
-      .navigationBarItems(
-        leading: Button("关闭") {
-          model.isProfilePresented = false
-          presentationMode.wrappedValue.dismiss()
-        }
-      )
     }
-    .navigationViewStyle(StackNavigationViewStyle())
   }
 
   private func profileHero(_ profile: PiliNativeProfile) -> some View {
@@ -4212,7 +4200,7 @@ private struct PiliNativeVideoDetailView: View {
   @State private var isCollectionPresented = false
 
   var body: some View {
-    NavigationView {
+    NavigationStack {
       ZStack {
         Color.black.ignoresSafeArea()
         VStack(spacing: 0) {
@@ -4243,14 +4231,24 @@ private struct PiliNativeVideoDetailView: View {
           .background(Color(UIColor.systemBackground))
         }
       }
+      .piliEdgeSwipeBack { model.closeVideoDetail() }
       .navigationBarHidden(true)
       .safeAreaInset(edge: .bottom, spacing: 0) {
         if selectedTab == .comments && model.videoDetail != nil {
           nativeCommentComposerBar
         }
       }
+      .navigationDestination(isPresented: $isCollectionPresented) {
+        if let video = model.videoDetail {
+          PiliNativeVideoCollectionView(video: video, model: model)
+            .toolbar(.visible, for: .navigationBar)
+        }
+      }
+      .navigationDestination(isPresented: $model.isCommentThreadPresented) {
+        PiliNativeCommentThreadView(model: model)
+          .toolbar(.visible, for: .navigationBar)
+      }
     }
-    .navigationViewStyle(StackNavigationViewStyle())
     .onAppear {
       model.handleVideoDeviceOrientation(UIDevice.current.orientation)
     }
@@ -4262,16 +4260,6 @@ private struct PiliNativeVideoDetailView: View {
     .sheet(isPresented: $model.isDynamicComposerPresented) {
       PiliNativeDynamicComposerView(model: model)
         .piliEdgeSwipeBack { model.isDynamicComposerPresented = false }
-    }
-    .sheet(isPresented: $isCollectionPresented) {
-      if let video = model.videoDetail {
-        PiliNativeVideoCollectionView(video: video, model: model)
-          .piliEdgeSwipeBack { isCollectionPresented = false }
-      }
-    }
-    .fullScreenCover(isPresented: $model.isCommentThreadPresented) {
-      PiliNativeCommentThreadView(model: model)
-        .piliEdgeSwipeBack { model.isCommentThreadPresented = false }
     }
     .overlay {
       if model.originalPlayerFullscreen {
@@ -5089,7 +5077,7 @@ private struct PiliNativeVideoCollectionView: View {
   @Environment(\.presentationMode) private var presentationMode
 
   var body: some View {
-    NavigationView {
+    Group {
       List {
         Section(
           header: Text("共 \(video.collectionItems.count) 个视频"),
@@ -5142,11 +5130,7 @@ private struct PiliNativeVideoCollectionView: View {
       }
       .listStyle(InsetGroupedListStyle())
       .navigationBarTitle(video.collectionTitle, displayMode: .inline)
-      .navigationBarItems(
-        leading: Button("关闭") { presentationMode.wrappedValue.dismiss() }
-      )
     }
-    .navigationViewStyle(StackNavigationViewStyle())
   }
 
   private func select(_ item: PiliNativeVideo) {
@@ -5325,10 +5309,9 @@ private struct PiliNativeVideoMetric: View {
 
 private struct PiliNativeDynamicDetailView: View {
   @ObservedObject var model: PiliNativeViewModel
-  @Environment(\.presentationMode) private var presentationMode
 
   var body: some View {
-    NavigationView {
+    Group {
       Group {
         if let item = model.selectedDynamic {
           ScrollView {
@@ -5436,21 +5419,13 @@ private struct PiliNativeDynamicDetailView: View {
         }
       }
       .navigationBarTitle("动态详情", displayMode: .inline)
-      .navigationBarItems(
-        leading: Button("关闭") {
-          model.isDynamicDetailPresented = false
-          presentationMode.wrappedValue.dismiss()
-        }
-      )
     }
-    .navigationViewStyle(StackNavigationViewStyle())
     .sheet(isPresented: $model.isDynamicComposerPresented) {
       PiliNativeDynamicComposerView(model: model)
         .piliEdgeSwipeBack { model.isDynamicComposerPresented = false }
     }
-    .fullScreenCover(isPresented: $model.isCommentThreadPresented) {
+    .navigationDestination(isPresented: $model.isCommentThreadPresented) {
       PiliNativeCommentThreadView(model: model)
-        .piliEdgeSwipeBack { model.isCommentThreadPresented = false }
     }
   }
 }
@@ -5597,10 +5572,9 @@ private struct PiliNativeDynamicComposerView: View {
 
 private struct PiliNativeCommentThreadView: View {
   @ObservedObject var model: PiliNativeViewModel
-  @Environment(\.presentationMode) private var presentationMode
 
   var body: some View {
-    NavigationView {
+    Group {
       Group {
         if let root = model.commentThreadRoot {
           ScrollView {
@@ -5682,10 +5656,6 @@ private struct PiliNativeCommentThreadView: View {
         displayMode: .inline
       )
       .navigationBarItems(
-        leading: Button("关闭") {
-          model.isCommentThreadPresented = false
-          presentationMode.wrappedValue.dismiss()
-        },
         trailing: Button("回复") {
           if let root = model.commentThreadRoot {
             model.beginCommentReply(root)
@@ -5693,7 +5663,6 @@ private struct PiliNativeCommentThreadView: View {
         }
       )
     }
-    .navigationViewStyle(StackNavigationViewStyle())
     .sheet(isPresented: $model.isDynamicComposerPresented) {
       PiliNativeDynamicComposerView(model: model)
         .piliEdgeSwipeBack { model.isDynamicComposerPresented = false }
@@ -6022,7 +5991,6 @@ private struct PiliNativeCommentPictureView: View {
 
 private struct PiliNativeMessagesView: View {
   @ObservedObject var model: PiliNativeViewModel
-  @Environment(\.presentationMode) private var presentationMode
   @State private var searchText = ""
 
   private let kinds: [(id: String, title: String)] = [
@@ -6043,7 +6011,7 @@ private struct PiliNativeMessagesView: View {
   }
 
   var body: some View {
-    NavigationView {
+    Group {
       VStack(spacing: 0) {
         folderBar
         Divider()
@@ -6051,19 +6019,19 @@ private struct PiliNativeMessagesView: View {
       }
       .background(Color(UIColor.systemBackground))
       .navigationBarTitle("消息", displayMode: .large)
-      .navigationBarItems(
-        leading: Button("关闭") { presentationMode.wrappedValue.dismiss() }
-      )
       .searchable(
         text: $searchText,
         placement: .navigationBarDrawer(displayMode: .always),
         prompt: "搜索消息"
       )
     }
-    .navigationViewStyle(StackNavigationViewStyle())
-    .fullScreenCover(item: $model.selectedChat) { chat in
-      PiliNativeChatView(model: model, chat: chat)
-        .piliEdgeSwipeBack { model.selectedChat = nil }
+    .navigationDestination(isPresented: Binding(
+      get: { model.selectedChat != nil },
+      set: { if !$0 && model.selectedChat != nil { model.closeChat() } }
+    )) {
+      if let chat = model.selectedChat {
+        PiliNativeChatView(model: model, chat: chat)
+      }
     }
   }
 
@@ -6305,19 +6273,11 @@ private struct PiliNativeChatView: View {
   }
 
   var body: some View {
-    NavigationView {
+    Group {
       chatContent
         .background(Color(UIColor.systemGroupedBackground))
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-          ToolbarItem(placement: .navigationBarLeading) {
-            Button {
-              model.closeChat()
-            } label: {
-              Image(systemName: "chevron.left")
-                .font(.system(size: 17, weight: .semibold))
-            }
-          }
           ToolbarItem(placement: .principal) {
             HStack(spacing: 8) {
               PiliRemoteImage(urlString: chat.avatar)
@@ -6338,7 +6298,6 @@ private struct PiliNativeChatView: View {
           composer
         }
     }
-    .navigationViewStyle(StackNavigationViewStyle())
     .sheet(isPresented: $showPhotoPicker) {
       PiliNativeChatPhotoPicker(isPresented: $showPhotoPicker) { url in
         model.sendChatImage(at: url)
@@ -6597,11 +6556,10 @@ private struct PiliNativeChatPhotoPicker: UIViewControllerRepresentable {
 
 private struct PiliNativeLoginView: View {
   @ObservedObject var model: PiliNativeViewModel
-  @Environment(\.presentationMode) private var presentationMode
   private let timer = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
 
   var body: some View {
-    NavigationView {
+    Group {
       VStack(spacing: 22) {
         Spacer()
         Image(systemName: "person.crop.circle.badge.checkmark")
@@ -6664,14 +6622,7 @@ private struct PiliNativeLoginView: View {
       .padding()
       .background(Color(UIColor.systemGroupedBackground).ignoresSafeArea())
       .navigationBarTitle("扫码登录", displayMode: .inline)
-      .navigationBarItems(
-        leading: Button("关闭") {
-          model.isLoginPresented = false
-          presentationMode.wrappedValue.dismiss()
-        }
-      )
     }
-    .navigationViewStyle(StackNavigationViewStyle())
     .onReceive(timer) { _ in model.pollNativeLogin() }
   }
 }
@@ -6707,10 +6658,9 @@ private struct PiliQRCodeView: View {
 
 private struct PiliNativeDownloadsView: View {
   @ObservedObject var model: PiliNativeViewModel
-  @Environment(\.presentationMode) private var presentationMode
 
   var body: some View {
-    NavigationView {
+    Group {
       Group {
         if model.downloadsLoading && model.downloads.isEmpty {
           PiliNativeLoadingView(title: "正在读取离线缓存")
@@ -6762,11 +6712,7 @@ private struct PiliNativeDownloadsView: View {
         }
       }
       .navigationBarTitle("离线缓存", displayMode: .inline)
-      .navigationBarItems(
-        leading: Button("关闭") { presentationMode.wrappedValue.dismiss() }
-      )
     }
-    .navigationViewStyle(StackNavigationViewStyle())
   }
 }
 
@@ -6774,10 +6720,10 @@ private struct PiliNativeDownloadsView: View {
 
 private struct PiliNativeLibraryView: View {
   @ObservedObject var model: PiliNativeViewModel
-  @Environment(\.presentationMode) private var presentationMode
+  var isDetail = false
 
   var body: some View {
-    NavigationView {
+    Group {
       Group {
         if model.libraryLoading && model.libraryItems.isEmpty {
           PiliNativeLoadingView(title: "正在加载\(model.libraryTitle)")
@@ -6840,22 +6786,12 @@ private struct PiliNativeLibraryView: View {
         }
       }
       .navigationBarTitle(model.libraryTitle, displayMode: .inline)
-      .navigationBarItems(
-        leading: leadingButton
-      )
     }
-    .navigationViewStyle(StackNavigationViewStyle())
-  }
-
-  private var leadingButton: some View {
-    Group {
-      if model.libraryCanGoBack {
-        Button(action: model.returnToLibraryRoot) {
-          Label("返回", systemImage: "chevron.left")
-        }
-      } else {
-        Button("关闭") { presentationMode.wrappedValue.dismiss() }
-      }
+    .navigationDestination(isPresented: Binding(
+      get: { !isDetail && model.isLibraryDetailPresented },
+      set: { if !$0 && !isDetail { model.returnToLibraryRoot() } }
+    )) {
+      PiliNativeLibraryView(model: model, isDetail: true)
     }
   }
 
@@ -7008,7 +6944,6 @@ private struct PiliNativeLibraryRow: View {
 
 private struct PiliNativeSettingsView: View {
   @ObservedObject var model: PiliNativeViewModel
-  @Environment(\.presentationMode) private var presentationMode
   @State private var searchText = ""
 
   private let groups = [
@@ -7031,7 +6966,7 @@ private struct PiliNativeSettingsView: View {
   ]
 
   var body: some View {
-    NavigationView {
+    Group {
       Group {
         if model.settingsLoading && model.settings.isEmpty {
           PiliNativeLoadingView(title: "正在加载设置")
@@ -7169,12 +7104,8 @@ private struct PiliNativeSettingsView: View {
         }
       }
       .navigationBarTitle("设置", displayMode: .inline)
-      .navigationBarItems(
-        leading: Button("关闭") { presentationMode.wrappedValue.dismiss() }
-      )
       .searchable(text: $searchText, prompt: "搜索设置")
     }
-    .navigationViewStyle(StackNavigationViewStyle())
     .onAppear(perform: model.loadSettings)
   }
 
@@ -7452,7 +7383,7 @@ private struct PiliNativeSearchView: View {
   @State private var keyword = ""
 
   var body: some View {
-    NavigationView {
+    Group {
       VStack(spacing: 0) {
         HStack(spacing: 10) {
           Image(systemName: "magnifyingglass").foregroundColor(.secondary)
@@ -7557,11 +7488,9 @@ private struct PiliNativeSearchView: View {
       }
       .navigationBarTitle("搜索", displayMode: .inline)
       .navigationBarItems(
-        leading: Button("关闭") { presentationMode.wrappedValue.dismiss() },
         trailing: Button("搜索", action: submit).disabled(keyword.trimmingCharacters(in: .whitespaces).isEmpty)
       )
     }
-    .navigationViewStyle(StackNavigationViewStyle())
   }
 
   private func submit() {

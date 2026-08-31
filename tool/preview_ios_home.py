@@ -118,11 +118,13 @@ private struct HomePreviewApp: App {
       if ProcessInfo.processInfo.arguments.contains("--settings") {
         NavigationStack { PiliNativePlaybackSourceSettingsView(model: model) }
       } else {
+      NavigationStack {
       TabView(selection: $model.selectedIndex) {
         PiliNativeHomeView(model: model)
           .tabItem { Label("首页", systemImage: "house.fill") }.tag(0)
         Text("动态").tabItem { Label("动态", systemImage: "sparkles") }.tag(1)
         Text("我的").tabItem { Label("我的", systemImage: "person.fill") }.tag(2)
+      }
       }
       }
       }

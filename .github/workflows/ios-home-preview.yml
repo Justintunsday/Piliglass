@@ -5,6 +5,7 @@ on:
     paths:
       - "ios/Runner/PiliNativeRootViewController.swift"
       - "tool/preview_ios_home.py"
+      - "tool/preview_ios_navigation.py"
       - ".github/workflows/ios-home-preview.yml"
   workflow_dispatch:
 
@@ -14,11 +15,13 @@ permissions:
 jobs:
   preview:
     runs-on: macos-26
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v7
       - name: Render production home views with offline fixtures
         run: python3 tool/preview_ios_home.py
+      - name: Test menu pushes and interactive back gestures
+        run: python3 tool/preview_ios_navigation.py
       - name: Upload screenshots and layout measurements
         if: always()
         uses: actions/upload-artifact@v7
@@ -27,4 +30,14 @@ jobs:
           path: |
             build/home-preview/*.png
             build/home-preview/*.json
+          if-no-files-found: warn
+      - name: Upload menu navigation test results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ios-menu-navigation
+          path: |
+            build/navigation-preview/xcodebuild.log
+            build/navigation-preview/MenuNavigation.xcresult
+            build/navigation-preview/attachments
           if-no-files-found: warn
