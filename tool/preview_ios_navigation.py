@@ -16,7 +16,6 @@ OUTPUT = ROOT / "build" / "navigation-preview"
 BUNDLE_ID = "dev.piliglass.menupreview"
 
 MODEL = r'''
-  @Published var isSettingsPresented = false
   @Published var isLibraryPresented = false
   @Published var isLibraryDetailPresented = false
   @Published var isDownloadsPresented = false
@@ -45,6 +44,7 @@ MODEL = r'''
   let librarySubtitle = ""
   let libraryLoading = false, libraryLoadingMore = false, libraryHasMore = false
   let libraryError: String? = nil
+  var libraryCanGoBack: Bool { libraryKind != "favorites" }
   func loadLibrary(refresh: Bool) {}
   func openLibraryItem(_ item: PiliNativeLibraryItem) {
     libraryKind = "favoriteDetail"
@@ -85,6 +85,7 @@ private struct PiliOriginalIcon: View {
 private struct PiliNativeMineView: View {
   @ObservedObject var model: PiliNativeViewModel
   var body: some View {
+    NavigationStack {
     List {
       Button("设置") { model.isSettingsPresented = true }
       Button("我的收藏") { model.isLibraryPresented = true }
@@ -94,6 +95,8 @@ private struct PiliNativeMineView: View {
       Button("动态详情") { model.isDynamicDetailPresented = true }
       Button("扫码登录") { model.isLoginPresented = true }
     }.navigationTitle("我的").navigationBarTitleDisplayMode(.inline)
+      .modifier(PiliNativePrimaryDestinations(model: model, tab: .mine))
+    }
   }
 }
 private struct PiliNativeDynamicsView: View {
@@ -191,32 +194,28 @@ final class MenuNavigationTests: XCTestCase {
     XCTAssertTrue(app.tabBars.firstMatch.isHittable)
   }
 
-  func testFolderBackReturnsToLibraryBeforeTab() {
+  func testLibraryKeepsRestoredCloseAndFolderBack() {
     openMine()
     app.buttons["我的收藏"].tap()
-    assertPage("我的收藏")
+    XCTAssertTrue(app.navigationBars["我的收藏"].waitForExistence(timeout: 8))
+    XCTAssertTrue(app.navigationBars.buttons["关闭"].exists)
     app.buttons.containing(.staticText, identifier: "测试收藏夹").firstMatch.tap()
-    assertPage("测试收藏夹")
-    screenshot("favorite-folder-pushed")
-    edgeBack()
+    XCTAssertTrue(app.navigationBars["测试收藏夹"].waitForExistence(timeout: 8))
+    screenshot("restored-favorite-folder")
+    app.navigationBars.buttons["返回"].tap()
     XCTAssertTrue(app.navigationBars["我的收藏"].waitForExistence(timeout: 8))
     XCTAssertTrue(app.staticTexts["测试收藏夹"].exists)
-    XCTAssertFalse(app.tabBars.firstMatch.isHittable)
-    edgeBack()
+    app.navigationBars.buttons["关闭"].tap()
     XCTAssertTrue(app.tabBars.firstMatch.isHittable)
   }
 
-  // These destinations use placeholder content but the production root's
-  // actual bindings. Detailed page rendering is covered by the full app build.
-  func testOtherRootMenuBindings() {
+  func testHomeButtonsSurviveTabSwitches() {
     openMine()
-    for title in ["消息", "离线缓存", "个人主页", "动态详情", "扫码登录"] {
-      app.buttons[title].tap()
-      assertPage(title)
-      edgeBack()
-      XCTAssertTrue(app.tabBars.firstMatch.isHittable)
-    }
-    screenshot("mine-after-menu-roundtrips")
+    app.tabBars.buttons["首页"].tap()
+    XCTAssertTrue(app.navigationBars.buttons["搜索"].waitForExistence(timeout: 8))
+    XCTAssertTrue(app.navigationBars.buttons["消息"].exists)
+    XCTAssertTrue(app.navigationBars.buttons["我的"].exists)
+    screenshot("home-toolbar-after-tab-switch")
   }
 }
 '''

@@ -64,6 +64,7 @@ private final class PiliNativeViewModel: ObservableObject {
   func setSetting(_ key: String, value: Bool) {}
   @Published var selectedIndex = 0
   @Published var isSearchPresented = false
+  @Published var isSettingsPresented = false
   @Published var isMessagesPresented = false
   let account = PreviewAccount()
   let tabTitles = ["首页", "动态", "我的"]
@@ -118,13 +119,11 @@ private struct HomePreviewApp: App {
       if ProcessInfo.processInfo.arguments.contains("--settings") {
         NavigationStack { PiliNativePlaybackSourceSettingsView(model: model) }
       } else {
-      NavigationStack {
       TabView(selection: $model.selectedIndex) {
         PiliNativeHomeView(model: model)
           .tabItem { Label("首页", systemImage: "house.fill") }.tag(0)
         Text("动态").tabItem { Label("动态", systemImage: "sparkles") }.tag(1)
         Text("我的").tabItem { Label("我的", systemImage: "person.fill") }.tag(2)
-      }
       }
       }
       }
@@ -163,6 +162,9 @@ private func inspectLayout() async {
         let tabBar = views.compactMap({ $0 as? UITabBar }).first else { return }
   let scrollFrame = scroll.convert(scroll.bounds, to: window)
   let barFrame = tabBar.convert(tabBar.bounds, to: window)
+  let navigationBar = views.compactMap { $0 as? UINavigationBar }.first {
+    !$0.isHidden && $0.alpha > 0 && $0.bounds.height > 20
+  }
   let top = -scroll.adjustedContentInset.top
   let bottom = max(top, scroll.contentSize.height - scroll.bounds.height + scroll.adjustedContentInset.bottom)
   let arguments = ProcessInfo.processInfo.arguments
@@ -184,6 +186,7 @@ private func inspectLayout() async {
   try? await Task.sleep(nanoseconds: 450_000_000)
   let report: [String: Any] = [
     "scrollFrame": NSCoder.string(for: scrollFrame),
+    "hasNavigationBar": navigationBar != nil,
     "tabBarFrame": NSCoder.string(for: barFrame),
     "contentSize": NSCoder.string(for: scroll.contentSize),
     "topScrollOffset": top,
@@ -211,7 +214,20 @@ def main():
     option_end = source.index("private struct PiliNativeSetting:", option_start)
     settings_start = source.index("private struct PiliNativePlaybackSourceSettingsView:")
     settings_end = source.index("private struct PiliNativeDiagnosticLogSettingsView:", settings_start)
-    swift.write_text(FIXTURES + source[start:end] + source[option_start:option_end]
+    navigation_start = source.index("private struct PiliNativePrimaryDestinations:")
+    navigation_end = source.index("// MARK: - Root tabs", navigation_start)
+    placeholders = '''
+private struct PiliNativeSearchView: View {
+  @ObservedObject var model: PiliNativeViewModel
+  var body: some View { Text("搜索") }
+}
+private struct PiliNativeSettingsView: View {
+  @ObservedObject var model: PiliNativeViewModel
+  var body: some View { Text("设置") }
+}
+'''
+    swift.write_text(FIXTURES + source[navigation_start:navigation_end] + placeholders
+                     + source[start:end] + source[option_start:option_end]
                      + source[settings_start:settings_end] + APP)
     app = OUTPUT / "HomePreview.app"
     app.mkdir(exist_ok=True)
@@ -275,6 +291,8 @@ def main():
         print(f"{name}: {json.dumps(report)}", flush=True)
         if "drawsBehindTabBar" in report and not report["drawsBehindTabBar"]:
             raise RuntimeError(f"{name}: the feed is clipped above the tab bar")
+        if report.get("hasNavigationBar") is False:
+            raise RuntimeError(f"{name}: the home navigation bar is missing")
 
 
 if __name__ == "__main__":
