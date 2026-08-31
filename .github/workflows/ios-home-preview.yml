@@ -9,6 +9,7 @@ on:
       - "tool/preview_ios_navigation.py"
       - "tool/check_ios_video_load.py"
       - "tool/check_ios_player_controls.py"
+      - "tool/check_ios_image_preview.py"
       - ".github/workflows/ios-home-preview.yml"
   workflow_dispatch:
 
@@ -16,6 +17,23 @@ permissions:
   contents: read
 
 jobs:
+  image-preview:
+    runs-on: macos-26
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - name: Check comment and dynamic image galleries
+        run: python3 tool/check_ios_image_preview.py
+      - name: Upload image preview tests and screenshots
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ios-image-preview
+          path: |
+            build/image-preview-check/xcodebuild.log
+            build/image-preview-check/MenuNavigation.xcresult
+            build/image-preview-check/attachments
+          if-no-files-found: warn
   preview:
     runs-on: macos-26
     timeout-minutes: 25

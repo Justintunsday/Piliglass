@@ -207,7 +207,7 @@ final class MenuNavigationTests: XCTestCase {
     openMine()
     app.buttons["设置"].tap()
     assertPage("设置")
-    app.buttons["播放源设置"].tap()
+    app.buttons.containing(.staticText, identifier: "播放源设置").firstMatch.tap()
     assertPage("播放源设置")
     screenshot("nested-playback-settings")
     edgeBack()

@@ -3596,57 +3596,62 @@ private struct PiliNativeDynamicRow: View {
   let action: () -> Void
 
   var body: some View {
-    Button(action: action) {
-      HStack(alignment: .top, spacing: 12) {
+    HStack(alignment: .top, spacing: 12) {
+      Button(action: action) {
         PiliRemoteImage(urlString: item.avatar)
           .frame(width: 42, height: 42)
           .clipShape(Circle())
           .overlay(Circle().stroke(Color(UIColor.separator).opacity(0.2)))
+      }.buttonStyle(PlainButtonStyle())
 
-        VStack(alignment: .leading, spacing: 7) {
-          HStack {
-            Text(item.author.isEmpty ? "动态" : item.author)
-              .font(.subheadline)
-              .fontWeight(.semibold)
-              .foregroundColor(.primary)
-            Spacer()
-            Text(item.time)
-              .font(.caption)
-              .foregroundColor(.secondary)
-          }
-          if !item.title.isEmpty {
-            Text(item.title)
-              .font(.subheadline)
-              .fontWeight(.semibold)
-              .foregroundColor(.primary)
-              .lineLimit(2)
-          }
-          if !item.body.isEmpty {
-            Text(item.body)
-              .font(.subheadline)
-              .foregroundColor(.primary)
-              .lineLimit(4)
-          }
-          if !item.pictures.isEmpty {
-            PiliNativeDynamicPicturesView(
-              pictures: item.pictures,
-              maxWidth: min(UIScreen.main.bounds.width - 96, 520),
-              singleMaxHeight: 260
-            )
-          }
+      VStack(alignment: .leading, spacing: 7) {
+        Button(action: action) {
+          VStack(alignment: .leading, spacing: 7) {
+            HStack {
+              Text(item.author.isEmpty ? "动态" : item.author)
+                .font(.subheadline)
+                .fontWeight(.semibold)
+                .foregroundColor(.primary)
+              Spacer()
+              Text(item.time)
+                .font(.caption)
+                .foregroundColor(.secondary)
+            }
+            if !item.title.isEmpty {
+              Text(item.title)
+                .font(.subheadline)
+                .fontWeight(.semibold)
+                .foregroundColor(.primary)
+                .lineLimit(2)
+            }
+            if !item.body.isEmpty {
+              Text(item.body)
+                .font(.subheadline)
+                .foregroundColor(.primary)
+                .lineLimit(4)
+            }
+          }.frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
+        }.buttonStyle(PlainButtonStyle())
+        if !item.pictures.isEmpty {
+          PiliNativeDynamicPicturesView(
+            pictures: item.pictures,
+            maxWidth: min(UIScreen.main.bounds.width - 96, 520),
+            singleMaxHeight: 260
+          )
+        }
+        Button(action: action) {
           HStack(spacing: 22) {
             PiliNativeStat(icon: "arrowshape.turn.up.right", count: item.forward)
             PiliNativeStat(icon: "bubble.left", count: item.comment)
             PiliNativeStat(icon: "hand.thumbsup", count: item.like)
           }
           .padding(.top, 2)
-        }
+        }.buttonStyle(PlainButtonStyle())
       }
-      .padding(.horizontal, 14)
-      .padding(.vertical, 12)
-      .contentShape(Rectangle())
     }
-    .buttonStyle(PlainButtonStyle())
+    .padding(.horizontal, 14)
+    .padding(.vertical, 12)
+    .contentShape(Rectangle())
   }
 }
 
@@ -3715,44 +3720,54 @@ private struct PiliNativeDynamicPicturesView: View {
   let pictures: [PiliNativeCommentPicture]
   let maxWidth: CGFloat
   let singleMaxHeight: CGFloat
+  @State private var preview: PiliNativeImageGallery?
 
   private var columnCount: Int {
     pictures.count > 4 ? 3 : 2
   }
 
   var body: some View {
-    if let picture = pictures.first, pictures.count == 1 {
-      PiliNativeDynamicPictureView(
-        urlString: picture.url,
-        sourceWidth: picture.width,
-        sourceHeight: picture.height,
-        maxWidth: maxWidth,
-        maxHeight: singleMaxHeight
-      )
-    } else {
-      let spacing: CGFloat = 7
-      let cellWidth = max(1, (maxWidth - spacing * CGFloat(columnCount - 1)) / CGFloat(columnCount))
-      LazyVGrid(
-        columns: Array(
-          repeating: GridItem(.flexible(minimum: 1, maximum: cellWidth), spacing: spacing, alignment: .topLeading),
-          count: columnCount
-        ),
-        alignment: .leading,
-        spacing: spacing
-      ) {
-        ForEach(pictures, id: \.self) { picture in
+    Group {
+      if let picture = pictures.first, pictures.count == 1 {
+        Button { preview = PiliNativeImageGallery(pictures: pictures, selectedIndex: 0) } label: {
           PiliNativeDynamicPictureView(
             urlString: picture.url,
             sourceWidth: picture.width,
             sourceHeight: picture.height,
-            maxWidth: cellWidth,
-            maxHeight: cellWidth * 1.35,
-            cornerRadius: 8
+            maxWidth: maxWidth,
+            maxHeight: singleMaxHeight
           )
-          .frame(maxWidth: .infinity, alignment: .leading)
+        }.buttonStyle(PlainButtonStyle()).accessibilityLabel("预览图片 1")
+      } else {
+        let spacing: CGFloat = 7
+        let cellWidth = max(1, (maxWidth - spacing * CGFloat(columnCount - 1)) / CGFloat(columnCount))
+        LazyVGrid(
+          columns: Array(
+            repeating: GridItem(.flexible(minimum: 1, maximum: cellWidth), spacing: spacing, alignment: .topLeading),
+            count: columnCount
+          ),
+          alignment: .leading,
+          spacing: spacing
+        ) {
+          ForEach(Array(pictures.enumerated()), id: \.offset) { index, picture in
+            Button { preview = PiliNativeImageGallery(pictures: pictures, selectedIndex: index) } label: {
+              PiliNativeDynamicPictureView(
+                urlString: picture.url,
+                sourceWidth: picture.width,
+                sourceHeight: picture.height,
+                maxWidth: cellWidth,
+                maxHeight: cellWidth * 1.35,
+                cornerRadius: 8
+              )
+              .frame(maxWidth: .infinity, alignment: .leading)
+            }.buttonStyle(PlainButtonStyle()).accessibilityLabel("预览图片 \(index + 1)")
+          }
         }
+        .frame(maxWidth: maxWidth, alignment: .leading)
       }
-      .frame(maxWidth: maxWidth, alignment: .leading)
+    }
+    .fullScreenCover(item: $preview) { gallery in
+      PiliNativeImagePreview(gallery: gallery)
     }
   }
 }
@@ -6078,6 +6093,7 @@ private struct PiliNativeCommentRichText: UIViewRepresentable {
 }
 
 private struct PiliNativeCommentRow: View {
+  @State private var preview: PiliNativeImageGallery?
   let comment: PiliNativeComment
   let openMember: () -> Void
   let toggleLike: () -> Void
@@ -6135,8 +6151,12 @@ private struct PiliNativeCommentRow: View {
         if !comment.pictures.isEmpty {
           ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
-              ForEach(comment.pictures, id: \.self) { picture in
-                PiliNativeCommentPictureView(picture: picture)
+              ForEach(Array(comment.pictures.enumerated()), id: \.offset) { index, picture in
+                Button {
+                  preview = PiliNativeImageGallery(pictures: comment.pictures, selectedIndex: index)
+                } label: {
+                  PiliNativeCommentPictureView(picture: picture)
+                }.buttonStyle(PlainButtonStyle()).accessibilityLabel("预览图片 \(index + 1)")
               }
             }
           }
@@ -6158,6 +6178,9 @@ private struct PiliNativeCommentRow: View {
       }
     }
     .padding(.vertical, 4)
+    .fullScreenCover(item: $preview) { gallery in
+      PiliNativeImagePreview(gallery: gallery)
+    }
   }
 }
 
@@ -6204,6 +6227,243 @@ private struct PiliNativeCommentPictureView: View {
     .frame(width: displaySize.width, height: displaySize.height)
     .background(Color(UIColor.tertiarySystemFill))
     .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+  }
+}
+
+// MARK: - Shared image preview
+
+private struct PiliNativeImageGallery: Identifiable {
+  let id = UUID()
+  let pictures: [PiliNativeCommentPicture]
+  let selectedIndex: Int
+}
+
+private struct PiliNativeImagePreview: View {
+  let gallery: PiliNativeImageGallery
+  @Environment(\.dismiss) private var dismiss
+  @State private var selection: Int
+
+  init(gallery: PiliNativeImageGallery) {
+    self.gallery = gallery
+    _selection = State(initialValue: min(max(gallery.selectedIndex, 0), max(gallery.pictures.count - 1, 0)))
+  }
+
+  var body: some View {
+    VStack(spacing: 0) {
+      HStack {
+        Button { dismiss() } label: {
+          Image(systemName: "xmark").font(.system(size: 19, weight: .semibold))
+            .frame(width: 44, height: 44)
+        }.accessibilityLabel("关闭图片预览")
+        Spacer()
+        Text(gallery.pictures.isEmpty ? "图片预览" : "\(selection + 1) / \(gallery.pictures.count)")
+          .monospacedDigit().accessibilityIdentifier("image-preview-index")
+        Spacer()
+        if gallery.pictures.count > 1 {
+          HStack(spacing: 0) {
+            Button { selection = max(0, selection - 1) } label: {
+              Image(systemName: "chevron.left").frame(width: 36, height: 44)
+            }.disabled(selection == 0).accessibilityLabel("上一张图片")
+            Button { selection = min(gallery.pictures.count - 1, selection + 1) } label: {
+              Image(systemName: "chevron.right").frame(width: 36, height: 44)
+            }.disabled(selection == gallery.pictures.count - 1).accessibilityLabel("下一张图片")
+          }
+        } else {
+          Color.clear.frame(width: 44, height: 44)
+        }
+      }
+      .padding(.horizontal, 12)
+      if gallery.pictures.isEmpty {
+        Text("没有可预览的图片").frame(maxWidth: .infinity, maxHeight: .infinity)
+      } else {
+        TabView(selection: $selection) {
+          ForEach(Array(gallery.pictures.enumerated()), id: \.offset) { index, picture in
+            PiliNativeImagePreviewPage(url: picture.url)
+              .tag(index)
+          }
+        }
+        .tabViewStyle(PageTabViewStyle(indexDisplayMode: .never))
+      }
+      Text("双指缩放 · 双击放大或还原" + (gallery.pictures.count > 1 ? " · 左右切换" : ""))
+        .font(.caption).foregroundStyle(.white.opacity(0.65))
+        .padding(.vertical, 12)
+    }
+    .foregroundStyle(.white)
+    .tint(.white)
+    .background(Color.black.ignoresSafeArea())
+    .preferredColorScheme(.dark)
+    .accessibilityAction(.escape) { dismiss() }
+  }
+}
+
+@MainActor
+private final class PiliNativePreviewImageLoader: ObservableObject {
+  private static let cache: NSCache<NSURL, UIImage> = {
+    let cache = NSCache<NSURL, UIImage>()
+    cache.countLimit = 8
+    cache.totalCostLimit = 64 * 1024 * 1024
+    return cache
+  }()
+  let url: String
+  @Published private(set) var image: UIImage?
+  @Published private(set) var error: String?
+
+  init(url: String) { self.url = url }
+
+  func load() async {
+    guard image == nil else { return }
+    error = nil
+    guard let url = URL(string: url), ["https", "http"].contains(url.scheme?.lowercased() ?? "") else {
+      error = "图片地址无效"
+      return
+    }
+    if let cached = Self.cache.object(forKey: url as NSURL) {
+      image = cached
+      return
+    }
+    do {
+      var request = URLRequest(url: url)
+      request.timeoutInterval = 30
+      request.setValue("https://www.bilibili.com/", forHTTPHeaderField: "Referer")
+      let (data, response) = try await URLSession.shared.data(for: request)
+      try Task.checkCancellation()
+      guard let response = response as? HTTPURLResponse, (200..<300).contains(response.statusCode),
+            let decoded = UIImage(data: data), decoded.size.width > 0, decoded.size.height > 0 else {
+        error = "图片加载失败，请重试"
+        return
+      }
+      let cost = Int(decoded.size.width * decoded.size.height * decoded.scale * decoded.scale * 4)
+      Self.cache.setObject(decoded, forKey: url as NSURL, cost: cost)
+      image = decoded
+    } catch {
+      if !Task.isCancelled { self.error = "图片加载失败，请检查网络后重试" }
+    }
+  }
+}
+
+private struct PiliNativeImagePreviewPage: View {
+  @StateObject private var loader: PiliNativePreviewImageLoader
+  @State private var retry = 0
+
+  init(url: String) {
+    _loader = StateObject(wrappedValue: PiliNativePreviewImageLoader(url: url))
+  }
+
+  var body: some View {
+    Group {
+      if let image = loader.image {
+        PiliNativeZoomImage(image: image)
+      } else if let error = loader.error {
+        VStack(spacing: 16) {
+          Image(systemName: "photo.badge.exclamationmark").font(.largeTitle)
+          Text(error).multilineTextAlignment(.center)
+          Button("重新加载图片") { retry += 1 }.buttonStyle(.bordered)
+        }.padding(24)
+      } else {
+        ProgressView("正在加载图片").tint(.white)
+      }
+    }
+    .frame(maxWidth: .infinity, maxHeight: .infinity)
+    .task(id: retry) { await loader.load() }
+  }
+}
+
+private struct PiliNativeZoomImage: UIViewRepresentable {
+  let image: UIImage
+
+  func makeUIView(context: Context) -> PiliNativeZoomImageScrollView {
+    let view = PiliNativeZoomImageScrollView()
+    view.setImage(image)
+    return view
+  }
+
+  func updateUIView(_ view: PiliNativeZoomImageScrollView, context: Context) {
+    view.setImage(image)
+  }
+}
+
+private final class PiliNativeZoomImageScrollView: UIScrollView, UIScrollViewDelegate {
+  private let imageView = UIImageView()
+  private var fittedSize = CGSize.zero
+
+  init() {
+    super.init(frame: .zero)
+    delegate = self
+    backgroundColor = .black
+    contentInsetAdjustmentBehavior = .never
+    showsHorizontalScrollIndicator = false
+    showsVerticalScrollIndicator = false
+    bounces = false
+    bouncesZoom = true
+    imageView.contentMode = .scaleAspectFit
+    imageView.isAccessibilityElement = true
+    imageView.accessibilityLabel = "预览大图"
+    addSubview(imageView)
+    let doubleTap = UITapGestureRecognizer(target: self, action: #selector(toggleZoom(_:)))
+    doubleTap.numberOfTapsRequired = 2
+    addGestureRecognizer(doubleTap)
+    accessibilityIdentifier = "zoomable-preview-image"
+  }
+
+  required init?(coder: NSCoder) { fatalError("init(coder:) is unavailable") }
+
+  func setImage(_ image: UIImage) {
+    guard imageView.image !== image else { return }
+    imageView.image = image
+    fittedSize = .zero
+    setNeedsLayout()
+  }
+
+  override func layoutSubviews() {
+    super.layoutSubviews()
+    guard let image = imageView.image, bounds.width > 0, bounds.height > 0 else { return }
+    if fittedSize != bounds.size {
+      fittedSize = bounds.size
+      minimumZoomScale = 1
+      maximumZoomScale = 1
+      zoomScale = 1
+      imageView.frame = CGRect(origin: .zero, size: image.size)
+      contentSize = image.size
+      let fit = min(bounds.width / image.size.width, bounds.height / image.size.height)
+      maximumZoomScale = max(fit * 6, 2)
+      minimumZoomScale = fit
+      zoomScale = fit
+      centerImage()
+      contentOffset = CGPoint(x: -contentInset.left, y: -contentInset.top)
+    } else {
+      centerImage()
+    }
+  }
+
+  override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+    // Leave one-finger swipes to the gallery pager until the image is zoomed.
+    if gestureRecognizer === panGestureRecognizer && zoomScale <= minimumZoomScale * 1.01 {
+      return false
+    }
+    return super.gestureRecognizerShouldBegin(gestureRecognizer)
+  }
+
+  func viewForZooming(in scrollView: UIScrollView) -> UIView? { imageView }
+  func scrollViewDidZoom(_ scrollView: UIScrollView) { centerImage() }
+
+  private func centerImage() {
+    let horizontal = max(0, (bounds.width - imageView.frame.width) / 2)
+    let vertical = max(0, (bounds.height - imageView.frame.height) / 2)
+    let inset = UIEdgeInsets(top: vertical, left: horizontal, bottom: vertical, right: horizontal)
+    if contentInset != inset { contentInset = inset }
+    imageView.accessibilityValue = String(format: "%.1f 倍", zoomScale / max(minimumZoomScale, 0.0001))
+  }
+
+  @objc private func toggleZoom(_ gesture: UITapGestureRecognizer) {
+    if zoomScale > minimumZoomScale * 1.01 {
+      setZoomScale(minimumZoomScale, animated: true)
+    } else {
+      let target = min(maximumZoomScale, max(minimumZoomScale * 3, bounds.width / imageView.bounds.width))
+      let point = gesture.location(in: imageView)
+      zoom(to: CGRect(x: point.x - bounds.width / target / 2,
+                      y: point.y - bounds.height / target / 2,
+                      width: bounds.width / target, height: bounds.height / target), animated: true)
+    }
   }
 }
 
