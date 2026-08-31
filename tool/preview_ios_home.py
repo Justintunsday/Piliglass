@@ -144,14 +144,14 @@ private struct HomePreviewApp: App {
       .environment(\.dynamicTypeSize, ProcessInfo.processInfo.arguments.contains("--large-text") ? .accessibility1 : .large)
       .task {
         try? await Task.sleep(nanoseconds: 3_000_000_000)
-        inspectLayout()
+        await inspectLayout()
       }
     }
   }
 }
 
 @MainActor
-private func inspectLayout() {
+private func inspectLayout() async {
   guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
         let window = scene.windows.first(where: { $0.isKeyWindow }) else { return }
   func descendants(_ view: UIView) -> [UIView] {
@@ -176,8 +176,23 @@ private func inspectLayout() {
   let scrollFrame = scroll.convert(scroll.bounds, to: window)
   let barFrame = tabBar.convert(tabBar.bounds, to: window)
   let bottom = max(0, scroll.contentSize.height - scroll.bounds.height + scroll.adjustedContentInset.bottom)
-  let offset = ProcessInfo.processInfo.arguments.contains("--bottom") ? bottom : min(280, bottom)
+  let arguments = ProcessInfo.processInfo.arguments
+  let offset: CGFloat
+  if arguments.contains("--bottom") {
+    offset = bottom
+  } else if arguments.contains("--pull-top") {
+    offset = -72
+  } else if arguments.contains("--top") || arguments.contains("--return-top") {
+    offset = 0
+  } else {
+    offset = min(280, bottom)
+  }
+  if arguments.contains("--return-top") {
+    scroll.setContentOffset(CGPoint(x: 0, y: min(280, bottom)), animated: false)
+    try? await Task.sleep(nanoseconds: 450_000_000)
+  }
   scroll.setContentOffset(CGPoint(x: 0, y: offset), animated: false)
+  try? await Task.sleep(nanoseconds: 450_000_000)
   let report: [String: Any] = [
     "scrollFrame": NSCoder.string(for: scrollFrame),
     "tabBarFrame": NSCoder.string(for: barFrame),
@@ -244,6 +259,10 @@ def main():
         ("dark", "dark", []),
         ("large-text", "light", ["--large-text"]),
         ("last-row", "light", ["--bottom"]),
+        ("initial-top", "light", ["--top"]),
+        ("returned-top", "light", ["--return-top"]),
+        ("returned-top-dark", "dark", ["--return-top"]),
+        ("pull-top", "light", ["--pull-top"]),
         ("settings-light", "light", ["--settings"]),
         ("settings-dark", "dark", ["--settings"]),
         ("settings-large-text", "light", ["--settings", "--large-text"]),

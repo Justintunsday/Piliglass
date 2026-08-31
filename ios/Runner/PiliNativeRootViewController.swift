@@ -3422,6 +3422,7 @@ private struct PiliNativeHomeView: View {
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: selectedZone)
       }
       .background(Color(UIColor.systemBackground))
+      .modifier(PiliNativeHomeScrollEdgeModifier())
       .navigationTitle("PiliGlass")
       .navigationBarTitleDisplayMode(.inline)
       // Remove the full-width bar backing, not the native glass controls.
@@ -3483,7 +3484,6 @@ private struct PiliNativeHomeView: View {
       .padding(.top, contentInsets.top + 12)
       .padding(.bottom, contentInsets.bottom + 24)
     }
-    .modifier(PiliNativeHomeScrollEdgeModifier())
   }
 
   @ViewBuilder private func recommendPage(contentInsets: EdgeInsets) -> some View {
@@ -3568,9 +3568,9 @@ private struct PiliNativeHomeScrollEdgeModifier: ViewModifier {
   @ViewBuilder
   func body(content: Content) -> some View {
     if #available(iOS 26.0, *) {
-      // The system edge scrim can look like a solid white strip behind the
-      // floating bars. Keep the glass surfaces, but let the feed show through.
-      content.scrollEdgeEffectHidden(true, for: [.top, .bottom])
+      // Include the paging container as well as its vertical feeds. Keep a
+      // soft blur at both edges instead of an automatic opaque hard boundary.
+      content.scrollEdgeEffectStyle(.soft, for: [.top, .bottom])
     } else {
       content
     }
