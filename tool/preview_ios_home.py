@@ -75,7 +75,7 @@ private final class PiliNativeViewModel: ObservableObject {
   func userSelectedTab(_ index: Int) { selectedIndex = index }
   func refresh(_ section: String) {}
   func loadMore(_ section: String) {}
-  func openVideo(_ video: PiliNativeVideo) {}
+  func openVideo(_ video: PiliNativeVideo, sourceID: String? = nil) {}
   func openRoute(_ route: String) {}
 }
 private struct PiliRemoteImage: View {
@@ -216,6 +216,8 @@ def main():
     settings_end = source.index("private struct PiliNativeDiagnosticLogSettingsView:", settings_start)
     navigation_start = source.index("private struct PiliNativePrimaryDestinations:")
     navigation_end = source.index("// MARK: - Root tabs", navigation_start)
+    transition_start = source.index("// MARK: - Video transition sources")
+    transition_end = source.index("// MARK: - Video presentation transition", transition_start)
     placeholders = '''
 private struct PiliNativeSearchView: View {
   @ObservedObject var model: PiliNativeViewModel
@@ -226,7 +228,8 @@ private struct PiliNativeSettingsView: View {
   var body: some View { Text("设置") }
 }
 '''
-    swift.write_text(FIXTURES + source[navigation_start:navigation_end] + placeholders
+    swift.write_text(FIXTURES + source[transition_start:transition_end]
+                     + source[navigation_start:navigation_end] + placeholders
                      + source[start:end] + source[option_start:option_end]
                      + source[settings_start:settings_end] + APP)
     app = OUTPUT / "HomePreview.app"

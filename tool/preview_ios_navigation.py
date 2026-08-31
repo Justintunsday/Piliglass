@@ -23,6 +23,9 @@ MODEL = r'''
   @Published var isDynamicDetailPresented = false
   @Published var isLoginPresented = false
   @Published var isVideoDetailPresented = false
+  @Published var videoTransitionSourceID: String?
+  @Published var videoDismissCount = 0
+  let originalPlayerFullscreen = false
   let dynamicBadge = ""
   let settingsLoading = false
   let videoQualityOptions: [PreviewQuality] = []
@@ -32,8 +35,12 @@ MODEL = r'''
   func requestSnapshot() {}
   func handleVideoDeviceOrientation(_ orientation: UIDeviceOrientation) {}
   func closeVideoDetail() { isVideoDetailPresented = false }
+  func videoDetailDidDismiss() {
+    videoTransitionSourceID = nil
+    videoDismissCount += 1
+  }
   func presentProfile(_ id: Int) { isProfilePresented = true }
-  let searchResults: [PiliNativeVideo] = []
+  let searchResults = [PiliNativeVideo(id: 1)]
   let searchLoading = false, searchLoadingMore = false, searchHasMore = false
   let searchError: String? = nil
   func search(_ text: String) {}
@@ -110,6 +117,20 @@ private struct PiliNativeSettingsSectionView: View {
 }
 private struct PiliNativeDiagnosticLogSettingsView: View {
   var body: some View { Text("诊断").navigationTitle("诊断") }
+}
+private struct PiliNativeVideoDetailView: View {
+  @ObservedObject var model: PiliNativeViewModel
+  var body: some View {
+    VStack(spacing: 20) {
+      Color.black.frame(height: 240)
+      Text("视频详情").accessibilityIdentifier("video-detail")
+      Text("已退出 \(model.videoDismissCount) 次")
+      Button("关闭视频") { model.closeVideoDetail() }
+      Spacer()
+    }
+    .frame(maxWidth: .infinity, maxHeight: .infinity)
+    .background(Color(UIColor.systemBackground))
+  }
 }
 @main
 private struct MenuPreviewApp: App {
@@ -217,6 +238,50 @@ final class MenuNavigationTests: XCTestCase {
     XCTAssertTrue(app.navigationBars.buttons["我的"].exists)
     screenshot("home-toolbar-after-tab-switch")
   }
+
+  func testVideoZoomCloseAndReopen() {
+    let card = app.buttons.containing(.staticText, identifier: "城市漫游：发现身边的美好").firstMatch
+    XCTAssertTrue(card.waitForExistence(timeout: 8))
+    card.tap()
+    XCTAssertTrue(app.staticTexts["video-detail"].waitForExistence(timeout: 8))
+    screenshot("video-zoom-open")
+    app.buttons["关闭视频"].tap()
+    XCTAssertTrue(app.tabBars.buttons["首页"].waitForExistence(timeout: 8))
+    card.tap()
+    XCTAssertTrue(app.staticTexts["video-detail"].waitForExistence(timeout: 8))
+    XCTAssertTrue(app.staticTexts["已退出 1 次"].exists)
+    edgeBack()
+    XCTAssertTrue(app.tabBars.buttons["首页"].waitForExistence(timeout: 8))
+    card.tap()
+    XCTAssertTrue(app.staticTexts["video-detail"].waitForExistence(timeout: 8))
+    XCTAssertTrue(app.staticTexts["已退出 2 次"].exists)
+  }
+
+  func testVideoZoomCancelledGestureAndSearchReturn() {
+    app.navigationBars.buttons["搜索"].tap()
+    let card = app.buttons.containing(.staticText, identifier: "山海之间，记录旅途的风景").firstMatch
+    XCTAssertTrue(card.waitForExistence(timeout: 8))
+    card.tap()
+    XCTAssertTrue(app.staticTexts["video-detail"].waitForExistence(timeout: 8))
+    // A short, slow drag should cancel without releasing playback resources.
+    let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.005, dy: 0.5))
+    let middle = app.coordinate(withNormalizedOffset: CGVector(dx: 0.2, dy: 0.5))
+    start.press(forDuration: 0.05, thenDragTo: middle,
+                withVelocity: .slow, thenHoldForDuration: 0.5)
+    XCTAssertTrue(app.staticTexts["video-detail"].exists)
+    XCTAssertTrue(app.staticTexts["已退出 0 次"].exists)
+    screenshot("video-zoom-cancelled-back")
+    edgeBack()
+    // A completed dismissal must preserve the search stack and result card.
+    XCTAssertTrue(app.navigationBars["搜索"].waitForExistence(timeout: 8))
+    XCTAssertTrue(card.isHittable)
+    XCTAssertFalse(app.tabBars.firstMatch.isHittable)
+    card.tap()
+    XCTAssertTrue(app.staticTexts["video-detail"].waitForExistence(timeout: 8))
+    app.buttons["关闭视频"].tap()
+    XCTAssertTrue(app.navigationBars["搜索"].waitForExistence(timeout: 8))
+    screenshot("search-after-video-zoom-back")
+  }
 }
 '''
 
@@ -232,6 +297,12 @@ def production_swift():
         'private final class PiliNativeViewModel: ObservableObject {',
         'private final class PiliNativeViewModel: ObservableObject {\n' + MODEL,
     ).replace(
+        'func openVideo(_ video: PiliNativeVideo, sourceID: String? = nil) {}',
+        '''func openVideo(_ video: PiliNativeVideo, sourceID: String? = nil) {
+    videoTransitionSourceID = sourceID
+    isVideoDetailPresented = true
+  }''',
+    ).replace(
         'private struct PreviewSetting {',
         '''private struct PreviewSetting: Identifiable {
   var id: String { key }
@@ -241,7 +312,7 @@ def production_swift():
     stubs = STUBS
     for name, title in [('Messages', '消息'), ('Downloads', '离线缓存'),
                         ('Profile', '个人主页'), ('DynamicDetail', '动态详情'),
-                        ('Login', '扫码登录'), ('VideoDetail', '视频')]:
+                        ('Login', '扫码登录')]:
         stubs += f'''\nprivate struct PiliNative{name}View: View {{
   @ObservedObject var model: PiliNativeViewModel
   var body: some View {{ Text("{title}").navigationTitle("{title}").navigationBarTitleDisplayMode(.inline) }}

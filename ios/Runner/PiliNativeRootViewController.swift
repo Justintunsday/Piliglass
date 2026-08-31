@@ -260,6 +260,7 @@ private final class PiliNativeViewModel: ObservableObject {
   @Published private(set) var searchError: String?
 
   @Published var isVideoDetailPresented = false
+  @Published private(set) var videoTransitionSourceID: String?
   @Published private(set) var videoDetail: PiliNativeVideoDetail?
   @Published private(set) var videoDetailLoading = false
   @Published private(set) var videoDetailError: String?
@@ -588,7 +589,14 @@ private final class PiliNativeViewModel: ObservableObject {
     }
   }
 
-  func openVideo(_ video: PiliNativeVideo) {
+  func openVideo(_ video: PiliNativeVideo, sourceID: String? = nil) {
+    // Related videos replace the content inside the same presentation. Keep
+    // the original card as the return target until the cover has dismissed.
+    if !isVideoDetailPresented {
+      // A source in a modal that has already closed is no longer available;
+      // the system then uses its centered zoom fallback.
+      videoTransitionSourceID = sourceID ?? "video:\(video.id)"
+    }
     nativePlaybackGeneration = UUID()
     nativePlayerSession.stop()
     flutterPlayerSurface.restore(hidden: true)
@@ -928,6 +936,17 @@ private final class PiliNativeViewModel: ObservableObject {
   }
 
   func closeVideoDetail() {
+    guard isVideoDetailPresented else { return }
+    videoDetailGeneration = UUID()
+    nativePlaybackGeneration = UUID()
+    nativePlayerSession.pausePlayback()
+    isVideoDetailPresented = false
+  }
+
+  func videoDetailDidDismiss() {
+    // onDismiss also handles the system's interactive zoom gesture. Unlike
+    // onDisappear, it does not run for a cancelled dismissal or a child cover.
+    guard !isVideoDetailPresented else { return }
     videoDetailGeneration = UUID()
     onVideoOrientationPolicyChanged?(false)
     nativePlaybackGeneration = UUID()
@@ -938,7 +957,7 @@ private final class PiliNativeViewModel: ObservableObject {
     nativePlayerCID = nil
     nativePlayerQuality = nil
     flutterPlayerSurface.restore(hidden: true)
-    isVideoDetailPresented = false
+    videoTransitionSourceID = nil
     channel.invokeMethod("closeNativeVideoPlayer", arguments: nil)
   }
 
@@ -3131,6 +3150,58 @@ private extension View {
   }
 }
 
+// MARK: - Video transition sources
+
+private struct PiliVideoTransitionNamespaceKey: EnvironmentKey {
+  static let defaultValue: Namespace.ID? = nil
+}
+
+private extension EnvironmentValues {
+  var piliVideoTransitionNamespace: Namespace.ID? {
+    get { self[PiliVideoTransitionNamespaceKey.self] }
+    set { self[PiliVideoTransitionNamespaceKey.self] = newValue }
+  }
+}
+
+private struct PiliVideoTransitionSource: ViewModifier {
+  @Environment(\.piliVideoTransitionNamespace) private var namespace
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  let id: String
+
+  func body(content: Content) -> some View {
+    if #available(iOS 18.0, *), let namespace, !reduceMotion {
+      content.matchedTransitionSource(id: id, in: namespace)
+    } else {
+      content
+    }
+  }
+}
+
+private extension View {
+  func piliVideoTransitionSource(id: String) -> some View {
+    modifier(PiliVideoTransitionSource(id: id))
+  }
+}
+
+// MARK: - Video presentation transition
+
+private struct PiliVideoOpeningTransition: ViewModifier {
+  @Environment(\.accessibilityReduceMotion) private var reduceMotion
+  let sourceID: String?
+  let namespace: Namespace.ID
+  let close: () -> Void
+
+  func body(content: Content) -> some View {
+    if #available(iOS 18.0, *), let sourceID, !reduceMotion {
+      // Let the system own interactive dismissal; the legacy edge gesture
+      // would otherwise close the page even when the zoom gesture cancels.
+      content.navigationTransition(.zoom(sourceID: sourceID, in: namespace))
+    } else {
+      content.piliEdgeSwipeBack(close)
+    }
+  }
+}
+
 // Keep toolbar ownership inside each tab. A stack around the whole TabView
 // does not receive the tab content's navigation items reliably.
 private struct PiliNativePrimaryDestinations: ViewModifier {
@@ -3176,6 +3247,7 @@ private struct PiliNativePrimaryDestinations: ViewModifier {
 
 private struct PiliNativeRootView: View {
   @ObservedObject var model: PiliNativeViewModel
+  @Namespace private var videoTransitionNamespace
 
   private var selection: Binding<Int> {
     Binding(
@@ -3196,6 +3268,7 @@ private struct PiliNativeRootView: View {
       }
     }
     .accentColor(piliAccent)
+    .environment(\.piliVideoTransitionNamespace, videoTransitionNamespace)
     .sheet(isPresented: $model.isLibraryPresented) {
       PiliNativeLibraryView(model: model)
         .piliEdgeSwipeBack { model.isLibraryPresented = false }
@@ -3208,9 +3281,16 @@ private struct PiliNativeRootView: View {
       PiliNativeDownloadsView(model: model)
         .piliEdgeSwipeBack { model.isDownloadsPresented = false }
     }
-    .fullScreenCover(isPresented: $model.isVideoDetailPresented) {
+    .fullScreenCover(isPresented: $model.isVideoDetailPresented, onDismiss: {
+      model.videoDetailDidDismiss()
+    }) {
       PiliNativeVideoDetailView(model: model)
-        .piliEdgeSwipeBack { model.closeVideoDetail() }
+        .interactiveDismissDisabled(model.originalPlayerFullscreen)
+        .modifier(PiliVideoOpeningTransition(
+          sourceID: model.videoTransitionSourceID,
+          namespace: videoTransitionNamespace,
+          close: { model.closeVideoDetail() }
+        ))
     }
     .fullScreenCover(isPresented: $model.isProfilePresented) {
       PiliNativeProfileView(model: model)
@@ -3304,7 +3384,7 @@ private struct PiliNativeHomeView: View {
             LazyVGrid(columns: columns, spacing: 14) {
               ForEach(model.homeVideos) { video in
                 PiliNativeVideoCard(video: video) {
-                  model.openVideo(video)
+                  model.openVideo(video, sourceID: "home:\(video.id)")
                 }
                 .onAppear {
                   if video.id == model.homeVideos.last?.id {
@@ -3395,6 +3475,7 @@ private struct PiliNativeVideoCard: View {
           }
         }
         .cornerRadius(9)
+        .piliVideoTransitionSource(id: "home:\(video.id)")
 
         Text(video.title)
           .font(.subheadline)
@@ -7522,7 +7603,6 @@ private struct PiliNativeSettingsSectionView: View {
 
 private struct PiliNativeSearchView: View {
   @ObservedObject var model: PiliNativeViewModel
-  @Environment(\.presentationMode) private var presentationMode
   @State private var keyword = ""
 
   var body: some View {
@@ -7568,14 +7648,14 @@ private struct PiliNativeSearchView: View {
             LazyVStack(spacing: 0) {
               ForEach(model.searchResults) { video in
                 Button(action: {
-                  presentationMode.wrappedValue.dismiss()
-                  model.openVideo(video)
+                  model.openVideo(video, sourceID: "search:\(video.id)")
                 }) {
                   HStack(alignment: .top, spacing: 12) {
                     PiliRemoteImage(urlString: video.cover)
                       .frame(width: 128, height: 72)
                       .clipped()
                       .cornerRadius(8)
+                      .piliVideoTransitionSource(id: "search:\(video.id)")
                     VStack(alignment: .leading, spacing: 6) {
                       Text(video.title)
                         .font(.subheadline)
