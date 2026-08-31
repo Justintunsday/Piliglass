@@ -25,7 +25,7 @@ FIXTURES = r'''
 import SwiftUI
 import UIKit
 
-private let piliAccent = Color(red: 0.93, green: 0.29, blue: 0.48)
+private let piliAccent = Color(red: 251.0 / 255, green: 114.0 / 255, blue: 153.0 / 255)
 private struct PiliNativeVideo: Identifiable {
   let id: Int
   var cover: String? { String(id) }

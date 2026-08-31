@@ -3985,9 +3985,16 @@ private struct PiliNativeGlassButton: ViewModifier {
       content.buttonStyle(.borderedProminent).buttonBorderShape(.capsule)
         .controlSize(.large).tint(piliAccent)
     } else {
-      content.buttonStyle(.plain).frame(width: 44, height: 44)
-        .foregroundStyle(piliAccent).background(.regularMaterial, in: Circle())
+      content.buttonStyle(PiliNativeLegacyGlassButtonStyle())
     }
+  }
+}
+
+private struct PiliNativeLegacyGlassButtonStyle: ButtonStyle {
+  func makeBody(configuration: Configuration) -> some View {
+    configuration.label.frame(width: 44, height: 44)
+      .foregroundStyle(piliAccent).background(.regularMaterial, in: Circle())
+      .contentShape(Circle()).opacity(configuration.isPressed ? 0.6 : 1)
   }
 }
 
