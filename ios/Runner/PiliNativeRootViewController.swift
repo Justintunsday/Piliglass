@@ -10,7 +10,6 @@ import UIKit
 private let piliNativeChannelName = "piliglass/native_ui"
 private let piliAccent = Color(red: 0.93, green: 0.29, blue: 0.48)
 private let piliProfileAccent = Color(red: 0.12, green: 0.36, blue: 0.25)
-private let piliProfileMuted = Color(UIColor.secondaryLabel)
 
 private extension Notification.Name {
   static let piliPresentNativeProfile = Notification.Name("piliglass.presentNativeProfile")
@@ -3417,10 +3416,12 @@ private struct PiliNativePrimaryDestinations: ViewModifier {
       .navigationDestination(isPresented: presentation($model.isSearchPresented)) {
         PiliNativeSearchView(model: model)
           .toolbar(.hidden, for: .tabBar)
+          .toolbar(.visible, for: .navigationBar)
       }
       .navigationDestination(isPresented: presentation($model.isSettingsPresented)) {
         PiliNativeSettingsView(model: model)
           .toolbar(.hidden, for: .tabBar)
+          .toolbar(.visible, for: .navigationBar)
       }
   }
 }

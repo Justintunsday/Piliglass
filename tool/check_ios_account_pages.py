@@ -35,11 +35,13 @@ private struct PiliNativeCommentRichText: View {
   var textStyle: UIFont.TextStyle = .subheadline
   var body: some View { Text(message).lineSpacing(7) }
 }
-private enum PiliNativePrimaryTab { case mine }
-private struct PiliNativePrimaryDestinations: ViewModifier {
+private struct PiliNativeSettingsView: View {
   let model: PiliNativeViewModel
-  let tab: PiliNativePrimaryTab
-  func body(content: Content) -> some View { content }
+  var body: some View { Text("设置内容").navigationTitle("设置").navigationBarTitleDisplayMode(.inline) }
+}
+private struct PiliNativeSearchView: View {
+  let model: PiliNativeViewModel
+  var body: some View { Text("搜索内容").navigationTitle("搜索").navigationBarTitleDisplayMode(.inline) }
 }
 @MainActor
 private final class PiliNativeViewModel: ObservableObject {
@@ -51,6 +53,9 @@ private final class PiliNativeViewModel: ObservableObject {
   var mineFavoritesLoading = false
   var mineFavoritesError: String? = nil
   @Published var isSearchPresented = false
+  @Published var isSettingsPresented = false
+  let selectedIndex = 2
+  let tabTitles = ["首页", "动态", "我的"]
   @Published var isProfilePresented = false
   @Published var profile: PiliNativeProfile?
   @Published var profileSection = 0
@@ -69,7 +74,7 @@ private final class PiliNativeViewModel: ObservableObject {
   }
   func loadMineFavorites() { if account.isLogin { mineFavorites = folders() } }
   func refresh(_ section: String) {}
-  func presentSettings() { destination = "设置" }
+  func presentSettings() { isSettingsPresented = true }
   func openRoute(_ route: String) { destination = route }
   func openFavoriteFolder(_ item: PiliNativeLibraryItem) { destination = item.title }
   func presentProfile(_ mid: Int, section: Int = 0) {
@@ -137,7 +142,10 @@ final class AccountPageTests: XCTestCase {
     XCTAssertEqual(app.staticTexts["destination"].label, "默认收藏夹")
     app.buttons["关闭"].tap()
     app.buttons["设置"].tap()
-    XCTAssertEqual(app.staticTexts["destination"].label, "设置")
+    XCTAssertTrue(app.navigationBars["设置"].waitForExistence(timeout: 5))
+    XCTAssertTrue(app.navigationBars.buttons.firstMatch.exists)
+    app.navigationBars.buttons.firstMatch.tap()
+    XCTAssertTrue(app.buttons["favorite-folder-0"].waitForExistence(timeout: 5))
   }
   func testOwnDynamicTabAndEditor() {
     launch()
@@ -187,7 +195,7 @@ def production_swift():
     source = (ROOT / 'ios/Runner/PiliNativeRootViewController.swift').read_text(encoding='utf-8')
     def section(start, end):
         return source[source.index(start):source.index(end, source.index(start))]
-    return FIXTURES + section('private struct PiliNativeVideo:', 'private struct PiliNativeVideoPart:') + section(
+    return FIXTURES + section('private struct PiliNativePrimaryDestinations:', '// MARK: - Root tabs') + section('private struct PiliNativeVideo:', 'private struct PiliNativeVideoPart:') + section(
         'private struct PiliNativeLibraryItem:', 'private struct PiliNativeMessage:') + section(
         'private struct PiliNativeComment:', 'private struct PiliNativeDownload:') + section(
         'private struct PiliNativeAccount {', '// MARK: - Native navigation gestures') + section(
