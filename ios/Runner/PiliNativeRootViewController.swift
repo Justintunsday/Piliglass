@@ -3279,7 +3279,7 @@ private struct PiliNativeHomeView: View {
           HStack(spacing: 10) {
             Image(systemName: "magnifyingglass")
             Text("搜索视频")
-              .foregroundStyle(.secondary)
+              .foregroundStyle(Color.secondary)
               .lineLimit(1)
             Spacer(minLength: 0)
           }
