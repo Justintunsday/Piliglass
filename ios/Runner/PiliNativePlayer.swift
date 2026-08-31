@@ -776,12 +776,15 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
   @Published var isFullscreen = false {
     didSet {
       if isFullscreen != oldValue {
+        endTemporaryDoubleSpeed()
         activateDanmakuProfile(isFullscreen ? .full : .simple)
       }
     }
   }
   @Published var fullscreenCommentsVisible = false
   @Published private(set) var playbackRate: Float = 1
+  @Published private(set) var temporaryDoubleSpeedActive = false
+  private var playbackRateBeforeHold: Float?
   @Published private(set) var isHDR = false
   @Published private(set) var hdrBrightnessActive = false
   @Published private(set) var videoTitle = "正在播放"
@@ -1150,6 +1153,7 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
   }
 
   func pausePlayback() {
+    endTemporaryDoubleSpeed()
     engine.pause()
     audioEngine.pause()
   }
@@ -1183,11 +1187,33 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
   }
 
   func cyclePlaybackRate() {
+    endTemporaryDoubleSpeed()
     let values: [Float] = [1, 1.25, 1.5, 2, 0.75]
     let current = values.firstIndex(where: { abs($0 - playbackRate) < 0.01 }) ?? 0
-    playbackRate = values[(current + 1) % values.count]
-    engine.setRate(playbackRate)
-    if isPlaying, hasAudioTrack { audioEngine.setRate(playbackRate) }
+    setPlaybackRate(values[(current + 1) % values.count])
+  }
+
+  private func setPlaybackRate(_ rate: Float) {
+    playbackRate = rate
+    // Changing speed while paused must not restart either playback engine.
+    if isPlaying {
+      engine.setRate(rate)
+      if hasAudioTrack { audioEngine.setRate(rate) }
+    }
+  }
+
+  func beginTemporaryDoubleSpeed() {
+    guard isReady, isPlaying, playbackRateBeforeHold == nil else { return }
+    playbackRateBeforeHold = playbackRate
+    temporaryDoubleSpeedActive = true
+    setPlaybackRate(2)
+  }
+
+  func endTemporaryDoubleSpeed() {
+    guard let previousRate = playbackRateBeforeHold else { return }
+    playbackRateBeforeHold = nil
+    temporaryDoubleSpeedActive = false
+    setPlaybackRate(previousRate)
   }
 
   func selectQuality(_ value: Int) {
@@ -1944,8 +1970,8 @@ final class PiliNativePlayerViewController: UIViewController, UIGestureRecognize
   private let embeddedBottomShade = PiliNativePlayerGradientView()
   private let topBar = UIStackView()
   private let bottomBar = UIStackView()
-  private let topChrome = UIView()
-  private let bottomChrome = UIView()
+  private let topChrome = PiliNativePlayerGradientView()
+  private let bottomChrome = PiliNativePlayerGradientView()
   private let playButton = UIButton(type: .system)
   private let danmakuButton = UIButton(type: .system)
   private let danmakuSettingsButton = UIButton(type: .system)
@@ -1973,6 +1999,7 @@ final class PiliNativePlayerViewController: UIViewController, UIGestureRecognize
   private let spinner = UIActivityIndicatorView(style: .large)
   private let errorLabel = UILabel()
   private let toastLabel = UILabel()
+  private let speedHoldLabel = UILabel()
   private let danmakuSettingsPanel = UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterialDark))
   private var pictureInPictureController: AVPictureInPictureController?
   private var cancellables = Set<AnyCancellable>()
@@ -1983,7 +2010,6 @@ final class PiliNativePlayerViewController: UIViewController, UIGestureRecognize
   private var isScrubbing = false
   private var controlsLocked = false
   private var settingsPanelVisible = false
-  private var audioOnlyMode = false
   private var videoSurfaceRevealed = false
   private var surfaceRevealTask: DispatchWorkItem?
 
@@ -2011,7 +2037,10 @@ final class PiliNativePlayerViewController: UIViewController, UIGestureRecognize
     canvas.layer.opacity = 0
     bindSession()
     session.bindVideoSurface(canvas)
-    pipButton.isHidden = fullscreenPresentation && !AVPictureInPictureController.isPictureInPictureSupported()
+    NotificationCenter.default.addObserver(
+      self, selector: #selector(endSpeedHold),
+      name: UIApplication.willResignActiveNotification, object: nil
+    )
     if fullscreenPresentation { startSystemStatusUpdates() }
   }
 
@@ -2034,6 +2063,7 @@ final class PiliNativePlayerViewController: UIViewController, UIGestureRecognize
 
   override func viewWillDisappear(_ animated: Bool) {
     super.viewWillDisappear(animated)
+    endSpeedHold()
     controlsHideTask?.cancel()
     surfaceRevealTask?.cancel()
     statusTimer?.invalidate()
@@ -2041,13 +2071,26 @@ final class PiliNativePlayerViewController: UIViewController, UIGestureRecognize
   }
 
   func detachVideoSurface() {
+    endSpeedHold()
     surfaceRevealTask?.cancel()
     session.unbindVideoSurface(canvas)
   }
 
   func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
-    if touch.view is UIControl { return false }
+    var touchedAncestor = touch.view
+    while let ancestor = touchedAncestor, ancestor !== controls {
+      if ancestor is UIControl { return false }
+      touchedAncestor = ancestor.superview
+    }
     if let touchedView = touch.view, touchedView.isDescendant(of: danmakuSettingsPanel) { return false }
+    return true
+  }
+
+  func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+    if gestureRecognizer is UILongPressGestureRecognizer {
+      return session.isReady && session.isPlaying && !controlsLocked
+        && !settingsPanelVisible && !isScrubbing
+    }
     return true
   }
 
@@ -2082,20 +2125,25 @@ final class PiliNativePlayerViewController: UIViewController, UIGestureRecognize
     tap.cancelsTouchesInView = false
     tap.delegate = self
     controls.addGestureRecognizer(tap)
-    let doubleTap = UITapGestureRecognizer(target: self, action: #selector(doubleTapSeek(_:)))
+    let doubleTap = UITapGestureRecognizer(target: self, action: #selector(doubleTapPlayback(_:)))
     doubleTap.numberOfTapsRequired = 2
     doubleTap.cancelsTouchesInView = false
     doubleTap.delegate = self
     controls.addGestureRecognizer(doubleTap)
     tap.require(toFail: doubleTap)
 
+    let hold = UILongPressGestureRecognizer(target: self, action: #selector(holdDoubleSpeed(_:)))
+    hold.minimumPressDuration = 0.35
+    hold.allowableMovement = 30
+    hold.delegate = self
+    controls.addGestureRecognizer(hold)
+    tap.require(toFail: hold)
+    doubleTap.require(toFail: hold)
+
     configureButton(playButton, image: "play.fill", action: #selector(togglePlayback))
     configureButton(fullscreenButton, image: fullscreenPresentation ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right", action: #selector(toggleFullscreen))
-    configureButton(
-      pipButton,
-      image: fullscreenPresentation ? "pip.enter" : "headphones",
-      action: fullscreenPresentation ? #selector(togglePictureInPicture) : #selector(toggleAudioOnly)
-    )
+    configureButton(pipButton, image: "pip.enter", action: #selector(togglePictureInPicture))
+    pipButton.isHidden = true
     configureButton(backButton, image: "chevron.left", action: #selector(exitFullscreen))
     configureButton(lockButton, image: "lock.open.fill", action: #selector(toggleScreenLock))
     configureButton(danmakuSettingsButton, image: "slider.horizontal.3", action: #selector(toggleDanmakuSettings))
@@ -2122,6 +2170,11 @@ final class PiliNativePlayerViewController: UIViewController, UIGestureRecognize
     slider.addTarget(self, action: #selector(scrubStarted), for: .touchDown)
     slider.addTarget(self, action: #selector(scrubChanged), for: .valueChanged)
     slider.addTarget(self, action: #selector(scrubEnded), for: [.touchUpInside, .touchUpOutside, .touchCancel])
+    slider.accessibilityLabel = "播放进度"
+    playButton.accessibilityLabel = "暂停或播放"
+    backButton.accessibilityLabel = "退出播放器"
+    lockButton.accessibilityLabel = "锁定播放器"
+    danmakuSettingsButton.accessibilityLabel = "弹幕设置"
 
     if fullscreenPresentation {
       buildFullscreenControls()
@@ -2151,6 +2204,21 @@ final class PiliNativePlayerViewController: UIViewController, UIGestureRecognize
       toastLabel.centerYAnchor.constraint(equalTo: view.centerYAnchor, constant: 54),
       toastLabel.heightAnchor.constraint(greaterThanOrEqualToConstant: 36),
       toastLabel.widthAnchor.constraint(lessThanOrEqualTo: view.widthAnchor, multiplier: 0.7),
+    ])
+    speedHoldLabel.translatesAutoresizingMaskIntoConstraints = false
+    speedHoldLabel.text = "  ▶▶  2× 倍速播放中  "
+    speedHoldLabel.font = .systemFont(ofSize: 14, weight: .semibold)
+    speedHoldLabel.textColor = .white
+    speedHoldLabel.backgroundColor = UIColor.black.withAlphaComponent(0.65)
+    speedHoldLabel.textAlignment = .center
+    speedHoldLabel.layer.cornerRadius = 18
+    speedHoldLabel.clipsToBounds = true
+    speedHoldLabel.isHidden = true
+    view.addSubview(speedHoldLabel)
+    NSLayoutConstraint.activate([
+      speedHoldLabel.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+      speedHoldLabel.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 16),
+      speedHoldLabel.heightAnchor.constraint(equalToConstant: 36),
     ])
   }
 
@@ -2182,7 +2250,6 @@ final class PiliNativePlayerViewController: UIViewController, UIGestureRecognize
 
     configureButton(menuButton, image: "ellipsis", action: #selector(showEmbeddedMoreMenu))
     menuButton.transform = CGAffineTransform(rotationAngle: .pi / 2)
-    pipButton.isHidden = false
     backButton.setPreferredSymbolConfiguration(
       UIImage.SymbolConfiguration(pointSize: 25, weight: .medium),
       forImageIn: .normal
@@ -2201,7 +2268,6 @@ final class PiliNativePlayerViewController: UIViewController, UIGestureRecognize
     topBar.spacing = 10
     topBar.addArrangedSubview(backButton)
     topBar.addArrangedSubview(UIView())
-    topBar.addArrangedSubview(pipButton)
     topBar.addArrangedSubview(menuButton)
 
     bottomBar.axis = .horizontal
@@ -2243,22 +2309,28 @@ final class PiliNativePlayerViewController: UIViewController, UIGestureRecognize
   private func buildFullscreenControls() {
     topChrome.translatesAutoresizingMaskIntoConstraints = false
     bottomChrome.translatesAutoresizingMaskIntoConstraints = false
-    topChrome.backgroundColor = UIColor.black.withAlphaComponent(0.42)
-    bottomChrome.backgroundColor = UIColor.black.withAlphaComponent(0.5)
+    topChrome.configure(
+      colors: [UIColor.black.withAlphaComponent(0.65), UIColor.clear],
+      start: CGPoint(x: 0.5, y: 0), end: CGPoint(x: 0.5, y: 1)
+    )
+    bottomChrome.configure(
+      colors: [UIColor.clear, UIColor.black.withAlphaComponent(0.7)],
+      start: CGPoint(x: 0.5, y: 0), end: CGPoint(x: 0.5, y: 1)
+    )
     controls.addSubview(topChrome)
     controls.addSubview(bottomChrome)
     NSLayoutConstraint.activate([
       topChrome.topAnchor.constraint(equalTo: controls.topAnchor),
       topChrome.leadingAnchor.constraint(equalTo: controls.leadingAnchor),
       topChrome.trailingAnchor.constraint(equalTo: controls.trailingAnchor),
-      topChrome.heightAnchor.constraint(equalToConstant: 150),
+      topChrome.heightAnchor.constraint(equalToConstant: 140),
       bottomChrome.leadingAnchor.constraint(equalTo: controls.leadingAnchor),
       bottomChrome.trailingAnchor.constraint(equalTo: controls.trailingAnchor),
       bottomChrome.bottomAnchor.constraint(equalTo: controls.bottomAnchor),
-      bottomChrome.heightAnchor.constraint(equalToConstant: 142),
+      bottomChrome.heightAnchor.constraint(equalToConstant: 140),
     ])
 
-    titleLabel.font = .systemFont(ofSize: 15, weight: .semibold)
+    titleLabel.font = .systemFont(ofSize: 19, weight: .semibold)
     titleLabel.textColor = .white
     titleLabel.numberOfLines = 1
     titleLabel.lineBreakMode = .byTruncatingTail
@@ -2267,15 +2339,15 @@ final class PiliNativePlayerViewController: UIViewController, UIGestureRecognize
 
     let metricStack = UIStackView(arrangedSubviews: [
       metricView(icon: "hand.thumbsup", label: likeLabel, action: #selector(requestLike)),
-      metricView(icon: "bubble.left", label: replyLabel, action: #selector(requestComment)),
-      metricView(icon: "star", label: favoriteLabel, action: #selector(requestFavorite)),
       metricView(icon: "arrowshape.turn.up.right", label: shareLabel, action: #selector(requestShare)),
     ])
     metricStack.axis = .horizontal
     metricStack.alignment = .center
-    metricStack.spacing = 8
+    metricStack.spacing = 18
+    metricStack.setContentCompressionResistancePriority(.required, for: .horizontal)
 
     configureButton(menuButton, image: "ellipsis", action: #selector(showMoreMenu))
+    menuButton.transform = CGAffineTransform(rotationAngle: .pi / 2)
 
     let wifiView = UIImageView(image: UIImage(systemName: "wifi"))
     wifiView.tintColor = .white
@@ -2294,13 +2366,14 @@ final class PiliNativePlayerViewController: UIViewController, UIGestureRecognize
     ownerImageView.translatesAutoresizingMaskIntoConstraints = false
     ownerImageView.contentMode = .scaleAspectFill
     ownerImageView.clipsToBounds = true
-    ownerImageView.layer.cornerRadius = 12
+    ownerImageView.layer.cornerRadius = 15
     ownerImageView.backgroundColor = UIColor.white.withAlphaComponent(0.14)
-    ownerImageView.widthAnchor.constraint(equalToConstant: 24).isActive = true
-    ownerImageView.heightAnchor.constraint(equalToConstant: 24).isActive = true
+    ownerImageView.widthAnchor.constraint(equalToConstant: 30).isActive = true
+    ownerImageView.heightAnchor.constraint(equalToConstant: 30).isActive = true
     ownerLabel.text = session.videoOwnerName
     ownerLabel.textColor = .white
-    ownerLabel.font = .systemFont(ofSize: 13, weight: .semibold)
+    ownerLabel.font = .systemFont(ofSize: 14, weight: .medium)
+    ownerLabel.lineBreakMode = .byTruncatingTail
     let ownerStack = UIStackView(arrangedSubviews: [ownerImageView, ownerLabel])
     ownerStack.axis = .horizontal
     ownerStack.alignment = .center
@@ -2330,26 +2403,42 @@ final class PiliNativePlayerViewController: UIViewController, UIGestureRecognize
       topBar.trailingAnchor.constraint(equalTo: controls.safeAreaLayoutGuide.trailingAnchor, constant: -10),
       topBar.topAnchor.constraint(equalTo: systemTimeLabel.bottomAnchor, constant: 3),
       topBar.heightAnchor.constraint(equalToConstant: 38),
-      ownerStack.leadingAnchor.constraint(equalTo: controls.safeAreaLayoutGuide.leadingAnchor, constant: 50),
-      ownerStack.topAnchor.constraint(equalTo: topBar.bottomAnchor, constant: 1),
+      ownerStack.leadingAnchor.constraint(equalTo: controls.safeAreaLayoutGuide.leadingAnchor, constant: 12),
+      ownerStack.topAnchor.constraint(equalTo: topBar.bottomAnchor, constant: 12),
       ownerStack.trailingAnchor.constraint(lessThanOrEqualTo: topChrome.trailingAnchor, constant: -16),
       ownerStack.bottomAnchor.constraint(lessThanOrEqualTo: topChrome.bottomAnchor, constant: -6),
     ])
 
     fullTimeLabel.textAlignment = .left
+    fullTimeLabel.font = .monospacedDigitSystemFont(ofSize: 14, weight: .medium)
+    [playButton, backButton, lockButton, danmakuSettingsButton].forEach {
+      $0.setPreferredSymbolConfiguration(UIImage.SymbolConfiguration(pointSize: 24, weight: .regular), forImageIn: .normal)
+    }
 
-    danmakuButton.setImage(UIImage(systemName: "checkmark.square.fill"), for: .normal)
+    danmakuButton.setImage(UIImage(systemName: "text.bubble.fill"), for: .normal)
     danmakuButton.tintColor = .white
-    danmakuButton.setTitle(" 弹幕", for: .normal)
+    danmakuButton.setTitle(nil, for: .normal)
+    danmakuButton.accessibilityLabel = "弹幕开关"
+    danmakuButton.backgroundColor = .clear
+    danmakuButton.setPreferredSymbolConfiguration(UIImage.SymbolConfiguration(pointSize: 23), forImageIn: .normal)
+    [speedButton, qualityButton].forEach {
+      $0.backgroundColor = .clear
+      $0.titleLabel?.font = .systemFont(ofSize: 16, weight: .semibold)
+      $0.setContentCompressionResistancePriority(.required, for: .horizontal)
+    }
     danmakuInputButton.contentHorizontalAlignment = .left
     danmakuInputButton.setTitleColor(UIColor.darkGray, for: .normal)
     danmakuInputButton.backgroundColor = UIColor.white.withAlphaComponent(0.88)
-    danmakuInputButton.layer.cornerRadius = 18
+    danmakuInputButton.layer.cornerRadius = 20
+    danmakuInputButton.titleLabel?.font = .systemFont(ofSize: 14)
+    danmakuInputButton.titleLabel?.lineBreakMode = .byTruncatingTail
+    danmakuInputButton.contentEdgeInsets = UIEdgeInsets(top: 8, left: 14, bottom: 8, right: 14)
+    danmakuInputButton.setContentHuggingPriority(.defaultLow, for: .horizontal)
     danmakuInputButton.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
     let danmakuInputWidth = danmakuInputButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 120)
     danmakuInputWidth.priority = .defaultHigh
     danmakuInputWidth.isActive = true
-    danmakuInputButton.heightAnchor.constraint(equalToConstant: 36).isActive = true
+    danmakuInputButton.heightAnchor.constraint(equalToConstant: 40).isActive = true
 
     let actionRow = UIStackView(arrangedSubviews: [
       playButton,
@@ -2361,7 +2450,7 @@ final class PiliNativePlayerViewController: UIViewController, UIGestureRecognize
     ])
     actionRow.axis = .horizontal
     actionRow.alignment = .center
-    actionRow.spacing = 10
+    actionRow.spacing = 14
 
     bottomBar.axis = .vertical
     bottomBar.alignment = .fill
@@ -2374,12 +2463,13 @@ final class PiliNativePlayerViewController: UIViewController, UIGestureRecognize
     NSLayoutConstraint.activate([
       bottomBar.leadingAnchor.constraint(equalTo: controls.safeAreaLayoutGuide.leadingAnchor, constant: 14),
       bottomBar.trailingAnchor.constraint(equalTo: controls.safeAreaLayoutGuide.trailingAnchor, constant: -14),
-      bottomBar.topAnchor.constraint(equalTo: bottomChrome.topAnchor, constant: 9),
+      bottomBar.topAnchor.constraint(greaterThanOrEqualTo: bottomChrome.topAnchor, constant: 9),
       bottomBar.bottomAnchor.constraint(equalTo: controls.safeAreaLayoutGuide.bottomAnchor, constant: -8),
+      slider.heightAnchor.constraint(equalToConstant: 30),
     ])
 
     lockButton.translatesAutoresizingMaskIntoConstraints = false
-    lockButton.backgroundColor = UIColor.black.withAlphaComponent(0.52)
+    lockButton.backgroundColor = UIColor.black.withAlphaComponent(0.2)
     lockButton.layer.cornerRadius = 16
     view.addSubview(lockButton)
     NSLayoutConstraint.activate([
@@ -2448,6 +2538,16 @@ final class PiliNativePlayerViewController: UIViewController, UIGestureRecognize
     }.store(in: &cancellables)
     session.$isPlaying.receive(on: DispatchQueue.main).sink { [weak self] playing in
       self?.playButton.setImage(UIImage(systemName: playing ? "pause.fill" : "play.fill"), for: .normal)
+      if !playing {
+        self?.endSpeedHold()
+        self?.controlsHideTask?.cancel()
+        if self?.controlsLocked == false {
+          self?.chromeViews.forEach { $0.alpha = 1 }
+        }
+      }
+    }.store(in: &cancellables)
+    session.$temporaryDoubleSpeedActive.receive(on: DispatchQueue.main).sink { [weak self] active in
+      self?.speedHoldLabel.isHidden = !active
     }.store(in: &cancellables)
     session.$isBuffering.receive(on: DispatchQueue.main).sink { [weak self] buffering in
       buffering ? self?.spinner.startAnimating() : self?.spinner.stopAnimating()
@@ -2487,11 +2587,11 @@ final class PiliNativePlayerViewController: UIViewController, UIGestureRecognize
     session.$danmakuEnabled.receive(on: DispatchQueue.main).sink { [weak self] enabled in
       guard let self else { return }
       self.danmakuButton.setTitle(
-        self.fullscreenPresentation ? " 弹幕" : (enabled ? "弹幕开" : "弹幕关"),
+        self.fullscreenPresentation ? nil : (enabled ? "弹幕开" : "弹幕关"),
         for: .normal
       )
       self.danmakuButton.setImage(
-        UIImage(systemName: enabled ? "checkmark.square.fill" : "square"),
+        UIImage(systemName: enabled ? "text.bubble.fill" : "text.bubble"),
         for: .normal
       )
       self.danmakuButton.alpha = enabled ? 1 : 0.66
@@ -2504,7 +2604,7 @@ final class PiliNativePlayerViewController: UIViewController, UIGestureRecognize
       self?.updateQualityMenu(qualities)
     }.store(in: &cancellables)
     session.$playbackRate.receive(on: DispatchQueue.main).sink { [weak self] rate in
-      self?.speedButton.setTitle(rate == 1 ? "1.0x" : "\(rate)x", for: .normal)
+      self?.speedButton.setTitle(rate == 1 ? "倍速" : "\(rate)×", for: .normal)
     }.store(in: &cancellables)
     session.$pictureInPicturePlayer.receive(on: DispatchQueue.main).sink { [weak self] player in
       self?.configurePictureInPicture(player: player)
@@ -2567,7 +2667,7 @@ final class PiliNativePlayerViewController: UIViewController, UIGestureRecognize
     guard AVPictureInPictureController.isPictureInPictureSupported(),
           player != nil,
           let layer = session.engine.nativePlayerLayer else {
-      pipButton.isHidden = fullscreenPresentation
+      pipButton.isHidden = true
       return
     }
     // Reuse Aether's visible player layer. Creating a second hidden
@@ -2616,18 +2716,8 @@ final class PiliNativePlayerViewController: UIViewController, UIGestureRecognize
     }
   }
 
-  @objc private func toggleAudioOnly() {
-    audioOnlyMode.toggle()
-    canvas.isHidden = audioOnlyMode
-    danmakuView.isHidden = audioOnlyMode
-    pipButton.tintColor = audioOnlyMode
-      ? UIColor(red: 0.98, green: 0.38, blue: 0.56, alpha: 1)
-      : .white
-    showControllerToast(audioOnlyMode ? "已进入听视频模式" : "已恢复视频画面")
-    scheduleControlsHide()
-  }
-
   @objc private func toggleScreenLock() {
+    endSpeedHold()
     controlsLocked.toggle()
     controlsHideTask?.cancel()
     if controlsLocked { setDanmakuSettingsVisible(false, animated: false) }
@@ -2686,6 +2776,12 @@ final class PiliNativePlayerViewController: UIViewController, UIGestureRecognize
   @objc private func showMoreMenu() {
     controlsHideTask?.cancel()
     let menu = UIAlertController(title: nil, message: nil, preferredStyle: .actionSheet)
+    menu.addAction(UIAlertAction(title: "评论", style: .default) { [weak self] _ in
+      self?.requestComment()
+    })
+    menu.addAction(UIAlertAction(title: "收藏", style: .default) { [weak self] _ in
+      self?.requestFavorite()
+    })
     if pictureInPictureController != nil {
       menu.addAction(UIAlertAction(title: "画中画", style: .default) { [weak self] _ in
         self?.togglePictureInPicture()
@@ -2762,9 +2858,27 @@ final class PiliNativePlayerViewController: UIViewController, UIGestureRecognize
     if shouldShow { scheduleControlsHide() }
   }
 
-  @objc private func doubleTapSeek(_ gesture: UITapGestureRecognizer) {
-    guard !controlsLocked, !settingsPanelVisible else { return }
-    session.skip(by: gesture.location(in: controls).x < controls.bounds.midX ? -10 : 10)
+  @objc private func doubleTapPlayback(_ gesture: UITapGestureRecognizer) {
+    guard gesture.state == .ended, !controlsLocked, !settingsPanelVisible, !isScrubbing else { return }
+    togglePlayback()
+  }
+
+  @objc private func holdDoubleSpeed(_ gesture: UILongPressGestureRecognizer) {
+    switch gesture.state {
+    case .began:
+      guard !controlsLocked, !settingsPanelVisible, !isScrubbing else { return }
+      controlsHideTask?.cancel()
+      session.beginTemporaryDoubleSpeed()
+    case .ended, .cancelled, .failed:
+      endSpeedHold()
+    default:
+      break
+    }
+  }
+
+  @objc private func endSpeedHold() {
+    session.endTemporaryDoubleSpeed()
+    scheduleControlsHide()
   }
 
   @objc private func scrubStarted() {
@@ -2787,7 +2901,8 @@ final class PiliNativePlayerViewController: UIViewController, UIGestureRecognize
 
   private func scheduleControlsHide() {
     controlsHideTask?.cancel()
-    guard session.isPlaying, !controlsLocked, !settingsPanelVisible else { return }
+    guard session.isPlaying, !controlsLocked, !settingsPanelVisible,
+          !session.temporaryDoubleSpeedActive else { return }
     let task = DispatchWorkItem { [weak self] in
       UIView.animate(withDuration: 0.2) {
         self?.chromeViews.forEach { $0.alpha = 0 }
@@ -2842,6 +2957,7 @@ final class PiliNativePlayerViewController: UIViewController, UIGestureRecognize
   }
 
   private func setDanmakuSettingsVisible(_ visible: Bool, animated: Bool) {
+    if visible { endSpeedHold() }
     settingsPanelVisible = visible
     if visible {
       danmakuSettingsPanel.isHidden = false

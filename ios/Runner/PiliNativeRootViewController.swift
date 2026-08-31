@@ -4813,6 +4813,7 @@ private struct PiliNativeVideoDetailView: View {
         VStack(spacing: 0) {
           ForEach(Array(model.relatedVideos.prefix(16))) { video in
             nativeRelatedVideoRow(video)
+              .padding(.vertical, 10)
             if video.id != model.relatedVideos.prefix(16).last?.id {
               Divider().padding(.leading, 144)
             }

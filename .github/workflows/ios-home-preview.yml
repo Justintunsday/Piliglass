@@ -8,6 +8,7 @@ on:
       - "tool/preview_ios_home.py"
       - "tool/preview_ios_navigation.py"
       - "tool/check_ios_video_load.py"
+      - "tool/check_ios_player_controls.py"
       - ".github/workflows/ios-home-preview.yml"
   workflow_dispatch:
 
@@ -35,6 +36,7 @@ jobs:
             build/video-load-check/*.json
             build/video-load-check/*.png
           if-no-files-found: warn
+
       - name: Upload screenshots and layout measurements
         if: always()
         uses: actions/upload-artifact@v7
@@ -53,4 +55,22 @@ jobs:
             build/navigation-preview/xcodebuild.log
             build/navigation-preview/MenuNavigation.xcresult
             build/navigation-preview/attachments
+          if-no-files-found: warn
+
+  player-controls:
+    runs-on: macos-26
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - name: Check native player gestures and landscape layout
+        run: python3 tool/check_ios_player_controls.py
+      - name: Upload player gesture tests and screenshots
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ios-player-controls
+          path: |
+            build/player-controls-preview/xcodebuild.log
+            build/player-controls-preview/MenuNavigation.xcresult
+            build/player-controls-preview/attachments
           if-no-files-found: warn
