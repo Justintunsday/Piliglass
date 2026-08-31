@@ -8,12 +8,9 @@ import SwiftUI
 import UIKit
 
 private let piliNativeChannelName = "piliglass/native_ui"
-private let piliAccent = Color(red: 0.93, green: 0.29, blue: 0.48)
-private let piliProfileAccent = Color(UIColor { traits in
-  traits.userInterfaceStyle == .dark
-    ? UIColor(red: 0.58, green: 0.81, blue: 0.66, alpha: 1)
-    : UIColor(red: 0.12, green: 0.36, blue: 0.25, alpha: 1)
-})
+// Bilibili pink (#FB7299), shared by native navigation and account controls.
+private let piliAccent = Color(red: 251.0 / 255, green: 114.0 / 255, blue: 153.0 / 255)
+private let piliProfileAccent = piliAccent
 
 private extension Notification.Name {
   static let piliPresentNativeProfile = Notification.Name("piliglass.presentNativeProfile")
@@ -3455,11 +3452,7 @@ private struct PiliNativeRootView: View {
           .tag(item.offset)
       }
     }
-    .accentColor(Color(UIColor { traits in
-      traits.userInterfaceStyle == .dark
-        ? UIColor(red: 0.58, green: 0.81, blue: 0.66, alpha: 1)
-        : UIColor(red: 0.12, green: 0.36, blue: 0.25, alpha: 1)
-    }))
+    .tint(piliAccent)
     .preferredColorScheme(appearance == 1 ? .light : appearance == 2 ? .dark : nil)
     .environment(\.piliVideoTransitionNamespace, videoTransitionNamespace)
     .sheet(isPresented: $model.isLibraryPresented) {
@@ -3975,6 +3968,39 @@ private struct PiliNativeAvatar: View {
   }
 }
 
+// System button styles supply Liquid Glass interaction and accessibility behavior.
+private struct PiliNativeGlassButton: ViewModifier {
+  var prominent = false
+
+  @ViewBuilder func body(content: Content) -> some View {
+    if #available(iOS 26.0, *) {
+      if prominent {
+        content.buttonStyle(.glassProminent).buttonBorderShape(.capsule)
+          .controlSize(.large).tint(piliAccent)
+      } else {
+        content.buttonStyle(.glass).buttonBorderShape(.circle)
+          .controlSize(.large).tint(piliAccent)
+      }
+    } else if prominent {
+      content.buttonStyle(.borderedProminent).buttonBorderShape(.capsule)
+        .controlSize(.large).tint(piliAccent)
+    } else {
+      content.buttonStyle(.plain).frame(width: 44, height: 44)
+        .foregroundStyle(piliAccent).background(.regularMaterial, in: Circle())
+    }
+  }
+}
+
+private struct PiliNativeShortcutGlass: ViewModifier {
+  @ViewBuilder func body(content: Content) -> some View {
+    if #available(iOS 26.0, *) {
+      content.glassEffect(.regular.interactive(), in: Circle())
+    } else {
+      content.background(.regularMaterial, in: Circle())
+    }
+  }
+}
+
 private struct PiliNativeFavoriteCard: View {
   let item: PiliNativeLibraryItem
   let width: CGFloat
@@ -4009,14 +4035,14 @@ private struct PiliNativeMineView: View {
     NavigationStack {
       ScrollView {
         VStack(spacing: 0) {
-          HStack(spacing: 4) {
+          HStack(spacing: 10) {
             Spacer()
             toolbarButton("消息中心", "text.bubble") { protectedRoute("/whisper") }
             toolbarButton("搜索", "magnifyingglass") { model.isSearchPresented = true }
             toolbarButton("切换账号", "person.crop.rectangle.stack") { model.openRoute("/loginPage") }
             toolbarButton("切换主题", appearance == 2 ? "moon.fill" : "sun.max") { appearance = (appearance + 1) % 3 }
             toolbarButton("设置", "gearshape") { model.presentSettings() }
-          }.padding(.horizontal, 18).padding(.top, 10)
+          }.padding(.horizontal, 18).padding(.top, 10).padding(.bottom, 12)
 
           Button(action: { openAccount(section: 0) }) {
             HStack(spacing: 16) {
@@ -4054,6 +4080,7 @@ private struct PiliNativeMineView: View {
               Button { protectedRoute(item.2, requiresLogin: item.2 != "/download") } label: {
                 VStack(spacing: 13) {
                   Image(systemName: item.1).font(.system(size: 23, weight: .regular)).foregroundStyle(piliProfileAccent)
+                    .frame(width: 52, height: 52).modifier(PiliNativeShortcutGlass())
                   Text(item.0).font(.system(size: 14)).foregroundStyle(.primary).lineLimit(1).minimumScaleFactor(0.8)
                 }.frame(maxWidth: .infinity).padding(.vertical, 19)
               }.buttonStyle(.plain)
@@ -4083,8 +4110,8 @@ private struct PiliNativeMineView: View {
         }.buttonStyle(.plain)
         Spacer()
         Button(action: model.loadMineFavorites) {
-          Image(systemName: "arrow.clockwise").font(.system(size: 20)).frame(width: 36, height: 36)
-        }.disabled(model.mineFavoritesLoading || !model.account.isLogin).accessibilityLabel("刷新收藏夹")
+          Image(systemName: "arrow.clockwise").font(.system(size: 20)).frame(width: 20, height: 20)
+        }.modifier(PiliNativeGlassButton()).disabled(model.mineFavoritesLoading || !model.account.isLogin).accessibilityLabel("刷新收藏夹")
       }.padding(.horizontal, 24).padding(.top, 19)
       if !model.account.isLogin {
         Button("登录查看收藏夹") { model.openRoute("/loginPage") }.padding(.horizontal, 24)
@@ -4110,8 +4137,8 @@ private struct PiliNativeMineView: View {
   }
 
   private func toolbarButton(_ title: String, _ icon: String, action: @escaping () -> Void) -> some View {
-    Button(action: action) { Image(systemName: icon).font(.system(size: 21)).frame(width: 42, height: 44) }
-      .foregroundStyle(piliProfileAccent).accessibilityLabel(title)
+    Button(action: action) { Image(systemName: icon).font(.system(size: 20)).frame(width: 20, height: 20) }
+      .modifier(PiliNativeGlassButton()).accessibilityLabel(title)
   }
   private func openAccount(section: Int) {
     if model.account.isLogin, let mid = model.account.mid { model.presentProfile(mid, section: section) }
@@ -4189,8 +4216,8 @@ private struct PiliNativeProfileView: View {
 
   private var closeButton: some View {
     Button { model.isProfilePresented = false; dismiss() } label: {
-      Image(systemName: "chevron.left").font(.system(size: 23, weight: .medium)).frame(width: 44, height: 44)
-    }.accessibilityLabel("返回个人主页上一级")
+      Image(systemName: "chevron.left").font(.system(size: 20, weight: .medium)).frame(width: 20, height: 20)
+    }.modifier(PiliNativeGlassButton()).accessibilityLabel("返回个人主页上一级")
   }
 
   private func profileHero(_ profile: PiliNativeProfile) -> some View {
@@ -4202,21 +4229,21 @@ private struct PiliNativeProfileView: View {
         } else {
           LinearGradient(colors: [Color(red: 0.95, green: 0.77, blue: 0.51), Color(red: 0.82, green: 0.53, blue: 0.36)], startPoint: .topLeading, endPoint: .bottomTrailing)
         }
-        HStack(spacing: 4) {
+        HStack(spacing: 10) {
           closeButton
           Spacer()
           Button { searching.toggle() } label: {
-            Image(systemName: "magnifyingglass").font(.system(size: 22)).frame(width: 44, height: 44)
-          }.accessibilityLabel("搜索主页内容")
+            Image(systemName: "magnifyingglass").font(.system(size: 20)).frame(width: 20, height: 20)
+          }.modifier(PiliNativeGlassButton()).accessibilityLabel("搜索主页内容")
           Menu {
             ShareLink(item: URL(string: "https://space.bilibili.com/\(profile.mid)")!) {
               Label("分享主页", systemImage: "square.and.arrow.up")
             }
             Button { UIPasteboard.general.string = String(profile.mid) } label: { Label("复制 UID", systemImage: "doc.on.doc") }
             Button("刷新资料", action: model.loadProfile)
-          } label: { Image(systemName: "ellipsis").rotationEffect(.degrees(90)).font(.system(size: 22, weight: .bold)).frame(width: 44, height: 44) }
-          .accessibilityLabel("主页更多操作")
-        }.foregroundStyle(Color(red: 0.13, green: 0.20, blue: 0.16)).padding(.horizontal, 10).padding(.bottom, 26)
+          } label: { Image(systemName: "ellipsis").rotationEffect(.degrees(90)).font(.system(size: 20, weight: .bold)).frame(width: 20, height: 20) }
+          .modifier(PiliNativeGlassButton()).accessibilityLabel("主页更多操作")
+        }.padding(.horizontal, 10).padding(.bottom, 26)
       }
     }.frame(height: 135)
   }
@@ -4239,9 +4266,8 @@ private struct PiliNativeProfileView: View {
             if profile.isSelf { editing = true } else { model.toggleProfileFollow() }
           } label: {
             Text(profile.isSelf ? "编辑资料" : profile.isFollowing ? "已关注" : "+ 关注")
-              .font(.system(size: 15, weight: .semibold)).frame(maxWidth: .infinity).padding(.vertical, 8)
-              .foregroundStyle(piliProfileAccent).background(piliProfileAccent.opacity(0.16), in: Capsule())
-          }.buttonStyle(.plain).disabled(model.profileActionLoading)
+              .font(.system(size: 15, weight: .semibold)).frame(maxWidth: .infinity)
+          }.modifier(PiliNativeGlassButton(prominent: true)).disabled(model.profileActionLoading)
         }.padding(.top, 8)
       }
       HStack(spacing: 8) {

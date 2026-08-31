@@ -9,7 +9,6 @@ ROOT = Path(__file__).resolve().parents[1]
 FIXTURES = r'''
 import SwiftUI
 import UIKit
-private let piliAccent = Color.pink
 // PRODUCTION_ACCENT
 private final class PiliImageLoader: ObservableObject {
   let image: UIImage? = nil
@@ -195,7 +194,7 @@ def production_swift():
     source = (ROOT / 'ios/Runner/PiliNativeRootViewController.swift').read_text(encoding='utf-8')
     def section(start, end):
         return source[source.index(start):source.index(end, source.index(start))]
-    fixtures = FIXTURES.replace('// PRODUCTION_ACCENT', section('private let piliProfileAccent =', 'private extension Notification.Name'))
+    fixtures = FIXTURES.replace('// PRODUCTION_ACCENT', section('private let piliAccent =', 'private extension Notification.Name'))
     return fixtures + section('private struct PiliNativePrimaryDestinations:', '// MARK: - Root tabs') + section('private struct PiliNativeVideo:', 'private struct PiliNativeVideoPart:') + section(
         'private struct PiliNativeLibraryItem:', 'private struct PiliNativeMessage:') + section(
         'private struct PiliNativeComment:', 'private struct PiliNativeDownload:') + section(
