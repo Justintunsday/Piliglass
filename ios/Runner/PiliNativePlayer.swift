@@ -2323,11 +2323,11 @@ final class PiliNativePlayerViewController: UIViewController, UIGestureRecognize
       topChrome.topAnchor.constraint(equalTo: controls.topAnchor),
       topChrome.leadingAnchor.constraint(equalTo: controls.leadingAnchor),
       topChrome.trailingAnchor.constraint(equalTo: controls.trailingAnchor),
-      topChrome.heightAnchor.constraint(equalToConstant: 140),
+      topChrome.bottomAnchor.constraint(equalTo: controls.safeAreaLayoutGuide.topAnchor, constant: 140),
       bottomChrome.leadingAnchor.constraint(equalTo: controls.leadingAnchor),
       bottomChrome.trailingAnchor.constraint(equalTo: controls.trailingAnchor),
       bottomChrome.bottomAnchor.constraint(equalTo: controls.bottomAnchor),
-      bottomChrome.heightAnchor.constraint(equalToConstant: 140),
+      bottomChrome.topAnchor.constraint(equalTo: controls.safeAreaLayoutGuide.bottomAnchor, constant: -120),
     ])
 
     titleLabel.font = .systemFont(ofSize: 19, weight: .semibold)
