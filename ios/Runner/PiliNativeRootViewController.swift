@@ -5933,12 +5933,16 @@ private struct PiliNativeCommentRichText: UIViewRepresentable {
       URLSession.shared.dataTask(with: url) { [weak self] data, _, _ in
         guard let self = self else { return }
         guard let data = data, let image = UIImage(data: data) else {
-          DispatchQueue.main.async { self.requestedURLs.remove(emote.url) }
+          DispatchQueue.main.async {
+            self.requestedURLs.remove(emote.url)
+            self.renderedInput = nil
+          }
           return
         }
         let cost = (image.cgImage?.bytesPerRow ?? 0) * (image.cgImage?.height ?? 0)
         PiliNativeCommentRichText.imageCache.setObject(image, forKey: url as NSURL, cost: cost)
         DispatchQueue.main.async {
+          self.requestedURLs.remove(emote.url)
           guard let label = self.label else { return }
           self.render(in: label, force: true)
           label.invalidateIntrinsicContentSize()
