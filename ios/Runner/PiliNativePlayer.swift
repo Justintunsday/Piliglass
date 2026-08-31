@@ -377,6 +377,13 @@ struct PiliNativePlayerQuality: Identifiable, Equatable {
   var id: Int { value }
 }
 
+enum PiliNativeDanmakuProfile: String {
+  case simple
+  case full
+
+  var title: String { self == .full ? "完整播放器" : "简易播放器" }
+}
+
 struct PiliNativeDanmakuSettingsView: View {
   @ObservedObject var session: PiliNativePlayerSession
   var onClose: () -> Void
@@ -431,8 +438,6 @@ struct PiliNativeDanmakuSettingsView: View {
           Slider(value: binding(\.fontScale), in: 0.5...2.5, step: 0.1)
           Text("滚动时长：\(session.danmakuSettings.duration, specifier: "%.1f") 秒")
           Slider(value: binding(\.duration), in: 1...20, step: 0.5)
-          Text("描边粗细：\(session.danmakuSettings.strokeWidth, specifier: "%.1f")")
-          Slider(value: binding(\.strokeWidth), in: 0...3, step: 0.5)
         }
         if let error = session.danmakuSettingsError {
           Section {
@@ -445,7 +450,7 @@ struct PiliNativeDanmakuSettingsView: View {
         }
       }
       .disabled(!session.danmakuSettingsLoaded && session.danmakuSettingsBusy)
-      .navigationTitle("弹幕筛选")
+      .navigationTitle("\(session.danmakuProfile.title)弹幕设置")
       .navigationBarTitleDisplayMode(.inline)
       .toolbar {
         ToolbarItem(placement: .confirmationAction) {
@@ -598,17 +603,19 @@ struct PiliNativeDanmakuRule: Identifiable, Equatable {
 struct PiliNativeDanmakuSettings {
   // Same identifiers as PiliPala/PiliPlus, not the former native button indices.
   var blockTypes = Set<Int>()
+  var enabled = true
   var weight = 0.0
   var area = 0.5
   var opacity = 1.0
   var fontScale = 1.0
   var duration = 7.0
-  var strokeWidth = 1.5
+  let strokeWidth = 0.0
 
   init() {}
 
   init(map: [String: Any]) {
     blockTypes = Set(map["blockTypes"] as? [Int] ?? [])
+    enabled = (map["enabled"] as? Bool) ?? true
     func number(_ key: String, _ fallback: Double, _ range: ClosedRange<Double>) -> Double {
       guard let value = map[key] as? NSNumber, value.doubleValue.isFinite else { return fallback }
       return min(max(value.doubleValue, range.lowerBound), range.upperBound)
@@ -618,11 +625,10 @@ struct PiliNativeDanmakuSettings {
     opacity = number("opacity", 1, 0...1)
     fontScale = number("fontScale", 1, 0.5...2.5)
     duration = number("duration", 7, 1...20)
-    strokeWidth = number("strokeWidth", 1.5, 0...3)
   }
 
   var arguments: [String: Any] {
-    ["action": "save", "blockTypes": blockTypes.sorted(), "weight": Int(weight),
+    ["action": "save", "enabled": enabled, "blockTypes": blockTypes.sorted(), "weight": Int(weight),
      "area": area, "opacity": opacity, "fontScale": fontScale,
      "duration": duration, "strokeWidth": strokeWidth]
   }
@@ -759,8 +765,21 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
   @Published private(set) var qualityLabel = "清晰度"
   @Published private(set) var qualities: [PiliNativePlayerQuality] = []
   @Published private(set) var danmakuRevision = 0
-  @Published var danmakuEnabled = true
-  @Published var isFullscreen = false
+  @Published var danmakuEnabled = true {
+    didSet {
+      guard danmakuSettingsLoaded, danmakuSettings.enabled != danmakuEnabled else { return }
+      var settings = danmakuSettings
+      settings.enabled = danmakuEnabled
+      updateDanmakuSettings(settings)
+    }
+  }
+  @Published var isFullscreen = false {
+    didSet {
+      if isFullscreen != oldValue {
+        activateDanmakuProfile(isFullscreen ? .full : .simple)
+      }
+    }
+  }
   @Published var fullscreenCommentsVisible = false
   @Published private(set) var playbackRate: Float = 1
   @Published private(set) var isHDR = false
@@ -776,6 +795,7 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
   @Published private(set) var danmakuStatusMessage: String?
   @Published private(set) var danmakuComposerRequest = 0
   @Published private(set) var danmakuSettings = PiliNativeDanmakuSettings()
+  @Published private(set) var danmakuProfile: PiliNativeDanmakuProfile = .simple
   @Published private(set) var danmakuRules: [PiliNativeDanmakuRule] = []
   @Published private(set) var danmakuSettingsBusy = false
   @Published private(set) var danmakuSettingsLoaded = false
@@ -1008,7 +1028,21 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
     performDanmakuSettings(["action": "load"])
   }
 
+  private func activateDanmakuProfile(_ profile: PiliNativeDanmakuProfile) {
+    guard profile != danmakuProfile else { return }
+    // Flush with the old profile before selecting the new one. The request
+    // generation below prevents late loads from overwriting the active mode.
+    flushDanmakuSettings()
+    danmakuSettingsVersion += 1
+    danmakuProfile = profile
+    danmakuSettingsLoaded = false
+    danmakuRules = []
+    rebuildDanmaku()
+    loadDanmakuSettings()
+  }
+
   func resetDanmakuAccount() {
+    danmakuSettingsLoaded = false
     danmakuRules = []
     danmakuAccountLoggedIn = false
     rebuildDanmaku()
@@ -1026,6 +1060,7 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
     danmakuSettingsError = nil
     var requestArguments = arguments
     requestArguments["owner"] = danmakuRulesOwner
+    requestArguments["profile"] = danmakuProfile.rawValue
     request(requestArguments) { [weak self] result in
       guard let self, requestID == self.danmakuConfigurationRequest else { return }
       self.danmakuSettingsBusy = false
@@ -1034,12 +1069,13 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
         completion?(false)
         return
       }
-      self.danmakuSettingsLoaded = true
       self.danmakuAccountLoggedIn = (result["loggedIn"] as? Bool) ?? false
       self.danmakuRulesOwner = result["owner"] as? String ?? "guest"
       if version == self.danmakuSettingsVersion {
         self.danmakuSettings = PiliNativeDanmakuSettings(map: result)
+        self.danmakuEnabled = self.danmakuSettings.enabled
       }
+      self.danmakuSettingsLoaded = true
       self.danmakuRules = (result["rules"] as? [[String: Any]] ?? []).compactMap { PiliNativeDanmakuRule(map: $0) }
       self.danmakuSettingsError = result["warning"] as? String
       self.rebuildDanmaku()
@@ -1054,9 +1090,11 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
     rebuildDanmaku()
     danmakuSaveTask?.cancel()
     let version = danmakuSettingsVersion
+    var arguments = settings.arguments
+    arguments["profile"] = danmakuProfile.rawValue
     let task = DispatchWorkItem { [weak self] in
       self?.danmakuSaveTask = nil
-      self?.onDanmakuSettingsRequested?(settings.arguments) { [weak self] result in
+      self?.onDanmakuSettingsRequested?(arguments) { [weak self] result in
         guard let self, version == self.danmakuSettingsVersion else { return }
         self.danmakuSettingsError = result["state"] as? String == "success"
           ? nil : (result["error"] as? String ?? "弹幕设置保存失败，请重试")
@@ -2430,7 +2468,7 @@ final class PiliNativePlayerViewController: UIViewController, UIGestureRecognize
         self.slider.value = Float(time)
         self.refreshFullscreenTimeLabel()
       }
-      if self.session.danmakuEnabled {
+      if self.session.danmakuEnabled && self.session.danmakuSettingsLoaded {
         self.danmakuView.render(
           time: time,
           items: self.session.danmakuItems,
@@ -2439,7 +2477,7 @@ final class PiliNativePlayerViewController: UIViewController, UIGestureRecognize
       }
     }.store(in: &cancellables)
     session.$danmakuRevision.receive(on: DispatchQueue.main).sink { [weak self] _ in
-      guard let self = self, self.session.danmakuEnabled else { return }
+      guard let self = self, self.session.danmakuEnabled, self.session.danmakuSettingsLoaded else { return }
       self.danmakuView.render(
         time: self.session.currentTime,
         items: self.session.danmakuItems,

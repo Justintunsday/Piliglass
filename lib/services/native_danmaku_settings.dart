@@ -16,25 +16,42 @@ import 'package:synchronized/synchronized.dart';
 final class NativeDanmakuSettings {
   final _lock = Lock();
   static const _cachePrefix = 'nativeDanmakuRulesV1';
+  static const _simpleSettingsKey = 'nativeDanmakuSimpleSettingsV1';
   String get _owner => Accounts.main.isLogin ? '${Accounts.main.mid}' : 'guest';
 
-  List<Map<String, dynamic>> _rules(String owner) => (GStorage.localCache.get(
-    '$_cachePrefix:$owner',
-    defaultValue: <dynamic>[],
-  ) as List).map((e) => Map<String, dynamic>.from(e as Map)).toList();
+  List<Map<String, dynamic>> _rules(String owner, String profile) =>
+      (GStorage.localCache.get(
+        '$_cachePrefix:$owner:$profile',
+        defaultValue: <dynamic>[],
+      ) as List).map((e) => Map<String, dynamic>.from(e as Map)).toList();
 
-  Map<String, dynamic> _snapshot(String owner) => {
-    'state': 'success',
-    'owner': owner,
-    'loggedIn': Accounts.main.isLogin,
+  Map<String, dynamic> _displaySettings() => {
+    'enabled': GStorage.setting.get(
+      SettingBoxKey.enableShowDanmaku,
+      defaultValue: true,
+    ),
     'blockTypes': Pref.danmakuBlockType.toList(),
     'weight': Pref.danmakuWeight,
     'area': Pref.danmakuShowArea,
     'opacity': Pref.danmakuOpacity,
     'fontScale': Pref.danmakuFontScale,
     'duration': Pref.danmakuDuration,
-    'strokeWidth': Pref.danmakuStrokeWidth,
-    'rules': _rules(owner),
+    'strokeWidth': 0.0,
+  };
+
+  Map<String, dynamic> _snapshot(String owner, String profile) => {
+    'state': 'success',
+    'owner': owner,
+    'profile': profile,
+    'loggedIn': Accounts.main.isLogin,
+    ...profile == 'full'
+        ? _displaySettings()
+        : Map<String, dynamic>.from(
+            GStorage.setting.get(_simpleSettingsKey) as Map,
+          ),
+    'rules': _rules(owner, profile),
+    // The control was removed; never resurrect a pre-upgrade outline.
+    'strokeWidth': 0.0,
   };
 
   Future<Map<String, dynamic>> handle(
@@ -42,6 +59,10 @@ final class NativeDanmakuSettings {
   ) => _lock.synchronized(() async {
     final owner = _owner;
     try {
+      final profile = args['profile'] ?? 'full';
+      if (profile != 'full' && profile != 'simple') {
+        throw const FormatException('无效的播放器设置类型');
+      }
       final action = args['action'] ?? 'load';
       if (action != 'load' && action != 'save' && args['owner'] != owner) {
         throw const FormatException('账号已切换，请重新加载');
@@ -69,6 +90,26 @@ final class NativeDanmakuSettings {
         await GStorage.localCache.put('$_cachePrefix:$owner', imported);
         await GStorage.localCache.put('$_cachePrefix:migrated', true);
       }
+      // Seed both profiles before either one is edited. Existing users retain
+      // their settings on upgrade; subsequent edits cannot change the sibling.
+      if (!GStorage.setting.containsKey(_simpleSettingsKey)) {
+        await GStorage.setting.put(_simpleSettingsKey, _displaySettings());
+      }
+      for (final name in ['full', 'simple']) {
+        final key = '$_cachePrefix:$owner:$name';
+        if (!GStorage.localCache.containsKey(key)) {
+          final previous = GStorage.localCache.get(
+            '$_cachePrefix:$owner',
+            defaultValue: <dynamic>[],
+          );
+          await GStorage.localCache.put(
+            key,
+            (previous as List)
+                .map((e) => Map<String, dynamic>.from(e as Map))
+                .toList(),
+          );
+        }
+      }
       if (_owner != owner) throw const FormatException('账号已切换，请重新加载');
       if (action == 'save') {
         final blocks = (args['blockTypes'] as List?)?.cast<int>();
@@ -83,25 +124,34 @@ final class NativeDanmakuSettings {
           return v;
         }
 
-        await GStorage.setting.putAll({
-          SettingBoxKey.danmakuBlockType: blocks.toSet().toList(),
-          SettingBoxKey.danmakuWeight: value('weight', 0, 11).toInt(),
-          SettingBoxKey.danmakuShowArea: value('area', 0.25, 1).toDouble(),
-          SettingBoxKey.danmakuOpacity: value('opacity', 0, 1).toDouble(),
-          SettingBoxKey.danmakuFontScale: value(
-            'fontScale',
-            0.5,
-            2.5,
-          ).toDouble(),
-          SettingBoxKey.danmakuDuration: value('duration', 1, 20).toDouble(),
-          SettingBoxKey.danmakuStrokeWidth: value(
-            'strokeWidth',
-            0,
-            3,
-          ).toDouble(),
-        });
+        final enabled = args['enabled'] ?? _snapshot(owner, profile)['enabled'];
+        if (enabled is! bool) throw const FormatException('无效的弹幕开关');
+        final settings = <String, dynamic>{
+          'enabled': enabled,
+          'blockTypes': blocks.toSet().toList(),
+          'weight': value('weight', 0, 11).toInt(),
+          'area': value('area', 0.25, 1).toDouble(),
+          'opacity': value('opacity', 0, 1).toDouble(),
+          'fontScale': value('fontScale', 0.5, 2.5).toDouble(),
+          'duration': value('duration', 1, 20).toDouble(),
+          'strokeWidth': 0.0,
+        };
+        if (profile == 'simple') {
+          await GStorage.setting.put(_simpleSettingsKey, settings);
+        } else {
+          await GStorage.setting.putAll({
+            SettingBoxKey.enableShowDanmaku: settings['enabled'],
+            SettingBoxKey.danmakuBlockType: settings['blockTypes'],
+            SettingBoxKey.danmakuWeight: settings['weight'],
+            SettingBoxKey.danmakuShowArea: settings['area'],
+            SettingBoxKey.danmakuOpacity: settings['opacity'],
+            SettingBoxKey.danmakuFontScale: settings['fontScale'],
+            SettingBoxKey.danmakuDuration: settings['duration'],
+            SettingBoxKey.danmakuStrokeWidth: settings['strokeWidth'],
+          });
+        }
       } else if (action != 'load') {
-        final rules = _rules(owner);
+        final rules = _rules(owner, profile);
         if (action == 'sync') {
           if (!Accounts.main.isLogin) throw const FormatException('请先登录账号');
           final result = await DanmakuFilterHttp.danmakuFilter();
@@ -200,10 +250,16 @@ final class NativeDanmakuSettings {
               );
               if (!deleted.isSuccess) {
                 rules.add(added);
-                await GStorage.localCache.put('$_cachePrefix:$owner', rules);
+                await GStorage.localCache.put(
+                  '$_cachePrefix:$owner:$profile',
+                  rules,
+                );
                 if (_owner != owner) throw const FormatException('账号已切换，请重新加载');
-                await _publishRules(owner);
-                return {..._snapshot(owner), 'warning': '新规则已添加，旧规则删除失败，请重试删除'};
+                await _publishRules(owner, profile);
+                return {
+                  ..._snapshot(owner, profile),
+                  'warning': '新规则已添加，旧规则删除失败，请重试删除',
+                };
               }
             }
           }
@@ -212,11 +268,11 @@ final class NativeDanmakuSettings {
         } else {
           throw const FormatException('未知的弹幕设置操作');
         }
-        await GStorage.localCache.put('$_cachePrefix:$owner', rules);
+        await GStorage.localCache.put('$_cachePrefix:$owner:$profile', rules);
       }
       if (_owner != owner) throw const FormatException('账号已切换，请重新加载');
-      await _publishRules(owner);
-      return _snapshot(owner);
+      await _publishRules(owner, profile);
+      return _snapshot(owner, profile);
     } catch (error) {
       return {
         'state': 'error',
@@ -225,9 +281,10 @@ final class NativeDanmakuSettings {
     }
   });
 
-  Future<void> _publishRules(String owner) async {
+  Future<void> _publishRules(String owner, String profile) async {
+    if (profile != 'full') return;
     final entries = List.generate(3, (_) => <SimpleRule>[]);
-    for (final rule in _rules(owner)) {
+    for (final rule in _rules(owner, profile)) {
       entries[rule['type'] as int].add(SimpleRule.fromJson(rule));
     }
     await GStorage.localCache.put(

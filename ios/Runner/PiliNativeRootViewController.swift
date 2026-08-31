@@ -4440,7 +4440,6 @@ private struct PiliNativeVideoDetailView: View {
     ScrollView {
       LazyVStack(alignment: .leading, spacing: 0) {
         nativeOwnerRow(video)
-        nativeSectionDivider
         nativeTitleAndStats(video)
         nativeActionRow(video)
         if let message = model.videoActionMessage {
@@ -4452,23 +4451,18 @@ private struct PiliNativeVideoDetailView: View {
         }
         if !video.argueMessage.isEmpty {
           warningCard(video)
-          nativeSectionDivider
         }
         if video.pages.count > 1 {
           nativePartsSection(video)
-          nativeSectionDivider
         }
         if !video.collectionTitle.isEmpty {
           nativeCollectionRow(video)
-          nativeSectionDivider
         }
         if !video.staff.isEmpty {
           nativeStaffSection(video)
-          nativeSectionDivider
         }
         if !video.tags.isEmpty {
           nativeTagsSection(video)
-          nativeSectionDivider
         }
         nativeRelatedSection
       }
@@ -4735,10 +4729,12 @@ private struct PiliNativeVideoDetailView: View {
             .frame(maxWidth: .infinity, minHeight: 70)
         }
       } else {
-        ForEach(Array(model.relatedVideos.prefix(16))) { video in
-          nativeRelatedVideoRow(video)
-          if video.id != model.relatedVideos.prefix(16).last?.id {
-            Divider().padding(.leading, 144)
+        VStack(spacing: 0) {
+          ForEach(Array(model.relatedVideos.prefix(16))) { video in
+            nativeRelatedVideoRow(video)
+            if video.id != model.relatedVideos.prefix(16).last?.id {
+              Divider().padding(.leading, 144)
+            }
           }
         }
       }
@@ -4848,13 +4844,6 @@ private struct PiliNativeVideoDetailView: View {
     .padding(.vertical, 10)
     .background(Color(UIColor.systemBackground))
     .overlay(Divider(), alignment: .top)
-  }
-
-  private var nativeSectionDivider: some View {
-    Rectangle()
-      .fill(Color(UIColor.secondarySystemBackground))
-      .frame(height: 8)
-      .overlay(Divider(), alignment: .top)
   }
 
   private func summaryCard(_ video: PiliNativeVideoDetail) -> some View {

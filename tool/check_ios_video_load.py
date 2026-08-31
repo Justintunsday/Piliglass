@@ -153,6 +153,8 @@ private func check(model: PiliNativeViewModel, scrollToEnd: () -> Void) async {
   expect(roundTrip.weight == 8 && roundTrip.area == settings.area, "settingsBridgeRoundTrip")
   let safeSettings = PiliNativeDanmakuSettings(map: ["weight": 99, "opacity": -2, "duration": Double.nan])
   expect(safeSettings.weight == 11 && safeSettings.opacity == 0 && safeSettings.duration == 7, "settingsInputClamped")
+  let noOutline = PiliNativeDanmakuSettings(map: ["strokeWidth": 2.5, "enabled": false])
+  expect(noOutline.strokeWidth == 0 && !noOutline.enabled, "legacyOutlineDisabledAndToggleRestored")
   let rules = [
     PiliNativeDanmakuRule(map: ["id": 1, "type": 0, "filter": "关键词"])!,
     PiliNativeDanmakuRule(map: ["id": 2, "type": 1, "filter": "/hello.*/"])!,
