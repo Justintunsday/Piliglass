@@ -3135,7 +3135,12 @@ private struct PiliNativePrimaryDestinations: ViewModifier {
 
   func body(content: Content) -> some View {
     content
-      .toolbar(.visible, for: .tabBar)
+      // Inactive tabs must agree with the active page's visibility; an
+      // unconditional visible preference can override the pushed page.
+      .toolbar(
+        model.isSearchPresented || model.isSettingsPresented ? .hidden : .visible,
+        for: .tabBar
+      )
       .navigationDestination(isPresented: presentation($model.isSearchPresented)) {
         PiliNativeSearchView(model: model)
           .toolbar(.hidden, for: .tabBar)
