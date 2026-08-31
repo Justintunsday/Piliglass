@@ -2,6 +2,7 @@ import AVFoundation
 import AVKit
 import AetherEngine
 import Combine
+import JavaScriptCore
 import SwiftUI
 import UIKit
 
@@ -376,6 +377,305 @@ struct PiliNativePlayerQuality: Identifiable, Equatable {
   var id: Int { value }
 }
 
+struct PiliNativeDanmakuSettingsView: View {
+  @ObservedObject var session: PiliNativePlayerSession
+  var onClose: () -> Void
+
+  private func binding(_ key: WritableKeyPath<PiliNativeDanmakuSettings, Double>) -> Binding<Double> {
+    Binding(get: { session.danmakuSettings[keyPath: key] }, set: {
+      var settings = session.danmakuSettings
+      settings[keyPath: key] = $0
+      session.updateDanmakuSettings(settings)
+    })
+  }
+
+  private func blocked(_ type: Int) -> Binding<Bool> {
+    Binding(get: { session.danmakuSettings.blockTypes.contains(type) }, set: { blocked in
+      var settings = session.danmakuSettings
+      if blocked { settings.blockTypes.insert(type) } else { settings.blockTypes.remove(type) }
+      session.updateDanmakuSettings(settings)
+    })
+  }
+
+  var body: some View {
+    NavigationStack {
+      Form {
+        Section {
+          Toggle("屏蔽顶部弹幕", isOn: blocked(5))
+          Toggle("屏蔽底部弹幕", isOn: blocked(4))
+          Toggle("屏蔽滚动弹幕", isOn: blocked(2))
+          Toggle("彩色弹幕转白色", isOn: blocked(6))
+          Toggle("屏蔽高级弹幕", isOn: blocked(7))
+        } header: { Text("按类型筛选") } footer: {
+          Text("彩色弹幕保留文字并转为白色，与原版一致。滚动筛选包含逆向弹幕。")
+        }
+        Section("智能云屏蔽") {
+          Text("屏蔽等级：\(Int(session.danmakuSettings.weight))")
+          Slider(value: binding(\.weight), in: 0...11, step: 1)
+          Text("0 级关闭；等级越高，保留的弹幕越少。")
+            .font(.caption).foregroundStyle(.secondary)
+        }
+        Section("屏蔽规则") {
+          NavigationLink {
+            PiliNativeDanmakuRulesView(session: session)
+          } label: {
+            Label("关键词 / 正则 / 用户（\(session.danmakuRules.count)）", systemImage: "line.3.horizontal.decrease.circle")
+          }
+        }
+        Section("显示设置") {
+          Text("显示区域：\(Int((session.danmakuSettings.area * 100).rounded()))%")
+          Slider(value: binding(\.area), in: 0.25...1, step: 0.25)
+          Text("不透明度：\(Int((session.danmakuSettings.opacity * 100).rounded()))%")
+          Slider(value: binding(\.opacity), in: 0...1, step: 0.1)
+          Text("字体大小：\(Int((session.danmakuSettings.fontScale * 100).rounded()))%")
+          Slider(value: binding(\.fontScale), in: 0.5...2.5, step: 0.1)
+          Text("滚动时长：\(session.danmakuSettings.duration, specifier: "%.1f") 秒")
+          Slider(value: binding(\.duration), in: 1...20, step: 0.5)
+          Text("描边粗细：\(session.danmakuSettings.strokeWidth, specifier: "%.1f")")
+          Slider(value: binding(\.strokeWidth), in: 0...3, step: 0.5)
+        }
+        if let error = session.danmakuSettingsError {
+          Section {
+            Text(error).foregroundStyle(.red)
+            Button("重试加载") { session.loadDanmakuSettings() }
+            if session.danmakuSettingsLoaded {
+              Button("重试保存") { session.updateDanmakuSettings(session.danmakuSettings) }
+            }
+          }
+        }
+      }
+      .disabled(!session.danmakuSettingsLoaded && session.danmakuSettingsBusy)
+      .navigationTitle("弹幕筛选")
+      .navigationBarTitleDisplayMode(.inline)
+      .toolbar {
+        ToolbarItem(placement: .confirmationAction) {
+          Button("完成") { session.flushDanmakuSettings(); onClose() }
+        }
+      }
+      .task { if !session.danmakuSettingsLoaded { session.loadDanmakuSettings() } }
+      .onDisappear { session.flushDanmakuSettings() }
+    }
+  }
+}
+
+private struct PiliNativeDanmakuRulesView: View {
+  @ObservedObject var session: PiliNativePlayerSession
+  @State private var type = 0
+  @State private var editing: PiliNativeDanmakuRule?
+  @State private var deleting: PiliNativeDanmakuRule?
+  @State private var showsEditor = false
+  private let labels = ["关键词", "正则", "用户"]
+
+  var body: some View {
+    List {
+      Picker("规则类型", selection: $type) {
+        ForEach(0..<3) { index in
+          Text("\(labels[index])(\(session.danmakuRules.filter { $0.type == index }.count))").tag(index)
+        }
+      }.pickerStyle(.segmented)
+      Section {
+        let rules = session.danmakuRules.filter { $0.type == type }
+        if rules.isEmpty { Text("暂无规则，点击右上角添加").foregroundStyle(.secondary) }
+        ForEach(rules) { rule in
+          VStack(alignment: .leading, spacing: 4) {
+            Text(rule.filter).textSelection(.enabled)
+            Text(rule.id < 0 ? "本地规则" : "账号规则")
+              .font(.caption).foregroundStyle(.secondary)
+          }
+          .swipeActions {
+            Button("删除", role: .destructive) { deleting = rule }
+            if rule.type != 2 {
+              Button("编辑") { editing = rule; showsEditor = true }.tint(.blue)
+            }
+          }
+          .contextMenu {
+            if rule.type != 2 { Button("编辑") { editing = rule; showsEditor = true } }
+            Button("删除", role: .destructive) { deleting = rule }
+          }
+        }
+      } footer: {
+        Text(type == 2 ? "添加时输入用户 UID；列表展示用于匹配弹幕发送者的 CRC32 哈希。" : "关键词区分大小写；正则忽略大小写，无需输入首尾斜线。")
+      }
+      Section {
+        Button("同步账号屏蔽规则") { session.performDanmakuSettings(["action": "sync"]) }
+          .disabled(!session.danmakuAccountLoggedIn)
+        Text("同步会刷新账号规则，保留本地规则。未登录时仍可管理本地规则。")
+          .font(.caption).foregroundStyle(.secondary)
+        if session.danmakuSettingsBusy { ProgressView() }
+        if let error = session.danmakuSettingsError { Text(error).foregroundStyle(.red) }
+      }
+    }
+    .disabled(session.danmakuSettingsBusy)
+    .navigationTitle("弹幕屏蔽规则")
+    .toolbar {
+      ToolbarItem(placement: .primaryAction) {
+        Button { editing = nil; showsEditor = true } label: { Image(systemName: "plus") }
+          .accessibilityLabel("添加屏蔽规则")
+          .disabled(session.danmakuSettingsBusy)
+      }
+    }
+    .sheet(isPresented: $showsEditor) {
+      PiliNativeDanmakuRuleEditor(session: session, type: type, editing: editing)
+    }
+    .alert("确定删除该规则？", isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } })) {
+      Button("取消", role: .cancel) { deleting = nil }
+      if let rule = deleting {
+        Button("删除", role: .destructive) {
+          session.performDanmakuSettings(["action": "delete", "id": rule.id])
+          deleting = nil
+        }
+      }
+    }
+  }
+}
+
+private struct PiliNativeDanmakuRuleEditor: View {
+  @ObservedObject var session: PiliNativePlayerSession
+  let type: Int
+  let editing: PiliNativeDanmakuRule?
+  @Environment(\.dismiss) private var dismiss
+  @State private var text = ""
+  @State private var cloud = false
+  @State private var validationError: String?
+
+  var body: some View {
+    NavigationStack {
+      Form {
+        TextField(type == 2 ? "用户 UID" : (type == 1 ? "正则表达式" : "关键词"), text: $text, axis: .vertical)
+          .keyboardType(type == 2 ? .numberPad : .default)
+          .textInputAutocapitalization(.never).autocorrectionDisabled()
+        if editing == nil {
+          Toggle("保存到账号", isOn: $cloud).disabled(!session.danmakuAccountLoggedIn)
+        }
+        if let error = validationError ?? session.danmakuSettingsError { Text(error).foregroundStyle(.red) }
+        if session.danmakuSettingsBusy { ProgressView() }
+      }
+      .navigationTitle(editing == nil ? "添加屏蔽规则" : "编辑屏蔽规则")
+      .navigationBarTitleDisplayMode(.inline)
+      .toolbar {
+        ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() }.disabled(session.danmakuSettingsBusy) }
+        ToolbarItem(placement: .confirmationAction) { Button("保存", action: save).disabled(session.danmakuSettingsBusy) }
+      }
+      .interactiveDismissDisabled(session.danmakuSettingsBusy)
+      .onAppear {
+        text = editing?.filter ?? ""
+        cloud = editing.map { $0.id >= 0 } ?? session.danmakuAccountLoggedIn
+        session.danmakuSettingsError = nil
+      }
+    }
+  }
+
+  private func save() {
+    var value = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    if type == 1, value.count > 1, value.hasPrefix("/"), value.hasSuffix("/") {
+      value = String(value.dropFirst().dropLast())
+    }
+    guard !value.isEmpty else { validationError = "输入内容不能为空"; return }
+    // Dart validates the ECMAScript pattern before persisting or calling the
+    // server. ICU/NSRegularExpression would reject some valid Dart patterns.
+    validationError = nil
+    var args: [String: Any] = ["action": editing == nil ? "add" : "edit", "type": type, "filter": value, "cloud": cloud]
+    if let editing { args["id"] = editing.id }
+    session.performDanmakuSettings(args) { success in if success { dismiss() } }
+  }
+}
+
+struct PiliNativeDanmakuRule: Identifiable, Equatable {
+  let id: Int
+  let type: Int
+  let filter: String
+
+  init?(map: [String: Any]) {
+    guard let id = map["id"] as? Int, let type = map["type"] as? Int,
+          (0...2).contains(type), let filter = map["filter"] as? String,
+          !filter.isEmpty else { return nil }
+    self.id = id
+    self.type = type
+    self.filter = filter
+  }
+}
+
+struct PiliNativeDanmakuSettings {
+  // Same identifiers as PiliPala/PiliPlus, not the former native button indices.
+  var blockTypes = Set<Int>()
+  var weight = 0.0
+  var area = 0.5
+  var opacity = 1.0
+  var fontScale = 1.0
+  var duration = 7.0
+  var strokeWidth = 1.5
+
+  init() {}
+
+  init(map: [String: Any]) {
+    blockTypes = Set(map["blockTypes"] as? [Int] ?? [])
+    func number(_ key: String, _ fallback: Double, _ range: ClosedRange<Double>) -> Double {
+      guard let value = map[key] as? NSNumber, value.doubleValue.isFinite else { return fallback }
+      return min(max(value.doubleValue, range.lowerBound), range.upperBound)
+    }
+    weight = number("weight", 0, 0...11).rounded()
+    area = number("area", 0.5, 0.25...1)
+    opacity = number("opacity", 1, 0...1)
+    fontScale = number("fontScale", 1, 0.5...2.5)
+    duration = number("duration", 7, 1...20)
+    strokeWidth = number("strokeWidth", 1.5, 0...3)
+  }
+
+  var arguments: [String: Any] {
+    ["action": "save", "blockTypes": blockTypes.sorted(), "weight": Int(weight),
+     "area": area, "opacity": opacity, "fontScale": fontScale,
+     "duration": duration, "strokeWidth": strokeWidth]
+  }
+
+  func blocks(mode: Int, weight: Int) -> Bool {
+    if weight < Int(self.weight) { return true }
+    switch mode {
+    case 1, 2, 3, 6: return blockTypes.contains(2)
+    case 4: return blockTypes.contains(4)
+    case 5: return blockTypes.contains(5)
+    case 7: return blockTypes.contains(7)
+    default: return true // Code/BAS payloads cannot be rendered as plain text.
+    }
+  }
+}
+
+/// Compiled once per rules update and applied on the serial buffer queue,
+/// before merging: a blocked sender must not absorb an allowed sender's text.
+private struct PiliNativeDanmakuRuleFilter {
+  let keywords: [String]
+  let expressions: [JSValue]
+  let users: Set<String>
+  private let context: JSContext?
+
+  init(_ rules: [PiliNativeDanmakuRule] = []) {
+    keywords = rules.filter { $0.type == 0 }.map(\.filter)
+    users = Set(rules.filter { $0.type == 2 }.map { $0.filter.lowercased() })
+    let regexRules = rules.filter { $0.type == 1 }
+    let runtime = regexRules.isEmpty ? nil : JSContext()
+    context = runtime
+    expressions = regexRules.compactMap {
+      var pattern = $0.filter
+      if pattern.count > 1, pattern.hasPrefix("/"), pattern.hasSuffix("/") {
+        pattern = String(pattern.dropFirst().dropLast())
+      }
+      guard !pattern.isEmpty else { return nil }
+      // Pass user input as data, never interpolate it into JavaScript source.
+      runtime?.exception = nil
+      let expression = runtime?.objectForKeyedSubscript("RegExp")?.construct(withArguments: [pattern, "i"])
+      guard runtime?.exception == nil, let expression, !expression.isUndefined else { return nil }
+      return expression
+    }
+  }
+
+  func removes(_ item: PiliNativeDanmakuItem) -> Bool {
+    if users.contains(item.midHash.lowercased()) { return true }
+    let content = item.content
+    return keywords.contains { content.contains($0) } || expressions.contains {
+      $0.invokeMethod("test", withArguments: [content])?.toBool() == true
+    }
+  }
+}
+
 struct PiliNativeDanmakuItem: Identifiable {
   let id: String
   let progress: TimeInterval
@@ -384,6 +684,7 @@ struct PiliNativeDanmakuItem: Identifiable {
   let color: UIColor
   let content: String
   let weight: Int
+  var midHash = ""
   var mergeCount = 1
 
   var displayContent: String {
@@ -396,12 +697,29 @@ struct PiliNativeDanmakuItem: Identifiable {
 private final class PiliNativeDanmakuBuffer {
   private var rawItems: [PiliNativeDanmakuItem] = []
   private var ids = Set<String>()
+  var settings = PiliNativeDanmakuSettings()
+  var filter = PiliNativeDanmakuRuleFilter()
+  private var rules: [PiliNativeDanmakuRule] = []
+
+  func update(settings: PiliNativeDanmakuSettings, rules: [PiliNativeDanmakuRule]) {
+    self.settings = settings
+    if self.rules != rules {
+      self.rules = rules
+      filter = PiliNativeDanmakuRuleFilter(rules)
+    }
+  }
 
   func append(_ items: [PiliNativeDanmakuItem]) -> [PiliNativeDanmakuItem]? {
     let incoming = items.filter { ids.insert($0.id).inserted }
     guard !incoming.isEmpty else { return nil }
     rawItems.append(contentsOf: incoming)
-    let sorted = rawItems.sorted { lhs, rhs in
+    return rebuild()
+  }
+
+  func rebuild() -> [PiliNativeDanmakuItem] {
+    let sorted = rawItems.filter {
+      !settings.blocks(mode: $0.mode, weight: $0.weight) && !filter.removes($0)
+    }.sorted { lhs, rhs in
       lhs.progress == rhs.progress ? lhs.weight > rhs.weight : lhs.progress < rhs.progress
     }
     var merged: [PiliNativeDanmakuItem] = []
@@ -457,6 +775,17 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
   @Published private(set) var videoIsVertical = false
   @Published private(set) var danmakuStatusMessage: String?
   @Published private(set) var danmakuComposerRequest = 0
+  @Published private(set) var danmakuSettings = PiliNativeDanmakuSettings()
+  @Published private(set) var danmakuRules: [PiliNativeDanmakuRule] = []
+  @Published private(set) var danmakuSettingsBusy = false
+  @Published private(set) var danmakuSettingsLoaded = false
+  @Published private(set) var danmakuAccountLoggedIn = false
+  private var danmakuRulesOwner = "guest"
+  @Published var danmakuSettingsError: String?
+  private var danmakuSettingsVersion = 0
+  private var danmakuSaveTask: DispatchWorkItem?
+  private var danmakuConfigurationRequest = 0
+  private var danmakuFilterRevision = 0
 
   @Published private(set) var pictureInPicturePlayer: AVPlayer?
 
@@ -466,6 +795,7 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
   var onQualityRequested: ((Int, TimeInterval) -> Void)?
   var onDanmakuSendRequested: ((String, Int) -> Void)?
   var onVideoActionRequested: ((String) -> Void)?
+  var onDanmakuSettingsRequested: (([String: Any], @escaping ([String: Any]) -> Void) -> Void)?
 
   private(set) var danmakuItems: [PiliNativeDanmakuItem] = []
   private let danmakuQueue = DispatchQueue(label: "dev.piliglass.danmaku", qos: .userInitiated)
@@ -584,6 +914,7 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
   }
 
   func prepareDanmaku() {
+    loadDanmakuSettings()
     requestedDanmakuSegments.removeAll()
     danmakuGeneration = UUID()
     danmakuBuffer = PiliNativeDanmakuBuffer()
@@ -658,11 +989,107 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
     guard !items.isEmpty else { return }
     let buffer = danmakuBuffer
     let generation = danmakuGeneration
+    let filterRevision = danmakuFilterRevision
+    let settings = danmakuSettings
+    let rules = danmakuRules
     danmakuQueue.async { [weak self] in
+      buffer.update(settings: settings, rules: rules)
       guard let merged = buffer.append(items) else { return }
       DispatchQueue.main.async {
-        guard let self, self.danmakuGeneration == generation else { return }
+        guard let self, self.danmakuGeneration == generation,
+              self.danmakuFilterRevision == filterRevision else { return }
         self.danmakuItems = merged
+        self.danmakuRevision += 1
+      }
+    }
+  }
+
+  func loadDanmakuSettings() {
+    performDanmakuSettings(["action": "load"])
+  }
+
+  func resetDanmakuAccount() {
+    danmakuRules = []
+    danmakuAccountLoggedIn = false
+    rebuildDanmaku()
+    loadDanmakuSettings()
+  }
+
+  func performDanmakuSettings(_ arguments: [String: Any], completion: ((Bool) -> Void)? = nil) {
+    guard let request = onDanmakuSettingsRequested else { completion?(false); return }
+    // Queue a pending save before a load/sync can read an older snapshot.
+    flushDanmakuSettings()
+    danmakuConfigurationRequest += 1
+    let requestID = danmakuConfigurationRequest
+    let version = danmakuSettingsVersion
+    danmakuSettingsBusy = true
+    danmakuSettingsError = nil
+    var requestArguments = arguments
+    requestArguments["owner"] = danmakuRulesOwner
+    request(requestArguments) { [weak self] result in
+      guard let self, requestID == self.danmakuConfigurationRequest else { return }
+      self.danmakuSettingsBusy = false
+      guard result["state"] as? String == "success" else {
+        self.danmakuSettingsError = result["error"] as? String ?? "弹幕设置操作失败，请重试"
+        completion?(false)
+        return
+      }
+      self.danmakuSettingsLoaded = true
+      self.danmakuAccountLoggedIn = (result["loggedIn"] as? Bool) ?? false
+      self.danmakuRulesOwner = result["owner"] as? String ?? "guest"
+      if version == self.danmakuSettingsVersion {
+        self.danmakuSettings = PiliNativeDanmakuSettings(map: result)
+      }
+      self.danmakuRules = (result["rules"] as? [[String: Any]] ?? []).compactMap { PiliNativeDanmakuRule(map: $0) }
+      self.danmakuSettingsError = result["warning"] as? String
+      self.rebuildDanmaku()
+      completion?(true)
+    }
+  }
+
+  func updateDanmakuSettings(_ settings: PiliNativeDanmakuSettings) {
+    guard danmakuSettingsLoaded else { return }
+    danmakuSettingsVersion += 1
+    danmakuSettings = settings
+    rebuildDanmaku()
+    danmakuSaveTask?.cancel()
+    let version = danmakuSettingsVersion
+    let task = DispatchWorkItem { [weak self] in
+      self?.danmakuSaveTask = nil
+      self?.onDanmakuSettingsRequested?(settings.arguments) { [weak self] result in
+        guard let self, version == self.danmakuSettingsVersion else { return }
+        self.danmakuSettingsError = result["state"] as? String == "success"
+          ? nil : (result["error"] as? String ?? "弹幕设置保存失败，请重试")
+      }
+    }
+    danmakuSaveTask = task
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: task)
+  }
+
+  func flushDanmakuSettings() {
+    guard let task = danmakuSaveTask else { return }
+    danmakuSaveTask = nil
+    task.perform()
+    task.cancel()
+  }
+
+  private func rebuildDanmaku() {
+    danmakuFilterRevision += 1
+    let filterRevision = danmakuFilterRevision
+    // Do not display an old cached match while the worker refilters it.
+    danmakuItems = []
+    danmakuRevision += 1
+    let buffer = danmakuBuffer
+    let generation = danmakuGeneration
+    let settings = danmakuSettings
+    let rules = danmakuRules
+    danmakuQueue.async { [weak self] in
+      buffer.update(settings: settings, rules: rules)
+      let items = buffer.rebuild()
+      DispatchQueue.main.async {
+        guard let self, self.danmakuGeneration == generation,
+              self.danmakuFilterRevision == filterRevision else { return }
+        self.danmakuItems = items
         self.danmakuRevision += 1
       }
     }
@@ -1145,14 +1572,6 @@ private enum PiliNativePlayerBuildError: LocalizedError {
 // MARK: - UIKit video surface and customizable controls
 
 private final class PiliNativeDanmakuView: UIView {
-  private enum BlockCategory: Int {
-    case fixed
-    case scrolling
-    case colorful
-    case advanced
-    case reverse
-  }
-
   private var cursor = 0
   private var lastTime: TimeInterval = -1
   private var lastRevision = -1
@@ -1161,7 +1580,7 @@ private final class PiliNativeDanmakuView: UIView {
   private var bottomLane = 0
   private var displayAreaFraction: CGFloat = 0.75
   private var opacityMultiplier: CGFloat = 1
-  private var blockedCategories = Set<Int>()
+  private var settings = PiliNativeDanmakuSettings()
 
   private struct AdvancedPayload {
     let x: CGFloat
@@ -1230,14 +1649,10 @@ private final class PiliNativeDanmakuView: UIView {
     lastRevision = -1
   }
 
-  func applySettings(
-    displayArea: CGFloat,
-    opacity: CGFloat,
-    blockedCategories: Set<Int>
-  ) {
-    displayAreaFraction = min(max(displayArea, 0.25), 1)
-    opacityMultiplier = min(max(opacity, 0.1), 1)
-    self.blockedCategories = blockedCategories
+  func applySettings(_ settings: PiliNativeDanmakuSettings) {
+    self.settings = settings
+    displayAreaFraction = CGFloat(settings.area)
+    opacityMultiplier = CGFloat(settings.opacity)
     clear()
   }
 
@@ -1267,8 +1682,10 @@ private final class PiliNativeDanmakuView: UIView {
     label.attributedText = NSAttributedString(
       string: item.displayContent,
       attributes: [
-        .font: UIFont.systemFont(ofSize: min(max(item.fontSize * 0.72, 13), 25), weight: .semibold),
-        .foregroundColor: item.color,
+        .font: UIFont.systemFont(ofSize: 15 * CGFloat(settings.fontScale), weight: .semibold),
+        .foregroundColor: settings.blockTypes.contains(6) ? UIColor.white : item.color,
+        .strokeColor: UIColor.black,
+        .strokeWidth: -settings.strokeWidth,
         .shadow: shadow,
       ]
     )
@@ -1296,15 +1713,16 @@ private final class PiliNativeDanmakuView: UIView {
     default:
       let lane = scrollingLane % laneCount
       scrollingLane += 1
-      label.frame.origin = CGPoint(x: bounds.width + 12, y: 10 + CGFloat(lane) * laneHeight)
+      let reverse = item.mode == 6
+      label.frame.origin = CGPoint(x: reverse ? -label.bounds.width - 12 : bounds.width + 12, y: 10 + CGFloat(lane) * laneHeight)
       let distance = bounds.width + label.bounds.width + 24
-      let duration = min(max(Double(distance / 105), 6.5), 11)
+      let duration = settings.duration
       UIView.animate(
         withDuration: duration,
         delay: 0,
         options: [.curveLinear, .allowUserInteraction]
       ) {
-        label.transform = CGAffineTransform(translationX: -distance, y: 0)
+        label.transform = CGAffineTransform(translationX: reverse ? distance : -distance, y: 0)
       } completion: { _ in
         label.removeFromSuperview()
       }
@@ -1329,8 +1747,10 @@ private final class PiliNativeDanmakuView: UIView {
     label.attributedText = NSAttributedString(
       string: text,
       attributes: [
-        .font: UIFont.systemFont(ofSize: min(max(item.fontSize * 0.72, 13), 28), weight: .semibold),
-        .foregroundColor: item.color,
+        .font: UIFont.systemFont(ofSize: max(12, item.fontSize * CGFloat(settings.fontScale)), weight: .semibold),
+        .foregroundColor: settings.blockTypes.contains(6) ? UIColor.white : item.color,
+        .strokeColor: UIColor.black,
+        .strokeWidth: -settings.strokeWidth,
         .shadow: shadow,
       ]
     )
@@ -1437,22 +1857,7 @@ private final class PiliNativeDanmakuView: UIView {
   }
 
   private func shouldBlock(_ item: PiliNativeDanmakuItem) -> Bool {
-    if blockedCategories.contains(BlockCategory.fixed.rawValue), item.mode == 4 || item.mode == 5 {
-      return true
-    }
-    if blockedCategories.contains(BlockCategory.scrolling.rawValue), (1...3).contains(item.mode) {
-      return true
-    }
-    if blockedCategories.contains(BlockCategory.colorful.rawValue), item.color != UIColor.white {
-      return true
-    }
-    if blockedCategories.contains(BlockCategory.advanced.rawValue), item.mode >= 7 {
-      return true
-    }
-    if blockedCategories.contains(BlockCategory.reverse.rawValue), item.mode == 6 {
-      return true
-    }
-    return false
+    settings.blocks(mode: item.mode, weight: item.weight)
   }
 
   private func fade(_ label: UILabel) {
@@ -1531,12 +1936,6 @@ final class PiliNativePlayerViewController: UIViewController, UIGestureRecognize
   private let errorLabel = UILabel()
   private let toastLabel = UILabel()
   private let danmakuSettingsPanel = UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterialDark))
-  private let displayAreaSlider = UISlider()
-  private let opacitySlider = UISlider()
-  private let displayAreaValueLabel = UILabel()
-  private let opacityValueLabel = UILabel()
-  private var blockButtons: [UIButton] = []
-  private var blockedDanmakuCategories = Set<Int>()
   private var pictureInPictureController: AVPictureInPictureController?
   private var cancellables = Set<AnyCancellable>()
   private var controlsHideTask: DispatchWorkItem?
@@ -1980,116 +2379,31 @@ final class PiliNativePlayerViewController: UIViewController, UIGestureRecognize
       danmakuSettingsPanel.topAnchor.constraint(equalTo: view.topAnchor),
       danmakuSettingsPanel.trailingAnchor.constraint(equalTo: view.trailingAnchor),
       danmakuSettingsPanel.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-      danmakuSettingsPanel.widthAnchor.constraint(equalTo: view.widthAnchor, multiplier: 0.5),
+      danmakuSettingsPanel.widthAnchor.constraint(equalTo: view.widthAnchor, multiplier: fullscreenPresentation ? 0.5 : 1),
     ])
-
-    let panelTitle = UILabel()
-    panelTitle.text = "弹幕设置"
-    panelTitle.textColor = .white
-    panelTitle.font = .systemFont(ofSize: 18, weight: .bold)
-    let closeButton = UIButton(type: .system)
-    closeButton.tintColor = .white
-    closeButton.setImage(UIImage(systemName: "xmark"), for: .normal)
-    closeButton.addTarget(self, action: #selector(toggleDanmakuSettings), for: .touchUpInside)
-    let header = UIStackView(arrangedSubviews: [panelTitle, UIView(), closeButton])
-    header.axis = .horizontal
-    header.alignment = .center
-
-    displayAreaSlider.minimumValue = 0.25
-    displayAreaSlider.maximumValue = 1
-    displayAreaSlider.value = 0.75
-    displayAreaSlider.minimumTrackTintColor = UIColor(red: 0.93, green: 0.29, blue: 0.48, alpha: 1)
-    displayAreaSlider.addTarget(self, action: #selector(danmakuSettingsChanged), for: .valueChanged)
-    opacitySlider.minimumValue = 0.1
-    opacitySlider.maximumValue = 1
-    opacitySlider.value = 1
-    opacitySlider.minimumTrackTintColor = displayAreaSlider.minimumTrackTintColor
-    opacitySlider.addTarget(self, action: #selector(danmakuSettingsChanged), for: .valueChanged)
-
-    let areaRow = settingsSliderRow(
-      title: "显示区域",
-      slider: displayAreaSlider,
-      valueLabel: displayAreaValueLabel
-    )
-    let opacityRow = settingsSliderRow(
-      title: "不透明度",
-      slider: opacitySlider,
-      valueLabel: opacityValueLabel
-    )
-
-    let blockTitle = UILabel()
-    blockTitle.text = "画面防挡 / 按弹幕类型屏蔽"
-    blockTitle.textColor = UIColor.white.withAlphaComponent(0.82)
-    blockTitle.font = .systemFont(ofSize: 13, weight: .semibold)
-
-    let definitions = [
-      ("pin.fill", "固定"),
-      ("arrow.left", "滚动"),
-      ("paintpalette.fill", "彩色"),
-      ("sparkles", "高级"),
-      ("number", "计数"),
-    ]
-    blockButtons = definitions.enumerated().map { index, definition in
-      makeDanmakuBlockButton(icon: definition.0, title: definition.1, tag: index)
-    }
-    let blockRow = UIStackView(arrangedSubviews: blockButtons)
-    blockRow.axis = .horizontal
-    blockRow.distribution = .fillEqually
-    blockRow.spacing = 8
-
-    let content = UIStackView(arrangedSubviews: [header, areaRow, opacityRow, blockTitle, blockRow, UIView()])
-    content.translatesAutoresizingMaskIntoConstraints = false
-    content.axis = .vertical
-    content.spacing = 16
-    danmakuSettingsPanel.contentView.addSubview(content)
+    let hosting = UIHostingController(rootView: PiliNativeDanmakuSettingsView(session: session) { [weak self] in
+      self?.setDanmakuSettingsVisible(false, animated: true)
+    })
+    addChild(hosting)
+    hosting.view.backgroundColor = .clear
+    hosting.view.translatesAutoresizingMaskIntoConstraints = false
+    danmakuSettingsPanel.contentView.addSubview(hosting.view)
     NSLayoutConstraint.activate([
-      content.topAnchor.constraint(equalTo: danmakuSettingsPanel.contentView.safeAreaLayoutGuide.topAnchor, constant: 18),
-      content.leadingAnchor.constraint(equalTo: danmakuSettingsPanel.contentView.leadingAnchor, constant: 20),
-      content.trailingAnchor.constraint(equalTo: danmakuSettingsPanel.contentView.safeAreaLayoutGuide.trailingAnchor, constant: -20),
-      content.bottomAnchor.constraint(equalTo: danmakuSettingsPanel.contentView.safeAreaLayoutGuide.bottomAnchor, constant: -16),
-      blockRow.heightAnchor.constraint(equalToConstant: 64),
+      hosting.view.topAnchor.constraint(equalTo: danmakuSettingsPanel.contentView.topAnchor),
+      hosting.view.leadingAnchor.constraint(equalTo: danmakuSettingsPanel.contentView.leadingAnchor),
+      hosting.view.trailingAnchor.constraint(equalTo: danmakuSettingsPanel.contentView.trailingAnchor),
+      hosting.view.bottomAnchor.constraint(equalTo: danmakuSettingsPanel.contentView.bottomAnchor),
     ])
-    danmakuSettingsChanged()
-  }
-
-  private func settingsSliderRow(
-    title: String,
-    slider: UISlider,
-    valueLabel: UILabel
-  ) -> UIView {
-    let titleLabel = UILabel()
-    titleLabel.text = title
-    titleLabel.textColor = .white
-    titleLabel.font = .systemFont(ofSize: 14, weight: .medium)
-    valueLabel.textColor = UIColor.white.withAlphaComponent(0.7)
-    valueLabel.font = .monospacedDigitSystemFont(ofSize: 12, weight: .medium)
-    valueLabel.textAlignment = .right
-    valueLabel.widthAnchor.constraint(equalToConstant: 46).isActive = true
-    let row = UIStackView(arrangedSubviews: [titleLabel, slider, valueLabel])
-    row.axis = .horizontal
-    row.alignment = .center
-    row.spacing = 10
-    return row
-  }
-
-  private func makeDanmakuBlockButton(icon: String, title: String, tag: Int) -> UIButton {
-    let button = UIButton(type: .system)
-    button.tag = tag
-    var configuration = UIButton.Configuration.gray()
-    configuration.image = UIImage(systemName: icon)
-    configuration.title = title
-    configuration.imagePlacement = .top
-    configuration.imagePadding = 5
-    configuration.baseForegroundColor = .white
-    configuration.background.backgroundColor = UIColor.white.withAlphaComponent(0.08)
-    configuration.background.cornerRadius = 10
-    button.configuration = configuration
-    button.titleLabel?.font = .systemFont(ofSize: 11, weight: .medium)
-    button.addTarget(self, action: #selector(toggleDanmakuBlock(_:)), for: .touchUpInside)
-    return button
+    hosting.didMove(toParent: self)
   }
 
   private func bindSession() {
+    session.$danmakuSettings.receive(on: DispatchQueue.main).sink { [weak self] settings in
+      self?.danmakuView.applySettings(settings)
+    }.store(in: &cancellables)
+    session.$danmakuRules.receive(on: DispatchQueue.main).sink { [weak self] _ in
+      self?.danmakuView.clear()
+    }.store(in: &cancellables)
     session.$isReady.receive(on: DispatchQueue.main).sink { [weak self] ready in
       guard ready else { return }
       self?.revealVideoSurfaceAfterPreRender()
@@ -2296,37 +2610,6 @@ final class PiliNativePlayerViewController: UIViewController, UIGestureRecognize
     guard !controlsLocked else { return }
     controlsHideTask?.cancel()
     setDanmakuSettingsVisible(!settingsPanelVisible, animated: true)
-  }
-
-  @objc private func danmakuSettingsChanged() {
-    let area = CGFloat(displayAreaSlider.value)
-    let opacity = CGFloat(opacitySlider.value)
-    displayAreaValueLabel.text = "\(Int((area * 100).rounded()))%"
-    opacityValueLabel.text = "\(Int((opacity * 100).rounded()))%"
-    danmakuView.applySettings(
-      displayArea: area,
-      opacity: opacity,
-      blockedCategories: blockedDanmakuCategories
-    )
-  }
-
-  @objc private func toggleDanmakuBlock(_ sender: UIButton) {
-    if blockedDanmakuCategories.contains(sender.tag) {
-      blockedDanmakuCategories.remove(sender.tag)
-    } else {
-      blockedDanmakuCategories.insert(sender.tag)
-    }
-    let blocked = blockedDanmakuCategories.contains(sender.tag)
-    if var configuration = sender.configuration {
-      configuration.baseForegroundColor = blocked
-        ? UIColor(red: 0.98, green: 0.38, blue: 0.56, alpha: 1)
-        : .white
-      configuration.background.backgroundColor = blocked
-        ? UIColor(red: 0.93, green: 0.29, blue: 0.48, alpha: 0.2)
-        : UIColor.white.withAlphaComponent(0.08)
-      sender.configuration = configuration
-    }
-    danmakuSettingsChanged()
   }
 
   @objc private func showDanmakuComposer() {

@@ -19,6 +19,7 @@ BUNDLE_ID = "dev.piliglass.videoloadcheck"
 FIXTURES = r'''
 import SwiftUI
 import UIKit
+import JavaScriptCore
 private let piliAccent = Color.pink
 private final class PiliImageLoader: ObservableObject {
   let image: UIImage? = nil
@@ -136,6 +137,45 @@ private func check(model: PiliNativeViewModel, scrollToEnd: () -> Void) async {
   expect(merged.count == 4 && merged.first { $0.id == "a" }?.mergeCount == 2, "dedupAndTimedMerge")
   expect(buffer.append([item("a", 1, "重复  弹幕")]) == nil, "duplicateSegmentIsNoOp")
 
+  var settings = PiliNativeDanmakuSettings()
+  settings.blockTypes = [5]
+  expect(settings.blocks(mode: 5, weight: 10) && !settings.blocks(mode: 4, weight: 10), "topAndBottomAreIndependent")
+  settings.blockTypes = [2]
+  expect([1, 2, 3, 6].allSatisfy { settings.blocks(mode: $0, weight: 10) }, "scrollIncludesReverse")
+  settings.blockTypes = [6]
+  expect(!settings.blocks(mode: 1, weight: 10), "colorFilterDoesNotDiscardText")
+  settings.blockTypes = [7]
+  expect(settings.blocks(mode: 7, weight: 10), "advancedFilter")
+  settings.blockTypes = []
+  settings.weight = 8
+  expect(settings.blocks(mode: 1, weight: 7) && !settings.blocks(mode: 1, weight: 8), "weightBoundary")
+  let roundTrip = PiliNativeDanmakuSettings(map: settings.arguments)
+  expect(roundTrip.weight == 8 && roundTrip.area == settings.area, "settingsBridgeRoundTrip")
+  let safeSettings = PiliNativeDanmakuSettings(map: ["weight": 99, "opacity": -2, "duration": Double.nan])
+  expect(safeSettings.weight == 11 && safeSettings.opacity == 0 && safeSettings.duration == 7, "settingsInputClamped")
+  let rules = [
+    PiliNativeDanmakuRule(map: ["id": 1, "type": 0, "filter": "关键词"])!,
+    PiliNativeDanmakuRule(map: ["id": 2, "type": 1, "filter": "/hello.*/"])!,
+    PiliNativeDanmakuRule(map: ["id": 3, "type": 2, "filter": "abc"])!,
+    PiliNativeDanmakuRule(map: ["id": 4, "type": 1, "filter": "["])!,
+  ]
+  let filter = PiliNativeDanmakuRuleFilter(rules)
+  expect(filter.removes(item("kw", 0, "包含关键词")), "nativeKeywordFilter")
+  expect(filter.removes(item("rx", 0, "HELLO 😀")), "nativeRegexIgnoresCase")
+  expect(!filter.removes(item("safe", 0, "普通弹幕")), "invalidRegexDoesNotBlockAll")
+  let ecma = PiliNativeDanmakuRuleFilter([PiliNativeDanmakuRule(map: ["id": 5, "type": 1, "filter": "^\\w+$"])!])
+  expect(!ecma.removes(item("unicode", 0, "中文")), "regexMatchesDartECMAScriptSemantics")
+  var blockedSender = item("blocked", 0.1, "相同内容")
+  blockedSender.midHash = "abc"
+  let allowedSender = item("allowed", 0.2, "相同内容")
+  let filteredBuffer = PiliNativeDanmakuBuffer()
+  filteredBuffer.update(settings: PiliNativeDanmakuSettings(), rules: rules)
+  let filtered = filteredBuffer.append([blockedSender, allowedSender])!
+  expect(filtered.count == 1 && filtered[0].id == "allowed" && filtered[0].mergeCount == 1, "filterSenderBeforeMerge")
+  filteredBuffer.update(settings: PiliNativeDanmakuSettings(), rules: [])
+  let restored = filteredBuffer.rebuild()
+  expect(restored.count == 1 && restored[0].mergeCount == 2, "removingRulesRestoresRawTimeline")
+
   let overlay = PiliNativeDanmakuView(frame: CGRect(x: 0, y: 0, width: 390, height: 220))
   window.addSubview(overlay)
   var maximum = 0
@@ -161,6 +201,15 @@ private func check(model: PiliNativeViewModel, scrollToEnd: () -> Void) async {
   overlay.render(time: 0, items: short, revision: 3)
   overlay.render(time: 0.1, items: short, revision: 3)
   expect(overlay.subviews.count == 1, "backwardSeekReplaysTimeline")
+  var monochrome = PiliNativeDanmakuSettings()
+  monochrome.blockTypes = [6]
+  overlay.applySettings(monochrome)
+  expect(overlay.subviews.isEmpty, "settingsClearExistingLabels")
+  let colored = [PiliNativeDanmakuItem(id: "red", progress: 0.1, mode: 1, fontSize: 25, color: .red, content: "彩色仍显示", weight: 10)]
+  overlay.render(time: 0, items: colored, revision: 4)
+  overlay.render(time: 0.1, items: colored, revision: 4)
+  let foreground = (overlay.subviews.first as? UILabel)?.attributedText?.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? UIColor
+  expect(overlay.subviews.count == 1 && foreground == UIColor.white, "colorfulBecomesWhite")
   overlay.removeFromSuperview()
   report["failures"] = failures
   let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
@@ -178,7 +227,7 @@ def production_swift():
         a = source.index(start)
         return source[a:source.index(end, a)]
 
-    return FIXTURES + section(player, "struct PiliNativeDanmakuItem:", "@MainActor\nfinal class PiliNativePlayerSession") + section(
+    return FIXTURES + section(player, "struct PiliNativeDanmakuRule:", "@MainActor\nfinal class PiliNativePlayerSession") + section(
         player, "private final class PiliNativeDanmakuView:", "private final class PiliNativePlayerGradientView:") + section(
         root, "private struct PiliNativeComment:", "private struct PiliNativeDownload:") + section(
         root, "private struct PiliNativeCommentsSection:", "private struct PiliNativeDynamicComposerView:") + section(

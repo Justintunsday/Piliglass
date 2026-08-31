@@ -4,6 +4,17 @@ import 'package:PiliPlus/models/user/danmaku_block.dart';
 class RuleFilter {
   static final _regExp = RegExp(r'^/(.*)/$');
 
+  static RegExp? compile(String pattern) {
+    final normalized = _regExp.matchAsPrefix(pattern)?.group(1) ?? pattern;
+    if (normalized.isEmpty) return null;
+    try {
+      return RegExp(normalized, caseSensitive: false);
+    } on FormatException {
+      // A malformed remote rule must not prevent the player from opening.
+      return null;
+    }
+  }
+
   List<String> dmFilterString = [];
   List<RegExp> dmRegExp = [];
   Set<String> dmUid = {};
@@ -16,15 +27,14 @@ class RuleFilter {
   }
 
   RuleFilter.fromRuleTypeEntries(List<List<SimpleRule>> rules) {
-    dmFilterString = rules[0].map((e) => e.filter).toList();
+    dmFilterString = rules[0]
+        .map((e) => e.filter)
+        .where((e) => e.isNotEmpty)
+        .toList();
 
     dmRegExp = rules[1]
-        .map(
-          (e) => RegExp(
-            _regExp.matchAsPrefix(e.filter)?.group(1) ?? e.filter,
-            caseSensitive: false,
-          ),
-        )
+        .map((e) => compile(e.filter))
+        .whereType<RegExp>()
         .toList();
 
     dmUid = rules[2].map((e) => e.filter).toSet();

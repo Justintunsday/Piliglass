@@ -403,6 +403,18 @@ private final class PiliNativeViewModel: ObservableObject {
   ) {
     self.channel = channel
     self.flutterPlayerSurface = flutterPlayerSurface
+    nativePlayerSession.onDanmakuSettingsRequested = { [weak self] arguments, completion in
+      guard let self else { return }
+      self.channel.invokeMethod("nativeDanmakuSettings", arguments: arguments) { response in
+        DispatchQueue.main.async {
+          if let error = response as? FlutterError {
+            completion(["state": "error", "error": error.message ?? "弹幕设置操作失败"])
+          } else {
+            completion(piliDictionary(response))
+          }
+        }
+      }
+    }
     nativePlayerSession.onDanmakuSegmentNeeded = { [weak self] segmentIndex in
       self?.loadNativeDanmaku(segmentIndex: segmentIndex)
     }
@@ -495,7 +507,10 @@ private final class PiliNativeViewModel: ObservableObject {
     }
     applyHome(piliDictionary(snapshot["home"]))
     applyDynamics(piliDictionary(snapshot["dynamics"]))
-    account = PiliNativeAccount(map: piliDictionary(snapshot["account"]))
+    let updatedAccount = PiliNativeAccount(map: piliDictionary(snapshot["account"]))
+    let accountChanged = account.mid != updatedAccount.mid || account.isLogin != updatedAccount.isLogin
+    account = updatedAccount
+    if accountChanged { nativePlayerSession.resetDanmakuAccount() }
   }
 
   private func applyHome(_ section: [String: Any]) {
@@ -844,7 +859,8 @@ private final class PiliNativeViewModel: ObservableObject {
             fontSize: CGFloat(max(12, piliInt(map["fontSize"]))),
             color: color,
             content: content,
-            weight: piliInt(map["weight"])
+            weight: piliInt(map["weight"]),
+            midHash: piliString(map["midHash"]) ?? ""
           )
         }
         DispatchQueue.main.async {
@@ -5200,6 +5216,7 @@ private struct PiliNativeVideoCollectionView: View {
 
 private struct PiliNativePortraitDanmakuBar: View {
   @ObservedObject var session: PiliNativePlayerSession
+  @State private var showsSettings = false
 
   var body: some View {
     HStack(spacing: 0) {
@@ -5228,6 +5245,15 @@ private struct PiliNativePortraitDanmakuBar: View {
         }
       }
       .buttonStyle(PlainButtonStyle())
+      Button(action: { showsSettings = true }) {
+        Image(systemName: "slider.horizontal.3")
+          .frame(width: 36, height: 36)
+      }
+      .accessibilityLabel("弹幕筛选设置")
+      .buttonStyle(PlainButtonStyle())
+    }
+    .sheet(isPresented: $showsSettings) {
+      PiliNativeDanmakuSettingsView(session: session) { showsSettings = false }
     }
     .background(Color(UIColor.secondarySystemBackground))
     .clipShape(Capsule())

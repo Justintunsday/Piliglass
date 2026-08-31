@@ -43,6 +43,7 @@ import 'package:PiliPlus/pages/setting/common_setting.dart';
 import 'package:PiliPlus/pages/video/introduction/ugc/controller.dart';
 import 'package:PiliPlus/pages/webdav/view.dart';
 import 'package:PiliPlus/services/service_locator.dart';
+import 'package:PiliPlus/services/native_danmaku_settings.dart';
 import 'package:PiliPlus/services/download/download_service.dart';
 import 'package:PiliPlus/utils/app_scheme.dart';
 import 'package:PiliPlus/utils/accounts.dart';
@@ -73,6 +74,7 @@ final class IOSNativeUIBridge {
   static const MethodChannel _channel = MethodChannel('piliglass/native_ui');
 
   final MainController mainController;
+  final _danmakuSettings = NativeDanmakuSettings();
   final List<Worker> _workers = <Worker>[];
   final _cdnLatency = NativeCDNLatency(
     probe: (url) => probeMediaLatency(url, headers: {
@@ -174,6 +176,8 @@ final class IOSNativeUIBridge {
         return _loadNativePlayback(_arguments(call));
       case 'loadNativeDanmaku':
         return _loadNativeDanmaku(_arguments(call));
+      case 'nativeDanmakuSettings':
+        return _danmakuSettings.handle(_arguments(call));
       case 'sendNativeDanmaku':
         return _sendNativeDanmaku(_arguments(call));
       case 'playVideo':
@@ -837,6 +841,7 @@ final class IOSNativeUIBridge {
                 'color': item.color,
                 'content': item.content,
                 'weight': item.weight,
+                'midHash': item.midHash,
                 'pool': item.pool,
                 'isSelf': item.isSelf,
               },

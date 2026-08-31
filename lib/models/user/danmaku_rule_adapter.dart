@@ -11,7 +11,8 @@ class RuleFilterAdapter extends TypeAdapter<RuleFilter> {
       reader.readStringList(),
       reader
           .readStringList()
-          .map((i) => RegExp(i, caseSensitive: false))
+          .map(RuleFilter.compile)
+          .whereType<RegExp>()
           .toList(),
       reader.readStringList().toSet(),
     );

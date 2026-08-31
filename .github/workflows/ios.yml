@@ -10,6 +10,7 @@ on:
       - "assets/**"
       - "pubspec.yaml"
       - "pubspec.lock"
+      - "tool/check_native_danmaku.py"
       - ".github/workflows/ios.yml"
   pull_request:
     paths:
@@ -18,6 +19,7 @@ on:
       - "assets/**"
       - "pubspec.yaml"
       - "pubspec.lock"
+      - "tool/check_native_danmaku.py"
       - ".github/workflows/ios.yml"
   workflow_call:
     inputs:
@@ -83,6 +85,9 @@ jobs:
         run: |
           dart tool/check_native_playback_source.dart
           dart tool/check_native_cdn_latency.dart
+
+      - name: Verify native danmaku settings with isolated accounts
+        run: python3 tool/check_native_danmaku.py
 
       - name: Build iOS
         run: |
