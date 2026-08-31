@@ -94,26 +94,47 @@ final class PiliNativePlayerSession: ObservableObject {
   func toggleFullscreenComments() {}
   // PRODUCTION_SPEED_METHODS
 }
-struct PlayerHost: UIViewControllerRepresentable {
-  let session: PiliNativePlayerSession
-  func makeUIViewController(context: Context) -> PiliNativePlayerViewController {
-    PiliNativePlayerViewController(session: session,
-      fullscreen: !ProcessInfo.processInfo.arguments.contains("embedded"))
-  }
-  func updateUIViewController(_ controller: PiliNativePlayerViewController, context: Context) {}
-}
 @main
-struct PlayerPreviewApp: App {
-  @StateObject var session = PiliNativePlayerSession()
-  var body: some Scene {
-    WindowGroup {
-      PlayerHost(session: session).ignoresSafeArea()
-        .overlay(alignment: .center) {
-          Text("playing=\(session.isPlaying);rate=\(session.playbackRate);time=\(Int(session.currentTime));rates=\(session.engine.rates)")
-            .font(.system(size: 8)).foregroundColor(.white.opacity(0.3))
-            .accessibilityIdentifier("playback-state").allowsHitTesting(false)
-        }
+final class PlayerPreviewApp: UIResponder, UIApplicationDelegate {
+  var window: UIWindow?
+  let session = PiliNativePlayerSession()
+  let probe = UILabel()
+  var observation: AnyCancellable?
+  var embedded: Bool { ProcessInfo.processInfo.arguments.contains("embedded") }
+
+  func application(_ application: UIApplication,
+                   didFinishLaunchingWithOptions options: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
+    let controller = PiliNativePlayerViewController(session: session, fullscreen: !embedded)
+    // Use the UIKit controller as the window root so its supported orientations
+    // apply directly, without a SwiftUI preview host retaining a portrait frame.
+    let window = UIWindow(frame: UIScreen.main.bounds)
+    window.rootViewController = controller
+    self.window = window
+    window.makeKeyAndVisible()
+    probe.translatesAutoresizingMaskIntoConstraints = false
+    probe.font = .systemFont(ofSize: 8)
+    probe.textColor = .white.withAlphaComponent(0.3)
+    probe.accessibilityIdentifier = "playback-state"
+    probe.isUserInteractionEnabled = false
+    controller.view.addSubview(probe)
+    NSLayoutConstraint.activate([
+      probe.centerXAnchor.constraint(equalTo: controller.view.centerXAnchor),
+      probe.centerYAnchor.constraint(equalTo: controller.view.centerYAnchor),
+    ])
+    observation = session.objectWillChange.receive(on: DispatchQueue.main).sink { [weak self] _ in
+      self?.updateProbe()
     }
+    updateProbe()
+    return true
+  }
+
+  func application(_ application: UIApplication,
+                   supportedInterfaceOrientationsFor window: UIWindow?) -> UIInterfaceOrientationMask {
+    embedded ? .portrait : .landscape
+  }
+
+  func updateProbe() {
+    probe.text = "playing=\(session.isPlaying);rate=\(session.playbackRate);time=\(Int(session.currentTime));rates=\(session.engine.rates)"
   }
 }
 '''
