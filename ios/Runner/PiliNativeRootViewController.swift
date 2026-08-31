@@ -9,7 +9,11 @@ import UIKit
 
 private let piliNativeChannelName = "piliglass/native_ui"
 private let piliAccent = Color(red: 0.93, green: 0.29, blue: 0.48)
-private let piliProfileAccent = Color(red: 0.12, green: 0.36, blue: 0.25)
+private let piliProfileAccent = Color(UIColor { traits in
+  traits.userInterfaceStyle == .dark
+    ? UIColor(red: 0.58, green: 0.81, blue: 0.66, alpha: 1)
+    : UIColor(red: 0.12, green: 0.36, blue: 0.25, alpha: 1)
+})
 
 private extension Notification.Name {
   static let piliPresentNativeProfile = Notification.Name("piliglass.presentNativeProfile")
@@ -3451,7 +3455,11 @@ private struct PiliNativeRootView: View {
           .tag(item.offset)
       }
     }
-    .accentColor(Color(red: 0.12, green: 0.36, blue: 0.25))
+    .accentColor(Color(UIColor { traits in
+      traits.userInterfaceStyle == .dark
+        ? UIColor(red: 0.58, green: 0.81, blue: 0.66, alpha: 1)
+        : UIColor(red: 0.12, green: 0.36, blue: 0.25, alpha: 1)
+    }))
     .preferredColorScheme(appearance == 1 ? .light : appearance == 2 ? .dark : nil)
     .environment(\.piliVideoTransitionNamespace, videoTransitionNamespace)
     .sheet(isPresented: $model.isLibraryPresented) {
@@ -3991,7 +3999,7 @@ private struct PiliNativeMineView: View {
   @ObservedObject var model: PiliNativeViewModel
   @AppStorage("nativeAppearance") private var appearance = 0
   private let shortcuts = [
-    ("离线缓存", "folder.badge.minus", "/download"),
+    ("离线缓存", "arrow.down.to.line", "/download"),
     ("观看记录", "clock.arrow.circlepath", "/history"),
     ("我的订阅", "play.rectangle.on.rectangle", "/subscription"),
     ("稍后再看", "clock", "/later"),
@@ -4021,7 +4029,7 @@ private struct PiliNativeMineView: View {
                 if model.account.isLogin {
                   HStack(spacing: 12) {
                     Text(String(format: "硬币 %.1f", model.account.money))
-                    Text(model.account.nextExp > 0 ? "经验 \(model.account.currentExp)/\(model.account.nextExp)" : "经验 \(model.account.currentExp) · 已满级")
+                    Text(verbatim: model.account.nextExp > 0 ? "经验 \(model.account.currentExp)/\(model.account.nextExp)" : "经验 \(model.account.currentExp) · 已满级")
                       .lineLimit(1).minimumScaleFactor(0.7)
                   }.font(.system(size: 12)).foregroundStyle(.secondary)
                   ProgressView(value: model.account.nextExp > 0 ? min(1, max(0, Double(model.account.currentExp) / Double(model.account.nextExp))) : 1)
@@ -4031,14 +4039,14 @@ private struct PiliNativeMineView: View {
                   Text("登录后同步收藏、历史与动态").font(.caption).foregroundStyle(.secondary)
                 }
               }.frame(maxWidth: .infinity, alignment: .leading)
-            }.padding(.horizontal, 22).padding(.vertical, 18)
+            }.padding(.horizontal, 22).padding(.top, 6).padding(.bottom, 18)
           }.buttonStyle(.plain).accessibilityIdentifier("mine-account")
 
           HStack(spacing: 0) {
             PiliNativeAccountStat(value: model.account.dynamics, title: "动态") { openAccount(section: 1) }
             PiliNativeAccountStat(value: model.account.following, title: "关注") { protectedRoute("/follow") }
             PiliNativeAccountStat(value: model.account.followers, title: "粉丝") { protectedRoute("/fan") }
-          }.padding(.vertical, 17).padding(.horizontal, 14)
+          }.padding(.vertical, 14).padding(.horizontal, 14)
 
           HStack(alignment: .top, spacing: 0) {
             ForEach(shortcuts.indices, id: \.self) { index in
@@ -4047,7 +4055,7 @@ private struct PiliNativeMineView: View {
                 VStack(spacing: 13) {
                   Image(systemName: item.1).font(.system(size: 23, weight: .regular)).foregroundStyle(piliProfileAccent)
                   Text(item.0).font(.system(size: 14)).foregroundStyle(.primary).lineLimit(1).minimumScaleFactor(0.8)
-                }.frame(maxWidth: .infinity).padding(.vertical, 22)
+                }.frame(maxWidth: .infinity).padding(.vertical, 19)
               }.buttonStyle(.plain)
             }
           }.padding(.horizontal, 12).padding(.bottom, 8)
@@ -4190,7 +4198,7 @@ private struct PiliNativeProfileView: View {
       ZStack(alignment: .bottom) {
         if profile.topImage != nil {
           PiliRemoteImage(urlString: profile.topImage).aspectRatio(contentMode: .fill)
-            .frame(width: proxy.size.width, height: 145 + proxy.safeAreaInsets.top).clipped()
+            .frame(width: proxy.size.width, height: 135 + proxy.safeAreaInsets.top).clipped()
         } else {
           LinearGradient(colors: [Color(red: 0.95, green: 0.77, blue: 0.51), Color(red: 0.82, green: 0.53, blue: 0.36)], startPoint: .topLeading, endPoint: .bottomTrailing)
         }
@@ -4210,15 +4218,16 @@ private struct PiliNativeProfileView: View {
           .accessibilityLabel("主页更多操作")
         }.foregroundStyle(Color(red: 0.13, green: 0.20, blue: 0.16)).padding(.horizontal, 10).padding(.bottom, 26)
       }
-    }.frame(height: 145)
+    }.frame(height: 135)
   }
 
   private func profileIdentityCard(_ profile: PiliNativeProfile) -> some View {
-    VStack(alignment: .leading, spacing: 11) {
+    VStack(alignment: .leading, spacing: 6) {
       HStack(alignment: .top, spacing: 20) {
-        PiliNativeAvatar(url: profile.face, vip: profile.vip, size: 86)
+        PiliNativeAvatar(url: profile.face, vip: profile.vip, size: 82)
           .offset(y: -21).padding(.bottom, -21)
-        VStack(spacing: 12) {
+          .frame(width: 120, alignment: .leading)
+        VStack(spacing: 10) {
           HStack(spacing: 0) {
             profileStat(profile.followers, "粉丝")
             Divider().frame(height: 17)
@@ -4230,13 +4239,13 @@ private struct PiliNativeProfileView: View {
             if profile.isSelf { editing = true } else { model.toggleProfileFollow() }
           } label: {
             Text(profile.isSelf ? "编辑资料" : profile.isFollowing ? "已关注" : "+ 关注")
-              .font(.system(size: 15, weight: .semibold)).frame(maxWidth: .infinity).padding(.vertical, 9)
+              .font(.system(size: 15, weight: .semibold)).frame(maxWidth: .infinity).padding(.vertical, 8)
               .foregroundStyle(piliProfileAccent).background(piliProfileAccent.opacity(0.16), in: Capsule())
           }.buttonStyle(.plain).disabled(model.profileActionLoading)
         }.padding(.top, 8)
       }
       HStack(spacing: 8) {
-        Text(profile.name).font(.system(size: 23, weight: .bold))
+        Text(profile.name).font(.system(size: 20, weight: .bold))
         PiliOriginalLevelBadge(level: profile.level, height: 12)
         if profile.vip {
           Text("大会员").font(.system(size: 11, weight: .semibold)).foregroundStyle(.white)
@@ -4252,7 +4261,7 @@ private struct PiliNativeProfileView: View {
         Label(profile.official, systemImage: "checkmark.seal.fill").font(.caption).foregroundStyle(.secondary)
       }
       if let message = model.profileMessage { Text(message).font(.caption).foregroundStyle(.secondary) }
-    }.padding(.horizontal, 20).padding(.bottom, 15)
+    }.padding(.horizontal, 20).padding(.bottom, 12)
   }
 
   private func profileStat(_ value: Int, _ title: String) -> some View {
@@ -4266,11 +4275,11 @@ private struct PiliNativeProfileView: View {
     HStack(spacing: 0) {
       ForEach(sections.indices, id: \.self) { index in
         Button { query = ""; model.selectProfileSection(index) } label: {
-          VStack(spacing: 13) {
+          VStack(spacing: 11) {
             Text(sections[index]).font(.system(size: 16, weight: model.profileSection == index ? .semibold : .regular))
               .foregroundStyle(model.profileSection == index ? piliProfileAccent : Color.primary)
             Capsule().fill(model.profileSection == index ? piliProfileAccent : Color.clear).frame(width: 30, height: 3)
-          }.frame(maxWidth: .infinity).padding(.top, 12)
+          }.frame(maxWidth: .infinity).padding(.top, 9)
         }.buttonStyle(.plain).accessibilityIdentifier("profile-tab-\(index)")
         .accessibilityAddTraits(model.profileSection == index ? .isSelected : [])
       }
@@ -4302,7 +4311,7 @@ private struct PiliNativeProfileView: View {
                 } else {
                   PiliNativeFavoriteCard(item: item, width: proxy.size.width) { model.openProfileCollection(item) }
                 }
-              }.frame(height: min(240, (UIScreen.main.bounds.width - 52) * 0.30 + 66))
+              }.frame(height: (UIScreen.main.bounds.width - 52) * 0.30 + 66)
             }
           }.padding(20)
         }
