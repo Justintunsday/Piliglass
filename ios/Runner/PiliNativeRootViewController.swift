@@ -3424,6 +3424,8 @@ private struct PiliNativeHomeView: View {
       .background(Color(UIColor.systemBackground))
       .navigationTitle("PiliGlass")
       .navigationBarTitleDisplayMode(.inline)
+      // Remove the full-width bar backing, not the native glass controls.
+      .toolbarBackground(.hidden, for: .navigationBar)
       .toolbar {
         ToolbarItem(placement: .navigationBarLeading) {
           Button(action: { model.isSearchPresented = true }) {
@@ -3481,6 +3483,7 @@ private struct PiliNativeHomeView: View {
       .padding(.top, contentInsets.top + 12)
       .padding(.bottom, contentInsets.bottom + 24)
     }
+    .modifier(PiliNativeHomeScrollEdgeModifier())
   }
 
   @ViewBuilder private func recommendPage(contentInsets: EdgeInsets) -> some View {
@@ -3557,6 +3560,19 @@ private struct PiliNativeHomeView: View {
   private func selectMine() {
     if let index = model.tabTitles.firstIndex(where: { $0.contains("我") || $0.contains("账号") }) {
       model.userSelectedTab(index)
+    }
+  }
+}
+
+private struct PiliNativeHomeScrollEdgeModifier: ViewModifier {
+  @ViewBuilder
+  func body(content: Content) -> some View {
+    if #available(iOS 26.0, *) {
+      // The system edge scrim can look like a solid white strip behind the
+      // floating bars. Keep the glass surfaces, but let the feed show through.
+      content.scrollEdgeEffectHidden(true, for: [.top, .bottom])
+    } else {
+      content
     }
   }
 }
