@@ -1149,6 +1149,23 @@ private final class PiliNativeViewModel: ObservableObject {
     loadSettings()
   }
 
+  func makeDanmakuSettingsSession(_ profile: PiliNativeDanmakuProfile) -> PiliNativePlayerSession {
+    let editor = PiliNativePlayerSession(settingsProfile: profile)
+    editor.onDanmakuSettingsRequested = { [weak self] arguments, completion in
+      guard let self, let request = self.nativePlayerSession.onDanmakuSettingsRequested else {
+        completion(["state": "error", "error": "弹幕设置暂时不可用"])
+        return
+      }
+      request(arguments) { [weak self] result in
+        completion(result)
+        if result["state"] as? String == "success", arguments["action"] as? String != "load" {
+          self?.nativePlayerSession.loadDanmakuSettings()
+        }
+      }
+    }
+    return editor
+  }
+
   func loadSettings() {
     settingsLoading = settings.isEmpty
     settingsError = nil
@@ -3167,23 +3184,6 @@ private extension EnvironmentValues {
   var piliVideoTransitionNamespace: Namespace.ID? {
     get { self[PiliVideoTransitionNamespaceKey.self] }
     set { self[PiliVideoTransitionNamespaceKey.self] = newValue }
-  }
-
-  func makeDanmakuSettingsSession(_ profile: PiliNativeDanmakuProfile) -> PiliNativePlayerSession {
-    let editor = PiliNativePlayerSession(settingsProfile: profile)
-    editor.onDanmakuSettingsRequested = { [weak self] arguments, completion in
-      guard let self, let request = self.nativePlayerSession.onDanmakuSettingsRequested else {
-        completion(["state": "error", "error": "弹幕设置暂时不可用"])
-        return
-      }
-      request(arguments) { [weak self] result in
-        completion(result)
-        if result["state"] as? String == "success", arguments["action"] as? String != "load" {
-          self?.nativePlayerSession.loadDanmakuSettings()
-        }
-      }
-    }
-    return editor
   }
 }
 
