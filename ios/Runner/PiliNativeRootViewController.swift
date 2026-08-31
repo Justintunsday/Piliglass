@@ -9,6 +9,8 @@ import UIKit
 
 private let piliNativeChannelName = "piliglass/native_ui"
 private let piliAccent = Color(red: 0.93, green: 0.29, blue: 0.48)
+private let piliProfileAccent = Color(red: 0.12, green: 0.36, blue: 0.25)
+private let piliProfileMuted = Color(UIColor.secondaryLabel)
 
 private extension Notification.Name {
   static let piliPresentNativeProfile = Notification.Name("piliglass.presentNativeProfile")
@@ -252,6 +254,10 @@ private final class PiliNativeViewModel: ObservableObject {
   @Published private(set) var dynamicsLoadingMore = false
 
   @Published private(set) var account = PiliNativeAccount()
+  @Published private(set) var mineFavorites: [PiliNativeLibraryItem] = []
+  @Published private(set) var mineFavoritesLoading = false
+  @Published private(set) var mineFavoritesError: String?
+  private var mineFavoritesRequest = UUID()
   @Published var isSearchPresented = false
   @Published private(set) var searchResults: [PiliNativeVideo] = []
   @Published private(set) var searchLoading = false
@@ -309,6 +315,15 @@ private final class PiliNativeViewModel: ObservableObject {
   @Published private(set) var profileError: String?
   @Published private(set) var profileActionLoading = false
   @Published private(set) var profileMessage: String?
+  @Published var profileSection = 0
+  @Published private(set) var profileDynamics: [PiliNativeDynamic] = []
+  @Published private(set) var profileCollections: [PiliNativeLibraryItem] = []
+  @Published private(set) var profileSectionLoading = false
+  @Published private(set) var profileSectionError: String?
+  @Published private(set) var profileSectionHasMore = false
+  private var profileSectionPage = 1
+  private var profileSectionOffset = ""
+  private var profileSectionRequest = UUID()
 
   @Published var isDynamicDetailPresented = false
   @Published private(set) var selectedDynamic: PiliNativeDynamic?
@@ -511,7 +526,19 @@ private final class PiliNativeViewModel: ObservableObject {
     let updatedAccount = PiliNativeAccount(map: piliDictionary(snapshot["account"]))
     let accountChanged = account.mid != updatedAccount.mid || account.isLogin != updatedAccount.isLogin
     account = updatedAccount
-    if accountChanged { nativePlayerSession.resetDanmakuAccount() }
+    if accountChanged {
+      nativePlayerSession.resetDanmakuAccount()
+      mineFavoritesRequest = UUID()
+      mineFavorites = []
+      mineFavoritesLoading = false
+      mineFavoritesError = nil
+      isProfilePresented = false
+      profileMID = nil
+      profile = nil
+      profileDynamics = []
+      profileCollections = []
+      profileSectionRequest = UUID()
+    }
   }
 
   private func applyHome(_ section: [String: Any]) {
@@ -2416,7 +2443,113 @@ private final class PiliNativeViewModel: ObservableObject {
     libraryError = "该内容类型尚未提供原生操作"
   }
 
-  func presentProfile(_ memberID: Int) {
+  func loadMineFavorites() {
+    guard account.isLogin, let mid = account.mid else { return }
+    let request = UUID()
+    mineFavoritesRequest = request
+    mineFavoritesLoading = true
+    mineFavoritesError = nil
+    channel.invokeMethod("loadNativeProfileSection", arguments: ["mid": mid, "kind": "favorites", "page": 1]) { [weak self] response in
+      DispatchQueue.main.async {
+        guard let self, self.mineFavoritesRequest == request, self.account.mid == mid else { return }
+        self.mineFavoritesLoading = false
+        let result = piliDictionary(response)
+        guard piliString(result["state"]) == "success" else {
+          self.mineFavoritesError = (response as? FlutterError)?.message ?? piliString(result["error"]) ?? "收藏夹加载失败"
+          return
+        }
+        self.mineFavorites = (result["items"] as? [Any] ?? []).enumerated().map {
+          PiliNativeLibraryItem(map: piliDictionary($0.element), index: $0.offset)
+        }
+      }
+    }
+  }
+
+  func openFavoriteFolder(_ item: PiliNativeLibraryItem) {
+    libraryKind = "favorites"
+    libraryTitle = "我的收藏"
+    openLibraryItem(item)
+    isLibraryPresented = true
+  }
+
+  func selectProfileSection(_ section: Int) {
+    profileSection = section
+    profileSectionRequest = UUID()
+    profileSectionLoading = false
+    profileSectionError = nil
+    profileSectionHasMore = false
+    profileSectionPage = 1
+    profileSectionOffset = ""
+    profileDynamics = []
+    profileCollections = []
+    if [1, 3, 4].contains(section) { loadProfileSection() }
+  }
+
+  func loadProfileSection(refresh: Bool = false) {
+    guard let mid = profileMID, [1, 3, 4].contains(profileSection) else { return }
+    if refresh { selectProfileSection(profileSection); return }
+    guard !profileSectionLoading, profileSectionPage == 1 || profileSectionHasMore else { return }
+    let section = profileSection
+    let request = UUID()
+    profileSectionRequest = request
+    profileSectionLoading = true
+    profileSectionError = nil
+    let kind = section == 1 ? "dynamics" : section == 3 ? "favorites" : "bangumi"
+    channel.invokeMethod("loadNativeProfileSection", arguments: ["mid": mid, "kind": kind, "page": profileSectionPage, "offset": profileSectionOffset]) { [weak self] response in
+      DispatchQueue.main.async {
+        guard let self, self.profileMID == mid, self.profileSectionRequest == request else { return }
+        self.profileSectionLoading = false
+        let result = piliDictionary(response)
+        guard piliString(result["state"]) == "success" else {
+          self.profileSectionError = (response as? FlutterError)?.message ?? piliString(result["error"]) ?? "内容加载失败"
+          return
+        }
+        let rows = result["items"] as? [Any] ?? []
+        if section == 1 {
+          let existing = Set(self.profileDynamics.map(\.sourceID))
+          let start = self.profileDynamics.count
+          let items = rows.enumerated().map { PiliNativeDynamic(map: piliDictionary($0.element), index: start + $0.offset) }
+          self.profileDynamics.append(contentsOf: items.filter { !existing.contains($0.sourceID) })
+        } else {
+          let existing = Set(self.profileCollections.map(\.sourceID))
+          let start = self.profileCollections.count
+          let items = rows.enumerated().map { PiliNativeLibraryItem(map: piliDictionary($0.element), index: start + $0.offset) }
+          self.profileCollections.append(contentsOf: items.filter { !existing.contains($0.sourceID) })
+        }
+        self.profileSectionOffset = piliString(result["offset"]) ?? ""
+        self.profileSectionHasMore = piliBool(result["hasMore"]) && !rows.isEmpty
+        self.profileSectionPage += 1
+      }
+    }
+  }
+
+  func openProfileDynamic(_ item: PiliNativeDynamic) {
+    isProfilePresented = false
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in self?.openDynamic(item) }
+  }
+
+  func openProfileCollection(_ item: PiliNativeLibraryItem) {
+    isProfilePresented = false
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+      if item.kind == "folder" { self?.openFavoriteFolder(item) }
+      else { self?.openLibraryItem(item) }
+    }
+  }
+
+  func saveProfileSign(_ sign: String, completion: @escaping (String?) -> Void) {
+    guard let profile, profile.isSelf else { completion("只能编辑当前账号资料"); return }
+    let mid = profile.mid
+    channel.invokeMethod("saveNativeProfileSign", arguments: ["mid": mid, "sign": sign]) { [weak self] response in
+      DispatchQueue.main.async {
+        guard let self, self.profileMID == mid, self.account.mid == mid else { completion("账号已切换"); return }
+        let result = piliDictionary(response)
+        if piliString(result["state"]) == "success" { self.loadProfile(); completion(nil) }
+        else { completion((response as? FlutterError)?.message ?? piliString(result["error"]) ?? "保存失败") }
+      }
+    }
+  }
+
+  func presentProfile(_ memberID: Int, section: Int = 0) {
     profileMID = memberID
     profile = nil
     profileError = nil
@@ -2427,6 +2560,7 @@ private final class PiliNativeViewModel: ObservableObject {
     profileVideosLoadingMore = false
     profileVideosError = nil
     isProfilePresented = true
+    selectProfileSection(section)
     loadProfile()
   }
 
@@ -2436,7 +2570,7 @@ private final class PiliNativeViewModel: ObservableObject {
     profileError = nil
     channel.invokeMethod("loadNativeProfile", arguments: ["mid": memberID]) { [weak self] response in
       DispatchQueue.main.async {
-        guard let self = self else { return }
+        guard let self = self, self.profileMID == memberID else { return }
         self.profileLoading = false
         if let flutterError = response as? FlutterError {
           self.profileError = flutterError.message ?? "个人空间加载失败"
@@ -2783,6 +2917,7 @@ private struct PiliNativeLibraryItem: Identifiable {
   let viewText: String
   let danmakuText: String
   let fallbackRoute: String
+  let externalURL: URL?
   let fallbackParameters: [String: String]
 
   init(map: [String: Any], index: Int) {
@@ -2805,6 +2940,10 @@ private struct PiliNativeLibraryItem: Identifiable {
     viewText = piliString(map["viewText"]) ?? ""
     danmakuText = piliString(map["danmakuText"]) ?? ""
     fallbackRoute = piliString(map["fallbackRoute"]) ?? ""
+    if let value = piliString(map["url"]), let url = URL(string: value),
+       ["https", "http", "bilibili"].contains(url.scheme?.lowercased() ?? "") {
+      externalURL = url
+    } else { externalURL = nil }
     let rawParameters = piliDictionary(map["fallbackParameters"])
     fallbackParameters = rawParameters.reduce(into: [String: String]()) { result, pair in
       if let value = piliString(pair.value) { result[pair.key] = value }
@@ -2822,6 +2961,8 @@ private struct PiliNativeDynamic: Identifiable {
   let title: String
   let body: String
   let cover: String?
+  let emotes: [String: PiliNativeCommentEmote]
+  let repostText: String?
   let coverWidth: CGFloat
   let coverHeight: CGFloat
   let pictures: [PiliNativeCommentPicture]
@@ -2844,6 +2985,15 @@ private struct PiliNativeDynamic: Identifiable {
     title = piliString(map["title"]) ?? ""
     body = piliString(map["body"]) ?? ""
     cover = piliString(map["cover"])
+    repostText = piliString(map["repostText"])
+    var mappedEmotes: [String: PiliNativeCommentEmote] = [:]
+    for value in map["emotes"] as? [Any] ?? [] {
+      let entry = piliDictionary(value)
+      if let text = piliString(entry["text"]), let url = piliString(entry["url"]) {
+        mappedEmotes[text] = PiliNativeCommentEmote(text: text, url: url, size: max(1, min(2, piliInt(entry["size"]))))
+      }
+    }
+    emotes = mappedEmotes
     coverWidth = CGFloat(max(0, piliDouble(map["coverWidth"])))
     coverHeight = CGFloat(max(0, piliDouble(map["coverHeight"])))
     var mappedPictures = (map["pictures"] as? [Any])?.compactMap {
@@ -3090,6 +3240,9 @@ private struct PiliNativeAccount {
   let followers: Int
   let dynamics: Int
   let favoriteCount: Int
+  let currentExp: Int
+  let nextExp: Int
+  let vip: Bool
 
   init(map: [String: Any] = [:]) {
     isLogin = piliBool(map["isLogin"])
@@ -3102,6 +3255,9 @@ private struct PiliNativeAccount {
     followers = piliInt(map["followers"])
     dynamics = piliInt(map["dynamics"])
     favoriteCount = piliInt(map["favoriteCount"])
+    currentExp = piliInt(map["currentExp"])
+    nextExp = piliInt(map["nextExp"])
+    vip = piliBool(map["vip"])
   }
 }
 
@@ -3111,6 +3267,7 @@ private struct PiliNativeProfile {
   let face: String?
   let topImage: String?
   let sign: String
+  let location: String
   let level: Int
   let followers: Int
   let following: Int
@@ -3129,6 +3286,7 @@ private struct PiliNativeProfile {
     face = piliString(map["face"])
     topImage = piliString(map["topImage"])
     sign = piliString(map["sign"]) ?? ""
+    location = piliString(map["location"]) ?? ""
     level = piliInt(map["level"])
     followers = piliInt(map["followers"])
     following = piliInt(map["following"])
@@ -3271,6 +3429,7 @@ private struct PiliNativePrimaryDestinations: ViewModifier {
 
 private struct PiliNativeRootView: View {
   @ObservedObject var model: PiliNativeViewModel
+  @AppStorage("nativeAppearance") private var appearance = 0
   @Namespace private var videoTransitionNamespace
 
   private var selection: Binding<Int> {
@@ -3291,7 +3450,8 @@ private struct PiliNativeRootView: View {
           .tag(item.offset)
       }
     }
-    .accentColor(piliAccent)
+    .accentColor(Color(red: 0.12, green: 0.36, blue: 0.25))
+    .preferredColorScheme(appearance == 1 ? .light : appearance == 2 ? .dark : nil)
     .environment(\.piliVideoTransitionNamespace, videoTransitionNamespace)
     .sheet(isPresented: $model.isLibraryPresented) {
       PiliNativeLibraryView(model: model)
@@ -3787,169 +3947,169 @@ private struct PiliNativeStat: View {
   }
 }
 
-private struct PiliNativeMineAction {
-  let title: String
-  let codePoint: Int
-  let fallback: String
-  let route: String
-  let protected: Bool
+private struct PiliNativeAvatar: View {
+  let url: String?
+  let vip: Bool
+  let size: CGFloat
+  var body: some View {
+    PiliRemoteImage(urlString: url)
+      .frame(width: size, height: size).clipShape(Circle())
+      .overlay(Circle().stroke(Color(UIColor.systemBackground), lineWidth: 2))
+      .overlay(alignment: .bottomTrailing) {
+        if vip {
+          Text("大").font(.system(size: size * 0.17, weight: .heavy))
+            .foregroundStyle(.white).frame(width: size * 0.27, height: size * 0.27)
+            .background(Color.pink, in: Circle())
+            .overlay(Circle().stroke(Color(UIColor.systemBackground), lineWidth: 2))
+        }
+      }
+  }
+}
+
+private struct PiliNativeFavoriteCard: View {
+  let item: PiliNativeLibraryItem
+  let width: CGFloat
+  let action: () -> Void
+  var body: some View {
+    Button(action: action) {
+      VStack(alignment: .leading, spacing: 8) {
+        PiliRemoteImage(urlString: item.cover)
+          .aspectRatio(contentMode: .fill)
+          .frame(width: width, height: width * 0.60).clipped()
+          .clipShape(RoundedRectangle(cornerRadius: 12))
+        Text(item.title).font(.system(size: 16)).foregroundStyle(.primary).lineLimit(1)
+        Text([item.trailingText, item.badge].filter { !$0.isEmpty }.joined(separator: " · "))
+          .font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(1)
+      }.frame(width: width, alignment: .leading)
+    }.buttonStyle(.plain)
+    .accessibilityIdentifier("favorite-\(item.sourceID)")
+  }
 }
 
 private struct PiliNativeMineView: View {
   @ObservedObject var model: PiliNativeViewModel
-
-  private let actions = [
-    PiliNativeMineAction(title: "离线缓存", codePoint: 0xe806, fallback: "arrow.down.circle", route: "/download", protected: false),
-    PiliNativeMineAction(title: "观看记录", codePoint: 0xe807, fallback: "clock.arrow.circlepath", route: "/history", protected: true),
-    PiliNativeMineAction(title: "我的收藏", codePoint: 0xe81a, fallback: "star", route: "/fav", protected: true),
-    PiliNativeMineAction(title: "稍后再看", codePoint: 0xe820, fallback: "clock", route: "/later", protected: true),
-    PiliNativeMineAction(title: "我的订阅", codePoint: 0xe81c, fallback: "rectangle.stack", route: "/subscription", protected: true),
-    PiliNativeMineAction(title: "消息中心", codePoint: 0xe802, fallback: "bell", route: "/whisper", protected: true),
+  @AppStorage("nativeAppearance") private var appearance = 0
+  private let shortcuts = [
+    ("离线缓存", "folder.badge.minus", "/download"),
+    ("观看记录", "clock.arrow.circlepath", "/history"),
+    ("我的订阅", "play.rectangle.on.rectangle", "/subscription"),
+    ("稍后再看", "clock", "/later"),
   ]
 
   var body: some View {
     NavigationStack {
-      List {
-        Section {
-          Button(action: openAccount) {
-            HStack(spacing: 14) {
-              PiliRemoteImage(urlString: model.account.face)
-                .frame(width: 64, height: 64)
-                .clipShape(Circle())
-              VStack(alignment: .leading, spacing: 7) {
-                HStack(spacing: 6) {
-                  Text(model.account.name)
-                    .font(.headline)
-                    .foregroundColor(.primary)
-                  if model.account.isLogin {
-                    PiliOriginalLevelBadge(level: model.account.level, height: 13)
-                  }
+      ScrollView {
+        VStack(spacing: 0) {
+          HStack(spacing: 4) {
+            Spacer()
+            toolbarButton("消息中心", "text.bubble") { protectedRoute("/whisper") }
+            toolbarButton("搜索", "magnifyingglass") { model.isSearchPresented = true }
+            toolbarButton("切换账号", "person.crop.rectangle.stack") { model.openRoute("/loginPage") }
+            toolbarButton("切换主题", appearance == 2 ? "moon.fill" : "sun.max") { appearance = (appearance + 1) % 3 }
+            toolbarButton("设置", "gearshape") { model.presentSettings() }
+          }.padding(.horizontal, 18).padding(.top, 10)
+
+          Button(action: { openAccount(section: 0) }) {
+            HStack(spacing: 16) {
+              PiliNativeAvatar(url: model.account.face, vip: model.account.vip, size: 60)
+              VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
+                  Text(model.account.name).font(.system(size: 20, weight: .semibold)).foregroundStyle(.primary)
+                  if model.account.isLogin { PiliOriginalLevelBadge(level: model.account.level, height: 12) }
                 }
-                Text(
-                  model.account.isLogin
-                    ? String(format: "硬币 %.1f", model.account.money)
-                    : "登录后同步收藏、历史与动态"
-                )
-                  .font(.caption)
-                  .foregroundColor(.secondary)
-              }
-              Spacer()
-              Image(systemName: "chevron.right")
-                .font(.caption)
-                .foregroundColor(Color(UIColor.tertiaryLabel))
-            }
-            .padding(.vertical, 8)
-          }
-          .buttonStyle(PlainButtonStyle())
+                if model.account.isLogin {
+                  HStack(spacing: 12) {
+                    Text(String(format: "硬币 %.1f", model.account.money))
+                    Text(model.account.nextExp > 0 ? "经验 \(model.account.currentExp)/\(model.account.nextExp)" : "经验 \(model.account.currentExp) · 已满级")
+                      .lineLimit(1).minimumScaleFactor(0.7)
+                  }.font(.system(size: 12)).foregroundStyle(.secondary)
+                  ProgressView(value: model.account.nextExp > 0 ? min(1, max(0, Double(model.account.currentExp) / Double(model.account.nextExp))) : 1)
+                    .tint(piliProfileAccent).scaleEffect(x: 1, y: 0.7, anchor: .center)
+                    .accessibilityLabel("等级经验")
+                } else {
+                  Text("登录后同步收藏、历史与动态").font(.caption).foregroundStyle(.secondary)
+                }
+              }.frame(maxWidth: .infinity, alignment: .leading)
+            }.padding(.horizontal, 22).padding(.vertical, 18)
+          }.buttonStyle(.plain).accessibilityIdentifier("mine-account")
 
-          HStack {
-            PiliNativeAccountStat(value: model.account.dynamics, title: "动态") {
-              openProtected("/memberDynamics")
-            }
-            Spacer()
-            PiliNativeAccountStat(value: model.account.following, title: "关注") {
-              openService("/follow", protected: true)
-            }
-            Spacer()
-            PiliNativeAccountStat(value: model.account.followers, title: "粉丝") {
-              openService("/fan", protected: true)
-            }
-          }
-          .padding(.horizontal, 18)
-          .padding(.vertical, 8)
-        }
+          HStack(spacing: 0) {
+            PiliNativeAccountStat(value: model.account.dynamics, title: "动态") { openAccount(section: 1) }
+            PiliNativeAccountStat(value: model.account.following, title: "关注") { protectedRoute("/follow") }
+            PiliNativeAccountStat(value: model.account.followers, title: "粉丝") { protectedRoute("/fan") }
+          }.padding(.vertical, 17).padding(.horizontal, 14)
 
-        Section(header: Text("我的服务")) {
-          ForEach(actions.indices, id: \.self) { index in
-            let item = actions[index]
-            Button(action: { openService(item.route, protected: item.protected) }) {
-              HStack(spacing: 14) {
-                PiliOriginalIcon(
-                  family: .custom,
-                  codePoint: item.codePoint,
-                  fallback: item.fallback,
-                  size: 20
-                )
-                  .frame(width: 24)
-                  .foregroundColor(piliAccent)
-                Text(item.title).foregroundColor(.primary)
-                Spacer()
-                Image(systemName: "chevron.right")
-                  .font(.caption)
-                  .foregroundColor(Color(UIColor.tertiaryLabel))
-              }
+          HStack(alignment: .top, spacing: 0) {
+            ForEach(shortcuts.indices, id: \.self) { index in
+              let item = shortcuts[index]
+              Button { protectedRoute(item.2, requiresLogin: item.2 != "/download") } label: {
+                VStack(spacing: 13) {
+                  Image(systemName: item.1).font(.system(size: 23, weight: .regular)).foregroundStyle(piliProfileAccent)
+                  Text(item.0).font(.system(size: 14)).foregroundStyle(.primary).lineLimit(1).minimumScaleFactor(0.8)
+                }.frame(maxWidth: .infinity).padding(.vertical, 22)
+              }.buttonStyle(.plain)
             }
-          }
-        }
-
-        Section {
-          Button(action: { model.presentSettings() }) {
-            Label("设置", systemImage: "gearshape")
-              .foregroundColor(.primary)
-          }
-          Button(action: { model.openRoute("/loginPage") }) {
-            Label(model.account.isLogin ? "切换账号" : "登录", systemImage: "person.crop.circle.badge.arrow.forward")
-              .foregroundColor(.primary)
-          }
+          }.padding(.horizontal, 12).padding(.bottom, 8)
+          Divider().opacity(0.4)
+          favorites
         }
       }
-      .listStyle(InsetGroupedListStyle())
-      .refreshable { model.refresh("mine") }
-      .navigationBarTitle("我的", displayMode: .inline)
-      .navigationBarItems(
-        leading: Button(action: { model.isSearchPresented = true }) {
-          Image(systemName: "magnifyingglass")
-        }
-      )
+      .background(Color(UIColor.systemBackground))
+      .refreshable { model.refresh("mine"); model.loadMineFavorites() }
+      .task(id: model.account.mid) { model.loadMineFavorites() }
+      .toolbar(.hidden, for: .navigationBar)
       .modifier(PiliNativePrimaryDestinations(model: model, tab: .mine))
     }
   }
 
-  private func openAccount() {
-    if model.account.isLogin, let mid = model.account.mid {
-      model.presentProfile(mid)
-    } else {
-      model.openRoute("/loginPage")
-    }
-  }
-
-  private func openProtected(_ route: String) {
-    guard model.account.isLogin else {
-      model.openRoute("/loginPage")
-      return
-    }
-    var parameters: [String: String] = [:]
-    if let mid = model.account.mid {
-      parameters["mid"] = String(mid)
-    }
-    model.openRoute(route, parameters: parameters)
-  }
-
-  private func openService(_ route: String, protected: Bool) {
-    if protected && !model.account.isLogin {
-      model.openRoute("/loginPage")
-      return
-    }
-    switch route {
-    case "/history":
-      model.presentLibrary("history", title: "观看记录")
-    case "/later":
-      model.presentLibrary("later", title: "稍后再看")
-    case "/fav":
-      model.presentLibrary("favorites", title: "我的收藏")
-    case "/follow":
-      model.presentLibrary("following", title: "关注")
-    case "/fan":
-      model.presentLibrary("followers", title: "粉丝")
-    case "/subscription":
-      model.presentLibrary("subscriptions", title: "我的订阅")
-    default:
-      if protected {
-        openProtected(route)
+  private var favorites: some View {
+    VStack(alignment: .leading, spacing: 20) {
+      HStack {
+        Button { protectedRoute("/fav") } label: {
+          HStack(spacing: 10) {
+            Text("我的收藏").font(.system(size: 18, weight: .bold)).foregroundStyle(.primary)
+            Text("\(model.account.favoriteCount)").font(.system(size: 15)).foregroundStyle(.secondary)
+            Image(systemName: "chevron.right").font(.system(size: 17, weight: .medium)).foregroundStyle(piliProfileAccent)
+          }
+        }.buttonStyle(.plain)
+        Spacer()
+        Button(action: model.loadMineFavorites) {
+          Image(systemName: "arrow.clockwise").font(.system(size: 20)).frame(width: 36, height: 36)
+        }.disabled(model.mineFavoritesLoading || !model.account.isLogin).accessibilityLabel("刷新收藏夹")
+      }.padding(.horizontal, 24).padding(.top, 19)
+      if !model.account.isLogin {
+        Button("登录查看收藏夹") { model.openRoute("/loginPage") }.padding(.horizontal, 24)
+      } else if let error = model.mineFavoritesError {
+        VStack(alignment: .leading, spacing: 10) {
+          Text(error).font(.caption).foregroundStyle(.secondary)
+          Button("重试", action: model.loadMineFavorites)
+        }.padding(.horizontal, 24)
+      } else if model.mineFavoritesLoading && model.mineFavorites.isEmpty {
+        ProgressView().frame(maxWidth: .infinity, minHeight: 150)
+      } else if model.mineFavorites.isEmpty {
+        Text("还没有收藏夹").foregroundStyle(.secondary).padding(.horizontal, 24)
       } else {
-        model.openRoute(route)
+        ScrollView(.horizontal, showsIndicators: false) {
+          HStack(alignment: .top, spacing: 14) {
+            ForEach(model.mineFavorites) { item in
+              PiliNativeFavoriteCard(item: item, width: min(210, UIScreen.main.bounds.width * 0.46)) { model.openFavoriteFolder(item) }
+            }
+          }.padding(.horizontal, 20)
+        }
       }
-    }
+    }.padding(.bottom, 28).tint(piliProfileAccent)
+  }
+
+  private func toolbarButton(_ title: String, _ icon: String, action: @escaping () -> Void) -> some View {
+    Button(action: action) { Image(systemName: icon).font(.system(size: 21)).frame(width: 42, height: 44) }
+      .foregroundStyle(piliProfileAccent).accessibilityLabel(title)
+  }
+  private func openAccount(section: Int) {
+    if model.account.isLogin, let mid = model.account.mid { model.presentProfile(mid, section: section) }
+    else { model.openRoute("/loginPage") }
+  }
+  private func protectedRoute(_ route: String, requiresLogin: Bool = true) {
+    model.openRoute(requiresLogin && !model.account.isLogin ? "/loginPage" : route)
   }
 }
 
@@ -3960,13 +4120,14 @@ private struct PiliNativeAccountStat: View {
 
   var body: some View {
     Button(action: action) {
-      VStack(spacing: 4) {
-        Text(String(value)).font(.headline).foregroundColor(.primary)
-        Text(title).font(.caption).foregroundColor(.secondary)
+      VStack(spacing: 9) {
+        Text(String(value)).font(.system(size: 21, weight: .semibold)).foregroundColor(.primary)
+        Text(title).font(.system(size: 14)).foregroundColor(.secondary)
       }
       .frame(minWidth: 60)
     }
     .buttonStyle(PlainButtonStyle())
+    .frame(maxWidth: .infinity)
   }
 }
 
@@ -3974,190 +4135,196 @@ private struct PiliNativeAccountStat: View {
 
 private struct PiliNativeProfileView: View {
   @ObservedObject var model: PiliNativeViewModel
-  @Environment(\.presentationMode) private var presentationMode
-  @State private var selectedSection = 0
-  private let columns = [
-    GridItem(.flexible(minimum: 0), spacing: 12, alignment: .top),
-    GridItem(.flexible(minimum: 0), spacing: 12, alignment: .top),
-  ]
+  @Environment(\.dismiss) private var dismiss
+  @State private var editing = false
+  @State private var searching = false
+  @State private var query = ""
+  private let columns = [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)]
+  private let sections = ["主页", "动态", "投稿", "收藏", "追番"]
 
   var body: some View {
-    NavigationView {
+    NavigationStack {
       Group {
-        if model.profileLoading && model.profile == nil {
-          PiliNativeLoadingView(title: "正在加载个人空间")
-        } else if let error = model.profileError, model.profile == nil {
-          PiliNativeErrorView(message: error, retry: model.loadProfile)
-        } else if let profile = model.profile {
+        if let profile = model.profile {
           ScrollView {
-            VStack(spacing: 0) {
+            LazyVStack(spacing: 0, pinnedViews: [.sectionHeaders]) {
               profileHero(profile)
               profileIdentityCard(profile)
-              profileSectionPicker
-              profileContent(profile)
-            }
-            .padding(.bottom, 32)
+              Section {
+                if searching {
+                  TextField("筛选已加载内容", text: $query).textFieldStyle(.roundedBorder).padding(16)
+                }
+                profileContent(profile)
+              } header: { profileSectionPicker }
+            }.padding(.bottom, 24)
           }
-          .background(Color(UIColor.systemGroupedBackground))
-          .refreshable { model.loadProfile() }
+          .ignoresSafeArea(edges: .top)
+          .refreshable { model.loadProfile(); model.loadProfileSection(refresh: true) }
+          .sheet(isPresented: $editing) { PiliNativeProfileEditor(profile: profile, model: model) }
+        } else if let error = model.profileError {
+          PiliNativeErrorView(message: error, retry: model.loadProfile)
         } else {
-          PiliNativeErrorView(message: "暂无个人资料", retry: model.loadProfile)
+          PiliNativeLoadingView(title: "正在加载个人空间")
         }
       }
-      .navigationBarTitle("个人主页", displayMode: .inline)
-      .navigationBarItems(
-        leading: Button("关闭") {
-          model.isProfilePresented = false
-          presentationMode.wrappedValue.dismiss()
+      .background(Color(UIColor.systemBackground))
+      .toolbar(.hidden, for: .navigationBar)
+      .overlay(alignment: .top) {
+        if model.profile == nil {
+          HStack { closeButton; Spacer() }.padding(.horizontal, 12)
         }
-      )
+      }
+      .tint(piliProfileAccent)
     }
-    .navigationViewStyle(StackNavigationViewStyle())
+  }
+
+  private var closeButton: some View {
+    Button { model.isProfilePresented = false; dismiss() } label: {
+      Image(systemName: "chevron.left").font(.system(size: 23, weight: .medium)).frame(width: 44, height: 44)
+    }.accessibilityLabel("返回个人主页上一级")
   }
 
   private func profileHero(_ profile: PiliNativeProfile) -> some View {
-    ZStack(alignment: .bottom) {
-      PiliRemoteImage(urlString: profile.topImage)
-        .aspectRatio(16 / 8.5, contentMode: .fill)
-        .frame(maxWidth: .infinity)
-        .frame(height: 210)
-        .clipped()
-        .overlay(
-          LinearGradient(
-            colors: [.black.opacity(0.03), .black.opacity(0.58)],
-            startPoint: .top,
-            endPoint: .bottom
-          )
-        )
-
-      HStack {
-        Label(profile.vip ? "大会员" : "PiliGlass 用户", systemImage: profile.vip ? "crown.fill" : "person.fill")
-          .font(.system(size: 12, weight: .semibold))
-          .foregroundColor(.white)
-          .padding(.horizontal, 10)
-          .padding(.vertical, 6)
-          .background(Color.black.opacity(0.38))
-          .clipShape(Capsule())
-        Spacer()
-        Text("UID " + String(profile.mid))
-          .font(.caption)
-          .foregroundColor(.white.opacity(0.9))
+    GeometryReader { proxy in
+      ZStack(alignment: .bottom) {
+        if profile.topImage != nil {
+          PiliRemoteImage(urlString: profile.topImage).aspectRatio(contentMode: .fill)
+            .frame(width: proxy.size.width, height: 145 + proxy.safeAreaInsets.top).clipped()
+        } else {
+          LinearGradient(colors: [Color(red: 0.95, green: 0.77, blue: 0.51), Color(red: 0.82, green: 0.53, blue: 0.36)], startPoint: .topLeading, endPoint: .bottomTrailing)
+        }
+        HStack(spacing: 4) {
+          closeButton
+          Spacer()
+          Button { searching.toggle() } label: {
+            Image(systemName: "magnifyingglass").font(.system(size: 22)).frame(width: 44, height: 44)
+          }.accessibilityLabel("搜索主页内容")
+          Menu {
+            ShareLink(item: URL(string: "https://space.bilibili.com/\(profile.mid)")!) {
+              Label("分享主页", systemImage: "square.and.arrow.up")
+            }
+            Button { UIPasteboard.general.string = String(profile.mid) } label: { Label("复制 UID", systemImage: "doc.on.doc") }
+            Button("刷新资料", action: model.loadProfile)
+          } label: { Image(systemName: "ellipsis").rotationEffect(.degrees(90)).font(.system(size: 22, weight: .bold)).frame(width: 44, height: 44) }
+          .accessibilityLabel("主页更多操作")
+        }.foregroundStyle(Color(red: 0.13, green: 0.20, blue: 0.16)).padding(.horizontal, 10).padding(.bottom, 26)
       }
-      .padding(.horizontal, 16)
-      .padding(.bottom, 58)
-    }
+    }.frame(height: 145)
   }
 
   private func profileIdentityCard(_ profile: PiliNativeProfile) -> some View {
-    ZStack(alignment: .top) {
-      RoundedRectangle(cornerRadius: 22, style: .continuous)
-        .fill(Color(UIColor.systemBackground))
-        .padding(.top, 48)
-        .shadow(color: .black.opacity(0.07), radius: 18, y: 7)
-
-      VStack(spacing: 13) {
-        // Reserve the avatar's full height inside the card's layout bounds.
-        // This keeps it visible when the container overlaps the cover image.
-        Color.clear.frame(height: 96)
-
-        HStack(spacing: 7) {
-          Text(profile.name)
-            .font(.title2)
-            .fontWeight(.bold)
-            .foregroundColor(profile.vip ? piliAccent : .primary)
-          PiliOriginalLevelBadge(level: profile.level, height: 14)
-        }
-
-        if !profile.official.isEmpty {
-          Label(profile.official, systemImage: "checkmark.seal.fill")
-            .font(.caption)
-            .foregroundColor(piliAccent)
-        }
-
-        HStack(spacing: 0) {
-          profileStat(profile.following, "关注")
-          Divider().frame(height: 34)
-          profileStat(profile.followers, "粉丝")
-          Divider().frame(height: 34)
-          profileStat(profile.likes, "获赞")
-        }
-        .padding(.vertical, 4)
-
-        if !profile.isSelf {
-          Button(action: model.toggleProfileFollow) {
-            Label(
-              profile.isFollowing ? "已关注" : "关注",
-              systemImage: profile.isFollowing ? "checkmark" : "plus"
-            )
-            .font(.system(size: 15, weight: .semibold))
-            .foregroundColor(profile.isFollowing ? .primary : .white)
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 11)
-            .background(profile.isFollowing ? Color(UIColor.secondarySystemGroupedBackground) : piliAccent)
-            .cornerRadius(12)
+    VStack(alignment: .leading, spacing: 11) {
+      HStack(alignment: .top, spacing: 20) {
+        PiliNativeAvatar(url: profile.face, vip: profile.vip, size: 86)
+          .offset(y: -21).padding(.bottom, -21)
+        VStack(spacing: 12) {
+          HStack(spacing: 0) {
+            profileStat(profile.followers, "粉丝")
+            Divider().frame(height: 17)
+            profileStat(profile.following, "关注")
+            Divider().frame(height: 17)
+            profileStat(profile.likes, "获赞")
           }
-          .buttonStyle(PlainButtonStyle())
-          .disabled(model.profileActionLoading)
-        }
-
-        if let message = model.profileMessage {
-          Text(message)
-            .font(.caption)
-            .foregroundColor(.secondary)
-        }
+          Button {
+            if profile.isSelf { editing = true } else { model.toggleProfileFollow() }
+          } label: {
+            Text(profile.isSelf ? "编辑资料" : profile.isFollowing ? "已关注" : "+ 关注")
+              .font(.system(size: 15, weight: .semibold)).frame(maxWidth: .infinity).padding(.vertical, 9)
+              .foregroundStyle(piliProfileAccent).background(piliProfileAccent.opacity(0.16), in: Capsule())
+          }.buttonStyle(.plain).disabled(model.profileActionLoading)
+        }.padding(.top, 8)
       }
-      .padding(.horizontal, 16)
-      .padding(.bottom, 16)
-
-      PiliRemoteImage(urlString: profile.face)
-        .frame(width: 96, height: 96)
-        .clipShape(Circle())
-        .overlay(Circle().stroke(Color(UIColor.systemBackground), lineWidth: 5))
-        .shadow(color: .black.opacity(0.18), radius: 12, y: 4)
-        .zIndex(1)
-    }
-    .padding(.horizontal, 14)
-    .offset(y: -48)
-    .padding(.bottom, -38)
+      HStack(spacing: 8) {
+        Text(profile.name).font(.system(size: 23, weight: .bold))
+        PiliOriginalLevelBadge(level: profile.level, height: 12)
+        if profile.vip {
+          Text("大会员").font(.system(size: 11, weight: .semibold)).foregroundStyle(.white)
+            .padding(.horizontal, 9).padding(.vertical, 3).background(Color.pink, in: Capsule())
+        }
+      }.padding(.top, 2)
+      if !profile.sign.isEmpty { Text(profile.sign).font(.system(size: 15)).textSelection(.enabled) }
+      HStack(spacing: 10) {
+        Text("UID: \(profile.mid)")
+        if !profile.location.isEmpty { Text(profile.location) }
+      }.font(.system(size: 12)).foregroundStyle(.secondary)
+      if !profile.official.isEmpty {
+        Label(profile.official, systemImage: "checkmark.seal.fill").font(.caption).foregroundStyle(.secondary)
+      }
+      if let message = model.profileMessage { Text(message).font(.caption).foregroundStyle(.secondary) }
+    }.padding(.horizontal, 20).padding(.bottom, 15)
   }
 
   private func profileStat(_ value: Int, _ title: String) -> some View {
-    VStack(spacing: 4) {
-      Text(piliCompactNumber(value))
-        .font(.headline)
-        .fontWeight(.bold)
-      Text(title)
-        .font(.caption)
-        .foregroundColor(.secondary)
-    }
-    .frame(maxWidth: .infinity)
+    VStack(spacing: 3) {
+      Text(piliCompactNumber(value)).font(.system(size: 16))
+      Text(title).font(.system(size: 12)).foregroundStyle(.secondary)
+    }.frame(maxWidth: .infinity)
   }
 
   private var profileSectionPicker: some View {
-    Picker("主页内容", selection: $selectedSection) {
-      Text("主页").tag(0)
-      Text("视频").tag(1)
-      Text("资料").tag(2)
-    }
-    .pickerStyle(SegmentedPickerStyle())
-    .padding(5)
-    .background(Color(UIColor.systemBackground))
-    .cornerRadius(12)
-    .padding(.horizontal, 14)
-    .padding(.vertical, 10)
+    HStack(spacing: 0) {
+      ForEach(sections.indices, id: \.self) { index in
+        Button { query = ""; model.selectProfileSection(index) } label: {
+          VStack(spacing: 13) {
+            Text(sections[index]).font(.system(size: 16, weight: model.profileSection == index ? .semibold : .regular))
+              .foregroundStyle(model.profileSection == index ? piliProfileAccent : Color.primary)
+            Capsule().fill(model.profileSection == index ? piliProfileAccent : Color.clear).frame(width: 30, height: 3)
+          }.frame(maxWidth: .infinity).padding(.top, 12)
+        }.buttonStyle(.plain).accessibilityIdentifier("profile-tab-\(index)")
+        .accessibilityAddTraits(model.profileSection == index ? .isSelected : [])
+      }
+    }.background(Color(UIColor.systemBackground)).overlay(alignment: .bottom) { Divider().opacity(0.4) }
   }
 
   @ViewBuilder
   private func profileContent(_ profile: PiliNativeProfile) -> some View {
-    if selectedSection == 0 {
+    if model.profileSection == 0 {
       VStack(spacing: 12) {
         profileAboutCard(profile)
         profileVideoGrid(profile, limit: 4, title: "最新投稿")
-      }
-    } else if selectedSection == 1 {
-      profileVideoGrid(profile, limit: nil, title: "全部投稿 · \(profile.videoCount)")
+      }.padding(.top, 14)
+    } else if model.profileSection == 2 {
+      profileVideoGrid(profile, limit: nil, title: "全部投稿 · \(profile.videoCount)").padding(.top, 14)
     } else {
-      profileDetailsCard(profile)
+      LazyVStack(spacing: 0) {
+        if model.profileSection == 1 {
+          ForEach(model.profileDynamics.filter { query.isEmpty || ($0.body + $0.title).localizedCaseInsensitiveContains(query) }) { item in
+            PiliNativeProfileDynamicCard(item: item) { model.openProfileDynamic(item) }
+            Rectangle().fill(Color(UIColor.secondarySystemBackground)).frame(height: 8)
+          }
+        } else {
+          LazyVGrid(columns: columns, spacing: 20) {
+            ForEach(model.profileCollections.filter { query.isEmpty || $0.title.localizedCaseInsensitiveContains(query) }) { item in
+              GeometryReader { proxy in
+                if item.kind == "bangumi", let url = item.externalURL {
+                  Link(destination: url) { collectionContent(item, width: proxy.size.width) }
+                } else {
+                  PiliNativeFavoriteCard(item: item, width: proxy.size.width) { model.openProfileCollection(item) }
+                }
+              }.frame(height: min(240, (UIScreen.main.bounds.width - 52) * 0.30 + 66))
+            }
+          }.padding(20)
+        }
+        if model.profileSectionLoading { ProgressView().padding(24) }
+        else if let error = model.profileSectionError {
+          Text(error).font(.caption).foregroundStyle(.secondary).padding(12)
+          Button("重试加载") { model.loadProfileSection() }.padding(.bottom, 20)
+        } else if model.profileDynamics.isEmpty && model.profileCollections.isEmpty {
+          PiliNativeEmptyView(icon: model.profileSection == 1 ? "text.bubble" : "rectangle.stack", title: "暂无\(sections[model.profileSection])", subtitle: "未公开或还没有发布内容")
+            .frame(minHeight: 160)
+        } else if model.profileSectionHasMore {
+          Button("加载更多") { model.loadProfileSection() }.padding(24)
+        }
+      }
+    }
+  }
+
+  private func collectionContent(_ item: PiliNativeLibraryItem, width: CGFloat) -> some View {
+    VStack(alignment: .leading, spacing: 8) {
+      PiliRemoteImage(urlString: item.cover).aspectRatio(contentMode: .fill)
+        .frame(width: width, height: width * 0.6).clipped().cornerRadius(12)
+      Text(item.title).font(.subheadline).foregroundStyle(.primary).lineLimit(1)
+      Text(item.subtitle).font(.caption).foregroundStyle(.secondary).lineLimit(1)
     }
   }
 
@@ -4199,8 +4366,8 @@ private struct PiliNativeProfileView: View {
         Label(title, systemImage: "play.rectangle")
           .font(.headline)
         Spacer()
-        if selectedSection == 0 && profile.videos.count > 4 {
-          Button("查看全部") { selectedSection = 1 }
+        if model.profileSection == 0 && profile.videos.count > 4 {
+          Button("查看全部") { model.selectProfileSection(2) }
             .font(.caption)
             .foregroundColor(piliAccent)
         }
@@ -4218,7 +4385,7 @@ private struct PiliNativeProfileView: View {
         .frame(height: 150)
       } else {
         LazyVGrid(columns: columns, spacing: 14) {
-          ForEach(Array(profile.videos.prefix(limit ?? profile.videos.count))) { video in
+          ForEach(Array(profile.videos.filter { query.isEmpty || $0.title.localizedCaseInsensitiveContains(query) }.prefix(limit ?? profile.videos.count))) { video in
             PiliNativeProfileVideoCard(video: video) {
               model.openProfileVideo(video)
             }
@@ -4310,6 +4477,90 @@ private struct PiliNativeProfileView: View {
     }
     .font(.subheadline)
     .padding(.vertical, 11)
+  }
+}
+
+private struct PiliNativeProfileDynamicCard: View {
+  let item: PiliNativeDynamic
+  let action: () -> Void
+  var body: some View {
+    VStack(alignment: .leading, spacing: 14) {
+      Button(action: action) {
+        HStack(spacing: 12) {
+          PiliNativeAvatar(url: item.avatar, vip: false, size: 42)
+          VStack(alignment: .leading, spacing: 4) {
+            Text(item.author).font(.system(size: 16)).foregroundStyle(.primary)
+            Text(item.time).font(.system(size: 12)).foregroundStyle(.secondary)
+          }
+          Spacer()
+          Image(systemName: "ellipsis").rotationEffect(.degrees(90)).foregroundStyle(.secondary)
+        }
+      }.buttonStyle(.plain)
+      if !item.title.isEmpty { Text(item.title).font(.headline) }
+      if !item.body.isEmpty {
+        PiliNativeCommentRichText(message: item.body, emotes: item.emotes, textStyle: .body)
+          .fixedSize(horizontal: false, vertical: true)
+      }
+      if !item.pictures.isEmpty {
+        PiliNativeDynamicPicturesView(pictures: item.pictures, maxWidth: min(UIScreen.main.bounds.width - 32, 600), singleMaxHeight: 400)
+      }
+      if let repost = item.repostText {
+        Label(repost, systemImage: "exclamationmark.circle.fill")
+          .font(.system(size: 14)).foregroundStyle(.secondary)
+          .frame(maxWidth: .infinity, alignment: .leading).padding(12)
+          .background(Color(UIColor.secondarySystemBackground))
+      }
+      HStack(spacing: 0) {
+        dynamicAction("转发", "square.and.arrow.up", item.forward)
+        dynamicAction("评论", "bubble", item.comment)
+        dynamicAction("赞", "hand.thumbsup", item.like)
+      }.padding(.vertical, 6)
+    }.padding(.horizontal, 14).padding(.top, 14).padding(.bottom, 8)
+  }
+  private func dynamicAction(_ title: String, _ icon: String, _ count: Int) -> some View {
+    Button(action: action) {
+      Label(count > 0 ? String(count) : title, systemImage: icon)
+        .font(.system(size: 15)).foregroundStyle(.secondary).frame(maxWidth: .infinity)
+    }.buttonStyle(.plain)
+  }
+}
+
+private struct PiliNativeProfileEditor: View {
+  let profile: PiliNativeProfile
+  @ObservedObject var model: PiliNativeViewModel
+  @Environment(\.dismiss) private var dismiss
+  @State private var sign = ""
+  @State private var saving = false
+  @State private var error: String?
+  var body: some View {
+    NavigationStack {
+      Form {
+        Section("账号") {
+          LabeledContent("昵称", value: profile.name)
+          LabeledContent("UID", value: String(profile.mid))
+        }
+        Section("个性签名（最多 70 字）") {
+          TextEditor(text: $sign).frame(minHeight: 120).accessibilityLabel("个性签名")
+          Text("\(sign.count)/70").font(.caption).foregroundStyle(.secondary)
+        }
+        if let error { Text(error).foregroundStyle(.red) }
+      }
+      .navigationTitle("编辑资料").navigationBarTitleDisplayMode(.inline)
+      .toolbar {
+        ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() }.disabled(saving) }
+        ToolbarItem(placement: .confirmationAction) {
+          Button(saving ? "保存中…" : "保存") {
+            saving = true; error = nil
+            model.saveProfileSign(sign) { message in
+              saving = false
+              if let message { error = message } else { dismiss() }
+            }
+          }.disabled(saving || sign.count > 70)
+        }
+      }.interactiveDismissDisabled(saving)
+      .onAppear { sign = profile.sign }
+      .tint(piliProfileAccent)
+    }
   }
 }
 

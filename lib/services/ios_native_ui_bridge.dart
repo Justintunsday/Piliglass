@@ -1,7 +1,9 @@
 import 'dart:async';
 import 'dart:convert';
 
-import 'package:PiliPlus/grpc/bilibili/app/im/v1.pb.dart' as im_proto show Offset;
+import 'package:PiliPlus/grpc/bilibili/app/im/v1.pb.dart'
+    as im_proto
+    show Offset;
 import 'package:PiliPlus/grpc/bilibili/main/community/reply/v1.pb.dart'
     show Mode, ReplyInfo;
 import 'package:PiliPlus/grpc/dm.dart';
@@ -24,6 +26,11 @@ import 'package:PiliPlus/http/search.dart';
 import 'package:PiliPlus/http/user.dart';
 import 'package:PiliPlus/http/video.dart';
 import 'package:PiliPlus/models/common/account_type.dart';
+import 'package:PiliPlus/models/common/member/contribute_type.dart';
+import 'package:PiliPlus/common/constants.dart';
+import 'package:PiliPlus/http/init.dart';
+import 'package:PiliPlus/utils/app_sign.dart';
+import 'package:dio/dio.dart';
 import 'package:PiliPlus/models/common/dynamic/dynamics_type.dart';
 import 'package:PiliPlus/models/common/nav_bar_config.dart';
 import 'package:PiliPlus/models/common/search/search_type.dart';
@@ -72,10 +79,10 @@ final class IOSNativeUIBridge {
   final _danmakuSettings = NativeDanmakuSettings();
   final List<Worker> _workers = <Worker>[];
   final _cdnLatency = NativeCDNLatency(
-    probe: (url) => probeMediaLatency(url, headers: {
-      'user-agent': BrowserUa.pc,
-      'referer': HttpString.baseUrl,
-    }),
+    probe: (url) => probeMediaLatency(
+      url,
+      headers: {'user-agent': BrowserUa.pc, 'referer': HttpString.baseUrl},
+    ),
   );
   List<String> _latencySampleURLs = [];
   DateTime? _latencySampleTime;
@@ -86,8 +93,9 @@ final class IOSNativeUIBridge {
   bool _nativePlayerShellActive = false;
   PbMap<int, im_proto.Offset>? _nativeSessionOffsets;
 
-  late final RcmdController _homeController =
-      Get.putOrFind<RcmdController>(RcmdController.new);
+  late final RcmdController _homeController = Get.putOrFind<RcmdController>(
+    RcmdController.new,
+  );
   late final DynamicsController _dynamicsController =
       Get.putOrFind<DynamicsController>(DynamicsController.new);
   late final DynamicsTabController _dynamicsTabController =
@@ -95,8 +103,9 @@ final class IOSNativeUIBridge {
         () => DynamicsTabController(dynamicsType: DynamicsTabType.all),
         tag: DynamicsTabType.all.name,
       );
-  late final MineController _mineController =
-      Get.putOrFind<MineController>(MineController.new);
+  late final MineController _mineController = Get.putOrFind<MineController>(
+    MineController.new,
+  );
 
   void start() {
     // Initialize the original controllers before installing observers. Their
@@ -113,17 +122,11 @@ final class IOSNativeUIBridge {
       }),
       ever(mainController.dynCount, _syncDynamicBadge),
       ever(_homeController.loadingState, (_) => _scheduleSnapshot()),
-      ever(
-        _dynamicsTabController.loadingState,
-        (_) => _scheduleSnapshot(),
-      ),
+      ever(_dynamicsTabController.loadingState, (_) => _scheduleSnapshot()),
       ever(_mineController.loadingState, (_) => _scheduleSnapshot()),
       ever(_mineController.userInfo, (_) => _scheduleSnapshot()),
       ever(_mineController.userStat, (_) => _scheduleSnapshot()),
-      ever(
-        mainController.accountService.isLogin,
-        (_) => _scheduleSnapshot(),
-      ),
+      ever(mainController.accountService.isLogin, (_) => _scheduleSnapshot()),
     ]);
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -209,6 +212,10 @@ final class IOSNativeUIBridge {
         return _loadNativeLibrary(_arguments(call));
       case 'loadNativeProfile':
         return _loadNativeProfile(_arguments(call));
+      case 'loadNativeProfileSection':
+        return _loadNativeProfileSection(_arguments(call));
+      case 'saveNativeProfileSign':
+        return _saveNativeProfileSign(_arguments(call));
       case 'loadNativeProfileVideos':
         return _loadNativeProfileVideos(_arguments(call));
       case 'setNativeProfileFollow':
@@ -241,7 +248,9 @@ final class IOSNativeUIBridge {
       case 'openSearch':
         return _openRoute(const {'route': '/search'});
       default:
-        throw MissingPluginException('Unknown native UI method: ${call.method}');
+        throw MissingPluginException(
+          'Unknown native UI method: ${call.method}',
+        );
     }
   }
 
@@ -339,10 +348,20 @@ final class IOSNativeUIBridge {
           final result = await UserHttp.videoTags(bvid: bvid);
           final tags = result.dataOrNull;
           if (tags != null) {
-            extras['tags'] = tags.where((item) => item.tagName?.isNotEmpty == true)
-                .map((item) => {'id': item.tagId, 'name': item.tagName, 'type': item.tagType}).toList();
+            extras['tags'] = tags
+                .where((item) => item.tagName?.isNotEmpty == true)
+                .map(
+                  (item) => {
+                    'id': item.tagId,
+                    'name': item.tagName,
+                    'type': item.tagType,
+                  },
+                )
+                .toList();
           }
-        } catch (_) { /* Optional metadata remains retryable via refresh. */ }
+        } catch (_) {
+          /* Optional metadata remains retryable via refresh. */
+        }
       }(),
       () async {
         if (!Accounts.main.isLogin) return;
@@ -351,12 +370,15 @@ final class IOSNativeUIBridge {
           final relation = result.dataOrNull;
           if (relation != null) {
             extras.addAll({
-              'relationLoaded': true, 'liked': relation.like ?? false,
+              'relationLoaded': true,
+              'liked': relation.like ?? false,
               'coinCount': relation.coin?.toInt() ?? 0,
               'favorited': relation.favorite ?? false,
             });
           }
-        } catch (_) { /* A relationship failure must not stop playback. */ }
+        } catch (_) {
+          /* A relationship failure must not stop playback. */
+        }
       }(),
     ]);
     return extras;
@@ -380,7 +402,9 @@ final class IOSNativeUIBridge {
     final result = await VideoHttp.videoIntro(bvid: bvid);
     var tags = const [];
     try {
-      tags = tagRequest == null ? const [] : (await tagRequest).dataOrNull ?? const [];
+      tags = tagRequest == null
+          ? const []
+          : (await tagRequest).dataOrNull ?? const [];
     } catch (_) {
       // Tags are optional; a tag endpoint failure must not hide the intro.
     }
@@ -435,7 +459,8 @@ final class IOSNativeUIBridge {
           'argueMessage': response.argueInfo?.argueMsg ?? '',
           'collectionTitle': response.ugcSeason?.title ?? '',
           'collectionId': response.ugcSeason?.id,
-          'collectionCount': response.ugcSeason?.sections?.fold<int>(
+          'collectionCount':
+              response.ugcSeason?.sections?.fold<int>(
                 0,
                 (count, section) => count + (section.episodes?.length ?? 0),
               ) ??
@@ -448,7 +473,10 @@ final class IOSNativeUIBridge {
               .map((entry) {
                 final item = entry.value;
                 return {
-                  'id': item.bvid ?? item.aid?.toString() ?? 'collection-${entry.key}',
+                  'id':
+                      item.bvid ??
+                      item.aid?.toString() ??
+                      'collection-${entry.key}',
                   'aid': item.aid ?? item.arc?.aid,
                   'bvid': item.bvid,
                   'title': item.arc?.title ?? item.title ?? '未命名视频',
@@ -514,10 +542,7 @@ final class IOSNativeUIBridge {
     final result = await VideoHttp.relatedVideoList(bvid: bvid);
     return switch (result) {
       Loading() => const {'state': 'loading'},
-      Error(:final errMsg) => {
-        'state': 'error',
-        'error': errMsg ?? '相关推荐加载失败',
-      },
+      Error(:final errMsg) => {'state': 'error', 'error': errMsg ?? '相关推荐加载失败'},
       Success(:final response) => {
         'state': 'success',
         'items': (response ?? const []).asMap().entries.map((entry) {
@@ -543,11 +568,7 @@ final class IOSNativeUIBridge {
     final aid = _asInt(arguments['aid']);
     final part = _asInt(arguments['part']);
     if (bvid == null && aid == null) return;
-    await PiliScheme.videoPush(
-      aid,
-      bvid,
-      part: part?.toString(),
-    );
+    await PiliScheme.videoPush(aid, bvid, part: part?.toString());
   }
 
   Future<Map<String, dynamic>> _loadNativePlayback(
@@ -575,7 +596,8 @@ final class IOSNativeUIBridge {
       bvid: bvid,
       cid: cid,
       qn: quality,
-      tryLook: !Accounts.get(AccountType.video).isLogin &&
+      tryLook:
+          !Accounts.get(AccountType.video).isLogin &&
           GStorage.setting.get(SettingBoxKey.p1080, defaultValue: true) == true,
       videoType: VideoType.ugc,
     );
@@ -588,7 +610,8 @@ final class IOSNativeUIBridge {
       },
       Success(:final response) => await () async {
         String? automaticSource;
-        final automatic = GStorage.setting.get(SettingBoxKey.CDNService) == null;
+        final automatic =
+            GStorage.setting.get(SettingBoxKey.CDNService) == null;
         Future<void> prepareSource(Iterable<String> urls) async {
           _latencySampleURLs = urls.where((url) => url.isNotEmpty).toList();
           _latencySampleTime = DateTime.now();
@@ -613,12 +636,14 @@ final class IOSNativeUIBridge {
             preferredUrl: VideoUtils.getCdnUrl(
               rawUrls,
               isAudio: isAudio,
-              defaultCDNService:
-                  independentAudio ? CDNService.backupUrl :
-                  automaticSource == null ? null : CDNService.values.byName(automaticSource!),
+              defaultCDNService: independentAudio
+                  ? CDNService.backupUrl
+                  : automaticSource == null
+                  ? null
+                  : CDNService.values.byName(automaticSource!),
             ),
-            preferSelectedSource: independentAudio ||
-                !automatic || automaticSource != null,
+            preferSelectedSource:
+                independentAudio || !automatic || automaticSource != null,
           );
         }
 
@@ -634,7 +659,8 @@ final class IOSNativeUIBridge {
           final format = formatByQuality[value];
           qualities.add({
             'value': value,
-            'label': format?.newDesc ??
+            'label':
+                format?.newDesc ??
                 format?.displayDesc ??
                 (index < qualityDescriptions.length
                     ? qualityDescriptions[index].toString()
@@ -657,7 +683,8 @@ final class IOSNativeUIBridge {
               .where((item) => item.quality.code == actualQuality)
               .toList();
           if (candidates.isEmpty) candidates.add(videos.first);
-          final isHdr = actualQuality == 125 ||
+          final isHdr =
+              actualQuality == 125 ||
               actualQuality == 126 ||
               actualQuality == 129;
           final isDolbyVision = actualQuality == 126;
@@ -679,6 +706,7 @@ final class IOSNativeUIBridge {
             if (codec.startsWith('av01')) return 3;
             return 4;
           }
+
           candidates.sort((a, b) => codecRank(a).compareTo(codecRank(b)));
           final selectedVideo = candidates.first;
           await prepareSource(selectedVideo.playUrls);
@@ -699,6 +727,7 @@ final class IOSNativeUIBridge {
                 if (codec.contains('ec-3') || codec.contains('ac-3')) return 1;
                 return 2;
               }
+
               final codecOrder = rank(a).compareTo(rank(b));
               if (codecOrder != 0) return codecOrder;
               return (b.bandWidth ?? 0).compareTo(a.bandWidth ?? 0);
@@ -715,10 +744,7 @@ final class IOSNativeUIBridge {
           }
           final audioUrl = audioUrls.firstOrNull;
           if (videoUrl.isEmpty) {
-            return const {
-              'state': 'error',
-              'error': '4K/HDR 视频轨地址为空',
-            };
+            return const {'state': 'error', 'error': '4K/HDR 视频轨地址为空'};
           }
           final durationMs = (dash.duration ?? 0) * 1000;
           final format = formatByQuality[actualQuality];
@@ -741,9 +767,8 @@ final class IOSNativeUIBridge {
             ],
             'urls': [videoUrl],
             'quality': actualQuality,
-            'qualityText': format?.newDesc ??
-                format?.displayDesc ??
-                '${actualQuality}P',
+            'qualityText':
+                format?.newDesc ?? format?.displayDesc ?? '${actualQuality}P',
             'qualities': qualities,
             'duration': durationMs,
             'segmentCount': 1,
@@ -772,10 +797,7 @@ final class IOSNativeUIBridge {
             .where((segment) => (segment['url'] as String).isNotEmpty)
             .toList();
         if (segments.isEmpty) {
-          return const {
-            'state': 'error',
-            'error': '原生播放器暂时无法解析该视频格式',
-          };
+          return const {'state': 'error', 'error': '原生播放器暂时无法解析该视频格式'};
         }
         final currentQuality = response.quality ?? quality;
         final currentQualityIndex = qualityValues.indexOf(currentQuality);
@@ -786,7 +808,8 @@ final class IOSNativeUIBridge {
           // response while the custom UIKit player consumes `segments`.
           'urls': segments.map((segment) => segment['url']).toList(),
           'quality': currentQuality,
-          'qualityText': currentQualityIndex >= 0 &&
+          'qualityText':
+              currentQualityIndex >= 0 &&
                   currentQualityIndex < qualityDescriptions.length
               ? qualityDescriptions[currentQualityIndex].toString()
               : '${currentQuality}P',
@@ -900,10 +923,7 @@ final class IOSNativeUIBridge {
         final relation = await VideoHttp.videoRelation(bvid: bvid);
         if (relation case Success(:final response)) {
           final liked = response.like == true;
-          final result = await VideoHttp.likeVideo(
-            bvid: bvid,
-            type: !liked,
-          );
+          final result = await VideoHttp.likeVideo(bvid: bvid, type: !liked);
           return switch (result) {
             Success(:final response) => {
               'state': 'success',
@@ -922,10 +942,7 @@ final class IOSNativeUIBridge {
         final result = await VideoHttp.coinVideo(bvid: bvid, multiply: 1);
         return switch (result) {
           Success() => const {'state': 'success', 'message': '投币成功'},
-          Error(:final errMsg) => {
-            'state': 'error',
-            'error': errMsg ?? '投币失败',
-          },
+          Error(:final errMsg) => {'state': 'error', 'error': errMsg ?? '投币失败'},
           _ => const {'state': 'error', 'error': '投币失败'},
         };
       case 'favorite':
@@ -986,10 +1003,7 @@ final class IOSNativeUIBridge {
       case 'later':
         final result = await UserHttp.toViewLater(bvid: bvid);
         return result.isSuccess
-            ? const {
-                'state': 'success',
-                'message': '已添加到稍后再看',
-              }
+            ? const {'state': 'success', 'message': '已添加到稍后再看'}
             : const {'state': 'error', 'error': '添加稍后再看失败'};
       default:
         return const {'state': 'error', 'error': '不支持的视频操作'};
@@ -1086,19 +1100,24 @@ final class IOSNativeUIBridge {
 
   Map<String, dynamic> _nativeSettingsSnapshot() => {
     'state': 'success',
-    'playbackSource':
-        GStorage.setting.get(SettingBoxKey.CDNService) ?? 'auto',
+    'playbackSource': GStorage.setting.get(SettingBoxKey.CDNService) ?? 'auto',
     'playbackSources': [
       {'value': 'auto', 'label': '自动（选择延迟最低的线路）'},
       for (final cdn in CDNService.values)
         {
           'value': cdn.name,
           'label': cdn.desc,
-          'latencyMS': _cdnLatency.isFresh ? _cdnLatency.measurements[cdn.name]?.milliseconds : null,
-          'latencyState': _cdnLatency.isFresh ? _cdnLatency.measurements[cdn.name]?.status ?? 'untested' : 'untested',
+          'latencyMS': _cdnLatency.isFresh
+              ? _cdnLatency.measurements[cdn.name]?.milliseconds
+              : null,
+          'latencyState': _cdnLatency.isFresh
+              ? _cdnLatency.measurements[cdn.name]?.status ?? 'untested'
+              : 'untested',
         },
     ],
-    'automaticPlaybackSource': _cdnLatency.bestSource(_latencyCandidates(_latencySampleURLs)),
+    'automaticPlaybackSource': _cdnLatency.bestSource(
+      _latencyCandidates(_latencySampleURLs),
+    ),
     'liveCDN': GStorage.setting.get(SettingBoxKey.liveCdnUrl) ?? '',
     'defaultVideoQuality': GStorage.setting.get(
       SettingBoxKey.defaultVideoQa,
@@ -1142,7 +1161,6 @@ final class IOSNativeUIBridge {
       _homeController
         ..enableSaveLastData = value
         ..lastRefreshAt = null;
-
     } else if (key == SettingBoxKey.checkDynamic) {
       mainController.checkDynamic = value;
     } else if (key == SettingBoxKey.disableAudioCDN) {
@@ -1208,11 +1226,20 @@ final class IOSNativeUIBridge {
     final raw = urls.where((url) => url.isNotEmpty).toList();
     if (raw.isEmpty) return const {};
     final candidates = <String, String>{};
-    for (final cdn in [CDNService.baseUrl, CDNService.backupUrl,
-      CDNService.ali, CDNService.cos, CDNService.hw, CDNService.akamai]) {
+    for (final cdn in [
+      CDNService.baseUrl,
+      CDNService.backupUrl,
+      CDNService.ali,
+      CDNService.cos,
+      CDNService.hw,
+      CDNService.akamai,
+    ]) {
       final url = VideoUtils.getCdnUrl(raw, defaultCDNService: cdn);
       final uri = Uri.tryParse(url);
-      if (uri == null || (uri.scheme != 'https' && uri.scheme != 'http') || uri.host.isEmpty) continue;
+      if (uri == null ||
+          (uri.scheme != 'https' && uri.scheme != 'http') ||
+          uri.host.isEmpty)
+        continue;
       // Don't label an unchanged fallback URL as a different CDN's result.
       if (cdn.host != null && uri.host != cdn.host) continue;
       candidates[cdn.name] = url;
@@ -1233,21 +1260,28 @@ final class IOSNativeUIBridge {
     }
   }
 
-  Future<Map<String, dynamic>> _runPlaybackSourceTest({required bool force}) async {
+  Future<Map<String, dynamic>> _runPlaybackSourceTest({
+    required bool force,
+  }) async {
     if (!force && _cdnLatency.isFresh && _cdnLatency.measurements.isNotEmpty) {
       await _cdnLatency.test(_latencyCandidates(_latencySampleURLs));
       return _nativeSettingsSnapshot();
     }
     try {
-      if (_latencySampleURLs.isEmpty || _latencySampleTime == null ||
-          DateTime.now().difference(_latencySampleTime!) > const Duration(minutes: 1)) {
+      if (_latencySampleURLs.isEmpty ||
+          _latencySampleTime == null ||
+          DateTime.now().difference(_latencySampleTime!) >
+              const Duration(minutes: 1)) {
         // Same public sample as the original project's CDN settings dialog.
         final sample = await VideoHttp.videoUrl(
-          cid: 196018899, bvid: 'BV1fK4y1t7hj',
+          cid: 196018899,
+          bvid: 'BV1fK4y1t7hj',
           tryLook: !Accounts.get(AccountType.video).isLogin,
           videoType: VideoType.ugc,
         ).timeout(const Duration(seconds: 6));
-        _latencySampleURLs = sample.dataOrNull?.dash?.video?.firstOrNull?.playUrls.toList() ?? [];
+        _latencySampleURLs =
+            sample.dataOrNull?.dash?.video?.firstOrNull?.playUrls.toList() ??
+            [];
         _latencySampleTime = DateTime.now();
       }
       final candidates = _latencyCandidates(_latencySampleURLs);
@@ -1390,11 +1424,7 @@ final class IOSNativeUIBridge {
       PageUtils.toLiveRoom(roomId);
       return;
     }
-    await Get.toNamed(
-      route,
-      parameters: parameters,
-      preventDuplicates: false,
-    );
+    await Get.toNamed(route, parameters: parameters, preventDuplicates: false);
   }
 
   Future<Map<String, dynamic>> _searchVideos(
@@ -1402,10 +1432,7 @@ final class IOSNativeUIBridge {
   ) async {
     final keyword = _nonEmpty(arguments['keyword']?.toString());
     if (keyword == null) {
-      return const {
-        'state': 'success',
-        'items': <Map<String, dynamic>>[],
-      };
+      return const {'state': 'success', 'items': <Map<String, dynamic>>[]};
     }
 
     final page = _asInt(arguments['page']) ?? 1;
@@ -1426,7 +1453,8 @@ final class IOSNativeUIBridge {
       Success(:final response) => {
         'state': 'success',
         'total': response.numResults ?? 0,
-        'hasMore': (response.list?.isNotEmpty ?? false) &&
+        'hasMore':
+            (response.list?.isNotEmpty ?? false) &&
             page * 20 < (response.numResults ?? 0),
         'items': (response.list ?? const [])
             .asMap()
@@ -1466,6 +1494,115 @@ final class IOSNativeUIBridge {
     }
   }
 
+  Future<Map<String, dynamic>> _loadNativeProfileSection(
+    Map<dynamic, dynamic> arguments,
+  ) async {
+    final mid = _asInt(arguments['mid']);
+    if (mid == null || mid <= 0) {
+      return const {'state': 'error', 'error': '用户参数无效'};
+    }
+    final page = (_asInt(arguments['page']) ?? 1).clamp(1, 10000);
+    switch (arguments['kind']) {
+      case 'favorites':
+        return _loadNativeFavoriteFolders(page, mid: mid);
+      case 'dynamics':
+        final result = await MemberHttp.memberDynamic(
+          mid: mid,
+          offset: arguments['offset']?.toString() ?? '',
+        );
+        return switch (result) {
+          Success(:final response) => {
+            'state': 'success',
+            'offset': response.offset ?? '',
+            'hasMore':
+                response.hasMore == true &&
+                response.offset?.isNotEmpty == true &&
+                response.offset != '-1',
+            'items': (response.items ?? const <DynamicItemModel>[])
+                .asMap()
+                .entries
+                .map((entry) => _dynamicMap(entry.value, entry.key))
+                .toList(),
+          },
+          Error(:final errMsg) => {
+            'state': 'error',
+            'error': errMsg ?? '动态加载失败',
+          },
+          Loading() => const {'state': 'loading'},
+        };
+      case 'bangumi':
+        final result = await MemberHttp.spaceArchive(
+          type: ContributeType.bangumi,
+          mid: mid,
+          pn: page,
+        );
+        return switch (result) {
+          Success(:final response) => {
+            'state': 'success',
+            'hasMore': (response.item?.length ?? 0) >= 20,
+            'items': (response.item ?? const []).asMap().entries.map((entry) {
+              final item = entry.value;
+              return {
+                'id': 'bangumi-${item.param ?? entry.key}',
+                'kind': 'bangumi',
+                'title': item.title,
+                'subtitle': item.label ?? item.styles ?? '',
+                'cover': _normalizeURL(item.cover),
+                'bvid': item.bvid,
+                'url': item.uri,
+              };
+            }).toList(),
+          },
+          Error(:final errMsg) => {
+            'state': 'error',
+            'error': errMsg ?? '追番加载失败',
+          },
+          Loading() => const {'state': 'loading'},
+        };
+      default:
+        return const {'state': 'error', 'error': '不支持的主页内容'};
+    }
+  }
+
+  Future<Map<String, dynamic>> _saveNativeProfileSign(
+    Map<dynamic, dynamic> arguments,
+  ) async {
+    final mid = _asInt(arguments['mid']);
+    final sign = arguments['sign'];
+    if (!Accounts.main.isLogin || mid != Accounts.main.mid) {
+      return const {'state': 'error', 'error': '只能编辑当前账号资料'};
+    }
+    if (sign is! String || sign.runes.length > 70) {
+      return const {'state': 'error', 'error': '个性签名最多 70 字'};
+    }
+    final key = Accounts.main.accessKey;
+    if (key == null || key.isEmpty)
+      return const {'state': 'error', 'error': '请重新登录后再编辑资料'};
+    final data = <String, String>{
+      'access_key': key,
+      'build': '2001100',
+      'c_locale': 'zh_CN',
+      'channel': 'master',
+      'mobi_app': 'android_hd',
+      'platform': 'android',
+      's_locale': 'zh_CN',
+      'statistics': Constants.statistics,
+      'user_sign': sign,
+    };
+    AppSign.appSign(data);
+    final result = await Request().post(
+      '/x/member/app/sign/update',
+      data: data,
+      options: Options(contentType: Headers.formUrlEncodedContentType),
+    );
+    return result.data['code'] == 0
+        ? const {'state': 'success'}
+        : {
+            'state': 'error',
+            'error': result.data['message']?.toString() ?? '保存失败',
+          };
+  }
+
   Future<Map<String, dynamic>> _loadNativeProfile(
     Map<dynamic, dynamic> arguments,
   ) async {
@@ -1492,6 +1629,7 @@ final class IOSNativeUIBridge {
             'face': _normalizeURL(card?.face),
             'topImage': _normalizeURL(response.images?.imgUrl),
             'sign': card?.sign ?? '',
+            'location': card?.prInfo?.content ?? '',
             'level': card?.levelInfo?.currentLevel ?? 0,
             'followers': card?.fans ?? 0,
             'following': card?.attention ?? 0,
@@ -1562,11 +1700,7 @@ final class IOSNativeUIBridge {
       return const {'state': 'error', 'error': '用户投稿参数无效'};
     }
 
-    final result = await MemberHttp.searchArchive(
-      mid: mid,
-      ps: 30,
-      pn: page,
-    );
+    final result = await MemberHttp.searchArchive(mid: mid, ps: 30, pn: page);
     return switch (result) {
       Loading() => const {'state': 'loading'},
       Error(:final errMsg, :final code) => {
@@ -1586,7 +1720,9 @@ final class IOSNativeUIBridge {
             final item = entry.value;
             final bvid = _nonEmpty(item.bvid);
             return {
-              'id': bvid ?? item.aid?.toString() ??
+              'id':
+                  bvid ??
+                  item.aid?.toString() ??
                   'profile-video-$page-${entry.key}',
               'aid': item.aid,
               'bvid': bvid,
@@ -1614,11 +1750,7 @@ final class IOSNativeUIBridge {
       },
       Success(:final response) => () {
         _nativeLoginAuthCode = response.authCode;
-        return {
-          'state': 'success',
-          'url': response.url,
-          'expiresIn': 180,
-        };
+        return {'state': 'success', 'url': response.url, 'expiresIn': 180};
       }(),
     };
   }
@@ -1648,11 +1780,7 @@ final class IOSNativeUIBridge {
         _nativeLoginAuthCode = null;
         await _mineController.onRefresh();
         _scheduleSnapshot();
-        return {
-          'state': 'success',
-          'message': '登录成功',
-          'mid': account.mid,
-        };
+        return {'state': 'success', 'message': '登录成功', 'mid': account.mid};
       }
       final code = _asInt(result['code']);
       if (code == 86038) {
@@ -1680,10 +1808,7 @@ final class IOSNativeUIBridge {
     );
     return switch (result) {
       Loading() => const {'state': 'loading'},
-      Error(:final errMsg) => {
-        'state': 'error',
-        'error': errMsg ?? '私信会话加载失败',
-      },
+      Error(:final errMsg) => {'state': 'error', 'error': errMsg ?? '私信会话加载失败'},
       Success(:final response) => () {
         _nativeSessionOffsets = response.paginationParams.offsets;
         return {
@@ -1704,15 +1829,18 @@ final class IOSNativeUIBridge {
                 avatar = resource.resNativeDraw.drawSrc.remote.url;
               }
             }
-            final talkerId = item.id.hasPrivateId() &&
-                    item.id.privateId.hasTalkerUid()
+            final talkerId =
+                item.id.hasPrivateId() && item.id.privateId.hasTalkerUid()
                 ? item.id.privateId.talkerUid.toInt()
                 : null;
-            final memberId = avatarItem.hasMid() ? avatarItem.mid.toInt() : null;
+            final memberId = avatarItem.hasMid()
+                ? avatarItem.mid.toInt()
+                : null;
             final timestamp = item.hasTimestamp()
                 ? (item.timestamp ~/ 1000000).toInt()
                 : null;
-            final identity = talkerId?.toString() ??
+            final identity =
+                talkerId?.toString() ??
                 '${item.id.whichId().name}-${item.sessionInfo.sessionName}';
             return {
               'id': 'session-$identity',
@@ -1725,9 +1853,7 @@ final class IOSNativeUIBridge {
               'context': '',
               'time': DateFormatUtils.dateFormat(timestamp),
               'badge': '',
-              'unreadCount': item.hasUnread()
-                  ? item.unread.number.toInt()
-                  : 0,
+              'unreadCount': item.hasUnread() ? item.unread.number.toInt() : 0,
               'hasUnread': item.hasUnread() && item.unread.style.value != 0,
               'isMuted': item.isMuted,
               'isPinned': item.isPinned,
@@ -1764,7 +1890,9 @@ final class IOSNativeUIBridge {
         },
         Success(:final response) => () {
           final messages = response.messages
-              .where((item) => item.msgType != MsgType.EN_MSG_TYPE_DRAW_BACK.value)
+              .where(
+                (item) => item.msgType != MsgType.EN_MSG_TYPE_DRAW_BACK.value,
+              )
               .toList();
           final emotes = <String, String>{
             for (final info in response.eInfos)
@@ -1813,10 +1941,12 @@ final class IOSNativeUIBridge {
                 raw: item.content,
               );
               final image = _nativeChatImage(item.msgType, content);
-              final cover = _nonEmpty(content['cover']?.toString()) ??
+              final cover =
+                  _nonEmpty(content['cover']?.toString()) ??
                   _nonEmpty(content['thumb']?.toString()) ??
                   _nonEmpty(content['pic_url']?.toString());
-              final title = _nonEmpty(content['title']?.toString()) ??
+              final title =
+                  _nonEmpty(content['title']?.toString()) ??
                   _nonEmpty(content['main_title']?.toString());
               return {
                 'id': item.msgKey.toString() != '0'
@@ -1867,10 +1997,7 @@ final class IOSNativeUIBridge {
     );
     return switch (result) {
       Success() => const {'state': 'success'},
-      Error(:final errMsg) => {
-        'state': 'error',
-        'error': errMsg ?? '消息发送失败',
-      },
+      Error(:final errMsg) => {'state': 'error', 'error': errMsg ?? '消息发送失败'},
       Loading() => const {'state': 'loading'},
     };
   }
@@ -1922,8 +2049,8 @@ final class IOSNativeUIBridge {
   Future<Map<String, dynamic>> _recallNativeChatMessage(
     Map<dynamic, dynamic> arguments,
   ) async {
-    final receiverId = _asInt(arguments['memberId']) ??
-        _asInt(arguments['talkerId']);
+    final receiverId =
+        _asInt(arguments['memberId']) ?? _asInt(arguments['talkerId']);
     final msgKey = _asInt(arguments['msgKey']);
     if (!Accounts.main.isLogin || receiverId == null || msgKey == null) {
       return const {'state': 'error', 'error': '撤回参数无效'};
@@ -1936,10 +2063,7 @@ final class IOSNativeUIBridge {
     );
     return switch (result) {
       Success() => const {'state': 'success'},
-      Error(:final errMsg) => {
-        'state': 'error',
-        'error': errMsg ?? '消息撤回失败',
-      },
+      Error(:final errMsg) => {'state': 'error', 'error': errMsg ?? '消息撤回失败'},
       Loading() => const {'state': 'loading'},
     };
   }
@@ -2013,7 +2137,8 @@ final class IOSNativeUIBridge {
           },
           Success(:final response) => {
             'state': 'success',
-            'hasMore': (response.items?.isNotEmpty ?? false) &&
+            'hasMore':
+                (response.items?.isNotEmpty ?? false) &&
                 response.cursor?.isEnd != true,
             'nextCursor': response.cursor?.id,
             'nextCursorTime': response.cursor?.time,
@@ -2049,7 +2174,8 @@ final class IOSNativeUIBridge {
           },
           Success(:final response) => {
             'state': 'success',
-            'hasMore': (response.items?.isNotEmpty ?? false) &&
+            'hasMore':
+                (response.items?.isNotEmpty ?? false) &&
                 response.cursor?.isEnd != true,
             'nextCursor': response.cursor?.id,
             'nextCursorTime': response.cursor?.time,
@@ -2089,8 +2215,8 @@ final class IOSNativeUIBridge {
             ];
             return {
               'state': 'success',
-              'hasMore': items.isNotEmpty &&
-                  response.total?.cursor?.isEnd != true,
+              'hasMore':
+                  items.isNotEmpty && response.total?.cursor?.isEnd != true,
               'nextCursor': response.total?.cursor?.id,
               'nextCursorTime': response.total?.cursor?.time,
               'items': items.asMap().entries.map((entry) {
@@ -2188,9 +2314,8 @@ final class IOSNativeUIBridge {
         'total': response.hasSubjectControl()
             ? response.subjectControl.count.toInt()
             : replies.length,
-        'hasMore': replies.isNotEmpty &&
-            !response.cursor.isEnd &&
-            nextOffset != null,
+        'hasMore':
+            replies.isNotEmpty && !response.cursor.isEnd && nextOffset != null,
         'nextOffset': nextOffset,
         'items': replies.asMap().entries.map((entry) {
           return _grpcCommentMap(entry.value, entry.key);
@@ -2226,7 +2351,8 @@ final class IOSNativeUIBridge {
         return {
           'state': 'success',
           'total': response.cursor?.allCount ?? replies.length,
-          'hasMore': replies.isNotEmpty &&
+          'hasMore':
+              replies.isNotEmpty &&
               response.cursor?.isEnd != true &&
               (Accounts.main.isLogin || nextOffset != null),
           'nextOffset': nextOffset,
@@ -2239,7 +2365,8 @@ final class IOSNativeUIBridge {
               'author': item.member?.uname ?? '用户',
               'avatar': _normalizeURL(item.member?.avatar),
               'message': item.content?.message ?? '',
-              'time': item.replyControl?.timeDesc ??
+              'time':
+                  item.replyControl?.timeDesc ??
                   DateFormatUtils.format(item.ctime),
               'location': item.replyControl?.location ?? '',
               'like': item.like ?? 0,
@@ -2353,7 +2480,8 @@ final class IOSNativeUIBridge {
         return {
           'state': 'success',
           'total': response.root.count.toInt(),
-          'hasMore': replies.isNotEmpty &&
+          'hasMore':
+              replies.isNotEmpty &&
               !response.cursor.isEnd &&
               nextOffset != null,
           'nextOffset': nextOffset,
@@ -2400,19 +2528,22 @@ final class IOSNativeUIBridge {
           )
           .where((picture) => picture['url'] != null)
           .toList(),
-      'emotes': content.emotes.entries.map((entry) {
-        final emote = entry.value;
-        final source = emote.hasWebpUrl() && emote.webpUrl.isNotEmpty
-            ? emote.webpUrl
-            : emote.hasGifUrl() && emote.gifUrl.isNotEmpty
-            ? emote.gifUrl
-            : emote.url;
-        return {
-          'text': entry.key,
-          'url': _normalizeURL(source),
-          'size': emote.size.toInt().clamp(1, 2),
-        };
-      }).where((emote) => emote['url'] != null).toList(),
+      'emotes': content.emotes.entries
+          .map((entry) {
+            final emote = entry.value;
+            final source = emote.hasWebpUrl() && emote.webpUrl.isNotEmpty
+                ? emote.webpUrl
+                : emote.hasGifUrl() && emote.gifUrl.isNotEmpty
+                ? emote.gifUrl
+                : emote.url;
+            return {
+              'text': entry.key,
+              'url': _normalizeURL(source),
+              'size': emote.size.toInt().clamp(1, 2),
+            };
+          })
+          .where((emote) => emote['url'] != null)
+          .toList(),
     };
   }
 
@@ -2425,7 +2556,9 @@ final class IOSNativeUIBridge {
         'state': 'success',
         'items': items.asMap().entries.map((entry) {
           final item = entry.value;
-          final total = item.totalBytes > 0 ? item.totalBytes : item.guessedTotalBytes;
+          final total = item.totalBytes > 0
+              ? item.totalBytes
+              : item.guessedTotalBytes;
           final progress = total > 0 ? item.downloadedBytes / total : 0.0;
           return {
             'id': '${item.cid}-${entry.key}',
@@ -2487,7 +2620,9 @@ final class IOSNativeUIBridge {
               'subtitle': item.authorName ?? item.showTitle ?? '',
               'cover': _normalizeURL(
                 _nonEmpty(item.cover) ??
-                    (item.covers?.isNotEmpty == true ? item.covers!.first : null),
+                    (item.covers?.isNotEmpty == true
+                        ? item.covers!.first
+                        : null),
               ),
               'aid': item.history.oid,
               'bvid': _nonEmpty(item.history.bvid),
@@ -2519,7 +2654,8 @@ final class IOSNativeUIBridge {
       Success(:final response) => {
         'state': 'success',
         'title': '稍后再看',
-        'hasMore': (response.list?.isNotEmpty ?? false) &&
+        'hasMore':
+            (response.list?.isNotEmpty ?? false) &&
             page * 20 < (response.count ?? 0),
         'items': (response.list ?? const []).asMap().entries.map((entry) {
           final item = entry.value;
@@ -2548,11 +2684,14 @@ final class IOSNativeUIBridge {
     };
   }
 
-  Future<Map<String, dynamic>> _loadNativeFavoriteFolders(int page) async {
+  Future<Map<String, dynamic>> _loadNativeFavoriteFolders(
+    int page, {
+    int? mid,
+  }) async {
     final result = await FavHttp.userfavFolder(
       pn: page,
       ps: 20,
-      mid: Accounts.main.mid,
+      mid: mid ?? Accounts.main.mid,
     );
     return switch (result) {
       Loading() => const {'state': 'loading'},
@@ -2642,10 +2781,7 @@ final class IOSNativeUIBridge {
             pn: page,
             orderType: 'attention',
           )
-        : await FollowHttp.followings(
-            vmid: Accounts.main.mid,
-            pn: page,
-          );
+        : await FollowHttp.followings(vmid: Accounts.main.mid, pn: page);
     final pageTitle = followers ? '粉丝' : '关注';
     return switch (result) {
       Loading() => const {'state': 'loading'},
@@ -2658,7 +2794,8 @@ final class IOSNativeUIBridge {
         'state': 'success',
         'title': pageTitle,
         'subtitle': '共 ${response.total ?? 0} 人',
-        'hasMore': (response.list?.isNotEmpty ?? false) &&
+        'hasMore':
+            (response.list?.isNotEmpty ?? false) &&
             page * 20 < (response.total ?? 0),
         'items': (response.list ?? const []).asMap().entries.map((entry) {
           final item = entry.value;
@@ -2739,7 +2876,8 @@ final class IOSNativeUIBridge {
         'state': 'success',
         'title': response.info?.title ?? '订阅内容',
         'subtitle': response.info?.intro ?? '',
-        'hasMore': (response.medias?.isNotEmpty ?? false) &&
+        'hasMore':
+            (response.medias?.isNotEmpty ?? false) &&
             page * 20 < (response.info?.mediaCount ?? 0),
         'items': (response.medias ?? const []).asMap().entries.map((entry) {
           final item = entry.value;
@@ -2762,10 +2900,7 @@ final class IOSNativeUIBridge {
   }
 
   Map<String, dynamic> _snapshot() => {
-    'home': _listState(
-      _homeController.loadingState.value,
-      _videoMap,
-    ),
+    'home': _listState(_homeController.loadingState.value, _videoMap),
     'dynamics': _listState(
       _dynamicsTabController.loadingState.value,
       _dynamicMap,
@@ -2892,10 +3027,7 @@ final class IOSNativeUIBridge {
       major?.medialist?.cover,
       major?.music?.cover,
     ]);
-    final id = _firstNonEmpty([
-      item.idStr?.toString(),
-      item.fallback?.id,
-    ]);
+    final id = _firstNonEmpty([item.idStr?.toString(), item.fallback?.id]);
 
     return {
       // Keep the transport ID empty when the API did not provide one. Swift
@@ -2908,6 +3040,31 @@ final class IOSNativeUIBridge {
       'time': author?.pubTime ?? '',
       'title': title ?? '',
       'body': body ?? '',
+      'emotes':
+          (moduleDynamic?.desc?.richTextNodes ??
+                  opus?.summary?.richTextNodes ??
+                  const <RichTextNodeItem>[])
+              .where(
+                (node) =>
+                    node.emoji?.url != null &&
+                    (node.text ?? node.origText)?.isNotEmpty == true,
+              )
+              .map(
+                (node) => {
+                  'text': node.text ?? node.origText,
+                  'url': _normalizeURL(node.emoji?.url),
+                  'size': node.emoji?.size.toInt() ?? 1,
+                },
+              )
+              .toList(),
+      'repostText': item.type == 'DYNAMIC_TYPE_FORWARD'
+          ? _firstNonEmpty([
+                  item.orig?.modules.moduleDynamic?.desc?.text,
+                  item.orig?.modules.moduleDynamic?.major?.opus?.summary?.text,
+                  item.orig?.modules.moduleDynamic?.major?.archive?.title,
+                ]) ??
+                '源动态不可见'
+          : null,
       'cover': _normalizeURL(cover),
       'coverWidth': pictures.isEmpty ? 0 : pictures.first['width'],
       'coverHeight': pictures.isEmpty ? 0 : pictures.first['height'],

@@ -160,7 +160,7 @@ def production_swift():
         return source[source.index(start):source.index(end, source.index(start))]
     return FIXTURES + section('private struct PiliNativeDynamic:', 'private struct PiliNativeMessage:') + section(
         'private struct PiliNativeComment:', 'private struct PiliNativeDownload:') + section(
-        'private struct PiliNativeDynamicRow:', 'private struct PiliNativeMineAction {') + section(
+        'private struct PiliNativeDynamicRow:', 'private struct PiliNativeAvatar:') + section(
         'private struct PiliNativeCommentRow:', '// MARK: - Native messages') + section(
         'private func piliDictionary(', 'private func piliCompactNumber(')
 
