@@ -3342,7 +3342,7 @@ private struct PiliNativeVideoCard: View {
           .lineLimit(2)
           .multilineTextAlignment(.leading)
           .fixedSize(horizontal: false, vertical: true)
-          .frame(height: 40, alignment: .topLeading)
+          .frame(minHeight: 40, alignment: .topLeading)
           .frame(maxWidth: .infinity, alignment: .leading)
 
         HStack(spacing: 4) {
