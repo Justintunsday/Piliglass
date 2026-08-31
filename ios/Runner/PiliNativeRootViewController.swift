@@ -3273,10 +3273,18 @@ private struct PiliNativeHomeView: View {
           .refreshable { model.refresh("home") }
         }
       }
-      .navigationBarTitle("PiliGlass", displayMode: .inline)
+      .navigationBarTitle("", displayMode: .inline)
       .navigationBarItems(
         leading: Button(action: { model.isSearchPresented = true }) {
-          Image(systemName: "magnifyingglass")
+          HStack(spacing: 10) {
+            Image(systemName: "magnifyingglass")
+            Text("搜索视频")
+              .foregroundStyle(.secondary)
+              .lineLimit(1)
+            Spacer(minLength: 0)
+          }
+          .frame(minWidth: 120, idealWidth: 220, maxWidth: .infinity)
+          .contentShape(Rectangle())
         }
         .accessibilityLabel("搜索"),
         trailing: HStack(spacing: 18) {
