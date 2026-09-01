@@ -130,12 +130,16 @@ final class AccountPageTests: XCTestCase {
   }
   func testMineLayoutAndFavorites() {
     launch()
-    let folder = app.buttons["favorite-folder-0"]
-    XCTAssertTrue(folder.waitForExistence(timeout: 10))
+    XCTAssertTrue(app.navigationBars["我的"].waitForExistence(timeout: 10))
     XCTAssertTrue(app.buttons["设置"].exists)
     XCTAssertTrue(app.staticTexts["硬币 948.6"].exists)
     XCTAssertTrue(app.staticTexts["经验 19735/28800"].exists)
-    capture("mine-reference-layout")
+    XCTAssertTrue(app.buttons["离线缓存"].exists)
+    capture("mine-native-top")
+    let folder = app.buttons["favorite-folder-0"]
+    if !folder.waitForExistence(timeout: 2) { app.swipeUp() }
+    XCTAssertTrue(folder.waitForExistence(timeout: 5))
+    capture("mine-favorites")
     folder.tap()
     XCTAssertTrue(app.staticTexts["destination"].waitForExistence(timeout: 5))
     XCTAssertEqual(app.staticTexts["destination"].label, "默认收藏夹")
@@ -145,6 +149,24 @@ final class AccountPageTests: XCTestCase {
     XCTAssertTrue(app.navigationBars.buttons.firstMatch.exists)
     app.navigationBars.buttons.firstMatch.tap()
     XCTAssertTrue(app.buttons["favorite-folder-0"].waitForExistence(timeout: 5))
+  }
+  func testMineServiceAndToolbarActions() {
+    launch()
+    XCTAssertTrue(app.buttons["消息中心"].waitForExistence(timeout: 10))
+    app.buttons["离线缓存"].tap()
+    XCTAssertTrue(app.staticTexts["destination"].waitForExistence(timeout: 5))
+    XCTAssertEqual(app.staticTexts["destination"].label, "/download")
+    app.buttons["关闭"].tap()
+    app.buttons["消息中心"].tap()
+    XCTAssertTrue(app.staticTexts["destination"].waitForExistence(timeout: 5))
+    XCTAssertEqual(app.staticTexts["destination"].label, "/whisper")
+    app.buttons["关闭"].tap()
+    app.buttons["搜索"].tap()
+    XCTAssertTrue(app.navigationBars["搜索"].waitForExistence(timeout: 5))
+    app.navigationBars.buttons.firstMatch.tap()
+    app.swipeUp()
+    XCTAssertTrue(app.buttons["切换账号"].waitForExistence(timeout: 5))
+    XCTAssertTrue(app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "切换主题，当前")).firstMatch.exists)
   }
   func testOwnDynamicTabAndEditor() {
     launch()
@@ -183,7 +205,8 @@ final class AccountPageTests: XCTestCase {
   }
   func testDarkMine() {
     launch("dark")
-    XCTAssertTrue(app.buttons["favorite-folder-0"].waitForExistence(timeout: 10))
+    XCTAssertTrue(app.navigationBars["我的"].waitForExistence(timeout: 10))
+    XCTAssertTrue(app.staticTexts["我的服务"].exists)
     capture("mine-dark")
   }
 }

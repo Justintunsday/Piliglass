@@ -3998,16 +3998,6 @@ private struct PiliNativeLegacyGlassButtonStyle: ButtonStyle {
   }
 }
 
-private struct PiliNativeShortcutGlass: ViewModifier {
-  @ViewBuilder func body(content: Content) -> some View {
-    if #available(iOS 26.0, *) {
-      content.glassEffect(.regular.interactive(), in: Circle())
-    } else {
-      content.background(.regularMaterial, in: Circle())
-    }
-  }
-}
-
 private struct PiliNativeFavoriteCard: View {
   let item: PiliNativeLibraryItem
   let width: CGFloat
@@ -4040,117 +4030,190 @@ private struct PiliNativeMineView: View {
 
   var body: some View {
     NavigationStack {
-      ScrollView {
-        VStack(spacing: 0) {
-          HStack(spacing: 10) {
-            Spacer()
-            toolbarButton("消息中心", "text.bubble") { protectedRoute("/whisper") }
-            toolbarButton("搜索", "magnifyingglass") { model.isSearchPresented = true }
-            toolbarButton("切换账号", "person.crop.rectangle.stack") { model.openRoute("/loginPage") }
-            toolbarButton("切换主题", appearance == 2 ? "moon.fill" : "sun.max") { appearance = (appearance + 1) % 3 }
-            toolbarButton("设置", "gearshape") { model.presentSettings() }
-          }.padding(.horizontal, 18).padding(.top, 10).padding(.bottom, 12)
-
-          Button(action: { openAccount(section: 0) }) {
-            HStack(spacing: 16) {
-              PiliNativeAvatar(url: model.account.face, vip: model.account.vip, size: 60)
-              VStack(alignment: .leading, spacing: 8) {
-                HStack(spacing: 8) {
-                  Text(model.account.name).font(.system(size: 20, weight: .semibold)).foregroundStyle(.primary)
-                  if model.account.isLogin { PiliOriginalLevelBadge(level: model.account.level, height: 12) }
-                }
-                if model.account.isLogin {
-                  HStack(spacing: 12) {
-                    Text(String(format: "硬币 %.1f", model.account.money))
-                    Text(verbatim: model.account.nextExp > 0 ? "经验 \(model.account.currentExp)/\(model.account.nextExp)" : "经验 \(model.account.currentExp) · 已满级")
-                      .lineLimit(1).minimumScaleFactor(0.7)
-                  }.font(.system(size: 12)).foregroundStyle(.secondary)
-                  ProgressView(value: model.account.nextExp > 0 ? min(1, max(0, Double(model.account.currentExp) / Double(model.account.nextExp))) : 1)
-                    .tint(piliProfileAccent).scaleEffect(x: 1, y: 0.7, anchor: .center)
-                    .accessibilityLabel("等级经验")
-                } else {
-                  Text("登录后同步收藏、历史与动态").font(.caption).foregroundStyle(.secondary)
-                }
-              }.frame(maxWidth: .infinity, alignment: .leading)
-            }.padding(.horizontal, 22).padding(.top, 6).padding(.bottom, 18)
-          }.buttonStyle(.plain).accessibilityIdentifier("mine-account")
-
-          HStack(spacing: 0) {
-            PiliNativeAccountStat(value: model.account.dynamics, title: "动态") { openAccount(section: 1) }
-            PiliNativeAccountStat(value: model.account.following, title: "关注") { protectedRoute("/follow") }
-            PiliNativeAccountStat(value: model.account.followers, title: "粉丝") { protectedRoute("/fan") }
-          }.padding(.vertical, 14).padding(.horizontal, 14)
-
-          HStack(alignment: .top, spacing: 0) {
-            ForEach(shortcuts.indices, id: \.self) { index in
-              let item = shortcuts[index]
-              Button { protectedRoute(item.2, requiresLogin: item.2 != "/download") } label: {
-                VStack(spacing: 13) {
-                  Image(systemName: item.1).font(.system(size: 23, weight: .regular)).foregroundStyle(piliProfileAccent)
-                    .frame(width: 52, height: 52).modifier(PiliNativeShortcutGlass())
-                  Text(item.0).font(.system(size: 14)).foregroundStyle(.primary).lineLimit(1).minimumScaleFactor(0.8)
-                }.frame(maxWidth: .infinity).padding(.vertical, 19)
-              }.buttonStyle(.plain)
-            }
-          }.padding(.horizontal, 12).padding(.bottom, 8)
-          Divider().opacity(0.4)
-          favorites
+      List {
+        accountSection
+        servicesSection
+        favoritesSection
+        accountAndAppearanceSection
+      }
+      .listStyle(.insetGrouped)
+      .navigationTitle("我的")
+      .navigationBarTitleDisplayMode(.large)
+      .toolbar {
+        ToolbarItemGroup(placement: .topBarTrailing) {
+          toolbarButton("消息中心", "text.bubble") { protectedRoute("/whisper") }
+          toolbarButton("搜索", "magnifyingglass") { model.isSearchPresented = true }
+          toolbarButton("设置", "gearshape") { model.presentSettings() }
         }
       }
-      .background(Color(UIColor.systemBackground))
       .refreshable { model.refresh("mine"); model.loadMineFavorites() }
       .task(id: model.account.mid) { model.loadMineFavorites() }
-      .toolbar(.hidden, for: .navigationBar)
+      .tint(piliProfileAccent)
       .modifier(PiliNativePrimaryDestinations(model: model, tab: .mine))
     }
   }
 
-  private var favorites: some View {
-    VStack(alignment: .leading, spacing: 20) {
-      HStack {
-        Button { protectedRoute("/fav") } label: {
-          HStack(spacing: 10) {
-            Text("我的收藏").font(.system(size: 18, weight: .bold)).foregroundStyle(.primary)
-            Text("\(model.account.favoriteCount)").font(.system(size: 15)).foregroundStyle(.secondary)
-            Image(systemName: "chevron.right").font(.system(size: 17, weight: .medium)).foregroundStyle(piliProfileAccent)
+  private var accountSection: some View {
+    Section {
+      Button(action: { openAccount(section: 0) }) {
+        HStack(spacing: 14) {
+          PiliNativeAvatar(url: model.account.face, vip: model.account.vip, size: 62)
+          VStack(alignment: .leading, spacing: 7) {
+            HStack(spacing: 8) {
+              Text(model.account.name).font(.headline).foregroundStyle(.primary).lineLimit(1)
+              if model.account.isLogin { PiliOriginalLevelBadge(level: model.account.level, height: 12) }
+            }
+            if model.account.isLogin {
+              HStack(spacing: 12) {
+                Text(String(format: "硬币 %.1f", model.account.money))
+                Text(verbatim: model.account.nextExp > 0 ? "经验 \(model.account.currentExp)/\(model.account.nextExp)" : "经验 \(model.account.currentExp) · 已满级")
+                  .lineLimit(1).minimumScaleFactor(0.7)
+              }.font(.caption).foregroundStyle(.secondary)
+              ProgressView(value: experienceProgress)
+                .tint(piliProfileAccent).accessibilityLabel("等级经验")
+            } else {
+              Text("登录后同步收藏、历史与动态").font(.caption).foregroundStyle(.secondary)
+            }
+          }.frame(maxWidth: .infinity, alignment: .leading)
+          Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.tertiary)
+        }
+        .contentShape(Rectangle())
+      }
+      .buttonStyle(.plain)
+      .accessibilityIdentifier("mine-account")
+
+      HStack(spacing: 0) {
+        PiliNativeAccountStat(value: model.account.dynamics, title: "动态") { openAccount(section: 1) }
+        PiliNativeAccountStat(value: model.account.following, title: "关注") { protectedRoute("/follow") }
+        PiliNativeAccountStat(value: model.account.followers, title: "粉丝") { protectedRoute("/fan") }
+      }
+      .padding(.vertical, 4)
+    }
+  }
+
+  private var servicesSection: some View {
+    Section("我的服务") {
+      ForEach(shortcuts.indices, id: \.self) { index in
+        let item = shortcuts[index]
+        Button { protectedRoute(item.2, requiresLogin: item.2 != "/download") } label: {
+          HStack(spacing: 13) {
+            Image(systemName: item.1)
+              .font(.system(size: 17, weight: .semibold)).foregroundStyle(piliProfileAccent)
+              .frame(width: 28, height: 28).background(piliProfileAccent.opacity(0.12), in: RoundedRectangle(cornerRadius: 7))
+            Text(item.0).foregroundStyle(.primary)
+            Spacer()
+            Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.tertiary)
           }
-        }.buttonStyle(.plain)
+          .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+      }
+    }
+  }
+
+  private var favoritesSection: some View {
+    Section {
+      favoritesContent
+    } header: {
+      HStack(spacing: 8) {
+        Button { protectedRoute("/fav") } label: {
+          HStack(spacing: 7) {
+            Text("我的收藏")
+            Text("\(model.account.favoriteCount)").foregroundStyle(.secondary)
+            Image(systemName: "chevron.right").font(.caption.weight(.semibold))
+          }
+        }
+        .buttonStyle(.plain)
         Spacer()
         Button(action: model.loadMineFavorites) {
-          Image(systemName: "arrow.clockwise").font(.system(size: 20)).frame(width: 20, height: 20)
-        }.modifier(PiliNativeGlassButton()).disabled(model.mineFavoritesLoading || !model.account.isLogin).accessibilityLabel("刷新收藏夹")
-      }.padding(.horizontal, 24).padding(.top, 19)
-      if !model.account.isLogin {
-        Button("登录查看收藏夹") { model.openRoute("/loginPage") }.padding(.horizontal, 24)
-      } else if let error = model.mineFavoritesError {
-        VStack(alignment: .leading, spacing: 10) {
-          Text(error).font(.caption).foregroundStyle(.secondary)
-          Button("重试", action: model.loadMineFavorites)
-        }.padding(.horizontal, 24)
-      } else if model.mineFavoritesLoading && model.mineFavorites.isEmpty {
-        ProgressView().frame(maxWidth: .infinity, minHeight: 150)
-      } else if model.mineFavorites.isEmpty {
-        Text("还没有收藏夹").foregroundStyle(.secondary).padding(.horizontal, 24)
-      } else {
-        ScrollView(.horizontal, showsIndicators: false) {
-          HStack(alignment: .top, spacing: 14) {
-            ForEach(model.mineFavorites) { item in
-              PiliNativeFavoriteCard(item: item, width: min(210, UIScreen.main.bounds.width * 0.46)) { model.openFavoriteFolder(item) }
-            }
-          }.padding(.horizontal, 20)
+          Image(systemName: "arrow.clockwise")
         }
+        .buttonStyle(.borderless)
+        .disabled(model.mineFavoritesLoading || !model.account.isLogin)
+        .accessibilityLabel("刷新收藏夹")
       }
-    }.padding(.bottom, 28).tint(piliProfileAccent)
+    }
+  }
+
+  @ViewBuilder private var favoritesContent: some View {
+    if !model.account.isLogin {
+      Button { model.openRoute("/loginPage") } label: {
+        Label("登录查看收藏夹", systemImage: "person.crop.circle.badge.checkmark")
+      }
+    } else if let error = model.mineFavoritesError {
+      VStack(alignment: .leading, spacing: 10) {
+        Label(error, systemImage: "exclamationmark.triangle").font(.subheadline).foregroundStyle(.secondary)
+        Button("重试", action: model.loadMineFavorites)
+      }.padding(.vertical, 4)
+    } else if model.mineFavoritesLoading && model.mineFavorites.isEmpty {
+      ProgressView().frame(maxWidth: .infinity, minHeight: 110)
+    } else if model.mineFavorites.isEmpty {
+      Label("还没有收藏夹", systemImage: "folder").foregroundStyle(.secondary)
+        .frame(maxWidth: .infinity, minHeight: 90)
+    } else {
+      ScrollView(.horizontal, showsIndicators: false) {
+        LazyHStack(alignment: .top, spacing: 12) {
+          ForEach(model.mineFavorites) { item in
+            PiliNativeFavoriteCard(item: item, width: min(170, UIScreen.main.bounds.width * 0.40)) {
+              model.openFavoriteFolder(item)
+            }
+          }
+        }
+        .padding(.vertical, 4)
+      }
+      .listRowInsets(EdgeInsets(top: 12, leading: 16, bottom: 12, trailing: 0))
+    }
+  }
+
+  private var accountAndAppearanceSection: some View {
+    Section("账户与外观") {
+      Button { model.openRoute("/loginPage") } label: {
+        nativeRow(title: "切换账号", detail: nil, icon: "person.crop.rectangle.stack")
+      }
+      .buttonStyle(.plain)
+
+      Button { appearance = (appearance + 1) % 3 } label: {
+        nativeRow(title: "外观", detail: appearanceTitle, icon: appearance == 2 ? "moon.fill" : "circle.lefthalf.filled")
+      }
+      .buttonStyle(.plain)
+      .accessibilityLabel("切换主题，当前\(appearanceTitle)")
+    }
+  }
+
+  private func nativeRow(title: String, detail: String?, icon: String) -> some View {
+    HStack(spacing: 13) {
+      Image(systemName: icon).font(.system(size: 17, weight: .semibold)).foregroundStyle(piliProfileAccent)
+        .frame(width: 28, height: 28).background(piliProfileAccent.opacity(0.12), in: RoundedRectangle(cornerRadius: 7))
+      Text(title).foregroundStyle(.primary)
+      Spacer()
+      if let detail { Text(detail).foregroundStyle(.secondary) }
+      Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.tertiary)
+    }
+    .contentShape(Rectangle())
+  }
+
+  private var appearanceTitle: String {
+    switch appearance {
+    case 1: "浅色"
+    case 2: "深色"
+    default: "跟随系统"
+    }
+  }
+
+  private var experienceProgress: Double {
+    guard model.account.nextExp > 0 else { return 1 }
+    return min(1, max(0, Double(model.account.currentExp) / Double(model.account.nextExp)))
   }
 
   private func toolbarButton(_ title: String, _ icon: String, action: @escaping () -> Void) -> some View {
-    Button(action: action) { Image(systemName: icon).font(.system(size: 20)).frame(width: 20, height: 20) }
-      .modifier(PiliNativeGlassButton()).accessibilityLabel(title)
+    Button(action: action) { Image(systemName: icon) }.accessibilityLabel(title)
   }
+
   private func openAccount(section: Int) {
     if model.account.isLogin, let mid = model.account.mid { model.presentProfile(mid, section: section) }
     else { model.openRoute("/loginPage") }
   }
+
   private func protectedRoute(_ route: String, requiresLogin: Bool = true) {
     model.openRoute(requiresLogin && !model.account.isLogin ? "/loginPage" : route)
   }
