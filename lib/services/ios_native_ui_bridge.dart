@@ -172,6 +172,10 @@ final class IOSNativeUIBridge {
         return _loadRelatedVideos(_arguments(call));
       case 'loadNativePlayback':
         return _loadNativePlayback(_arguments(call));
+      case 'loadNativeSubtitle':
+        return _loadNativeSubtitle(_arguments(call));
+      case 'reportNativePlaybackProgress':
+        return _reportNativePlaybackProgress(_arguments(call));
       case 'loadNativeDanmaku':
         return _loadNativeDanmaku(_arguments(call));
       case 'nativeDanmakuSettings':
@@ -609,6 +613,69 @@ final class IOSNativeUIBridge {
         'code': ?code,
       },
       Success(:final response) => await () async {
+        final subtitleRows = <Map<String, dynamic>>[];
+        int? lastPlayCid;
+        final playInfoResult = await VideoHttp.playInfo(
+          aid: aid.toString(),
+          bvid: bvid,
+          cid: cid,
+        );
+        if (playInfoResult case Success(:final response)) {
+          lastPlayCid = response.lastPlayCid;
+          for (final item in response.subtitle?.subtitles ?? const []) {
+            final rawUrl = item.subtitleUrl ?? item.subtitleUrlV2;
+            if (rawUrl == null || rawUrl.isEmpty) continue;
+            subtitleRows.add({
+              'id': '${item.lan}-${subtitleRows.length}',
+              'label': item.lanDoc ?? item.lan,
+              'language': item.lan,
+              'url': rawUrl,
+              'isAI': item.isAi,
+            });
+          }
+        }
+        if (subtitleRows.isEmpty && !Accounts.main.isLogin) {
+          final dmView = await DmGrpc.dmView(aid, cid);
+          if (dmView case Success(:final response)
+              when response.hasSubtitle()) {
+            for (final item in response.subtitle.subtitles) {
+              if (item.subtitleUrl.isEmpty) continue;
+              subtitleRows.add({
+                'id': '${item.lan}-${subtitleRows.length}',
+                'label': item.lanDoc,
+                'language': item.lan,
+                'url': item.subtitleUrl,
+                'isAI': item.lan.startsWith('ai'),
+              });
+            }
+          }
+        }
+        subtitleRows.sort((a, b) {
+          final aLanguage = a['language'] as String? ?? '';
+          final bLanguage = b['language'] as String? ?? '';
+          final zhOrder = bLanguage.contains('zh') ? 1 : 0;
+          final otherZhOrder = aLanguage.contains('zh') ? 1 : 0;
+          if (zhOrder != otherZhOrder) return zhOrder - otherZhOrder;
+          return (a['isAI'] == true ? 1 : 0) - (b['isAI'] == true ? 1 : 0);
+        });
+        final subtitlePreference = GStorage.setting.get(
+          SettingBoxKey.subtitlePreferenceV2,
+          defaultValue: 0,
+        );
+        String? defaultSubtitleId;
+        if (subtitleRows.isNotEmpty && subtitlePreference != 0) {
+          final firstIsAI = subtitleRows.first['isAI'] == true;
+          if (subtitlePreference == 1 || !firstIsAI) {
+            defaultSubtitleId = subtitleRows.first['id'] as String;
+          }
+        }
+        final nativePlaybackExtras = <String, dynamic>{
+          'resumeAt': response.lastPlayTime,
+          'lastPlayCid': lastPlayCid,
+          'subtitles': subtitleRows,
+          'defaultSubtitleId': defaultSubtitleId,
+        };
+
         String? automaticSource;
         final automatic =
             GStorage.setting.get(SettingBoxKey.CDNService) == null;
@@ -776,6 +843,7 @@ final class IOSNativeUIBridge {
             'codec': selectedVideo.codecs ?? '',
             'width': selectedVideo.width ?? 0,
             'height': selectedVideo.height ?? 0,
+            ...nativePlaybackExtras,
           };
         }
 
@@ -818,9 +886,53 @@ final class IOSNativeUIBridge {
           'segmentCount': segments.length,
           'streamKind': 'progressive',
           'isHDR': false,
+          ...nativePlaybackExtras,
         };
       }(),
     };
+  }
+
+  Future<Map<String, dynamic>> _loadNativeSubtitle(
+    Map<dynamic, dynamic> arguments,
+  ) async {
+    var url = _nonEmpty(arguments['url']?.toString());
+    if (url == null) return const {'state': 'error', 'error': '字幕地址为空'};
+    url = url.replaceFirst(RegExp(r'^https?:'), '');
+    try {
+      final content = await VideoHttp.getSubtitles(url);
+      if (content == null || content.isEmpty) {
+        return const {'state': 'error', 'error': '字幕内容为空'};
+      }
+      return {'state': 'success', 'content': content};
+    } catch (error) {
+      return {'state': 'error', 'error': '字幕加载失败：$error'};
+    }
+  }
+
+  Future<Map<String, dynamic>> _reportNativePlaybackProgress(
+    Map<dynamic, dynamic> arguments,
+  ) async {
+    final bvid = _nonEmpty(arguments['bvid']?.toString());
+    final cid = _asInt(arguments['cid']);
+    final progress = _asInt(arguments['progress']);
+    if (!Accounts.heartbeat.isLogin ||
+        bvid == null ||
+        cid == null ||
+        progress == null ||
+        progress < 0) {
+      return const {'state': 'ignored'};
+    }
+    try {
+      await VideoHttp.heartBeat(
+        bvid: bvid,
+        cid: cid,
+        progress: progress,
+        videoType: VideoType.ugc,
+      );
+      return const {'state': 'success'};
+    } catch (error) {
+      return {'state': 'error', 'error': error.toString()};
+    }
   }
 
   Future<Map<String, dynamic>> _loadNativeDanmaku(

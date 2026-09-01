@@ -411,6 +411,7 @@ private final class PiliNativeViewModel: ObservableObject {
   private var videoDetailGeneration = UUID()
   private var videoActionRevision = 0
   private var nativePlayerFullscreenCancellable: AnyCancellable?
+  private var nativePlayerProgressCancellable: AnyCancellable?
   var onVideoOrientationPolicyChanged: ((Bool) -> Void)?
 
   init(
@@ -438,6 +439,15 @@ private final class PiliNativeViewModel: ObservableObject {
       guard let self = self, let video = self.videoDetail, let cid = self.nativePlayerCID else { return }
       self.loadNativePlayback(video: video, cid: cid, quality: quality, resumeAt: resumeAt)
     }
+    nativePlayerSession.onSubtitleRequested = { [weak self] url, completion in
+      guard let self else { completion(nil); return }
+      self.channel.invokeMethod("loadNativeSubtitle", arguments: ["url": url]) { response in
+        DispatchQueue.main.async {
+          let result = piliDictionary(response)
+          completion(result["state"] as? String == "success" ? piliString(result["content"]) : nil)
+        }
+      }
+    }
     nativePlayerSession.onDanmakuSendRequested = { [weak self] content, progress in
       self?.sendNativeDanmaku(content: content, progress: progress)
     }
@@ -457,6 +467,10 @@ private final class PiliNativeViewModel: ObservableObject {
         self.performVideoAction(action, video: video)
       }
     }
+    nativePlayerProgressCancellable = nativePlayerSession.$currentTime
+      .filter { $0 >= 1 }
+      .throttle(for: .seconds(15), scheduler: RunLoop.main, latest: true)
+      .sink { [weak self] time in self?.reportNativePlaybackProgress(time) }
     nativePlayerFullscreenCancellable = nativePlayerSession.$isFullscreen
       .removeDuplicates()
       .receive(on: DispatchQueue.main)
@@ -849,22 +863,52 @@ private final class PiliNativeViewModel: ObservableObject {
             label: piliString(map["label"]) ?? "\(value)P"
           )
         }
+        if resumeAt <= 0,
+           let lastCID = piliOptionalInt(result["lastPlayCid"]),
+           lastCID > 0, lastCID != cid,
+           video.pages.contains(where: { $0.cid == lastCID }) {
+          self.nativePlayerCID = lastCID
+          self.videoActionMessage = "正在定位上次播放的分P"
+          self.loadNativePlayback(video: video, cid: lastCID, quality: quality)
+          return
+        }
+        let durationMilliseconds = piliInt(result["duration"])
+        let durationSeconds = Double(durationMilliseconds) / 1000
+        let storedResume = Double(max(0, piliInt(result["resumeAt"]))) / 1000
+        let initialResume = storedResume > 0 && (durationSeconds <= 0 || storedResume < durationSeconds - 5)
+          ? storedResume : 0
+        let targetResume = resumeAt > 0 ? resumeAt : initialResume
         self.nativePlayerCID = cid
         self.nativePlayerQuality = piliOptionalInt(result["quality"]) ?? quality
         self.originalPlayerReady = true
         self.originalPlayerError = nil
+        if resumeAt <= 0 {
+          let subtitles = (result["subtitles"] as? [Any] ?? []).compactMap { row -> PiliNativeSubtitleOption? in
+            let map = piliDictionary(row)
+            guard let id = piliString(map["id"]),
+                  let label = piliString(map["label"]),
+                  let url = piliString(map["url"]), !url.isEmpty else { return nil }
+            return PiliNativeSubtitleOption(id: id, label: label, url: url, isAI: piliBool(map["isAI"]))
+          }
+          self.nativePlayerSession.configureSubtitles(
+            subtitles,
+            defaultID: piliString(result["defaultSubtitleId"])
+          )
+        }
         self.nativePlayerSession.configure(
           segments: segments,
-          durationMilliseconds: piliInt(result["duration"]),
+          durationMilliseconds: durationMilliseconds,
           quality: piliString(result["qualityText"])
             ?? "\(piliOptionalInt(result["quality"]) ?? quality ?? 80)P",
           qualities: qualities,
-          resumeAt: resumeAt,
+          resumeAt: targetResume,
           autoplay: autoplay
         )
         self.nativePlayerSession.prepareDanmaku()
         if resumeAt > 0 {
           self.videoActionMessage = "已切换清晰度"
+        } else if initialResume > 0 {
+          self.videoActionMessage = "已定位至上次播放位置"
         }
       }
     }
@@ -942,6 +986,16 @@ private final class PiliNativeViewModel: ObservableObject {
     }
   }
 
+  private func reportNativePlaybackProgress(_ time: TimeInterval) {
+    guard time.isFinite, time >= 1,
+          let video = videoDetail,
+          let cid = nativePlayerCID else { return }
+    channel.invokeMethod(
+      "reportNativePlaybackProgress",
+      arguments: ["bvid": video.bvid, "cid": cid, "progress": Int(time)]
+    )
+  }
+
   func originalPlayerDidBecomeReady(_ arguments: [String: Any]) {
     originalPlayerHeroTag = piliString(arguments["heroTag"]) ?? ""
     originalPlayerError = nil
@@ -969,6 +1023,7 @@ private final class PiliNativeViewModel: ObservableObject {
     guard isVideoDetailPresented else { return }
     videoDetailGeneration = UUID()
     nativePlaybackGeneration = UUID()
+    reportNativePlaybackProgress(nativePlayerSession.currentTime)
     nativePlayerSession.pausePlayback()
     isVideoDetailPresented = false
   }
@@ -980,6 +1035,7 @@ private final class PiliNativeViewModel: ObservableObject {
     videoDetailGeneration = UUID()
     onVideoOrientationPolicyChanged?(false)
     nativePlaybackGeneration = UUID()
+    reportNativePlaybackProgress(nativePlayerSession.currentTime)
     originalPlayerReady = false
     originalPlayerFullscreen = false
     nativePlayerSession.isFullscreen = false
