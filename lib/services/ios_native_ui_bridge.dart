@@ -635,7 +635,7 @@ final class IOSNativeUIBridge {
           }
         }
         if (subtitleRows.isEmpty && !Accounts.main.isLogin) {
-          final dmView = await DmGrpc.dmView(aid, cid);
+          final dmView = await DmGrpc.dmView(aid!, cid);
           if (dmView case Success(:final response)
               when response.hasSubtitle()) {
             for (final item in response.subtitle.subtitles) {
