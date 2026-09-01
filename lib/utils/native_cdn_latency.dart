@@ -111,27 +111,36 @@ class NativeCDNLatency {
     _pendingCandidates = Map.of(candidates);
     measurements.clear();
     checkedAt = DateTime.now();
-    _pending = (() async {
-      for (final entry in candidates.entries) {
-        final uri = Uri.tryParse(entry.value);
-        try {
-          if (uri == null || !uri.hasAuthority) {
-            throw const FormatException('Invalid media URL');
+    _pending =
+        (() async {
+          final samples = <String, Future<int>>{};
+          for (final entry in candidates.entries) {
+            final uri = Uri.tryParse(entry.value);
+            try {
+              if (uri == null || !uri.hasAuthority) {
+                throw const FormatException('Invalid media URL');
+              }
+              // Sequential samples avoid the candidate streams competing for the
+              // same connection bandwidth and skewing one another's result.
+              final speed = await samples.putIfAbsent(
+                entry.value,
+                () => probe(uri),
+              );
+              measurements[entry.key] = NativeCDNMeasurement(
+                uri.host,
+                speed,
+                'ok',
+              );
+            } catch (error) {
+              measurements[entry.key] = NativeCDNMeasurement(
+                uri?.host ?? '',
+                null,
+                error is TimeoutException ? 'timeout' : 'unavailable',
+              );
+            }
           }
-          // Sequential samples avoid the candidate streams competing for the
-          // same connection bandwidth and skewing one another's result.
-          final speed = await probe(uri);
-          measurements[entry.key] = NativeCDNMeasurement(uri.host, speed, 'ok');
-        } catch (error) {
-          measurements[entry.key] = NativeCDNMeasurement(
-            uri?.host ?? '',
-            null,
-            error is TimeoutException ? 'timeout' : 'unavailable',
-          );
-        }
-      }
-    })().whenComplete(() {
-      _pending = null;
-    });
+        })().whenComplete(() {
+          _pending = null;
+        });
   }
 }
