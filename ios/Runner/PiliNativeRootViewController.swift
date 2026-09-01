@@ -408,6 +408,7 @@ private final class PiliNativeViewModel: ObservableObject {
   private var nativePlayerCID: Int?
   private var nativePlayerQuality: Int?
   private var nativePlaybackGeneration = UUID()
+  private var nativePlaybackMetadataGeneration = UUID()
   private var videoDetailGeneration = UUID()
   private var videoActionRevision = 0
   private var nativePlayerFullscreenCancellable: AnyCancellable?
@@ -799,6 +800,18 @@ private final class PiliNativeViewModel: ObservableObject {
     ]
     if let quality { arguments["quality"] = quality }
     if let aid = video.aid { arguments["aid"] = aid }
+    if resumeAt <= 0 {
+      let metadataGeneration = UUID()
+      nativePlaybackMetadataGeneration = metadataGeneration
+      nativePlayerSession.configureSubtitles([], defaultID: nil)
+      loadNativePlaybackMetadata(
+        video: video,
+        cid: cid,
+        arguments: arguments,
+        generation: metadataGeneration,
+        restoreLastPart: quality == nil
+      )
+    }
     channel.invokeMethod("loadNativePlayback", arguments: arguments) { [weak self] response in
       DispatchQueue.main.async {
         guard let self = self, self.nativePlaybackGeneration == generation else { return }
@@ -863,15 +876,6 @@ private final class PiliNativeViewModel: ObservableObject {
             label: piliString(map["label"]) ?? "\(value)P"
           )
         }
-        if resumeAt <= 0,
-           let lastCID = piliOptionalInt(result["lastPlayCid"]),
-           lastCID > 0, lastCID != cid,
-           video.pages.contains(where: { $0.cid == lastCID }) {
-          self.nativePlayerCID = lastCID
-          self.videoActionMessage = "正在定位上次播放的分P"
-          self.loadNativePlayback(video: video, cid: lastCID, quality: quality)
-          return
-        }
         let durationMilliseconds = piliInt(result["duration"])
         let durationSeconds = Double(durationMilliseconds) / 1000
         let storedResume = Double(max(0, piliInt(result["resumeAt"]))) / 1000
@@ -882,19 +886,6 @@ private final class PiliNativeViewModel: ObservableObject {
         self.nativePlayerQuality = piliOptionalInt(result["quality"]) ?? quality
         self.originalPlayerReady = true
         self.originalPlayerError = nil
-        if resumeAt <= 0 {
-          let subtitles = (result["subtitles"] as? [Any] ?? []).compactMap { row -> PiliNativeSubtitleOption? in
-            let map = piliDictionary(row)
-            guard let id = piliString(map["id"]),
-                  let label = piliString(map["label"]),
-                  let url = piliString(map["url"]), !url.isEmpty else { return nil }
-            return PiliNativeSubtitleOption(id: id, label: label, url: url, isAI: piliBool(map["isAI"]))
-          }
-          self.nativePlayerSession.configureSubtitles(
-            subtitles,
-            defaultID: piliString(result["defaultSubtitleId"])
-          )
-        }
         self.nativePlayerSession.configure(
           segments: segments,
           durationMilliseconds: durationMilliseconds,
@@ -910,6 +901,42 @@ private final class PiliNativeViewModel: ObservableObject {
         } else if initialResume > 0 {
           self.videoActionMessage = "已定位至上次播放位置"
         }
+      }
+    }
+  }
+
+  private func loadNativePlaybackMetadata(
+    video: PiliNativeVideoDetail,
+    cid: Int,
+    arguments: [String: Any],
+    generation: UUID,
+    restoreLastPart: Bool
+  ) {
+    channel.invokeMethod("loadNativePlaybackMetadata", arguments: arguments) { [weak self] response in
+      DispatchQueue.main.async {
+        guard let self, self.nativePlaybackMetadataGeneration == generation else { return }
+        let result = piliDictionary(response)
+        guard result["state"] as? String == "success" else { return }
+        if restoreLastPart,
+           let lastCID = piliOptionalInt(result["lastPlayCid"]),
+           lastCID > 0, lastCID != cid,
+           video.pages.contains(where: { $0.cid == lastCID }) {
+          self.nativePlayerCID = lastCID
+          self.videoActionMessage = "正在定位上次播放的分P"
+          self.loadNativePlayback(video: video, cid: lastCID)
+          return
+        }
+        let subtitles = (result["subtitles"] as? [Any] ?? []).compactMap { row -> PiliNativeSubtitleOption? in
+          let map = piliDictionary(row)
+          guard let id = piliString(map["id"]),
+                let label = piliString(map["label"]),
+                let url = piliString(map["url"]), !url.isEmpty else { return nil }
+          return PiliNativeSubtitleOption(id: id, label: label, url: url, isAI: piliBool(map["isAI"]))
+        }
+        self.nativePlayerSession.configureSubtitles(
+          subtitles,
+          defaultID: piliString(result["defaultSubtitleId"])
+        )
       }
     }
   }
@@ -1023,6 +1050,7 @@ private final class PiliNativeViewModel: ObservableObject {
     guard isVideoDetailPresented else { return }
     videoDetailGeneration = UUID()
     nativePlaybackGeneration = UUID()
+    nativePlaybackMetadataGeneration = UUID()
     reportNativePlaybackProgress(nativePlayerSession.currentTime)
     nativePlayerSession.pausePlayback()
     isVideoDetailPresented = false
@@ -1035,6 +1063,7 @@ private final class PiliNativeViewModel: ObservableObject {
     videoDetailGeneration = UUID()
     onVideoOrientationPolicyChanged?(false)
     nativePlaybackGeneration = UUID()
+    nativePlaybackMetadataGeneration = UUID()
     reportNativePlaybackProgress(nativePlayerSession.currentTime)
     originalPlayerReady = false
     originalPlayerFullscreen = false
@@ -1375,7 +1404,7 @@ private final class PiliNativeViewModel: ObservableObject {
       guard let value = piliString($0["value"]), let label = piliString($0["label"]) else { return nil }
       return PiliNativePlaybackSourceOption(
         value: value, label: label,
-        latencyMS: piliOptionalInt($0["latencyMS"]),
+        speedKBps: piliOptionalInt($0["speedKBps"]),
         latencyState: piliString($0["latencyState"]) ?? "untested"
       )
     }
@@ -2918,11 +2947,14 @@ private struct PiliNativePlaybackSourceOption: Identifiable {
   var id: String { value }
   let value: String
   let label: String
-  let latencyMS: Int?
+  let speedKBps: Int?
   let latencyState: String
 
   var latencyText: String {
-    if let latencyMS { return "\(latencyMS) ms" }
+    if let speedKBps {
+      if speedKBps >= 1024 { return String(format: "%.1f MB/s", Double(speedKBps) / 1024) }
+      return "\(speedKBps) KB/s"
+    }
     switch latencyState {
     case "timeout": return "超时"
     case "unavailable": return "不可用"
@@ -7907,7 +7939,7 @@ private struct PiliNativeSettingsView: View {
             }
           }
           NavigationLink(destination: PiliNativePlaybackSourceSettingsView(model: model)) {
-            settingLabel("播放源设置", subtitle: "自动选线、延迟检测与直播 CDN", icon: "network")
+            settingLabel("播放源设置", subtitle: "自动选线、下载测速与直播 CDN", icon: "network")
           }
         }
       }
@@ -8049,11 +8081,11 @@ private struct PiliNativePlaybackSourceSettingsView: View {
     Form {
       Section(
         header: Text("视频播放源"),
-        footer: Text("自动选择已测线路中延迟最低且可用的一条；首次播放并行检测，首个可用线路即可开始加载。检测结果缓存 3 分钟，失败时保留原始和备用地址。延迟为测试视频的首字节耗时，不代表下载速度。")
+        footer: Text("自动选择实测下载速度最快的可用线路。播放器不会等待测速，首次使用原始地址并在后台下载小段视频测速；结果缓存 3 分钟，失败时保留原始和备用地址。")
       ) {
         Button(action: { model.testPlaybackSources(force: true) }) {
           HStack {
-            Label("检测线路延迟", systemImage: "speedometer")
+            Label("检测线路下载速度", systemImage: "speedometer")
             Spacer()
             if model.playbackLatencyTesting { ProgressView() }
           }

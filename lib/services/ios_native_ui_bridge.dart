@@ -79,7 +79,7 @@ final class IOSNativeUIBridge {
   final _danmakuSettings = NativeDanmakuSettings();
   final List<Worker> _workers = <Worker>[];
   final _cdnLatency = NativeCDNLatency(
-    probe: (url) => probeMediaLatency(
+    probe: (url) => probeMediaDownloadSpeed(
       url,
       headers: {'user-agent': BrowserUa.pc, 'referer': HttpString.baseUrl},
     ),
@@ -172,6 +172,8 @@ final class IOSNativeUIBridge {
         return _loadRelatedVideos(_arguments(call));
       case 'loadNativePlayback':
         return _loadNativePlayback(_arguments(call));
+      case 'loadNativePlaybackMetadata':
+        return _loadNativePlaybackMetadata(_arguments(call));
       case 'loadNativeSubtitle':
         return _loadNativeSubtitle(_arguments(call));
       case 'reportNativePlaybackProgress':
@@ -613,77 +615,18 @@ final class IOSNativeUIBridge {
         'code': ?code,
       },
       Success(:final response) => await () async {
-        final subtitleRows = <Map<String, dynamic>>[];
-        int? lastPlayCid;
-        final playInfoResult = await VideoHttp.playInfo(
-          aid: aid.toString(),
-          bvid: bvid,
-          cid: cid,
-        );
-        if (playInfoResult case Success(:final response)) {
-          lastPlayCid = response.lastPlayCid;
-          for (final item in response.subtitle?.subtitles ?? const []) {
-            final rawUrl = item.subtitleUrl ?? item.subtitleUrlV2;
-            if (rawUrl == null || rawUrl.isEmpty) continue;
-            subtitleRows.add({
-              'id': '${item.lan}-${subtitleRows.length}',
-              'label': item.lanDoc ?? item.lan,
-              'language': item.lan,
-              'url': rawUrl,
-              'isAI': item.isAi,
-            });
-          }
-        }
-        if (subtitleRows.isEmpty && !Accounts.main.isLogin) {
-          final dmView = await DmGrpc.dmView(aid!, cid);
-          if (dmView case Success(:final response)
-              when response.hasSubtitle()) {
-            for (final item in response.subtitle.subtitles) {
-              if (item.subtitleUrl.isEmpty) continue;
-              subtitleRows.add({
-                'id': '${item.lan}-${subtitleRows.length}',
-                'label': item.lanDoc,
-                'language': item.lan,
-                'url': item.subtitleUrl,
-                'isAI': item.lan.startsWith('ai'),
-              });
-            }
-          }
-        }
-        subtitleRows.sort((a, b) {
-          final aLanguage = a['language'] as String? ?? '';
-          final bLanguage = b['language'] as String? ?? '';
-          final zhOrder = bLanguage.contains('zh') ? 1 : 0;
-          final otherZhOrder = aLanguage.contains('zh') ? 1 : 0;
-          if (zhOrder != otherZhOrder) return zhOrder - otherZhOrder;
-          return (a['isAI'] == true ? 1 : 0) - (b['isAI'] == true ? 1 : 0);
-        });
-        final subtitlePreference = GStorage.setting.get(
-          SettingBoxKey.subtitlePreferenceV2,
-          defaultValue: 0,
-        );
-        String? defaultSubtitleId;
-        if (subtitleRows.isNotEmpty && subtitlePreference != 0) {
-          final firstIsAI = subtitleRows.first['isAI'] == true;
-          if (subtitlePreference == 1 || !firstIsAI) {
-            defaultSubtitleId = subtitleRows.first['id'] as String;
-          }
-        }
         final nativePlaybackExtras = <String, dynamic>{
           'resumeAt': response.lastPlayTime,
-          'lastPlayCid': lastPlayCid,
-          'subtitles': subtitleRows,
-          'defaultSubtitleId': defaultSubtitleId,
         };
 
         String? automaticSource;
         final automatic =
             GStorage.setting.get(SettingBoxKey.CDNService) == null;
-        Future<void> prepareSource(Iterable<String> urls) async {
+        void prepareSource(Iterable<String> urls) {
           _latencySampleURLs = urls.where((url) => url.isNotEmpty).toList();
           _latencySampleTime = DateTime.now();
           if (automatic) {
-            automaticSource = await _cdnLatency.choose(
+            automaticSource = _cdnLatency.choose(
               _latencyCandidates(_latencySampleURLs),
             );
           }
@@ -776,7 +719,7 @@ final class IOSNativeUIBridge {
 
           candidates.sort((a, b) => codecRank(a).compareTo(codecRank(b)));
           final selectedVideo = candidates.first;
-          await prepareSource(selectedVideo.playUrls);
+          prepareSource(selectedVideo.playUrls);
           final videoUrls = <String>[];
           for (final candidate in candidates) {
             for (final url in nativeTrackUrls(candidate.playUrls)) {
@@ -849,7 +792,7 @@ final class IOSNativeUIBridge {
 
         final sourceSegments = response.durl ?? const [];
         if (sourceSegments.isNotEmpty) {
-          await prepareSource(sourceSegments.first.playUrls);
+          prepareSource(sourceSegments.first.playUrls);
         }
         final segments = sourceSegments
             .where((segment) => segment.playUrls.isNotEmpty)
@@ -889,6 +832,80 @@ final class IOSNativeUIBridge {
           ...nativePlaybackExtras,
         };
       }(),
+    };
+  }
+
+  Future<Map<String, dynamic>> _loadNativePlaybackMetadata(
+    Map<dynamic, dynamic> arguments,
+  ) async {
+    final cid = _asInt(arguments['cid']);
+    var aid = _asInt(arguments['aid']);
+    final bvid = _nonEmpty(arguments['bvid']?.toString());
+    if (aid == null && bvid != null) aid = IdUtils.bv2av(bvid);
+    if (cid == null || cid <= 0 || aid == null || aid <= 0) {
+      return const {'state': 'error', 'error': '播放参数不完整'};
+    }
+
+    final subtitleRows = <Map<String, dynamic>>[];
+    int? lastPlayCid;
+    final playInfoResult = await VideoHttp.playInfo(
+      aid: aid.toString(),
+      bvid: bvid,
+      cid: cid,
+    );
+    if (playInfoResult case Success(:final response)) {
+      lastPlayCid = response.lastPlayCid;
+      for (final item in response.subtitle?.subtitles ?? const []) {
+        final rawUrl = item.subtitleUrl ?? item.subtitleUrlV2;
+        if (rawUrl == null || rawUrl.isEmpty) continue;
+        subtitleRows.add({
+          'id': '${item.lan}-${subtitleRows.length}',
+          'label': item.lanDoc ?? item.lan,
+          'language': item.lan,
+          'url': rawUrl,
+          'isAI': item.isAi,
+        });
+      }
+    }
+    if (subtitleRows.isEmpty && !Accounts.main.isLogin) {
+      final dmView = await DmGrpc.dmView(aid, cid);
+      if (dmView case Success(:final response) when response.hasSubtitle()) {
+        for (final item in response.subtitle.subtitles) {
+          if (item.subtitleUrl.isEmpty) continue;
+          subtitleRows.add({
+            'id': '${item.lan}-${subtitleRows.length}',
+            'label': item.lanDoc,
+            'language': item.lan,
+            'url': item.subtitleUrl,
+            'isAI': item.lan.startsWith('ai'),
+          });
+        }
+      }
+    }
+    subtitleRows.sort((a, b) {
+      final aLanguage = a['language'] as String? ?? '';
+      final bLanguage = b['language'] as String? ?? '';
+      final zhOrder = bLanguage.contains('zh') ? 1 : 0;
+      final otherZhOrder = aLanguage.contains('zh') ? 1 : 0;
+      if (zhOrder != otherZhOrder) return zhOrder - otherZhOrder;
+      return (a['isAI'] == true ? 1 : 0) - (b['isAI'] == true ? 1 : 0);
+    });
+    final subtitlePreference = GStorage.setting.get(
+      SettingBoxKey.subtitlePreferenceV2,
+      defaultValue: 0,
+    );
+    String? defaultSubtitleId;
+    if (subtitleRows.isNotEmpty && subtitlePreference != 0) {
+      final firstIsAI = subtitleRows.first['isAI'] == true;
+      if (subtitlePreference == 1 || !firstIsAI) {
+        defaultSubtitleId = subtitleRows.first['id'] as String;
+      }
+    }
+    return {
+      'state': 'success',
+      'lastPlayCid': lastPlayCid,
+      'subtitles': subtitleRows,
+      'defaultSubtitleId': defaultSubtitleId,
     };
   }
 
@@ -1214,13 +1231,13 @@ final class IOSNativeUIBridge {
     'state': 'success',
     'playbackSource': GStorage.setting.get(SettingBoxKey.CDNService) ?? 'auto',
     'playbackSources': [
-      {'value': 'auto', 'label': '自动（选择延迟最低的线路）'},
+      {'value': 'auto', 'label': '自动（选择下载最快的线路）'},
       for (final cdn in CDNService.values)
         {
           'value': cdn.name,
           'label': cdn.desc,
-          'latencyMS': _cdnLatency.isFresh
-              ? _cdnLatency.measurements[cdn.name]?.milliseconds
+          'speedKBps': _cdnLatency.isFresh
+              ? _cdnLatency.measurements[cdn.name]?.kilobytesPerSecond
               : null,
           'latencyState': _cdnLatency.isFresh
               ? _cdnLatency.measurements[cdn.name]?.status ?? 'untested'
