@@ -3,6 +3,7 @@ import AVKit
 import AetherEngine
 import Combine
 import JavaScriptCore
+import MediaPlayer
 import SwiftUI
 import UIKit
 
@@ -774,6 +775,21 @@ private final class PiliNativeDanmakuBuffer {
 }
 
 // Native preferences intentionally do not reuse obsolete Flutter player keys.
+enum PiliNativePlaybackEndMode: String, CaseIterable, Identifiable {
+  case stop
+  case playNext
+  case repeatOne
+
+  var id: String { rawValue }
+  var title: String {
+    switch self {
+    case .stop: return "播完停止"
+    case .playNext: return "自动播放下一个"
+    case .repeatOne: return "单集循环"
+    }
+  }
+}
+
 enum PiliNativePlayerPreferences {
   static let autoplayKey = "pili.native.player.autoplay"
   static let defaultRateKey = "pili.native.player.defaultRate"
@@ -782,6 +798,7 @@ enum PiliNativePlayerPreferences {
   static let lockKey = "pili.native.player.showLock"
   static let statusKey = "pili.native.player.showStatus"
   static let hideDelayKey = "pili.native.player.hideDelay"
+  static let endModeKey = "pili.native.player.endMode"
   static let relatedKey = "pili.native.detail.showRelated"
   static let expandIntroKey = "pili.native.detail.expandIntro"
 
@@ -793,6 +810,11 @@ enum PiliNativePlayerPreferences {
   static var holdDoubleSpeed: Bool { enabled(holdSpeedKey) }
   static var showLock: Bool { enabled(lockKey) }
   static var showStatus: Bool { enabled(statusKey) }
+  static var endMode: PiliNativePlaybackEndMode {
+    PiliNativePlaybackEndMode(
+      rawValue: UserDefaults.standard.string(forKey: endModeKey) ?? "playNext"
+    ) ?? .playNext
+  }
   static var defaultRate: Float {
     let rate = (UserDefaults.standard.object(forKey: defaultRateKey) as? Double) ?? 1
     return [0.75, 1, 1.25, 1.5, 2].contains(rate) ? Float(rate) : 1
@@ -871,6 +893,8 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
   var onSubtitleRequested: ((String, @escaping (String?) -> Void) -> Void)?
   var onDanmakuSendRequested: ((String, Int) -> Void)?
   var onVideoActionRequested: ((String) -> Void)?
+  var onPlaybackEnded: (() -> Void)?
+  var onNextRequested: (() -> Void)?
   var onDanmakuSettingsRequested: (([String: Any], @escaping ([String: Any]) -> Void) -> Void)?
 
   private(set) var danmakuItems: [PiliNativeDanmakuItem] = []
@@ -896,6 +920,12 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
   private var activeSegmentIndex = 0
   private var isTryingVideoCandidates = false
   private weak var videoSurface: AetherPlayerView?
+  private var remoteCommandTargets: [Any] = []
+  private var nowPlayingCoverURL = ""
+  private var nowPlayingArtworkGeneration = UUID()
+  private var lastNowPlayingElapsed: TimeInterval = -1
+  private var applicationIsInBackground = false
+  private var completedSegmentGeneration: UUID?
 
   private let requestHeaders = [
     "Accept": "*/*",
@@ -916,6 +946,7 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
     engine.videoGravity = .resizeAspect
     PiliNativeDiagnosticLog.shared.append("Native player session initialised")
     installObservers()
+    installRemoteCommands()
   }
 
   convenience init(settingsProfile: PiliNativeDanmakuProfile) {
@@ -1070,6 +1101,7 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
           + "audioHosts=\(audioHosts.isEmpty ? "none" : audioHosts)"
       )
     }
+    updateNowPlayingInfo(force: true)
     loadSegment(at: max(0, resumeAt), autoplay: autoplay)
   }
 
@@ -1091,6 +1123,7 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
     share: Int,
     ownerName: String = "",
     ownerFaceURL: String? = nil,
+    coverURL: String? = nil,
     isVertical: Bool = false
   ) {
     videoTitle = title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -1103,6 +1136,11 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
     videoOwnerName = ownerName
     videoOwnerFaceURL = ownerFaceURL ?? ""
     videoIsVertical = isVertical
+    if let newCoverURL = coverURL, nowPlayingCoverURL != newCoverURL {
+      nowPlayingCoverURL = newCoverURL
+      loadNowPlayingArtwork(newCoverURL)
+    }
+    updateNowPlayingInfo(force: true)
   }
 
   func requestVideoAction(_ action: String) {
@@ -1293,6 +1331,7 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
     endTemporaryDoubleSpeed()
     engine.pause()
     audioEngine.pause()
+    updateNowPlayingInfo(force: true)
   }
 
   func seek(to target: TimeInterval, autoplay: Bool? = nil) {
@@ -1305,6 +1344,7 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
     }
     let localTime = max(0, bounded - segmentOffsets[targetIndex])
     pausePlayback()
+    completedSegmentGeneration = nil
     isBuffering = true
     let generation = UUID()
     itemBuildGeneration = generation
@@ -1315,6 +1355,7 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
       guard self.itemBuildGeneration == generation else { return }
       self.currentTime = bounded
       self.isBuffering = false
+      self.updateNowPlayingInfo(force: true)
       if shouldResume { self.startPlayback() }
     }
   }
@@ -1342,6 +1383,7 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
       engine.setRate(rate)
       if hasAudioTrack { audioEngine.setRate(rate) }
     }
+    updateNowPlayingInfo(force: true)
   }
 
   func beginTemporaryDoubleSpeed() {
@@ -1393,6 +1435,12 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
     pictureInPicturePlayer = nil
     isTryingVideoCandidates = false
     fullscreenCommentsVisible = false
+    nowPlayingArtworkGeneration = UUID()
+    nowPlayingCoverURL = ""
+    lastNowPlayingElapsed = -1
+    MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
+    MPNowPlayingInfoCenter.default().playbackState = .stopped
+    completedSegmentGeneration = nil
   }
 
   func fail(_ message: String) {
@@ -1403,6 +1451,85 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
     isPlaying = false
     errorMessage = message
     hdrBrightnessActive = false
+    updateNowPlayingInfo(force: true)
+  }
+
+  private func installRemoteCommands() {
+    let commands = MPRemoteCommandCenter.shared()
+    commands.playCommand.isEnabled = true
+    commands.pauseCommand.isEnabled = true
+    commands.togglePlayPauseCommand.isEnabled = true
+    commands.changePlaybackPositionCommand.isEnabled = true
+    commands.nextTrackCommand.isEnabled = true
+    remoteCommandTargets = [
+      commands.playCommand.addTarget { [weak self] _ in
+        DispatchQueue.main.async {
+          guard let self else { return }
+          if self.duration > 0, self.currentTime >= self.duration - 0.25 {
+            self.seek(to: 0, autoplay: true)
+          } else {
+            self.startPlayback()
+          }
+        }
+        return .success
+      },
+      commands.pauseCommand.addTarget { [weak self] _ in
+        DispatchQueue.main.async { self?.pausePlayback() }
+        return .success
+      },
+      commands.togglePlayPauseCommand.addTarget { [weak self] _ in
+        DispatchQueue.main.async { self?.togglePlayback() }
+        return .success
+      },
+      commands.changePlaybackPositionCommand.addTarget { [weak self] event in
+        guard let event = event as? MPChangePlaybackPositionCommandEvent else {
+          return .commandFailed
+        }
+        DispatchQueue.main.async { self?.seek(to: event.positionTime) }
+        return .success
+      },
+      commands.nextTrackCommand.addTarget { [weak self] _ in
+        DispatchQueue.main.async { self?.onNextRequested?() }
+        return .success
+      },
+    ]
+  }
+
+  private func updateNowPlayingInfo(force: Bool = false) {
+    guard duration > 0 || isReady else { return }
+    if !force, abs(currentTime - lastNowPlayingElapsed) < 0.75 { return }
+    lastNowPlayingElapsed = currentTime
+    var info = MPNowPlayingInfoCenter.default().nowPlayingInfo ?? [:]
+    info[MPMediaItemPropertyTitle] = videoTitle
+    info[MPMediaItemPropertyArtist] = videoOwnerName.isEmpty ? "哔哩哔哩" : videoOwnerName
+    info[MPMediaItemPropertyPlaybackDuration] = duration
+    info[MPNowPlayingInfoPropertyElapsedPlaybackTime] = currentTime
+    info[MPNowPlayingInfoPropertyPlaybackRate] = isPlaying ? playbackRate : 0
+    info[MPNowPlayingInfoPropertyDefaultPlaybackRate] = playbackRate
+    info[MPNowPlayingInfoPropertyMediaType] = MPNowPlayingInfoMediaType.video.rawValue
+    MPNowPlayingInfoCenter.default().nowPlayingInfo = info
+    MPNowPlayingInfoCenter.default().playbackState = isPlaying ? .playing : .paused
+  }
+
+  private func loadNowPlayingArtwork(_ rawURL: String) {
+    let generation = UUID()
+    nowPlayingArtworkGeneration = generation
+    let normalizedURL = rawURL.hasPrefix("//") ? "https:\(rawURL)" : rawURL
+    guard let url = URL(string: normalizedURL), !normalizedURL.isEmpty else {
+      var info = MPNowPlayingInfoCenter.default().nowPlayingInfo ?? [:]
+      info.removeValue(forKey: MPMediaItemPropertyArtwork)
+      MPNowPlayingInfoCenter.default().nowPlayingInfo = info
+      return
+    }
+    URLSession.shared.dataTask(with: url) { [weak self] data, _, _ in
+      guard let data, let image = UIImage(data: data) else { return }
+      DispatchQueue.main.async {
+        guard let self, self.nowPlayingArtworkGeneration == generation else { return }
+        var info = MPNowPlayingInfoCenter.default().nowPlayingInfo ?? [:]
+        info[MPMediaItemPropertyArtwork] = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
+        MPNowPlayingInfoCenter.default().nowPlayingInfo = info
+      }
+    }.resume()
   }
 
   private func installObservers() {
@@ -1420,7 +1547,7 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
         guard let self else { return }
         PiliNativeDiagnosticLog.shared.append("Engine buffering=\(buffering)")
         self.isBuffering = buffering || self.engine.state == .loading
-        if buffering {
+        if buffering && !(self.applicationIsInBackground && self.hasAudioTrack) {
           self.audioEngine.pause()
         } else {
           self.resumeAudioIfPossible()
@@ -1438,7 +1565,22 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
            self.hasAudioTrack,
            !self.isTryingVideoCandidates {
           self.fail("音轨播放失败：\(message)")
+        } else if case .ended = state, self.applicationIsInBackground, self.hasAudioTrack {
+          self.finishActiveSegment()
         }
+      }
+      .store(in: &audioEngineCancellables)
+    audioEngine.clock.$currentTime
+      .receive(on: DispatchQueue.main)
+      .sink { [weak self] time in
+        guard let self, self.applicationIsInBackground, self.hasAudioTrack,
+              self.isReady, time.isFinite else { return }
+        self.currentTime = min(
+          max(0, self.segmentOffsets[self.activeSegmentIndex] + time),
+          max(self.duration, 0)
+        )
+        self.updateSubtitle(at: self.currentTime)
+        self.updateNowPlayingInfo()
       }
       .store(in: &audioEngineCancellables)
     audioEngine.$isBuffering
@@ -1479,6 +1621,24 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
         self?.rebindVideoSurface()
       }
       .store(in: &engineCancellables)
+    NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification)
+      .receive(on: DispatchQueue.main)
+      .sink { [weak self] _ in
+        self?.applicationIsInBackground = true
+        self?.updateNowPlayingInfo(force: true)
+      }
+      .store(in: &engineCancellables)
+    NotificationCenter.default.publisher(for: UIApplication.willEnterForegroundNotification)
+      .receive(on: DispatchQueue.main)
+      .sink { [weak self] _ in
+        guard let self else { return }
+        let shouldResume = self.isPlaying || self.audioEngine.state == .playing
+        self.applicationIsInBackground = false
+        if self.isReady, self.hasAudioTrack {
+          self.seek(to: self.currentTime, autoplay: shouldResume)
+        }
+      }
+      .store(in: &engineCancellables)
   }
 
   private func handleEngineState(_ state: PlaybackState) {
@@ -1486,27 +1646,42 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
     case .idle:
       isPlaying = false
     case .loading:
-      isPlaying = false
+      isPlaying = applicationIsInBackground && hasAudioTrack && audioEngine.state == .playing
       isBuffering = true
     case .playing:
       isPlaying = true
       isBuffering = false
       resumeAudioIfPossible()
     case .paused:
-      isPlaying = false
-      audioEngine.pause()
+      if applicationIsInBackground, hasAudioTrack, audioEngine.state == .playing {
+        isPlaying = true
+      } else {
+        isPlaying = false
+        audioEngine.pause()
+      }
     case .seeking:
       isBuffering = true
-      audioEngine.pause()
+      if !applicationIsInBackground { audioEngine.pause() }
     case .ended:
-      isPlaying = false
-      audioEngine.pause()
-      let next = activeSegmentIndex + 1
-      if next < segments.count {
-        loadSegment(index: next, localTime: 0, autoplay: shouldAutoplay)
-      }
+      finishActiveSegment()
     case .error(let message):
       if !isTryingVideoCandidates { fail(message) }
+    }
+    updateNowPlayingInfo(force: true)
+  }
+
+  private func finishActiveSegment() {
+    guard completedSegmentGeneration != itemBuildGeneration else { return }
+    completedSegmentGeneration = itemBuildGeneration
+    isPlaying = false
+    audioEngine.pause()
+    let next = activeSegmentIndex + 1
+    if next < segments.count {
+      loadSegment(index: next, localTime: 0, autoplay: shouldAutoplay)
+    } else {
+      currentTime = duration
+      updateNowPlayingInfo(force: true)
+      onPlaybackEnded?()
     }
   }
 
@@ -1536,6 +1711,7 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
     hdrBrightnessActive = false
     let generation = UUID()
     itemBuildGeneration = generation
+    completedSegmentGeneration = nil
     let segment = segments[segmentIndex]
     loadTask = Task { [weak self] in
       guard let self else { return }
@@ -1686,6 +1862,7 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
     PiliNativeDiagnosticLog.shared.append("Playback start requested rate=\(playbackRate)")
     engine.setRate(playbackRate)
     engine.play()
+    updateNowPlayingInfo(force: true)
     // Audio starts from the engine's actual non-buffering transition. Starting
     // it here made it run ahead while AVPlayer was still evaluating the first
     // video buffer, followed by an audible corrective seek.
@@ -1693,8 +1870,8 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
 
   private func resumeAudioIfPossible() {
     guard isReady,
-          engine.state == .playing,
-          !engine.isBuffering,
+          (engine.state == .playing || applicationIsInBackground),
+          (!engine.isBuffering || applicationIsInBackground),
           hasAudioTrack,
           audioEngine.state == .paused || audioEngine.state == .playing else { return }
     audioEngine.setRate(playbackRate)
@@ -1706,6 +1883,7 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
     guard isReady, segments.indices.contains(activeSegmentIndex), local.isFinite else { return }
     synchronizeAudio(to: local)
     currentTime = min(max(0, segmentOffsets[activeSegmentIndex] + local), max(duration, 0))
+    updateNowPlayingInfo()
     updateSubtitle(at: currentTime)
     requestDanmaku(near: currentTime)
   }

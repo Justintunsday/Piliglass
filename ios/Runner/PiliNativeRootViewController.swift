@@ -407,6 +407,7 @@ private final class PiliNativeViewModel: ObservableObject {
   private var originalPlayerHeroTag = ""
   private var nativePlayerCID: Int?
   private var nativePlayerQuality: Int?
+  private var pendingNativeAutoplay = false
   private var nativePlaybackGeneration = UUID()
   private var nativePlaybackMetadataGeneration = UUID()
   private var videoDetailGeneration = UUID()
@@ -467,6 +468,12 @@ private final class PiliNativeViewModel: ObservableObject {
       } else {
         self.performVideoAction(action, video: video)
       }
+    }
+    nativePlayerSession.onPlaybackEnded = { [weak self] in
+      self?.handleNativePlaybackEnded()
+    }
+    nativePlayerSession.onNextRequested = { [weak self] in
+      _ = self?.playNextNativeVideo()
     }
     nativePlayerProgressCancellable = nativePlayerSession.$currentTime
       .filter { $0 >= 1 }
@@ -631,7 +638,11 @@ private final class PiliNativeViewModel: ObservableObject {
     }
   }
 
-  func openVideo(_ video: PiliNativeVideo, sourceID: String? = nil) {
+  func openVideo(
+    _ video: PiliNativeVideo,
+    sourceID: String? = nil,
+    forceAutoplay: Bool = false
+  ) {
     // Related videos replace the content inside the same presentation. Keep
     // the original card as the return target until the cover has dismissed.
     if !isVideoDetailPresented {
@@ -658,7 +669,14 @@ private final class PiliNativeViewModel: ObservableObject {
     originalPlayerHeroTag = ""
     nativePlayerCID = nil
     nativePlayerQuality = nil
-    nativePlayerSession.configureOverlayMetadata(title: video.title, like: 0, reply: 0, share: 0)
+    pendingNativeAutoplay = forceAutoplay
+    nativePlayerSession.configureOverlayMetadata(
+      title: video.title,
+      like: 0,
+      reply: 0,
+      share: 0,
+      coverURL: video.cover
+    )
     isVideoDetailPresented = true
     onVideoOrientationPolicyChanged?(false)
 
@@ -711,12 +729,15 @@ private final class PiliNativeViewModel: ObservableObject {
           share: detail.share,
           ownerName: detail.owner,
           ownerFaceURL: detail.ownerFace,
+          coverURL: detail.cover,
           isVertical: detail.isVertical
         )
         self.videoDetailError = nil
         self.nativePlayerCID = detail.cid ?? detail.pages.first?.cid
         if let cid = self.nativePlayerCID {
-          self.loadNativePlayback(video: detail, cid: cid)
+          let autoplayOverride = self.pendingNativeAutoplay ? true : nil
+          self.pendingNativeAutoplay = false
+          self.loadNativePlayback(video: detail, cid: cid, autoplayOverride: autoplayOverride)
         } else {
           self.originalPlayerError = "视频没有可播放的分P"
         }
@@ -786,11 +807,31 @@ private final class PiliNativeViewModel: ObservableObject {
     video: PiliNativeVideoDetail,
     cid: Int,
     quality: Int? = nil,
-    resumeAt: TimeInterval = 0
+    resumeAt: TimeInterval = 0,
+    autoplayOverride: Bool? = nil
   ) {
     let generation = UUID()
     nativePlaybackGeneration = generation
-    let autoplay = quality == nil ? PiliNativePlayerPreferences.autoplay : nativePlayerSession.isPlaying
+    let autoplay = autoplayOverride
+      ?? (quality == nil ? PiliNativePlayerPreferences.autoplay : nativePlayerSession.isPlaying)
+    let part = video.pages.first(where: { $0.cid == cid })
+    let nowPlayingTitle: String
+    if video.pages.count > 1, let part {
+      nowPlayingTitle = "\(video.title) · P\(part.index) \(part.title)"
+    } else {
+      nowPlayingTitle = video.title
+    }
+    nativePlayerSession.configureOverlayMetadata(
+      title: nowPlayingTitle,
+      like: video.like,
+      reply: video.reply,
+      favorite: video.favorite,
+      share: video.share,
+      ownerName: video.owner,
+      ownerFaceURL: video.ownerFace,
+      coverURL: part?.cover ?? video.cover,
+      isVertical: video.isVertical
+    )
     originalPlayerError = nil
     originalPlayerReady = true
     nativePlayerSession.beginLoading()
@@ -1086,6 +1127,46 @@ private final class PiliNativeViewModel: ObservableObject {
     loadNativePlayback(video: video, cid: cid, quality: nativePlayerQuality)
   }
 
+  private func handleNativePlaybackEnded() {
+    reportNativePlaybackProgress(nativePlayerSession.currentTime)
+    switch PiliNativePlayerPreferences.endMode {
+    case .stop:
+      videoActionMessage = "播放完毕"
+    case .repeatOne:
+      videoActionMessage = "正在循环播放"
+      nativePlayerSession.seek(to: 0, autoplay: true)
+    case .playNext:
+      if !playNextNativeVideo() { videoActionMessage = "播放列表已结束" }
+    }
+  }
+
+  @discardableResult
+  private func playNextNativeVideo() -> Bool {
+    guard let video = videoDetail else { return false }
+    if let cid = nativePlayerCID,
+       let index = video.pages.firstIndex(where: { $0.cid == cid }),
+       video.pages.indices.contains(index + 1) {
+      videoActionMessage = "正在播放下一集"
+      let part = video.pages[index + 1]
+      guard let nextCID = part.cid else { return false }
+      nativePlayerCID = nextCID
+      loadNativePlayback(
+        video: video,
+        cid: nextCID,
+        quality: nativePlayerQuality,
+        autoplayOverride: true
+      )
+      return true
+    }
+    if let index = video.collectionItems.firstIndex(where: { $0.bvid == video.bvid }),
+       video.collectionItems.indices.contains(index + 1) {
+      videoActionMessage = "正在播放合集下一集"
+      openVideo(video.collectionItems[index + 1], forceAutoplay: true)
+      return true
+    }
+    return false
+  }
+
   func retryNativePlayback() {
     guard let video = videoDetail, let cid = nativePlayerCID else { return }
     originalPlayerError = nil
@@ -1201,6 +1282,7 @@ private final class PiliNativeViewModel: ObservableObject {
       share: current.share,
       ownerName: current.owner,
       ownerFaceURL: current.ownerFace,
+      coverURL: current.cover,
       isVertical: current.isVertical
     )
   }
@@ -1235,6 +1317,7 @@ private final class PiliNativeViewModel: ObservableObject {
           share: refreshed.share,
           ownerName: refreshed.owner,
           ownerFaceURL: refreshed.ownerFace,
+          coverURL: refreshed.cover,
           isVertical: refreshed.isVertical
         )
       }
@@ -5160,7 +5243,7 @@ private struct PiliNativeVideoDetailView: View {
         Text("选集")
           .font(.headline)
         Spacer()
-        Text("共 (video.pages.count) 个视频")
+        Text("共 \(video.pages.count) 个视频")
           .font(.caption)
           .foregroundColor(.secondary)
       }
@@ -7920,7 +8003,7 @@ private struct PiliNativeSettingsView: View {
           Button("重新加载网络设置", action: model.loadSettings)
         }
       }
-      if matches("播放器 播放 自动播放 默认倍速 双击 暂停 长按 2x 锁定 电量 控件") {
+      if matches("播放器 播放 自动播放 下一集 循环 后台 锁屏 默认倍速 双击 暂停 长按 2x 锁定 电量 控件") {
         Section("播放器") {
           NavigationLink(destination: PiliNativePlayerSettingsView()) {
             settingLabel("播放器设置", subtitle: "播放默认值、手势与横屏控件", icon: "play.rectangle")
@@ -8016,6 +8099,7 @@ private struct PiliNativeSettingsView: View {
 
 private struct PiliNativePlayerSettingsView: View {
   @AppStorage(PiliNativePlayerPreferences.autoplayKey) private var autoplay = true
+  @AppStorage(PiliNativePlayerPreferences.endModeKey) private var endMode = PiliNativePlaybackEndMode.playNext
   @AppStorage(PiliNativePlayerPreferences.defaultRateKey) private var defaultRate = 1.0
   @AppStorage(PiliNativePlayerPreferences.doubleTapKey) private var doubleTapPause = true
   @AppStorage(PiliNativePlayerPreferences.holdSpeedKey) private var holdDoubleSpeed = true
@@ -8027,6 +8111,11 @@ private struct PiliNativePlayerSettingsView: View {
     Form {
       Section {
         Toggle("打开视频自动播放", isOn: $autoplay)
+        Picker("视频播完后", selection: $endMode) {
+          ForEach(PiliNativePlaybackEndMode.allCases) { mode in
+            Text(mode.title).tag(mode)
+          }
+        }
         Picker("默认播放倍速", selection: $defaultRate) {
           ForEach([0.75, 1.0, 1.25, 1.5, 2.0], id: \.self) { rate in
             Text("\(rate, specifier: "%g")×").tag(rate)
@@ -8052,6 +8141,7 @@ private struct PiliNativePlayerSettingsView: View {
       }
       Section {
         Label("播放进度使用系统原生滑块", systemImage: "slider.horizontal.3")
+        Label("支持锁屏与后台播放、系统媒体控制和封面信息", systemImage: "lock.rectangle.stack")
       }
     }
     .tint(piliAccent)
