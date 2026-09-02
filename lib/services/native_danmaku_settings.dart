@@ -254,7 +254,13 @@ final class NativeDanmakuSettings {
                   '$_cachePrefix:$owner:$profile',
                   rules,
                 );
-                if (_owner != owner) throw const FormatException('账号已切换，请重新加载');
+      // `load` resolves snapshot and rules for the *current* account and
+      // replies with that owner, so a fresh native session whose first load
+      // still carries the Swift-side default ("guest") must not fail here.
+      // Only later actions (save/rule edits) must already agree on the owner.
+      if (action != 'load' && _owner != owner) {
+        throw const FormatException('账号已切换，请重新加载');
+      }
                 await _publishRules(owner, profile);
                 return {
                   ..._snapshot(owner, profile),

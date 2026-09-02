@@ -515,8 +515,14 @@ final class IOSNativeUIBridge {
   ) {
     final bvid = _nonEmpty(arguments['bvid']?.toString());
     final aid = _asInt(arguments['aid']);
+    final key = 'detail:${bvid ?? 'av$aid'}';
+    if (arguments['refresh'] == true) {
+      // A like/coin/favorite just mutated server state; never serve the stale
+      // 30-minute memoized intro over the fresh stat numbers.
+      _fetchCache.remove(key);
+    }
     return _dedupedFetch(
-      'detail:${bvid ?? 'av$aid'}',
+      key,
       () => _loadVideoDetailUncached(arguments),
     );
   }
