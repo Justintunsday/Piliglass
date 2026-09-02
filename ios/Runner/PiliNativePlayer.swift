@@ -1713,8 +1713,10 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
             }.map { [$0] } ?? [],
             maxConcurrentSourceRequests: segment.qualityValue >= 120 ? 6 : 4,
             declaredDurationSeconds: segment.duration > 0 ? segment.duration : nil,
-            probesize: 2 * 1024 * 1024,
-            maxAnalyzeDuration: 2_000_000,
+            // Bilibili m4s puts moov near the file head; 1 MiB is enough to
+            // identify the stream and cuts the probe transfer in half.
+            probesize: 1024 * 1024,
+            maxAnalyzeDuration: 1_500_000,
             externalSubtitles: subtitleOptions.map {
               ExternalSubtitleTrack(
                 url: URL(fileURLWithPath: $0.localPath),

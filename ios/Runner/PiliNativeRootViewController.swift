@@ -412,6 +412,7 @@ private final class PiliNativeViewModel: ObservableObject {
   private var nativePlaybackMetadataGeneration = UUID()
   private var nativePlaybackAwaitingMetadata: UUID?
   private var pendingNativePlaybackStart: (generation: UUID, action: () -> Void)?
+  private var nativePlaybackMetadataLate = false
   private var videoDetailGeneration = UUID()
   private var videoActionRevision = 0
   private var nativePlayerFullscreenCancellable: AnyCancellable?
@@ -678,6 +679,13 @@ private final class PiliNativeViewModel: ObservableObject {
     if let aid = video.aid { arguments["aid"] = aid }
     arguments["title"] = video.title
     if let cover = video.cover { arguments["cover"] = cover }
+    // Warm playback URLs and subtitle files the instant the card is tapped,
+    // in parallel with the detail request below. The Dart bridge deduplicates
+    // and memoizes these, so the later playback request is already resolved
+    // by the time the decode would otherwise begin.
+    if let bvid = video.bvid {
+      channel.invokeMethod("preloadNativePlaybackByBvid", arguments: ["bvid": bvid])
+    }
     requestVideoDetail(arguments)
   }
 
@@ -816,6 +824,7 @@ private final class PiliNativeViewModel: ObservableObject {
     nativePlaybackGeneration = generation
     nativePlaybackAwaitingMetadata = nil
     pendingNativePlaybackStart = nil
+    nativePlaybackMetadataLate = false
     let autoplay = autoplayOverride
       ?? (quality == nil ? PiliNativePlayerPreferences.autoplay : nativePlayerSession.isPlaying)
     let part = video.pages.first(where: { $0.cid == cid })
@@ -952,10 +961,23 @@ private final class PiliNativeViewModel: ObservableObject {
         }
         if self.nativePlaybackAwaitingMetadata == generation {
           self.pendingNativePlaybackStart = (generation, startPlayback)
+          // Subtitles are a nice-to-have for the first frame. If the playInfo
+          // request (or a cold subtitle download) has not finished shortly
+          // after the playback URLs are ready, start anyway and skip this
+          // video's subtitle menu instead of holding the first frame.
+          self.schedulePlaybackMetadataDeadline(generation: generation)
         } else {
           startPlayback()
         }
       }
+    }
+  }
+
+  private func schedulePlaybackMetadataDeadline(generation: UUID) {
+    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+      guard let self, self.nativePlaybackAwaitingMetadata == generation else { return }
+      self.nativePlaybackMetadataLate = true
+      self.finishNativePlaybackMetadata(generation: generation)
     }
   }
 
@@ -981,6 +1003,12 @@ private final class PiliNativeViewModel: ObservableObject {
           self.nativePlayerCID = lastCID
           self.videoActionMessage = "正在定位上次播放的分P"
           self.loadNativePlayback(video: video, cid: lastCID)
+          return
+        }
+        if self.nativePlaybackMetadataLate {
+          // Playback already started without subtitles (deadline fired). The
+          // engine load has snapshotted its external subtitle tracks, so
+          // injecting options now would only advertise unusable menu items.
           return
         }
         let subtitles = (result["subtitles"] as? [Any] ?? []).compactMap { row -> PiliNativeSubtitleOption? in

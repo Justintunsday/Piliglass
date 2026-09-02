@@ -263,6 +263,29 @@ final class IOSNativeUIBridge {
           }(),
         );
         return const {'state': 'started'};
+      // Fired the moment a card is tapped, before the detail request returns:
+      // resolves the cid through the shared (memoized) detail fetch, then
+      // warms playback URLs and subtitle files. The later loadVideoDetail /
+      // loadNativePlayback calls hit the same in-flight or cached result.
+      case 'preloadNativePlaybackByBvid':
+        unawaited(
+          () async {
+            final arguments = _arguments(call);
+            final bvid = _nonEmpty(arguments['bvid']?.toString());
+            if (bvid == null || bvid.isEmpty) return;
+            final detail = await _loadVideoDetail({'bvid': bvid});
+            if (detail['state'] != 'success') return;
+            final video = (detail['video'] as Map?) ?? const {};
+            final cid = video['cid'];
+            if (cid is! int || cid <= 0) return;
+            final playbackArguments = {'bvid': bvid, 'cid': cid};
+            await Future.wait([
+              _loadNativePlayback(playbackArguments),
+              _loadNativePlaybackMetadata(playbackArguments),
+            ]);
+          }(),
+        );
+        return const {'state': 'started'};
       // Kept for older native shells that still emit this action.
       case 'openSearch':
         return _openRoute(const {'route': '/search'});
@@ -316,6 +339,45 @@ final class IOSNativeUIBridge {
           defaultValue: VideoQuality.super8k.code,
         );
     return 'playback:$aid:$cid:$quality';
+  }
+
+  /// Bounded parallel low-volume sample across the CDN candidates. Returns
+  /// the fastest CDN name, or null when nothing completed in time. This runs
+  /// only when no cached 3-minute ranking exists, and only for the current
+  /// request; the result is used to lead with a good primary URL instead of
+  /// paying a full decoder reload when the default one is throttled.
+  Future<String?> _fastestCdnName(Iterable<String> urls) async {
+    final candidates = _latencyCandidates(urls);
+    if (candidates.isEmpty) return null;
+    final speeds = <String, double>{};
+    await Future.wait(
+      candidates.entries.map((entry) async {
+        final uri = Uri.tryParse(entry.value);
+        if (uri == null || !uri.hasAuthority) return;
+        try {
+          final measurement = await measureCdnDownloadSpeed(
+            uri,
+            maxBytes: 128 * 1024,
+            timeout: const Duration(milliseconds: 900),
+          );
+          if (measurement.status == 'ok' &&
+              (measurement.megabytesPerSecond ?? 0) > 0) {
+            speeds[entry.key] = measurement.megabytesPerSecond!;
+          }
+        } catch (_) {
+          /* A failed sample simply means this CDN is not picked. */
+        }
+      }),
+    );
+    String? best;
+    double? fastest;
+    for (final entry in speeds.entries) {
+      if (fastest == null || entry.value > fastest) {
+        fastest = entry.value;
+        best = entry.key;
+      }
+    }
+    return best;
   }
 
   Future<Map<String, dynamic>> _refreshSection(String? section) async {
@@ -449,6 +511,17 @@ final class IOSNativeUIBridge {
   }
 
   Future<Map<String, dynamic>> _loadVideoDetail(
+    Map<dynamic, dynamic> arguments,
+  ) {
+    final bvid = _nonEmpty(arguments['bvid']?.toString());
+    final aid = _asInt(arguments['aid']);
+    return _dedupedFetch(
+      'detail:${bvid ?? 'av$aid'}',
+      () => _loadVideoDetailUncached(arguments),
+    );
+  }
+
+  Future<Map<String, dynamic>> _loadVideoDetailUncached(
     Map<dynamic, dynamic> arguments,
   ) async {
     var bvid = _nonEmpty(arguments['bvid']?.toString());
@@ -687,13 +760,19 @@ final class IOSNativeUIBridge {
         String? automaticSource;
         final automatic =
             GStorage.setting.get(SettingBoxKey.CDNService) == null;
-        void prepareSource(Iterable<String> urls) {
+        Future<void> prepareSource(Iterable<String> urls) async {
           _latencySampleURLs = urls.where((url) => url.isNotEmpty).toList();
           _latencySampleTime = DateTime.now();
           if (automatic) {
             automaticSource = _cdnLatency.choose(
               _latencyCandidates(_latencySampleURLs),
             );
+            // No fresh ranking yet: run one bounded parallel sample (≈≤0.9 s)
+            // so the primary URL is the fastest host instead of a throttled
+            // default that would trigger a full decoder reload on retry.
+            if (automaticSource == null) {
+              automaticSource = await _fastestCdnName(_latencySampleURLs);
+            }
           }
         }
 
@@ -784,7 +863,7 @@ final class IOSNativeUIBridge {
 
           candidates.sort((a, b) => codecRank(a).compareTo(codecRank(b)));
           final selectedVideo = candidates.first;
-          prepareSource(selectedVideo.playUrls);
+          await prepareSource(selectedVideo.playUrls);
           final videoUrls = <String>[];
           for (final candidate in candidates) {
             for (final url in nativeTrackUrls(candidate.playUrls)) {
@@ -857,7 +936,7 @@ final class IOSNativeUIBridge {
 
         final sourceSegments = response.durl ?? const [];
         if (sourceSegments.isNotEmpty) {
-          prepareSource(sourceSegments.first.playUrls);
+          await prepareSource(sourceSegments.first.playUrls);
         }
         final segments = sourceSegments
             .where((segment) => segment.playUrls.isNotEmpty)
