@@ -6,6 +6,18 @@ import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
 STUBS = r'''
+class NativeCDNMeasurement {
+  final String host;
+  final double? megabytesPerSecond;
+  final String status;
+  final String? message;
+  const NativeCDNMeasurement(
+    this.host,
+    this.megabytesPerSecond,
+    this.status, {
+    this.message,
+  });
+}
 class Box {
   final values = <String, dynamic>{};
   Future<void> put(String? key, dynamic value) async { values[key!] = value; }

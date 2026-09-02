@@ -728,6 +728,15 @@ private final class PiliNativeViewModel: ObservableObject {
         self.videoDetailError = nil
         self.nativePlayerCID = detail.cid ?? detail.pages.first?.cid
         if let cid = self.nativePlayerCID {
+          // Official-client warm-up: fetch playback URLs and subtitle files in
+          // parallel while the player overlay finishes appearing. The Dart
+          // bridge memoizes both responses (30 min TTL) and deduplicates this
+          // request against the loadNativePlayback one issued below, so the
+          // worst case here is one shared background round trip.
+          self.channel.invokeMethod(
+            "preloadNativePlayback",
+            arguments: ["bvid": detail.bvid, "cid": cid],
+          )
           let autoplayOverride = self.pendingNativeAutoplay ? true : nil
           self.pendingNativeAutoplay = false
           self.loadNativePlayback(video: detail, cid: cid, autoplayOverride: autoplayOverride)
@@ -1511,7 +1520,7 @@ private final class PiliNativeViewModel: ObservableObject {
       guard let value = piliString($0["value"]), let label = piliString($0["label"]) else { return nil }
       return PiliNativePlaybackSourceOption(
         value: value, label: label,
-        speedKBps: piliOptionalInt($0["speedKBps"]),
+        speedText: piliString($0["speedText"]) ?? "",
         latencyState: piliString($0["latencyState"]) ?? "untested"
       )
     }
@@ -3054,15 +3063,13 @@ private struct PiliNativePlaybackSourceOption: Identifiable {
   var id: String { value }
   let value: String
   let label: String
-  let speedKBps: Int?
+  let speedText: String
   let latencyState: String
 
   var latencyText: String {
-    if let speedKBps {
-      if speedKBps >= 1024 { return String(format: "%.1f MB/s", Double(speedKBps) / 1024) }
-      return "\(speedKBps) KB/s"
-    }
+    if !speedText.isEmpty { return speedText }
     switch latencyState {
+    case "unsupported": return "此视频可能无法替换为该CDN"
     case "timeout": return "超时"
     case "unavailable": return "不可用"
     default: return "未检测"

@@ -12,8 +12,6 @@ import 'package:PiliPlus/grpc/im.dart';
 import 'package:PiliPlus/grpc/reply.dart';
 import 'package:PiliPlus/grpc/bilibili/im/type.pb.dart' show MsgType;
 import 'package:PiliPlus/http/fav.dart';
-import 'package:PiliPlus/http/browser_ua.dart';
-import 'package:PiliPlus/http/constants.dart';
 import 'package:PiliPlus/http/fan.dart';
 import 'package:PiliPlus/http/follow.dart';
 import 'package:PiliPlus/http/dynamics.dart';
@@ -79,12 +77,7 @@ final class IOSNativeUIBridge {
   final MainController mainController;
   final _danmakuSettings = NativeDanmakuSettings();
   final List<Worker> _workers = <Worker>[];
-  final _cdnLatency = NativeCDNLatency(
-    probe: (url) => probeMediaDownloadSpeed(
-      url,
-      headers: {'user-agent': BrowserUa.pc, 'referer': HttpString.baseUrl},
-    ),
-  );
+  final _cdnLatency = NativeCDNLatency(probe: measureCdnDownloadSpeed);
   List<String> _latencySampleURLs = [];
   DateTime? _latencySampleTime;
   Future<Map<String, dynamic>>? _latencyTest;
@@ -93,6 +86,10 @@ final class IOSNativeUIBridge {
   String? _nativeLoginAuthCode;
   bool _nativePlayerShellActive = false;
   PbMap<int, im_proto.Offset>? _nativeSessionOffsets;
+
+  static const _fetchResultTTL = Duration(minutes: 30);
+  final Map<String, ({DateTime at, Map<String, dynamic> data})> _fetchCache = {};
+  final Map<String, Future<Map<String, dynamic>>> _inFlightFetches = {};
 
   late final RcmdController _homeController = Get.putOrFind<RcmdController>(
     RcmdController.new,
@@ -249,6 +246,23 @@ final class IOSNativeUIBridge {
         return _loadNativeCommentReplies(_arguments(call));
       case 'loadNativeDownloads':
         return _loadNativeDownloads();
+      // Pre-warm playback URLs and subtitle files while the native shell shows
+      // the detail page. Responses are memoized for _fetchResultTTL so the
+      // later loadNativePlayback/loadNativePlaybackMetadata calls become
+      // instant cache hits.
+      case 'preloadNativePlayback':
+        unawaited(
+          () async {
+            final arguments = _arguments(call);
+            final cid = _asInt(arguments['cid']);
+            if (cid == null || cid <= 0) return;
+            await Future.wait([
+              _loadNativePlayback(arguments),
+              _loadNativePlaybackMetadata(arguments),
+            ]);
+          }(),
+        );
+        return const {'state': 'started'};
       // Kept for older native shells that still emit this action.
       case 'openSearch':
         return _openRoute(const {'route': '/search'});
@@ -257,6 +271,51 @@ final class IOSNativeUIBridge {
           'Unknown native UI method: ${call.method}',
         );
     }
+  }
+
+  Map<String, dynamic>? _cachedFetch(String key) {
+    final entry = _fetchCache[key];
+    if (entry == null) return null;
+    if (DateTime.now().difference(entry.at) > _fetchResultTTL) {
+      _fetchCache.remove(key);
+      return null;
+    }
+    return entry.data;
+  }
+
+  Future<Map<String, dynamic>> _dedupedFetch(
+    String key,
+    Future<Map<String, dynamic>> Function() loader,
+  ) async {
+    final cached = _cachedFetch(key);
+    if (cached != null) return cached;
+    final inFlight = _inFlightFetches[key];
+    if (inFlight != null) return inFlight;
+    final future = loader();
+    _inFlightFetches[key] = future;
+    try {
+      final data = await future;
+      if (data['state'] == 'success') {
+        _fetchCache[key] = (at: DateTime.now(), data: data);
+      }
+      return data;
+    } finally {
+      _inFlightFetches.remove(key);
+    }
+  }
+
+  String _playbackCacheKey(Map<dynamic, dynamic> arguments) {
+    var aid = _asInt(arguments['aid']);
+    final bvid = _nonEmpty(arguments['bvid']?.toString());
+    if (aid == null && bvid != null) aid = IdUtils.bv2av(bvid);
+    final cid = _asInt(arguments['cid']);
+    final quality =
+        _asInt(arguments['quality']) ??
+        GStorage.setting.get(
+          SettingBoxKey.defaultVideoQa,
+          defaultValue: VideoQuality.super8k.code,
+        );
+    return 'playback:$aid:$cid:$quality';
   }
 
   Future<Map<String, dynamic>> _refreshSection(String? section) async {
@@ -578,6 +637,13 @@ final class IOSNativeUIBridge {
 
   Future<Map<String, dynamic>> _loadNativePlayback(
     Map<dynamic, dynamic> arguments,
+  ) => _dedupedFetch(
+    _playbackCacheKey(arguments),
+    () => _loadNativePlaybackUncached(arguments),
+  );
+
+  Future<Map<String, dynamic>> _loadNativePlaybackUncached(
+    Map<dynamic, dynamic> arguments,
   ) async {
     final cid = _asInt(arguments['cid']);
     var aid = _asInt(arguments['aid']);
@@ -836,6 +902,19 @@ final class IOSNativeUIBridge {
 
   Future<Map<String, dynamic>> _loadNativePlaybackMetadata(
     Map<dynamic, dynamic> arguments,
+  ) {
+    var aid = _asInt(arguments['aid']);
+    final bvid = _nonEmpty(arguments['bvid']?.toString());
+    if (aid == null && bvid != null) aid = IdUtils.bv2av(bvid);
+    final cid = _asInt(arguments['cid']);
+    return _dedupedFetch(
+      'metadata:$aid:$cid',
+      () => _loadNativePlaybackMetadataUncached(arguments),
+    );
+  }
+
+  Future<Map<String, dynamic>> _loadNativePlaybackMetadataUncached(
+    Map<dynamic, dynamic> arguments,
   ) async {
     final cid = _asInt(arguments['cid']);
     var aid = _asInt(arguments['aid']);
@@ -894,22 +973,26 @@ final class IOSNativeUIBridge {
         '${Directory.systemTemp.path}/piliglass-native-subtitles/$aid-$cid',
       );
       try {
-        if (await subtitleDirectory.exists()) {
-          await subtitleDirectory.delete(recursive: true);
+        if (!await subtitleDirectory.exists()) {
+          await subtitleDirectory.create(recursive: true);
         }
-        await subtitleDirectory.create(recursive: true);
         final preparedRows = await Future.wait(
           subtitleRows.asMap().entries.map((entry) async {
             final row = entry.value;
             final rawUrl = row['url'] as String;
+            final file = File(
+              '${subtitleDirectory.path}/subtitle-'
+              '${base64Url.encode(utf8.encode(rawUrl)).replaceAll(RegExp(r'[^A-Za-z0-9]'), '').substring(0, 24)}'
+              '.vtt',
+            );
+            if (await file.exists()) {
+              return <String, dynamic>{...row, 'localPath': file.path};
+            }
             try {
               final subtitleUrl = rawUrl.replaceFirst(RegExp(r'^https?:'), '');
               final content = await VideoHttp.getSubtitles(subtitleUrl)
                   .timeout(const Duration(seconds: 4));
               if (content == null || content.isEmpty) return null;
-              final file = File(
-                '${subtitleDirectory.path}/subtitle-${entry.key}.vtt',
-              );
               await file.writeAsString(content, flush: false);
               return <String, dynamic>{...row, 'localPath': file.path};
             } catch (_) {
@@ -1253,11 +1336,15 @@ final class IOSNativeUIBridge {
         {
           'value': cdn.name,
           'label': cdn.desc,
-          'speedKBps': _cdnLatency.isFresh
-              ? _cdnLatency.measurements[cdn.name]?.kilobytesPerSecond
+          // Original project's measurement: bytes/µs => MB/s text.
+          'speedMBps': _cdnLatency.isFresh
+              ? _cdnLatency.measurements[cdn.name]?.megabytesPerSecond
+              : null,
+          'speedText': _cdnLatency.isFresh
+              ? _speedText(_cdnLatency.measurements[cdn.name])
               : null,
           'latencyState': _cdnLatency.isFresh
-              ? _cdnLatency.measurements[cdn.name]?.status ?? 'untested'
+              ? (_cdnLatency.measurements[cdn.name]?.status ?? 'untested')
               : 'untested',
         },
     ],
@@ -3348,6 +3435,12 @@ final class IOSNativeUIBridge {
     }
     if (value >= 10000) return '${(value / 10000).toStringAsFixed(1)}万';
     return value.toString();
+  }
+
+  String? _speedText(NativeCDNMeasurement? measurement) {
+    final speed = measurement?.megabytesPerSecond;
+    if (speed == null || speed <= 0 || !speed.isFinite) return null;
+    return '${speed.toStringAsPrecision(3)}MB/s';
   }
 
   static String _durationText(int seconds) {

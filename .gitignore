@@ -145,6 +145,9 @@ devtools_options.yaml
 # FVM Version Cache
 .fvm/
 
+# Local scratch work (xcresult/preview projects/python libs)
+.build-work/
+
 pili_release.json
 
 dist

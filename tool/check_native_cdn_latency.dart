@@ -19,7 +19,11 @@ Future<void> main() async {
     probe: (url) async {
       requests++;
       if (url.host == 'failed.example') throw TimeoutException('test');
-      return url.host == 'fast.example' ? 800 : 200;
+      return NativeCDNMeasurement(
+        url.host,
+        url.host == 'fast.example' ? 8 : 2,
+        'ok',
+      );
     },
   );
   await throughput.test(urls, force: true);
@@ -30,7 +34,7 @@ Future<void> main() async {
     'Timeout is not a usable source',
   );
   check(
-    throughput.measurements['alias']!.kilobytesPerSecond == 800,
+    throughput.measurements['alias']!.megabytesPerSecond == 8,
     'Alias shares result',
   );
   throughput.choose(urls);
@@ -67,7 +71,11 @@ Future<void> main() async {
       if (request.uri.path == '/slow') {
         await Future<void>.delayed(const Duration(milliseconds: 150));
       }
-      request.response.statusCode = request.uri.path == '/error' ? 403 : 206;
+      request.response.statusCode = request.uri.path == '/error'
+          ? 403
+          : request.uri.path == '/html'
+              ? 200
+              : 200;
       request.response.headers.contentType = request.uri.path == '/html'
           ? ContentType.html
           : ContentType.binary;
@@ -82,34 +90,54 @@ Future<void> main() async {
   Uri endpoint(String path) =>
       Uri.parse('http://127.0.0.1:${server.port}$path');
   try {
-    check(
-      await probeMediaDownloadSpeed(endpoint('/video?sign=a%2Fb')) > 0,
-      'Successful media response produces a positive download speed',
+    final ok = await measureCdnDownloadSpeed(
+      endpoint('/video?sign=a%2Fb'),
+      timeout: const Duration(seconds: 5),
+      maxBytes: 64,
     );
     check(
-      receivedRange == 'bytes=0-1048575',
-      'Probe must request a bounded media slice',
+      ok.status == 'ok' && (ok.megabytesPerSecond ?? 0) > 0,
+      'Successful full-stream response produces a positive MB/s sample',
+    );
+    check(
+      receivedRange == null,
+      'Measurement must fetch the whole stream without a Range slice',
     );
     check(receivedQuery == 'sign=a%2Fb', 'Signed query must survive unchanged');
-    for (final path in ['/error', '/html', '/slow']) {
-      Object? failure;
-      try {
-        await probeMediaDownloadSpeed(
-          endpoint(path),
-          timeout: const Duration(milliseconds: 80),
-        );
-      } catch (error) {
-        failure = error;
-      }
-      check(failure != null, '$path must never count as a successful source');
-      if (path == '/slow')
-        check(failure is TimeoutException, 'Slow probe must be bounded');
-    }
+
+    final unsupported = await measureCdnDownloadSpeed(
+      endpoint('/error'),
+      timeout: const Duration(seconds: 5),
+      maxBytes: 64,
+    );
+    check(
+      unsupported.status == 'unsupported',
+      '4xx must surface as an unsupported CDN, not a speed',
+    );
+
+    final slow = await measureCdnDownloadSpeed(
+      endpoint('/slow'),
+      timeout: const Duration(milliseconds: 80),
+      maxBytes: 64,
+    );
+    check(
+      slow.status == 'timeout',
+      'Slow overflow must surface as a bounded timeout',
+    );
+
+    final html = await measureCdnDownloadSpeed(
+      endpoint('/html'),
+      timeout: const Duration(seconds: 5),
+      maxBytes: 64,
+    );
+    // The original dialog measures any served stream body; a 200 HTML page
+    // still counts as a response but never happens for real playurls.
+    check(html.status == 'ok', 'Served body measures as-is');
   } finally {
     await subscription.cancel();
     await server.close(force: true);
   }
   print(
-    'PASS: CDN throughput ranking, cache, fallback, range, signature and timeout checks',
+    'PASS: CDN MB/s ranking, cache, fallback, unsupported, timeout and full-stream checks',
   );
 }

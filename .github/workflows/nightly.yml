@@ -1,0 +1,21 @@
+name: Nightly iOS Build
+
+# Every 18:30 UTC (02:30 UTC+8) build the latest main and publish a
+# pre-release with the freshly produced IPA.
+on:
+  schedule:
+    - cron: "30 18 * * *"
+  workflow_dispatch: {}
+
+concurrency:
+  group: piliglass-nightly
+  cancel-in-progress: true
+
+jobs:
+  ios-nightly:
+    name: Build and release nightly IPA
+    uses: ./.github/workflows/ios.yml
+    permissions:
+      contents: write
+    with:
+      tag: nightly-${{ github.run_number }}

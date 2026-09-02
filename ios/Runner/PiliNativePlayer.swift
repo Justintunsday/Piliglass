@@ -1670,9 +1670,28 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
   ) async {
     var videoLoaded = false
     do {
-      // The decoders are independent: prepare DASH audio while the video
-      // decoder opens, then join before starting the synchronized clock.
-      async let audioLoad: Void = loadAudioTrack(for: segment, localTime: localTime)
+      // The audio decoder is fully independent: open it in parallel with the
+      // video decoder but never gate the first frame on it. Once ready it is
+      // joined through resumeAudioIfPossible, matching the official client's
+      // picture-first behavior (audio joins within a few hundred ms).
+      let audioTask = Task { [weak self] in
+        guard let self else { return }
+        do {
+          try await self.loadAudioTrack(for: segment, localTime: localTime)
+          guard !Task.isCancelled, self.itemBuildGeneration == generation else { return }
+          self.audioItemReady = true
+          self.finishAudioIfReady()
+        } catch is CancellationError {
+          return
+        } catch {
+          guard !Task.isCancelled, self.itemBuildGeneration == generation else { return }
+          self.hasAudioTrack = false
+          self.audioItemReady = true
+          PiliNativeDiagnosticLog.shared.append(
+            "Audio track unavailable; continuing video-only: \(error.localizedDescription)"
+          )
+        }
+      }
       var lastError: Error = PiliNativePlayerBuildError.noPlayableCandidate
       isTryingVideoCandidates = true
       defer { isTryingVideoCandidates = false }
@@ -1727,22 +1746,18 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
       videoLoaded = true
       guard !Task.isCancelled, itemBuildGeneration == generation else { return }
 
-      // Open the separate DASH audio representation through Aether's dedicated
-      // audio-only decoder and our seekable HTTP reader. This keeps the entire
-      // audio path away from AVPlayer's rejected remote-asset probe.
-      try await audioLoad
-      guard !Task.isCancelled, itemBuildGeneration == generation else { return }
-
+      // The picture is ready. The audio task above keeps running; it rejoins
+      // the clock through finishAudioIfReady/resumeAudioIfPossible.
       videoItemReady = true
-      audioItemReady = true
       finishPreparingIfReady()
     } catch {
       guard !Task.isCancelled, itemBuildGeneration == generation else { return }
       if videoLoaded {
-        fail("音轨载入失败：\(error.localizedDescription)")
-      } else {
-        fail("Aether 视频轨道载入失败：\(error.localizedDescription)")
+        PiliNativeDiagnosticLog.shared.append(
+          "Video candidate validated but playback setup failed: \(error.localizedDescription)"
+        )
       }
+      fail("Aether 视频轨道载入失败：\(error.localizedDescription)")
     }
   }
 
@@ -1802,7 +1817,9 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
   }
 
   private func finishPreparingIfReady() {
-    guard videoItemReady, audioItemReady, pendingAudioSeek != nil else { return }
+    // Picture-first: only the video decoder gates the first frame. The audio
+    // decoder joins afterwards through finishAudioIfReady/resumeAudioIfPossible.
+    guard videoItemReady else { return }
     pendingAudioSeek = nil
     isReady = true
     isBuffering = false
@@ -1810,6 +1827,10 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
     hdrBrightnessActive = engine.videoFormat != .sdr
     applyNativeSubtitleSelection()
     if shouldAutoplay { startPlayback() }
+  }
+
+  private func finishAudioIfReady() {
+    if isReady { resumeAudioIfPossible() }
   }
 
   private func startPlayback() {

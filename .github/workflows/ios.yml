@@ -40,6 +40,8 @@ jobs:
   build-macos-app:
     name: Build SwiftUI root + Flutter features
     runs-on: macos-26
+    permissions:
+      contents: write
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
@@ -75,6 +77,14 @@ jobs:
           restore-keys: |
             swiftpm-${{ runner.os }}-${{ runner.arch }}-
 
+      - name: Cache DerivedData (incremental rebuild)
+        uses: actions/cache@v5
+        with:
+          path: build/ios/DerivedData
+          key: ios-derived-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('ios/Runner.xcodeproj/project.pbxproj', 'ios/Runner.xcworkspace/xcshareddata/swiftpm/Package.resolved', 'pubspec.lock') }}
+          restore-keys: |
+            ios-derived-${{ runner.os }}-${{ runner.arch }}-
+
       - name: Set and Extract version
         shell: pwsh
         run: lib/scripts/build.ps1
@@ -95,7 +105,7 @@ jobs:
 
       - name: Build iOS
         run: |
-          flutter build ios --verbose --release --no-codesign --dart-define-from-file=pili_release.json --no-pub
+          flutter build ios --release --no-codesign --dart-define-from-file=pili_release.json --no-pub
           runner_binary="build/ios/iphoneos/Runner.app/Runner"
           aether_ffmpeg_order="$(otool -L "$runner_binary" | grep -n '/Libavcodec.framework/' | head -1 | cut -d: -f1)"
           legacy_ffmpeg_order="$(otool -L "$runner_binary" | grep -n '/Avcodec.framework/' | head -1 | cut -d: -f1)"
@@ -130,11 +140,15 @@ jobs:
           }
 
       - name: Release
-        if: ${{ github.event.inputs.tag != '' }}
+        # Inputs context is only bound for workflow_call; standalone push runs
+        # treat this as empty and skip the release step.
+        if: ${{ inputs.tag != '' }}
         uses: softprops/action-gh-release@v3
         with:
-          tag_name: ${{ github.event.inputs.tag }}
-          name: ${{ github.event.inputs.tag }}
+          tag_name: ${{ inputs.tag }}
+          name: ${{ inputs.tag }}
+          prerelease: ${{ startsWith(inputs.tag, 'nightly-') }}
+          generate_release_notes: true
           files: |
             PiliPlus_ios_*.ipa
 
