@@ -981,17 +981,43 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
     applyNativeSubtitleSelection()
   }
 
+  /// Original-project logic: the picker lists the subtitles Bilibili ships
+  /// with the video (CC/AI transcripts fetched from playInfo and converted to
+  /// WebVTT on the Dart side). Rendering is handed to the OS: the WebVTT
+  /// tracks are declared as legible renditions at load time and selection
+  /// below drives AVPlayer's subtitle media selection, so styling, large type
+  /// and accessibility follow the system subtitle settings.
+  private var lastAppliedSubtitleID: String?
+
   private func applyNativeSubtitleSelection() {
-    guard isReady,
-          let id = selectedSubtitleID,
+    guard isReady else { return }
+    let id = selectedSubtitleID
+    guard lastAppliedSubtitleID != id else { return }
+    lastAppliedSubtitleID = id
+    guard let id,
           let option = subtitleOptions.first(where: { $0.id == id }) else {
       engine.setNativeSubtitleSelected(track: nil)
+      PiliNativeDiagnosticLog.shared.append("System subtitles disabled")
       return
     }
-    let ordinal = engine.nativeSubtitleTracks.firstIndex {
+    // Select the matching legible track inside AVPlayer. All Bilibili tracks
+    // were declared at load time, so this never reloads the media item.
+    if let ordinal = engine.nativeSubtitleTracks.firstIndex(where: {
       $0.language == option.language
+    }) {
+      engine.setNativeSubtitleSelected(track: ordinal)
+      PiliNativeDiagnosticLog.shared.append(
+        "System subtitle selected track=\(ordinal) language=\(option.language) label=\(option.label)"
+      )
+      return
     }
-    engine.setNativeSubtitleSelected(track: ordinal)
+    // A mismatch would otherwise fail silently. Log the track table so a
+    // missing/incompatible language can be diagnosed from device logs.
+    PiliNativeDiagnosticLog.shared.append(
+      "System subtitle unavailable: wanted=\(option.language) nativeTracks=["
+        + engine.nativeSubtitleTracks.map { "\($0.language):\($0.displayName)" }.joined(separator: ", ")
+        + "]"
+    )
   }
 
   func configure(
@@ -1369,6 +1395,7 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
     currentTime = 0
     subtitleOptions.removeAll()
     selectedSubtitleID = nil
+    lastAppliedSubtitleID = nil
     duration = 0
     errorMessage = nil
     isHDR = false
@@ -1827,6 +1854,9 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
     isBuffering = false
     errorMessage = nil
     hdrBrightnessActive = engine.videoFormat != .sdr
+    // The engine has a fresh AVPlayer item: its subtitle track table changed,
+    // so re-apply the user's current selection instead of skipping it.
+    lastAppliedSubtitleID = nil
     applyNativeSubtitleSelection()
     if shouldAutoplay { startPlayback() }
   }
