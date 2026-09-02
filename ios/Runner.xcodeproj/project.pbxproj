@@ -194,7 +194,7 @@
 			);
 			mainGroup = 97C146E51CF9000F007C117D;
 			packageReferences = (
-				AE7E00000000000000000002 /* XCRemoteSwiftPackageReference "AetherEngine" */,
+				AE7E00000000000000000002 /* XCLocalSwiftPackageReference "AetherEngine" */,
 			);
 			productRefGroup = 97C146EF1CF9000F007C117D /* Products */;
 			projectDirPath = "";
@@ -657,21 +657,17 @@
 		};
 /* End XCConfigurationList section */
 
-/* Begin XCRemoteSwiftPackageReference section */
-		AE7E00000000000000000002 /* XCRemoteSwiftPackageReference "AetherEngine" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/superuser404notfound/AetherEngine";
-			requirement = {
-				kind = exactVersion;
-				version = 6.39.0;
-			};
+/* Begin XCLocalSwiftPackageReference section */
+		AE7E00000000000000000002 /* XCLocalSwiftPackageReference "AetherEngine" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = "../Packages/AetherEngine";
 		};
-/* End XCRemoteSwiftPackageReference section */
+/* End XCLocalSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
 		AE7E00000000000000000003 /* AetherEngine */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = AE7E00000000000000000002 /* XCRemoteSwiftPackageReference "AetherEngine" */;
+			package = AE7E00000000000000000002 /* XCLocalSwiftPackageReference "AetherEngine" */;
 			productName = AetherEngine;
 		};
 /* End XCSwiftPackageProductDependency section */
