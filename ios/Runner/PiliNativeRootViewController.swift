@@ -413,6 +413,8 @@ private final class PiliNativeViewModel: ObservableObject {
   private var nativePlaybackAwaitingMetadata: UUID?
   private var pendingNativePlaybackStart: (generation: UUID, action: () -> Void)?
   private var nativePlaybackMetadataLate = false
+  private var prewarmedHomeVideoIDs: Set<String> = []
+  private var homePrewarmWorkItem: DispatchWorkItem?
   private var videoDetailGeneration = UUID()
   private var videoActionRevision = 0
   private var nativePlayerFullscreenCancellable: AnyCancellable?
@@ -567,7 +569,32 @@ private final class PiliNativeViewModel: ObservableObject {
       homeVideos = rows.enumerated().map {
         PiliNativeVideo(map: piliDictionary($0.element), index: $0.offset)
       }
+      homePrewarmWorkItem?.cancel()
+      homePrewarmWorkItem = nil
+      prewarmedHomeVideoIDs.removeAll()
     }
+  }
+
+  /// Predictive preload (official-client style): once the home feed's first
+  /// card is on screen, quietly warm its playback URLs and subtitle files so
+  /// a tap on it starts the decode without waiting for any API round trip.
+  /// The Dart bridge deduplicates against the tap-time warm-up, so this only
+  /// costs one network request per refreshed feed.
+  func prewarmHomeFirstVideoIfNeeded(_ video: PiliNativeVideo) {
+    guard let bvid = video.bvid, !bvid.isEmpty else { return }
+    guard video.id == homeVideos.first?.id else { return }
+    guard !prewarmedHomeVideoIDs.contains(video.id) else { return }
+    prewarmedHomeVideoIDs.insert(video.id)
+    guard homePrewarmWorkItem == nil else { return }
+    let work = DispatchWorkItem { [weak self] in
+      guard let self, self.prewarmedHomeVideoIDs.contains(video.id) else { return }
+      self.channel.invokeMethod(
+        "preloadNativePlaybackByBvid",
+        arguments: ["bvid": bvid]
+      )
+    }
+    homePrewarmWorkItem = work
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.8, execute: work)
   }
 
   private func applyDynamics(_ section: [String: Any]) {
@@ -3803,6 +3830,7 @@ private struct PiliNativeHomeView: View {
                   model.openVideo(video, sourceID: "home:\(video.id)")
                 }
                 .onAppear {
+                  model.prewarmHomeFirstVideoIfNeeded(video)
                   if video.id == model.homeVideos.last?.id {
                     model.loadMore("home")
                   }
