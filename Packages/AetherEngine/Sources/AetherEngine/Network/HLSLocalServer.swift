@@ -186,7 +186,7 @@ final class HLSLocalServer: @unchecked Sendable {
     /// instances try this port first so the origin stays stable; they fall
     /// back to an ephemeral port when a concurrent server (e.g. the remote
     /// HLS subtitle proxy) already holds it.
-    private static var lastAssignedPort: UInt16 = 0
+    private nonisolated(unsafe) static var lastAssignedPort: UInt16 = 0
 
     // MARK: - Public state
 
