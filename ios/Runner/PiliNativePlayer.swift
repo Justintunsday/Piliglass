@@ -1217,7 +1217,12 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
       guard let self, requestID == self.danmakuConfigurationRequest else { return }
       self.danmakuSettingsBusy = false
       guard result["state"] as? String == "success" else {
-        self.danmakuSettingsError = result["error"] as? String ?? "弹幕设置操作失败，请重试"
+        let failure = result["error"] as? String ?? "弹幕设置操作失败，请重试"
+        PiliNativeDiagnosticLog.shared.append(
+          "[Danmaku] settings \(requestArguments["action"] ?? "?") failed: \(failure) "
+            + "(owner=\(requestArguments["owner"] ?? "?"))"
+        )
+        self.danmakuSettingsError = failure
         completion?(false)
         return
       }

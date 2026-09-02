@@ -1369,7 +1369,10 @@ private final class PiliNativeViewModel: ObservableObject {
         } else {
           self.videoActionRevision += 1
           self.applyVideoActionResult(action, result: result)
-          DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
+          // Wait for the server-side stat to settle before refetching it;
+          // Bilibili counters usually converge within ~1 s. The refresh skips
+          // the memoized detail and keeps the just-confirmed relation state.
+          DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
             guard let self, self.videoDetailGeneration == generation else { return }
             self.refreshCurrentVideoDetail()
           }
@@ -1419,6 +1422,9 @@ private final class PiliNativeViewModel: ObservableObject {
     var arguments: [String: Any] = [
       "bvid": current.bvid,
       "title": current.title,
+      // Never resolve from the 30-minute memoized detail: the stat counters
+      // were just mutated by the action above and the cached copy is stale.
+      "refresh": true,
     ]
     if let aid = current.aid { arguments["aid"] = aid }
     if let cover = current.cover { arguments["cover"] = cover }
@@ -1430,11 +1436,12 @@ private final class PiliNativeViewModel: ObservableObject {
         let result = piliDictionary(response)
         guard result["state"] as? String == "success" else { return }
         var refreshed = PiliNativeVideoDetail(map: piliDictionary(result["video"]))
-        if !refreshed.relationLoaded {
-          refreshed.liked = active.liked
-          refreshed.coinCount = active.coinCount
-          refreshed.favorited = active.favorited
-        }
+        // The relation state (liked/coinCount/favorited) belongs to the action
+        // just confirmed; the fresh fetch is only used for the stat counters.
+        // Without this the stale cached detail would flip the button back.
+        refreshed.liked = active.liked
+        refreshed.coinCount = active.coinCount
+        refreshed.favorited = active.favorited
         self.videoDetail = refreshed
         self.nativePlayerSession.configureOverlayMetadata(
           title: refreshed.title,
@@ -2202,15 +2209,21 @@ private final class PiliNativeViewModel: ObservableObject {
         }
         let nowLiked = piliBool(result["liked"])
         if let currentIndex = self.comments.firstIndex(where: { $0.id == comment.id }) {
-          self.comments[currentIndex].liked = nowLiked
-          self.comments[currentIndex].like = max(0, self.comments[currentIndex].like + (nowLiked ? 1 : -1))
-          if self.commentThreadRoot?.id == comment.id {
+          // Copy-on-write: mutating an array element in place does not notify
+          // @Published, so rebuild the array and reassign it.
+          var updated = self.comments
+          updated[currentIndex].liked = nowLiked
+          updated[currentIndex].like = max(0, updated[currentIndex].like + (nowLiked ? 1 : -1))
+          if let rootID = self.commentThreadRoot?.id, rootID == comment.id {
             self.commentThreadRoot?.liked = nowLiked
-            self.commentThreadRoot?.like = self.comments[currentIndex].like
+            self.commentThreadRoot?.like = updated[currentIndex].like
           }
+          self.comments = updated
         }
-        self.loadComments(oid: oid, type: self.commentType, preserveExisting: true)
-        if self.isCommentThreadPresented { self.loadCommentThread() }
+        // No whole-list refetch here: the server-side counter may lag for a
+        // moment and would roll the freshly updated row back on screen. The
+        // local row is authoritative for this session; later entry refreshes
+        // converge it.
       }
     }
   }
@@ -2319,11 +2332,12 @@ private final class PiliNativeViewModel: ObservableObject {
           return
         }
         let nowLiked = piliBool(result["liked"])
-        self.selectedDynamic?.liked = nowLiked
-        self.selectedDynamic?.like = max(0, item.like + (nowLiked ? 1 : -1))
+        var updated = self.selectedDynamic
+        updated?.liked = nowLiked
+        updated?.like = max(0, item.like + (nowLiked ? 1 : -1))
+        self.selectedDynamic = updated
         self.syncSelectedDynamicToList()
         self.dynamicMessage = nowLiked ? "点赞成功" : "已取消点赞"
-        self.loadDynamicDetail()
       }
     }
   }
@@ -2569,14 +2583,16 @@ private final class PiliNativeViewModel: ObservableObject {
         }
         let nowLiked = piliBool(result["liked"])
         if let index = self.commentThreadItems.firstIndex(where: { $0.id == comment.id }) {
-          self.commentThreadItems[index].liked = nowLiked
-          self.commentThreadItems[index].like = max(
+          var updated = self.commentThreadItems
+          updated[index].liked = nowLiked
+          updated[index].like = max(
             0,
-            self.commentThreadItems[index].like + (nowLiked ? 1 : -1)
+            updated[index].like + (nowLiked ? 1 : -1)
           )
+          self.commentThreadItems = updated
         }
-        self.loadCommentThread()
-        self.loadComments(oid: oid, type: self.commentType, preserveExisting: true)
+        // No refetch: same reasoning as toggleCommentLike, the confirmed row
+        // stays authoritative on screen for this session.
       }
     }
   }
@@ -2584,10 +2600,12 @@ private final class PiliNativeViewModel: ObservableObject {
   private func syncSelectedDynamicToList() {
     guard let selected = selectedDynamic,
           let index = dynamics.firstIndex(where: { $0.sourceID == selected.sourceID }) else { return }
-    dynamics[index].like = selected.like
-    dynamics[index].liked = selected.liked
-    dynamics[index].comment = selected.comment
-    dynamics[index].forward = selected.forward
+    var updated = dynamics
+    updated[index].like = selected.like
+    updated[index].liked = selected.liked
+    updated[index].comment = selected.comment
+    updated[index].forward = selected.forward
+    dynamics = updated
   }
 
   func presentLibrary(_ kind: String, title: String) {
