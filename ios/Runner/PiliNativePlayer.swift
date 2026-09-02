@@ -2030,7 +2030,12 @@ private final class PiliNativeDanmakuView: UIView {
 
   func render(time: TimeInterval, items: [PiliNativeDanmakuItem], revision: Int) {
     if items.isEmpty {
-      if !subviews.isEmpty { clear() }
+      // An empty timeline is a transient state: a segment is still loading or
+      // a settings/rule rebuild momentarily published an empty array before
+      // its async repopulation lands. Clearing animations here made danmaku
+      // flash off the screen, and the repopulated cursor then skipped the
+      // instant that had been playing. Only reset state; labels already on
+      // screen finish their own animation.
       cursor = 0
       lastTime = time
       lastRevision = revision
