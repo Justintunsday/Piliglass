@@ -913,6 +913,8 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
   private var loadTask: Task<Void, Never>?
   private var activeSegmentIndex = 0
   private var isTryingVideoCandidates = false
+  private var configureTimestamp: Date?
+  private var firstPlayingReported = false
   private weak var videoSurface: AetherPlayerView?
   private var remoteCommandTargets: [Any] = []
   private var nowPlayingCoverURL = ""
@@ -1048,6 +1050,8 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
     errorMessage = nil
     isReady = false
     isBuffering = true
+    configureTimestamp = Date()
+    firstPlayingReported = false
     segmentOffsets = []
     var offset: TimeInterval = 0
     for segment in segments {
@@ -1382,6 +1386,8 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
     engine.stop()
     hasAudioTrack = false
     audioEngine.stop()
+    configureTimestamp = nil
+    firstPlayingReported = false
     segments.removeAll()
     segmentOffsets.removeAll()
     requestedDanmakuSegments.removeAll()
@@ -1500,11 +1506,25 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
     }.resume()
   }
 
+  /// One per configure(): logs how long the decoder took to reach the first
+  /// playing state, so tap-to-picture slowness can be split between the
+  /// bridge round trips (timed in the root controller) and engine startup.
+  private func reportTimingIfFirstPlayback(state: PlaybackState) {
+    guard case .playing = state else { return }
+    guard !firstPlayingReported, let start = configureTimestamp else { return }
+    firstPlayingReported = true
+    let ms = Int(Date().timeIntervalSince(start) * 1000)
+    PiliNativeDiagnosticLog.shared.append(
+      "[Timing] decoder open + first playing: \(ms) ms after segments configured"
+    )
+  }
+
   private func installObservers() {
     engine.$state
       .receive(on: DispatchQueue.main)
       .sink { [weak self] state in
         PiliNativeDiagnosticLog.shared.append("Engine state=\(String(describing: state))")
+        self?.reportTimingIfFirstPlayback(state: state)
         self?.handleEngineState(state)
       }
       .store(in: &engineCancellables)

@@ -415,6 +415,7 @@ private final class PiliNativeViewModel: ObservableObject {
   private var nativePlaybackMetadataLate = false
   private var prewarmedHomeVideoIDs: Set<String> = []
   private var homePrewarmWorkItem: DispatchWorkItem?
+  private var videoOpenTimestamp: Date?
   private var videoDetailGeneration = UUID()
   private var videoActionRevision = 0
   private var nativePlayerFullscreenCancellable: AnyCancellable?
@@ -671,6 +672,11 @@ private final class PiliNativeViewModel: ObservableObject {
       // the system then uses its centered zoom fallback.
       videoTransitionSourceID = sourceID ?? "video:\(video.id)"
     }
+    let openedAt = Date()
+    videoOpenTimestamp = openedAt
+    PiliNativeDiagnosticLog.shared.append(
+      "[Timing] video opened bvid=\(video.bvid ?? "unknown")"
+    )
     nativePlaybackGeneration = UUID()
     nativePlayerSession.stop()
     nativePlayerSession.applyDefaultPlaybackRate()
@@ -749,6 +755,12 @@ private final class PiliNativeViewModel: ObservableObject {
         }
         let detail = PiliNativeVideoDetail(map: piliDictionary(result["video"]))
         self.videoDetail = detail
+        if let openedAt = self.videoOpenTimestamp {
+          let ms = Int(Date().timeIntervalSince(openedAt) * 1000)
+          PiliNativeDiagnosticLog.shared.append(
+            "[Timing] detail loaded: \(ms) ms after open (network + JSON)"
+          )
+        }
         self.nativePlayerSession.configureOverlayMetadata(
           title: detail.title,
           like: detail.like,
@@ -949,6 +961,12 @@ private final class PiliNativeViewModel: ObservableObject {
           self.nativePlayerSession.fail(message)
           return
         }
+        if let openedAt = self.videoOpenTimestamp {
+          let ms = Int(Date().timeIntervalSince(openedAt) * 1000)
+          PiliNativeDiagnosticLog.shared.append(
+            "[Timing] playback URLs resolved: \(ms) ms after open (incl. videoUrl API)"
+          )
+        }
 
         let qualities = (result["qualities"] as? [Any] ?? []).compactMap { row -> PiliNativePlayerQuality? in
           let map = piliDictionary(row)
@@ -988,6 +1006,12 @@ private final class PiliNativeViewModel: ObservableObject {
         }
         if self.nativePlaybackAwaitingMetadata == generation {
           self.pendingNativePlaybackStart = (generation, startPlayback)
+          if let openedAt = self.videoOpenTimestamp {
+            let ms = Int(Date().timeIntervalSince(openedAt) * 1000)
+            PiliNativeDiagnosticLog.shared.append(
+              "[Timing] waiting for metadata gate at \(ms) ms after open"
+            )
+          }
           // Subtitles are a nice-to-have for the first frame. If the playInfo
           // request (or a cold subtitle download) has not finished shortly
           // after the playback URLs are ready, start anyway and skip this
@@ -1003,6 +1027,9 @@ private final class PiliNativeViewModel: ObservableObject {
   private func schedulePlaybackMetadataDeadline(generation: UUID) {
     DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
       guard let self, self.nativePlaybackAwaitingMetadata == generation else { return }
+      PiliNativeDiagnosticLog.shared.append(
+        "[Timing] subtitle deadline fired; playback starts without subtitles"
+      )
       self.nativePlaybackMetadataLate = true
       self.finishNativePlaybackMetadata(generation: generation)
     }
@@ -1056,6 +1083,12 @@ private final class PiliNativeViewModel: ObservableObject {
           subtitles,
           defaultID: piliString(result["defaultSubtitleId"])
         )
+        if let openedAt = self.videoOpenTimestamp {
+          let ms = Int(Date().timeIntervalSince(openedAt) * 1000)
+          PiliNativeDiagnosticLog.shared.append(
+            "[Timing] metadata + subtitle files ready: \(ms) ms after open"
+          )
+        }
         self.finishNativePlaybackMetadata(generation: generation)
       }
     }
@@ -1067,6 +1100,12 @@ private final class PiliNativeViewModel: ObservableObject {
     guard let pending = pendingNativePlaybackStart,
           pending.generation == generation else { return }
     pendingNativePlaybackStart = nil
+    if let openedAt = videoOpenTimestamp {
+      let ms = Int(Date().timeIntervalSince(openedAt) * 1000)
+      PiliNativeDiagnosticLog.shared.append(
+        "[Timing] decoder launch begins at \(ms) ms after open"
+      )
+    }
     pending.action()
   }
 
