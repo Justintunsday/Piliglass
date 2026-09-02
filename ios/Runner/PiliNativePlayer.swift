@@ -221,7 +221,10 @@ private final class PiliNativeHTTPRangeReader: IOReader, @unchecked Sendable {
 
   private func resolveMetadata() -> Bool {
     do {
-      let result = try fetchRange(start: 0, count: 1)
+      // Resolve Content-Length and fill the initial AAC bytes in one request.
+      // A one-byte size probe forced a second TLS round-trip before FFmpeg could
+      // read the first packet on every DASH start.
+      let result = try fetchRange(start: 0, count: 1_024 * 1_024)
       locked {
         if let length = result.contentLength { contentLength = length }
         if cache.isEmpty {
@@ -381,14 +384,9 @@ struct PiliNativePlayerQuality: Identifiable, Equatable {
 struct PiliNativeSubtitleOption: Identifiable, Equatable {
   let id: String
   let label: String
-  let url: String
+  let language: String
+  let localPath: String
   let isAI: Bool
-}
-
-private struct PiliNativeSubtitleCue {
-  let start: TimeInterval
-  let end: TimeInterval
-  let text: String
 }
 
 enum PiliNativeDanmakuProfile: String, Identifiable {
@@ -837,7 +835,6 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
   @Published private(set) var qualities: [PiliNativePlayerQuality] = []
   @Published private(set) var subtitleOptions: [PiliNativeSubtitleOption] = []
   @Published private(set) var selectedSubtitleID: String?
-  @Published private(set) var subtitleText: String?
   @Published private(set) var danmakuRevision = 0
   @Published var danmakuEnabled = true {
     didSet {
@@ -890,7 +887,6 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
   private let audioEngine: AetherEngine
   var onDanmakuSegmentNeeded: ((Int) -> Void)?
   var onQualityRequested: ((Int, TimeInterval) -> Void)?
-  var onSubtitleRequested: ((String, @escaping (String?) -> Void) -> Void)?
   var onDanmakuSendRequested: ((String, Int) -> Void)?
   var onVideoActionRequested: ((String) -> Void)?
   var onPlaybackEnded: (() -> Void)?
@@ -903,8 +899,6 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
   private(set) var danmakuGeneration = UUID()
   private var segments: [PiliNativePlayerSegment] = []
   private var segmentOffsets: [TimeInterval] = []
-  private var subtitleCues: [PiliNativeSubtitleCue] = []
-  private var subtitleGeneration = UUID()
   private var requestedDanmakuSegments = Set<Int>()
   private var engineCancellables = Set<AnyCancellable>()
   private var audioEngineCancellables = Set<AnyCancellable>()
@@ -983,71 +977,21 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
   }
 
   func selectSubtitle(_ id: String?) {
-    subtitleGeneration = UUID()
-    let generation = subtitleGeneration
     selectedSubtitleID = id
-    subtitleCues.removeAll()
-    subtitleText = nil
-    guard let id,
-          let option = subtitleOptions.first(where: { $0.id == id }),
-          let request = onSubtitleRequested else { return }
-    request(option.url) { [weak self] content in
-      guard let self, self.subtitleGeneration == generation else { return }
-      guard let content else {
-        self.selectedSubtitleID = nil
-        return
-      }
-      self.subtitleCues = Self.parseWebVTT(content)
-      self.updateSubtitle(at: self.currentTime)
-    }
+    applyNativeSubtitleSelection()
   }
 
-  private func updateSubtitle(at time: TimeInterval) {
-    guard !subtitleCues.isEmpty else {
-      if subtitleText != nil { subtitleText = nil }
+  private func applyNativeSubtitleSelection() {
+    guard isReady,
+          let id = selectedSubtitleID,
+          let option = subtitleOptions.first(where: { $0.id == id }) else {
+      engine.setNativeSubtitleSelected(track: nil)
       return
     }
-    var low = 0
-    var high = subtitleCues.count
-    while low < high {
-      let middle = (low + high) / 2
-      if subtitleCues[middle].start <= time { low = middle + 1 } else { high = middle }
+    let ordinal = engine.nativeSubtitleTracks.firstIndex {
+      $0.language == option.language
     }
-    let index = low - 1
-    let text = index >= 0 && time < subtitleCues[index].end ? subtitleCues[index].text : nil
-    if subtitleText != text { subtitleText = text }
-  }
-
-  private static func parseWebVTT(_ content: String) -> [PiliNativeSubtitleCue] {
-    let normalized = content.replacingOccurrences(of: "\r\n", with: "\n")
-      .replacingOccurrences(of: "\r", with: "\n")
-    return normalized.components(separatedBy: "\n\n").compactMap { block in
-      let lines = block.split(separator: "\n", omittingEmptySubsequences: true).map(String.init)
-      guard let timingIndex = lines.firstIndex(where: { $0.contains("-->") }) else { return nil }
-      let timing = lines[timingIndex].components(separatedBy: "-->")
-      guard timing.count == 2,
-            let start = subtitleTime(timing[0]),
-            let end = subtitleTime(timing[1]),
-            end > start else { return nil }
-      let rawText = lines.dropFirst(timingIndex + 1).joined(separator: "\n")
-      let withoutTags = rawText.replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
-      let text = withoutTags.replacingOccurrences(of: "&nbsp;", with: " ")
-        .replacingOccurrences(of: "&amp;", with: "&")
-        .replacingOccurrences(of: "&lt;", with: "<")
-        .replacingOccurrences(of: "&gt;", with: ">")
-      return text.isEmpty ? nil : PiliNativeSubtitleCue(start: start, end: end, text: text)
-    }.sorted { $0.start < $1.start }
-  }
-
-  private static func subtitleTime(_ value: String) -> TimeInterval? {
-    let token = value.trimmingCharacters(in: .whitespacesAndNewlines)
-      .split(separator: " ").first.map(String.init) ?? ""
-    let parts = token.replacingOccurrences(of: ",", with: ".").split(separator: ":")
-    guard parts.count >= 2 else { return nil }
-    let seconds = Double(parts.last ?? "") ?? 0
-    let minutes = Double(parts[parts.count - 2]) ?? 0
-    let hours = parts.count > 2 ? (Double(parts[parts.count - 3]) ?? 0) : 0
-    return hours * 3600 + minutes * 60 + seconds
+    engine.setNativeSubtitleSelected(track: ordinal)
   }
 
   func configure(
@@ -1423,11 +1367,8 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
     isPlaying = false
     isBuffering = false
     currentTime = 0
-    subtitleGeneration = UUID()
     subtitleOptions.removeAll()
     selectedSubtitleID = nil
-    subtitleCues.removeAll()
-    subtitleText = nil
     duration = 0
     errorMessage = nil
     isHDR = false
@@ -1575,11 +1516,10 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
       .sink { [weak self] time in
         guard let self, self.applicationIsInBackground, self.hasAudioTrack,
               self.isReady, time.isFinite else { return }
-        self.currentTime = min(
+      self.currentTime = min(
           max(0, self.segmentOffsets[self.activeSegmentIndex] + time),
           max(self.duration, 0)
         )
-        self.updateSubtitle(at: self.currentTime)
         self.updateNowPlayingInfo()
       }
       .store(in: &audioEngineCancellables)
@@ -1747,9 +1687,24 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
           engine.stop(resetDisplayCriteria: false)
           let options = LoadOptions(
             httpHeaders: requestHeaders,
+            prepareNativeSubtitles: !subtitleOptions.isEmpty,
+            eagerNativeSubtitleReaders: true,
+            nativeSubtitlePreferredLanguages: selectedSubtitleID.flatMap { id in
+              subtitleOptions.first(where: { $0.id == id })?.language
+            }.map { [$0] } ?? [],
             maxConcurrentSourceRequests: segment.qualityValue >= 120 ? 6 : 4,
             declaredDurationSeconds: segment.duration > 0 ? segment.duration : nil,
-            forwardBufferSegments: segment.qualityValue >= 120 ? 12 : 8,
+            probesize: 2 * 1024 * 1024,
+            maxAnalyzeDuration: 2_000_000,
+            externalSubtitles: subtitleOptions.map {
+              ExternalSubtitleTrack(
+                url: URL(fileURLWithPath: $0.localPath),
+                name: $0.label,
+                language: $0.language,
+                formatHint: "vtt"
+              )
+            },
+            forwardBufferSegments: segment.qualityValue >= 120 ? 8 : 6,
             autoplay: false
           )
           try await engine.load(url: url, startPosition: localTime, options: options)
@@ -1816,6 +1771,8 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
           suppressDisplayCriteria: true,
           audioOnly: true,
           declaredDurationSeconds: segment.duration > 0 ? segment.duration : nil,
+          probesize: 512 * 1024,
+          maxAnalyzeDuration: 1_000_000,
           autoplay: false
         )
         try await audioEngine.load(
@@ -1845,17 +1802,14 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
   }
 
   private func finishPreparingIfReady() {
-    guard videoItemReady, audioItemReady, let localTime = pendingAudioSeek else { return }
+    guard videoItemReady, audioItemReady, pendingAudioSeek != nil else { return }
     pendingAudioSeek = nil
-    Task { [weak self] in
-      guard let self else { return }
-      await self.seekAudio(to: localTime)
-      self.isReady = true
-      self.isBuffering = false
-      self.errorMessage = nil
-      self.hdrBrightnessActive = self.engine.videoFormat != .sdr
-      if self.shouldAutoplay { self.startPlayback() }
-    }
+    isReady = true
+    isBuffering = false
+    errorMessage = nil
+    hdrBrightnessActive = engine.videoFormat != .sdr
+    applyNativeSubtitleSelection()
+    if shouldAutoplay { startPlayback() }
   }
 
   private func startPlayback() {
@@ -1884,7 +1838,6 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
     synchronizeAudio(to: local)
     currentTime = min(max(0, segmentOffsets[activeSegmentIndex] + local), max(duration, 0))
     updateNowPlayingInfo()
-    updateSubtitle(at: currentTime)
     requestDanmaku(near: currentTime)
   }
 
@@ -2328,7 +2281,6 @@ final class PiliNativePlayerViewController: UIViewController, UIGestureRecognize
   private let errorLabel = UILabel()
   private let toastLabel = UILabel()
   private let speedHoldLabel = UILabel()
-  private let subtitleLabel = UILabel()
   private let danmakuSettingsPanel = UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterialDark))
   private var pictureInPictureController: AVPictureInPictureController?
   private var cancellables = Set<AnyCancellable>()
@@ -2426,7 +2378,7 @@ final class PiliNativePlayerViewController: UIViewController, UIGestureRecognize
 
   private func buildInterface() {
     view.backgroundColor = .black
-    [canvas, danmakuView, subtitleLabel, controls, spinner, errorLabel].forEach {
+    [canvas, danmakuView, controls, spinner, errorLabel].forEach {
       $0.translatesAutoresizingMaskIntoConstraints = false
       view.addSubview($0)
     }
@@ -2439,12 +2391,6 @@ final class PiliNativePlayerViewController: UIViewController, UIGestureRecognize
       danmakuView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
       danmakuView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
       danmakuView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-      subtitleLabel.centerXAnchor.constraint(equalTo: view.centerXAnchor),
-      subtitleLabel.widthAnchor.constraint(lessThanOrEqualTo: view.widthAnchor, multiplier: 0.86),
-      subtitleLabel.bottomAnchor.constraint(
-        equalTo: view.safeAreaLayoutGuide.bottomAnchor,
-        constant: fullscreenPresentation ? -94 : -58
-      ),
       controls.topAnchor.constraint(equalTo: view.topAnchor),
       controls.leadingAnchor.constraint(equalTo: view.leadingAnchor),
       controls.trailingAnchor.constraint(equalTo: view.trailingAnchor),
@@ -2513,16 +2459,6 @@ final class PiliNativePlayerViewController: UIViewController, UIGestureRecognize
     backButton.accessibilityLabel = "退出播放器"
     lockButton.accessibilityLabel = "锁定播放器"
     danmakuSettingsButton.accessibilityLabel = "弹幕设置"
-    subtitleLabel.numberOfLines = 3
-    subtitleLabel.textAlignment = .center
-    subtitleLabel.textColor = .white
-    subtitleLabel.font = .systemFont(ofSize: fullscreenPresentation ? 20 : 15, weight: .semibold)
-    subtitleLabel.layer.shadowColor = UIColor.black.cgColor
-    subtitleLabel.layer.shadowOpacity = 1
-    subtitleLabel.layer.shadowRadius = 2
-    subtitleLabel.layer.shadowOffset = .zero
-    subtitleLabel.isHidden = true
-
     if fullscreenPresentation {
       buildFullscreenControls()
     } else {
@@ -2950,11 +2886,6 @@ final class PiliNativePlayerViewController: UIViewController, UIGestureRecognize
       )
       self.danmakuButton.alpha = enabled ? 1 : 0.66
       if !enabled { self.danmakuView.clear() }
-    }.store(in: &cancellables)
-    session.$subtitleText.receive(on: DispatchQueue.main).sink { [weak self] text in
-      guard let self else { return }
-      self.subtitleLabel.text = text
-      self.subtitleLabel.isHidden = text?.isEmpty != false
     }.store(in: &cancellables)
     session.$subtitleOptions.receive(on: DispatchQueue.main).sink { [weak self] _ in
       self?.updateSubtitleMenu()

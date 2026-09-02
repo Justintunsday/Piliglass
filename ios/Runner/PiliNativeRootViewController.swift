@@ -410,6 +410,8 @@ private final class PiliNativeViewModel: ObservableObject {
   private var pendingNativeAutoplay = false
   private var nativePlaybackGeneration = UUID()
   private var nativePlaybackMetadataGeneration = UUID()
+  private var nativePlaybackAwaitingMetadata: UUID?
+  private var pendingNativePlaybackStart: (generation: UUID, action: () -> Void)?
   private var videoDetailGeneration = UUID()
   private var videoActionRevision = 0
   private var nativePlayerFullscreenCancellable: AnyCancellable?
@@ -440,15 +442,6 @@ private final class PiliNativeViewModel: ObservableObject {
     nativePlayerSession.onQualityRequested = { [weak self] quality, resumeAt in
       guard let self = self, let video = self.videoDetail, let cid = self.nativePlayerCID else { return }
       self.loadNativePlayback(video: video, cid: cid, quality: quality, resumeAt: resumeAt)
-    }
-    nativePlayerSession.onSubtitleRequested = { [weak self] url, completion in
-      guard let self else { completion(nil); return }
-      self.channel.invokeMethod("loadNativeSubtitle", arguments: ["url": url]) { response in
-        DispatchQueue.main.async {
-          let result = piliDictionary(response)
-          completion(result["state"] as? String == "success" ? piliString(result["content"]) : nil)
-        }
-      }
     }
     nativePlayerSession.onDanmakuSendRequested = { [weak self] content, progress in
       self?.sendNativeDanmaku(content: content, progress: progress)
@@ -812,6 +805,8 @@ private final class PiliNativeViewModel: ObservableObject {
   ) {
     let generation = UUID()
     nativePlaybackGeneration = generation
+    nativePlaybackAwaitingMetadata = nil
+    pendingNativePlaybackStart = nil
     let autoplay = autoplayOverride
       ?? (quality == nil ? PiliNativePlayerPreferences.autoplay : nativePlayerSession.isPlaying)
     let part = video.pages.first(where: { $0.cid == cid })
@@ -842,8 +837,9 @@ private final class PiliNativeViewModel: ObservableObject {
     if let quality { arguments["quality"] = quality }
     if let aid = video.aid { arguments["aid"] = aid }
     if resumeAt <= 0 {
-      let metadataGeneration = UUID()
+      let metadataGeneration = generation
       nativePlaybackMetadataGeneration = metadataGeneration
+      nativePlaybackAwaitingMetadata = metadataGeneration
       nativePlayerSession.configureSubtitles([], defaultID: nil)
       loadNativePlaybackMetadata(
         video: video,
@@ -927,20 +923,28 @@ private final class PiliNativeViewModel: ObservableObject {
         self.nativePlayerQuality = piliOptionalInt(result["quality"]) ?? quality
         self.originalPlayerReady = true
         self.originalPlayerError = nil
-        self.nativePlayerSession.configure(
-          segments: segments,
-          durationMilliseconds: durationMilliseconds,
-          quality: piliString(result["qualityText"])
-            ?? "\(piliOptionalInt(result["quality"]) ?? quality ?? 80)P",
-          qualities: qualities,
-          resumeAt: targetResume,
-          autoplay: autoplay
-        )
-        self.nativePlayerSession.prepareDanmaku()
-        if resumeAt > 0 {
-          self.videoActionMessage = "已切换清晰度"
-        } else if initialResume > 0 {
-          self.videoActionMessage = "已定位至上次播放位置"
+        let startPlayback = { [weak self] in
+          guard let self, self.nativePlaybackGeneration == generation else { return }
+          self.nativePlayerSession.configure(
+            segments: segments,
+            durationMilliseconds: durationMilliseconds,
+            quality: piliString(result["qualityText"])
+              ?? "\(piliOptionalInt(result["quality"]) ?? quality ?? 80)P",
+            qualities: qualities,
+            resumeAt: targetResume,
+            autoplay: autoplay
+          )
+          self.nativePlayerSession.prepareDanmaku()
+          if resumeAt > 0 {
+            self.videoActionMessage = "已切换清晰度"
+          } else if initialResume > 0 {
+            self.videoActionMessage = "已定位至上次播放位置"
+          }
+        }
+        if self.nativePlaybackAwaitingMetadata == generation {
+          self.pendingNativePlaybackStart = (generation, startPlayback)
+        } else {
+          startPlayback()
         }
       }
     }
@@ -957,7 +961,10 @@ private final class PiliNativeViewModel: ObservableObject {
       DispatchQueue.main.async {
         guard let self, self.nativePlaybackMetadataGeneration == generation else { return }
         let result = piliDictionary(response)
-        guard result["state"] as? String == "success" else { return }
+        guard result["state"] as? String == "success" else {
+          self.finishNativePlaybackMetadata(generation: generation)
+          return
+        }
         if restoreLastPart,
            let lastCID = piliOptionalInt(result["lastPlayCid"]),
            lastCID > 0, lastCID != cid,
@@ -971,15 +978,32 @@ private final class PiliNativeViewModel: ObservableObject {
           let map = piliDictionary(row)
           guard let id = piliString(map["id"]),
                 let label = piliString(map["label"]),
-                let url = piliString(map["url"]), !url.isEmpty else { return nil }
-          return PiliNativeSubtitleOption(id: id, label: label, url: url, isAI: piliBool(map["isAI"]))
+                let language = piliString(map["language"]),
+                let localPath = piliString(map["localPath"]), !localPath.isEmpty else { return nil }
+          return PiliNativeSubtitleOption(
+            id: id,
+            label: label,
+            language: language,
+            localPath: localPath,
+            isAI: piliBool(map["isAI"])
+          )
         }
         self.nativePlayerSession.configureSubtitles(
           subtitles,
           defaultID: piliString(result["defaultSubtitleId"])
         )
+        self.finishNativePlaybackMetadata(generation: generation)
       }
     }
+  }
+
+  private func finishNativePlaybackMetadata(generation: UUID) {
+    guard nativePlaybackAwaitingMetadata == generation else { return }
+    nativePlaybackAwaitingMetadata = nil
+    guard let pending = pendingNativePlaybackStart,
+          pending.generation == generation else { return }
+    pendingNativePlaybackStart = nil
+    pending.action()
   }
 
   private func loadNativeDanmaku(segmentIndex: Int) {

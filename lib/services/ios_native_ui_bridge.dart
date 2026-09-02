@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io' show Directory, File;
 
 import 'package:PiliPlus/grpc/bilibili/app/im/v1.pb.dart'
     as im_proto
@@ -174,8 +175,6 @@ final class IOSNativeUIBridge {
         return _loadNativePlayback(_arguments(call));
       case 'loadNativePlaybackMetadata':
         return _loadNativePlaybackMetadata(_arguments(call));
-      case 'loadNativeSubtitle':
-        return _loadNativeSubtitle(_arguments(call));
       case 'reportNativePlaybackProgress':
         return _reportNativePlaybackProgress(_arguments(call));
       case 'loadNativeDanmaku':
@@ -890,6 +889,41 @@ final class IOSNativeUIBridge {
       if (zhOrder != otherZhOrder) return zhOrder - otherZhOrder;
       return (a['isAI'] == true ? 1 : 0) - (b['isAI'] == true ? 1 : 0);
     });
+    if (subtitleRows.isNotEmpty) {
+      final subtitleDirectory = Directory(
+        '${Directory.systemTemp.path}/piliglass-native-subtitles/$aid-$cid',
+      );
+      try {
+        if (await subtitleDirectory.exists()) {
+          await subtitleDirectory.delete(recursive: true);
+        }
+        await subtitleDirectory.create(recursive: true);
+        final preparedRows = await Future.wait(
+          subtitleRows.asMap().entries.map((entry) async {
+            final row = entry.value;
+            final rawUrl = row['url'] as String;
+            try {
+              final subtitleUrl = rawUrl.replaceFirst(RegExp(r'^https?:'), '');
+              final content = await VideoHttp.getSubtitles(subtitleUrl)
+                  .timeout(const Duration(seconds: 4));
+              if (content == null || content.isEmpty) return null;
+              final file = File(
+                '${subtitleDirectory.path}/subtitle-${entry.key}.vtt',
+              );
+              await file.writeAsString(content, flush: false);
+              return <String, dynamic>{...row, 'localPath': file.path};
+            } catch (_) {
+              return null;
+            }
+          }),
+        );
+        subtitleRows
+          ..clear()
+          ..addAll(preparedRows.whereType<Map<String, dynamic>>());
+      } catch (_) {
+        subtitleRows.clear();
+      }
+    }
     final subtitlePreference = GStorage.setting.get(
       SettingBoxKey.subtitlePreferenceV2,
       defaultValue: 0,
@@ -907,23 +941,6 @@ final class IOSNativeUIBridge {
       'subtitles': subtitleRows,
       'defaultSubtitleId': defaultSubtitleId,
     };
-  }
-
-  Future<Map<String, dynamic>> _loadNativeSubtitle(
-    Map<dynamic, dynamic> arguments,
-  ) async {
-    var url = _nonEmpty(arguments['url']?.toString());
-    if (url == null) return const {'state': 'error', 'error': '字幕地址为空'};
-    url = url.replaceFirst(RegExp(r'^https?:'), '');
-    try {
-      final content = await VideoHttp.getSubtitles(url);
-      if (content == null || content.isEmpty) {
-        return const {'state': 'error', 'error': '字幕内容为空'};
-      }
-      return {'state': 'success', 'content': content};
-    } catch (error) {
-      return {'state': 'error', 'error': '字幕加载失败：$error'};
-    }
   }
 
   Future<Map<String, dynamic>> _reportNativePlaybackProgress(
