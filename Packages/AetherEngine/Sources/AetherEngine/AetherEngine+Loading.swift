@@ -615,7 +615,8 @@ extension AetherEngine {
             maxAnalyzeDuration: loadedOptions.maxAnalyzeDuration,
             sequentialOrigin: loadedOptions.sequentialOrigin,
             declaredDurationSeconds: loadedOptions.declaredDurationSeconds,
-            forwardBufferSegments: loadedOptions.forwardBufferSegments
+            forwardBufferSegments: loadedOptions.forwardBufferSegments,
+            forwardBufferBytes: loadedOptions.forwardBufferBytes
         )
         // #240: the pump claims the source link through this gate while it is fetching, so the
         // subtitle side readers can stay out of its way. Set before start().

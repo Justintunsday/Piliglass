@@ -362,6 +362,13 @@ public struct LoadOptions: Sendable, Equatable {
     /// remote server directly.
     public var forwardBufferSegments: Int?
 
+    /// Optional byte budget for the loopback VOD forward buffer. The producer
+    /// pauses once this budget or `forwardBufferSegments` is reached, whichever
+    /// happens first. The value is clamped by the engine's free-space safety
+    /// budget. nil keeps the engine-managed budget. Ignored for live and
+    /// `nativeRemoteHLS` sessions.
+    public var forwardBufferBytes: Int?
+
     /// Autostart at load completion. Default `true`: every load path ends in `host.play()` and a
     /// `.playing` state (current behavior, byte-identical). Set `false` to mount PAUSED: a host that
     /// holds a pause at mount (synchronized-start lobby that loads several devices and starts them on
@@ -426,6 +433,7 @@ public struct LoadOptions: Sendable, Equatable {
         preferredSubtitleLanguages: [String] = [],
         externalSubtitles: [ExternalSubtitleTrack] = [],
         forwardBufferSegments: Int? = nil,
+        forwardBufferBytes: Int? = nil,
         autoplay: Bool = true,
         teletextPage: Int? = nil,
         deinterlaceMode: DeinterlaceMode = .auto,
@@ -459,6 +467,7 @@ public struct LoadOptions: Sendable, Equatable {
         self.preferredSubtitleLanguages = preferredSubtitleLanguages
         self.externalSubtitles = externalSubtitles
         self.forwardBufferSegments = forwardBufferSegments
+        self.forwardBufferBytes = forwardBufferBytes
         self.autoplay = autoplay
         self.teletextPage = teletextPage
         self.deinterlaceMode = deinterlaceMode

@@ -488,20 +488,25 @@ final class SegmentCache: @unchecked Sendable {
     /// #207 producer park step: true once the producer may write `head`. Withheld while its race-ahead
     /// has reached `budgetBytes` and the consumer still has a safe lead behind it; the extras eviction
     /// that follows the advancing playhead is what frees the room again.
-    func awaitPrefetchDiskHeadroom(head: Int, budgetBytes: Int, timeout: TimeInterval = 1.0) -> Bool {
+    func awaitPrefetchDiskHeadroom(head: Int, budgetBytes: Int,
+                                   minAheadSegments: Int = PrefetchDiskBudget.minAheadSegments,
+                                   timeout: TimeInterval = 1.0) -> Bool {
         condition.lock()
         defer { condition.unlock() }
-        if !shouldParkLocked(head: head, budgetBytes: budgetBytes) { return true }
+        if !shouldParkLocked(head: head, budgetBytes: budgetBytes,
+                             minAheadSegments: minAheadSegments) { return true }
         _ = condition.wait(until: Date().addingTimeInterval(timeout))
-        return !shouldParkLocked(head: head, budgetBytes: budgetBytes)
+        return !shouldParkLocked(head: head, budgetBytes: budgetBytes,
+                                 minAheadSegments: minAheadSegments)
     }
 
     /// Must be called with condition held.
-    private func shouldParkLocked(head: Int, budgetBytes: Int) -> Bool {
+    private func shouldParkLocked(head: Int, budgetBytes: Int, minAheadSegments: Int) -> Bool {
         PrefetchDiskBudget.shouldPark(forwardBytes: currentForwardBytes(),
                                       budgetBytes: budgetBytes,
                                       head: head,
-                                      consumerTarget: currentTargetIndex)
+                                      consumerTarget: currentTargetIndex,
+                                      minAheadSegments: minAheadSegments)
     }
 
     /// Must be called with condition held.

@@ -1441,6 +1441,9 @@ final class HLSSegmentProducer: @unchecked Sendable {
         while !checkShouldStop() {
             if cache.awaitPrefetchDiskHeadroom(head: head,
                                                budgetBytes: prefetchDiskBudgetBytes,
+                                               minAheadSegments: min(
+                                                   bufferAheadSegments,
+                                                   PrefetchDiskBudget.minAheadSegments),
                                                timeout: 1.0) {
                 if parked >= Self.prefetchDiskParkLogThresholdSeconds {
                     EngineLog.emit(

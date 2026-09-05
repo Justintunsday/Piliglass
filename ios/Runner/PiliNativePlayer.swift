@@ -797,6 +797,8 @@ enum PiliNativePlayerPreferences {
   static let statusKey = "pili.native.player.showStatus"
   static let hideDelayKey = "pili.native.player.hideDelay"
   static let endModeKey = "pili.native.player.endMode"
+  static let bufferSizeMBKey = "pili.native.player.bufferSizeMB"
+  static let bufferDurationSecondsKey = "pili.native.player.bufferDurationSeconds"
   static let relatedKey = "pili.native.detail.showRelated"
   static let expandIntroKey = "pili.native.detail.expandIntro"
 
@@ -820,6 +822,20 @@ enum PiliNativePlayerPreferences {
   static var hideDelay: Double {
     let delay = (UserDefaults.standard.object(forKey: hideDelayKey) as? Double) ?? 3
     return [3, 5, 8].contains(delay) ? delay : 3
+  }
+  static var bufferSizeMB: Int {
+    let value = UserDefaults.standard.integer(forKey: bufferSizeMBKey)
+    return [64, 128, 256, 512, 1024].contains(value) ? value : 128
+  }
+  static var bufferDurationSeconds: Int {
+    let value = UserDefaults.standard.integer(forKey: bufferDurationSecondsKey)
+    return [16, 24, 40, 60, 120].contains(value) ? value : 24
+  }
+  static var forwardBufferSegments: Int {
+    max(4, Int(ceil(Double(bufferDurationSeconds) / 4.0)))
+  }
+  static var forwardBufferBytes: Int {
+    bufferSizeMB * (1 << 20)
   }
 }
 
@@ -1777,7 +1793,11 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
                 formatHint: "vtt"
               )
             },
-            forwardBufferSegments: segment.qualityValue >= 120 ? 8 : 6,
+            // Aether cuts VOD into roughly four-second segments. The engine
+            // applies both limits and stops prefetching when either the time
+            // window or the byte budget is reached.
+            forwardBufferSegments: PiliNativePlayerPreferences.forwardBufferSegments,
+            forwardBufferBytes: PiliNativePlayerPreferences.forwardBufferBytes,
             autoplay: false
           )
           try await engine.load(url: url, startPosition: localTime, options: options)

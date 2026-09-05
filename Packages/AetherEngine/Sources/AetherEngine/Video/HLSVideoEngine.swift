@@ -692,7 +692,8 @@ public final class HLSVideoEngine: @unchecked Sendable {
         maxAnalyzeDuration: Int64? = nil,
         sequentialOrigin: Bool = false,
         declaredDurationSeconds: Double? = nil,
-        forwardBufferSegments: Int? = nil
+        forwardBufferSegments: Int? = nil,
+        forwardBufferBytes: Int? = nil
     ) {
         self.sourceURL = url
         self.sourceHTTPHeaders = sourceHTTPHeaders
@@ -734,6 +735,7 @@ public final class HLSVideoEngine: @unchecked Sendable {
         self.customSourceReopenFactory = customSourceReopenFactory
         self.companionAudioReader = companionAudioReader
         self.forwardWindowSegments = Self.clampedForwardWindow(forwardBufferSegments)
+        self.requestedForwardBufferBytes = forwardBufferBytes.map { max(1 << 20, $0) }
     }
 
     /// Session forward-buffer window in segments. Drives BOTH the producer's race-ahead
@@ -741,6 +743,10 @@ public final class HLSVideoEngine: @unchecked Sendable {
     /// (`SegmentCache.forwardWindow`); the two MUST stay identical (a drift is exactly what stalls
     /// AVPlayer, see `SegmentCache`). From `LoadOptions.forwardBufferSegments`; nil -> historical 10.
     let forwardWindowSegments: Int
+
+    /// Host-provided forward-buffer byte limit. Kept separate from the segment
+    /// window so the producer naturally enforces the smaller of the two.
+    private let requestedForwardBufferBytes: Int?
 
     /// Session retention budget resolved in `start()`; also bounds the producer's race-ahead on disk
     /// (#207, see `PrefetchDiskBudget`). Live resolves the same budget, so the DVR history the
@@ -1187,8 +1193,12 @@ public final class HLSVideoEngine: @unchecked Sendable {
             .volumeAvailableCapacityForImportantUsage
         #endif
         let capRelaxed = Self.retentionCapRelaxed(forwardWindowSegments: forwardWindowSegments)
-        let retentionBudget = Self.sessionRetentionBudgetBytes(volumeAvailableBytes: availableBytes,
-                                                               capRelaxed: capRelaxed)
+        let safeRetentionBudget = Self.sessionRetentionBudgetBytes(volumeAvailableBytes: availableBytes,
+                                                                   capRelaxed: capRelaxed)
+        let effectiveRequestedForwardBytes = isLiveSession ? nil : requestedForwardBufferBytes
+        let retentionBudget = effectiveRequestedForwardBytes.map {
+            min(safeRetentionBudget, $0)
+        } ?? safeRetentionBudget
         self.retentionBudgetBytes = retentionBudget
         let segmentCache = SegmentCache(forwardWindow: forwardWindowSegments,
                                         retentionBudgetBytes: retentionBudget)
@@ -1197,6 +1207,7 @@ public final class HLSVideoEngine: @unchecked Sendable {
             "[HLSVideoEngine] segment retention budget: \(retentionBudget / (1 << 20)) MiB "
             + "(volumeAvailable=\(availableBytes.map { "\($0 / (1 << 20)) MiB" } ?? "unknown"), "
             + "forwardWindow=\(forwardWindowSegments) seg"
+            + (effectiveRequestedForwardBytes.map { ", requestedForward=\($0 / (1 << 20)) MiB" } ?? "")
             + (capRelaxed ? ", opt-in prefetch: default cap relaxed" : "") + ")",
             category: .session
         )

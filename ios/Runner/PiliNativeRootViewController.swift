@@ -8147,10 +8147,10 @@ private struct PiliNativeSettingsView: View {
           Button("重新加载网络设置", action: model.loadSettings)
         }
       }
-      if matches("播放器 播放 自动播放 下一集 循环 后台 锁屏 默认倍速 双击 暂停 长按 2x 锁定 电量 控件") {
+      if matches("播放器 播放 自动播放 下一集 循环 后台 锁屏 默认倍速 双击 暂停 长按 2x 锁定 电量 控件 缓冲 大小 时长") {
         Section("播放器") {
           NavigationLink(destination: PiliNativePlayerSettingsView()) {
-            settingLabel("播放器设置", subtitle: "播放默认值、手势与横屏控件", icon: "play.rectangle")
+            settingLabel("播放器设置", subtitle: "播放默认值、视频缓冲、手势与横屏控件", icon: "play.rectangle")
           }
         }
       }
@@ -8250,6 +8250,8 @@ private struct PiliNativePlayerSettingsView: View {
   @AppStorage(PiliNativePlayerPreferences.lockKey) private var showLock = true
   @AppStorage(PiliNativePlayerPreferences.statusKey) private var showStatus = true
   @AppStorage(PiliNativePlayerPreferences.hideDelayKey) private var hideDelay = 3.0
+  @AppStorage(PiliNativePlayerPreferences.bufferSizeMBKey) private var bufferSizeMB = 128
+  @AppStorage(PiliNativePlayerPreferences.bufferDurationSecondsKey) private var bufferDurationSeconds = 24
 
   var body: some View {
     Form {
@@ -8267,6 +8269,20 @@ private struct PiliNativePlayerSettingsView: View {
         }
       } header: { Text("播放默认值") } footer: {
         Text("下次打开视频时使用这些默认值，不会更改正在播放的视频。")
+      }
+      Section {
+        Picker("缓冲大小", selection: $bufferSizeMB) {
+          ForEach([64, 128, 256, 512, 1024], id: \.self) { size in
+            Text(size >= 1024 ? "1 GB" : "\(size) MB").tag(size)
+          }
+        }
+        Picker("缓冲时长", selection: $bufferDurationSeconds) {
+          ForEach([16, 24, 40, 60, 120], id: \.self) { seconds in
+            Text(seconds >= 60 ? "\(seconds / 60) 分钟" : "\(seconds) 秒").tag(seconds)
+          }
+        }
+      } header: { Text("视频缓冲") } footer: {
+        Text("实际前向缓冲以大小和时长中先达到的限制为准；数值越大越能抵抗网络波动，但会占用更多临时磁盘空间。下次打开视频时生效。")
       }
       Section {
         Toggle("双击暂停或继续", isOn: $doubleTapPause)
