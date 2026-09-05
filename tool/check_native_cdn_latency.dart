@@ -8,6 +8,33 @@ void check(bool condition, String message) {
 }
 
 Future<void> main() async {
+  final automaticResult = Completer<NativeCDNMeasurement>();
+  var automaticRequests = 0;
+  var manualRequests = 0;
+  final startupRanking = NativeCDNLatency(
+    probe: (url) async {
+      manualRequests++;
+      return NativeCDNMeasurement(url.host, 4, 'ok');
+    },
+    automaticProbe: (url) {
+      automaticRequests++;
+      return automaticResult.future;
+    },
+  );
+  const startupURLs = {'origin': 'https://origin.example/video'};
+  check(startupRanking.choose(startupURLs) == null,
+      'Cold playback must return before the sample completes');
+  startupRanking.choose(startupURLs);
+  check(automaticRequests == 1 && manualRequests == 0,
+      'Concurrent opens share one small sample, with no full download probe');
+  automaticResult.complete(const NativeCDNMeasurement('origin.example', 2, 'ok'));
+  await startupRanking.test(startupURLs);
+  check(startupRanking.choose(startupURLs) == 'origin',
+      'Later opens reuse the automatic ranking');
+  await startupRanking.test(startupURLs, force: true);
+  check(manualRequests == 1,
+      'An explicit retest must run the full measurement after an automatic sample');
+
   const urls = {
     'origin': 'https://origin.example/video?sign=a%2Fb',
     'fast': 'https://fast.example/video?sign=a%2Fb',

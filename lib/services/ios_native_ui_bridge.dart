@@ -77,7 +77,12 @@ final class IOSNativeUIBridge {
   final MainController mainController;
   final _danmakuSettings = NativeDanmakuSettings();
   final List<Worker> _workers = <Worker>[];
-  final _cdnLatency = NativeCDNLatency(probe: measureCdnDownloadSpeed);
+  final _cdnLatency = NativeCDNLatency(
+    probe: measureCdnDownloadSpeed,
+    automaticProbe: (url) => measureCdnDownloadSpeed(
+      url, maxBytes: 128 * 1024, timeout: const Duration(milliseconds: 900),
+    ),
+  );
   List<String> _latencySampleURLs = [];
   DateTime? _latencySampleTime;
   Future<Map<String, dynamic>>? _latencyTest;
@@ -339,45 +344,6 @@ final class IOSNativeUIBridge {
           defaultValue: VideoQuality.super8k.code,
         );
     return 'playback:$aid:$cid:$quality';
-  }
-
-  /// Bounded parallel low-volume sample across the CDN candidates. Returns
-  /// the fastest CDN name, or null when nothing completed in time. This runs
-  /// only when no cached 3-minute ranking exists, and only for the current
-  /// request; the result is used to lead with a good primary URL instead of
-  /// paying a full decoder reload when the default one is throttled.
-  Future<String?> _fastestCdnName(Iterable<String> urls) async {
-    final candidates = _latencyCandidates(urls);
-    if (candidates.isEmpty) return null;
-    final speeds = <String, double>{};
-    await Future.wait(
-      candidates.entries.map((entry) async {
-        final uri = Uri.tryParse(entry.value);
-        if (uri == null || !uri.hasAuthority) return;
-        try {
-          final measurement = await measureCdnDownloadSpeed(
-            uri,
-            maxBytes: 128 * 1024,
-            timeout: const Duration(milliseconds: 900),
-          );
-          if (measurement.status == 'ok' &&
-              (measurement.megabytesPerSecond ?? 0) > 0) {
-            speeds[entry.key] = measurement.megabytesPerSecond!;
-          }
-        } catch (_) {
-          /* A failed sample simply means this CDN is not picked. */
-        }
-      }),
-    );
-    String? best;
-    double? fastest;
-    for (final entry in speeds.entries) {
-      if (fastest == null || entry.value > fastest) {
-        fastest = entry.value;
-        best = entry.key;
-      }
-    }
-    return best;
   }
 
   Future<Map<String, dynamic>> _refreshSection(String? section) async {
@@ -766,19 +732,13 @@ final class IOSNativeUIBridge {
         String? automaticSource;
         final automatic =
             GStorage.setting.get(SettingBoxKey.CDNService) == null;
-        Future<void> prepareSource(Iterable<String> urls) async {
+        void prepareSource(Iterable<String> urls) {
           _latencySampleURLs = urls.where((url) => url.isNotEmpty).toList();
           _latencySampleTime = DateTime.now();
           if (automatic) {
             automaticSource = _cdnLatency.choose(
               _latencyCandidates(_latencySampleURLs),
             );
-            // No fresh ranking yet: run one bounded parallel sample (≈≤0.9 s)
-            // so the primary URL is the fastest host instead of a throttled
-            // default that would trigger a full decoder reload on retry.
-            if (automaticSource == null) {
-              automaticSource = await _fastestCdnName(_latencySampleURLs);
-            }
           }
         }
 
@@ -869,7 +829,7 @@ final class IOSNativeUIBridge {
 
           candidates.sort((a, b) => codecRank(a).compareTo(codecRank(b)));
           final selectedVideo = candidates.first;
-          await prepareSource(selectedVideo.playUrls);
+          prepareSource(selectedVideo.playUrls);
           final videoUrls = <String>[];
           for (final candidate in candidates) {
             for (final url in nativeTrackUrls(candidate.playUrls)) {
@@ -942,7 +902,7 @@ final class IOSNativeUIBridge {
 
         final sourceSegments = response.durl ?? const [];
         if (sourceSegments.isNotEmpty) {
-          await prepareSource(sourceSegments.first.playUrls);
+          prepareSource(sourceSegments.first.playUrls);
         }
         final segments = sourceSegments
             .where((segment) => segment.playUrls.isNotEmpty)

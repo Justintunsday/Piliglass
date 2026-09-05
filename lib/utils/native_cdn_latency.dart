@@ -31,7 +31,7 @@ Future<NativeCDNMeasurement> measureCdnDownloadSpeed(
     ),
   )..options.headers = headers;
   final cancelToken = CancelToken();
-  final start = DateTime.now().microsecondsSinceEpoch;
+  final elapsed = Stopwatch()..start();
   var downloaded = 0;
   var settled = false;
   NativeCDNMeasurement? measurement;
@@ -48,14 +48,23 @@ Future<NativeCDNMeasurement> measureCdnDownloadSpeed(
     cancelToken.cancel();
   }
 
+  // receiveTimeout only bounds gaps between packets. Bound the entire sample
+  // too, including a slow server that keeps trickling bytes indefinitely.
+  final deadline = Timer(timeout, () {
+    final micros = elapsed.elapsedMicroseconds;
+    settle(downloaded > 0 && micros > 0 ? downloaded / micros : null,
+        downloaded > 0 ? 'ok' : 'timeout');
+  });
+
   try {
     await dio.get(
       url.toString(),
       cancelToken: cancelToken,
       options: Options(responseType: ResponseType.bytes),
       onReceiveProgress: (count, total) {
-        downloaded += count;
-        final duration = DateTime.now().microsecondsSinceEpoch - start;
+        // Dio reports the cumulative byte count, not a chunk delta.
+        downloaded = count;
+        final duration = elapsed.elapsedMicroseconds;
         if (duration > timeout.inMicroseconds) {
           if (downloaded > 0) {
             // Original behavior: report the partial sample on timeout.
@@ -70,7 +79,7 @@ Future<NativeCDNMeasurement> measureCdnDownloadSpeed(
     );
     // Response finished before the inbound window was reached.
     if (measurement == null) {
-      final duration = DateTime.now().microsecondsSinceEpoch - start;
+      final duration = elapsed.elapsedMicroseconds;
       if (downloaded > 0 && duration > 0) {
         settle(downloaded / duration, 'ok');
       }
@@ -84,7 +93,7 @@ Future<NativeCDNMeasurement> measureCdnDownloadSpeed(
       } else if (error.type == DioExceptionType.receiveTimeout ||
           error.type == DioExceptionType.connectionTimeout) {
         if (downloaded > 0 && !settled) {
-          settle(downloaded / (DateTime.now().microsecondsSinceEpoch - start), 'ok');
+          settle(downloaded / (elapsed.elapsedMicroseconds), 'ok');
         } else if (!settled) {
           settle(null, 'timeout');
         }
@@ -95,6 +104,7 @@ Future<NativeCDNMeasurement> measureCdnDownloadSpeed(
   } catch (_) {
     if (!settled) settle(null, 'unavailable');
   } finally {
+    deadline.cancel();
     if (!cancelToken.isCancelled) cancelToken.cancel();
     dio.close(force: true);
   }
@@ -126,10 +136,12 @@ class NativeCDNMeasurement {
 class NativeCDNLatency {
   NativeCDNLatency({
     required this.probe,
+    this.automaticProbe,
     this.maxAge = const Duration(minutes: 3),
   });
 
   final Future<NativeCDNMeasurement> Function(Uri) probe;
+  final Future<NativeCDNMeasurement> Function(Uri)? automaticProbe;
   final Duration maxAge;
   final Map<String, NativeCDNMeasurement> measurements = {};
   DateTime? checkedAt;
@@ -165,7 +177,7 @@ class NativeCDNLatency {
       await _pending;
       // A newer video may have different signed URLs/hosts. Don't apply an
       // unrelated in-flight sample to it after the first test completes.
-      if (_sameCandidates(candidates, _pendingCandidates)) return;
+      if (!force && _sameCandidates(candidates, _pendingCandidates)) return;
     }
     if (!force && bestSource(candidates) != null) return;
     _start(candidates);
@@ -175,14 +187,18 @@ class NativeCDNLatency {
   /// Returns a cached winner immediately and refreshes throughput in background.
   String? choose(Map<String, String> candidates) {
     final cached = bestSource(candidates);
-    if (cached == null && _pending == null) _start(candidates);
+    if (cached == null && _pending == null) {
+      _start(candidates, sample: automaticProbe);
+    }
     return cached;
   }
 
   bool _sameCandidates(Map<String, String> a, Map<String, String> b) =>
       a.length == b.length && a.entries.every((e) => b[e.key] == e.value);
 
-  void _start(Map<String, String> candidates) {
+  void _start(Map<String, String> candidates, {
+    Future<NativeCDNMeasurement> Function(Uri)? sample,
+  }) {
     if (candidates.isEmpty) return;
     _pendingCandidates = Map.of(candidates);
     measurements.clear();
@@ -201,7 +217,7 @@ class NativeCDNLatency {
               }
               final result = await probes.putIfAbsent(
                 entry.value,
-                () => probe(uri),
+                () => (sample ?? probe)(uri),
               );
               measurements[entry.key] = result;
             } catch (error) {
