@@ -216,7 +216,7 @@ def production_swift():
     speed = source[source.index('  func cyclePlaybackRate() {'):source.index('  func selectQuality(')]
     controls = source[source.index('private final class PiliNativePlayerGradientView:'):
                       source.index('struct PiliNativePlayerView:')]
-    preferences = source[source.index('enum PiliNativePlayerPreferences {'):
+    preferences = source[source.index('enum PiliNativePlaybackEndMode:'):
                          source.index('@MainActor\nfinal class PiliNativePlayerSession')]
     return FIXTURES.replace('// PRODUCTION_SPEED_METHODS', speed) + preferences + controls
 

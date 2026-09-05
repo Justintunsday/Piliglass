@@ -43,13 +43,13 @@ private final class PiliNativeViewModel: ObservableObject {
   let playbackSource = "auto"
   let automaticPlaybackSource: String? = "ali"
   let playbackSources = [
-    PiliNativePlaybackSourceOption(value: "auto", label: "自动（选择延迟最低的线路）", latencyMS: nil, latencyState: "untested"),
-    PiliNativePlaybackSourceOption(value: "baseUrl", label: "基础URL（不推荐）", latencyMS: 240, latencyState: "ok"),
-    PiliNativePlaybackSourceOption(value: "backupUrl", label: "备用URL", latencyMS: 130, latencyState: "ok"),
-    PiliNativePlaybackSourceOption(value: "ali", label: "ali（阿里云）", latencyMS: 42, latencyState: "ok"),
-    PiliNativePlaybackSourceOption(value: "cos", label: "cos（腾讯云）", latencyMS: 66, latencyState: "ok"),
-    PiliNativePlaybackSourceOption(value: "hw", label: "hw（华为云，融合CDN）", latencyMS: nil, latencyState: "timeout"),
-    PiliNativePlaybackSourceOption(value: "akamai", label: "akamai（Akamai海外）", latencyMS: nil, latencyState: "unavailable"),
+    PiliNativePlaybackSourceOption(value: "auto", label: "自动（选择下载最快的线路）", speedText: "", latencyState: "untested"),
+    PiliNativePlaybackSourceOption(value: "baseUrl", label: "基础URL（不推荐）", speedText: "1.2 MB/s", latencyState: "ok"),
+    PiliNativePlaybackSourceOption(value: "backupUrl", label: "备用URL", speedText: "2.8 MB/s", latencyState: "ok"),
+    PiliNativePlaybackSourceOption(value: "ali", label: "ali（阿里云）", speedText: "8.6 MB/s", latencyState: "ok"),
+    PiliNativePlaybackSourceOption(value: "cos", label: "cos（腾讯云）", speedText: "6.4 MB/s", latencyState: "ok"),
+    PiliNativePlaybackSourceOption(value: "hw", label: "hw（华为云，融合CDN）", speedText: "", latencyState: "timeout"),
+    PiliNativePlaybackSourceOption(value: "akamai", label: "akamai（Akamai海外）", speedText: "", latencyState: "unavailable"),
   ]
   let playbackSourceSaving = false, playbackLatencyTesting = false
   let playbackLatencyError: String? = nil
