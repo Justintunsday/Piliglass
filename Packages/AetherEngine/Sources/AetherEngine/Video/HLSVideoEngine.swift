@@ -859,6 +859,11 @@ public final class HLSVideoEngine: @unchecked Sendable {
         return HLSVideoEngineError.openFailed(reason: "\(error)")
     }
 
+    static func skipsCuePrewarm(containerFormatName: String?) -> Bool {
+        let formats = Set((containerFormatName ?? "").lowercased().split(separator: ","))
+        return !formats.isDisjoint(with: ["mov", "mp4", "m4a", "3gp", "3g2", "mj2"])
+    }
+
     public func start() throws -> URL {
         guard demuxer == nil else { throw HLSVideoEngineError.alreadyStarted }
 
@@ -949,6 +954,11 @@ public final class HLSVideoEngine: @unchecked Sendable {
             //    uniform-stride plan for the price of two segment downloads at every session start.
             if dem.timeSeekableReader != nil {
                 EngineLog.emit("[HLSVideoEngine] cue prewarm: skipped for a segmented source (no index to load, every reposition refetches a segment)")
+            } else if Self.skipsCuePrewarm(containerFormatName: dem.containerFormatName) {
+                // MOV/MP4 exposes its sample index through moov/sidx. Seeking
+                // mid-file can scan remote DASH fragments without discovering
+                // MKV cues. Sparse indexes use the uniform plan below instead.
+                EngineLog.emit("[HLSVideoEngine] cue prewarm: skipped for MOV/MP4")
             } else {
                 let prewarmStart = DispatchTime.now()
                 let prewarmOK = dem.seekBounded(to: durationSeconds * 0.5, timeout: Self.cuePrewarmTimeout)
@@ -1162,11 +1172,8 @@ public final class HLSVideoEngine: @unchecked Sendable {
             hevcExtradataOverride = nil
         }
 
-        // 6. Reset demuxer cursor to 0 (cue prewarm moved it mid-file). Skipped for live
-        //    (no prewarm, forward-only feed).
-        if !isLiveSession {
-            dem.seek(to: 0)
-        }
+        // Position once immediately before starting the producer. Resetting
+        // here before a resume seek needlessly reopens the remote range.
 
         // volumeAvailableCapacityForImportantUsage is unavailable on tvOS; the plain capacity key
         // exists on every platform and is close enough for the quarter-of-free-space clamp.
@@ -1653,6 +1660,8 @@ public final class HLSVideoEngine: @unchecked Sendable {
                 let tb = savedVideoConfig?.timeBase ?? AVRational(num: 1, den: 1000)
                 dem.seek(to: Double(targetPts) * Double(tb.num) / Double(tb.den))
             }
+        } else if !isLiveSession {
+            dem.seek(to: 0)
         }
         prod.start()
 
