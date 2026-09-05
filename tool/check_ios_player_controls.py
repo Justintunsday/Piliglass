@@ -36,6 +36,10 @@ final class AetherPlayerView: UIView {
   required init?(coder: NSCoder) { fatalError() }
 }
 struct PiliNativePlayerQuality { let value: Int; let label: String }
+struct PiliNativeSubtitleOption: Identifiable, Equatable {
+  let id: String
+  let label: String
+}
 final class PiliNativeDanmakuView: UIView {
   func applySettings(_ settings: Int) {}
   func clear() {}
@@ -62,6 +66,8 @@ final class PiliNativePlayerSession: ObservableObject {
   let danmakuSettingsLoaded = true
   @Published var qualityLabel = "720P"
   @Published var qualities = [PiliNativePlayerQuality(value: 64, label: "720P")]
+  @Published var subtitleOptions = [PiliNativeSubtitleOption(id: "zh-CN", label: "中文")]
+  @Published var selectedSubtitleID: String?
   @Published var playbackRate: Float = 1.5
   @Published var temporaryDoubleSpeedActive = false
   private var playbackRateBeforeHold: Float?
@@ -89,9 +95,11 @@ final class PiliNativePlayerSession: ObservableObject {
     isPlaying = autoplay ?? isPlaying
   }
   func selectQuality(_ value: Int) {}
+  func selectSubtitle(_ id: String?) { selectedSubtitleID = id }
   func requestVideoAction(_ action: String) {}
   func requestDanmakuSend(_ content: String) {}
   func toggleFullscreenComments() {}
+  func updateNowPlayingInfo(force: Bool = false) {}
   // PRODUCTION_SPEED_METHODS
 }
 @main

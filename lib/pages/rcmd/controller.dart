@@ -6,6 +6,7 @@ import 'package:PiliPlus/utils/storage_pref.dart';
 class RcmdController extends CommonListController {
   late bool enableSaveLastData = Pref.enableSaveLastData;
   final bool appRcmd = Pref.appRcmd;
+  late bool personalizedRcmd = Pref.personalizedRcmd;
 
   int? lastRefreshAt;
   late bool savedRcmdTip = Pref.savedRcmdTip;
@@ -23,8 +24,15 @@ class RcmdController extends CommonListController {
   @override
   Future<LoadingState> customGetData() {
     return appRcmd
-        ? VideoHttp.rcmdVideoListApp(freshIdx: page)
-        : VideoHttp.rcmdVideoList(freshIdx: page, ps: 20);
+        ? VideoHttp.rcmdVideoListApp(
+            freshIdx: page,
+            personalized: personalizedRcmd,
+          )
+        : VideoHttp.rcmdVideoList(
+            freshIdx: page,
+            ps: 20,
+            personalized: personalizedRcmd,
+          );
   }
 
   @override
@@ -55,5 +63,20 @@ class RcmdController extends CommonListController {
     page = 0;
     isEnd = false;
     return queryData();
+  }
+
+  Future<void> setPersonalizedRecommendations(bool value) async {
+    if (personalizedRcmd == value) return;
+    personalizedRcmd = value;
+    lastRefreshAt = null;
+    // Do not mix recommendations produced under the previous privacy mode
+    // into the replacement feed, even when "保留首页推荐刷新" is enabled.
+    final retainPreviousFeed = enableSaveLastData;
+    enableSaveLastData = false;
+    try {
+      await onRefresh();
+    } finally {
+      enableSaveLastData = retainPreviousFeed;
+    }
   }
 }

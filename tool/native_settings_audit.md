@@ -17,7 +17,7 @@ removing a control does not erase unrelated user data.
 | Default resolution | Existing Hive key; native playback request |
 | CDN, live CDN, audio CDN | Existing Hive keys and VideoUtils resolver; existing latency service |
 | Guest 1080P | Existing `p1080` key; native playback `tryLook` request |
-| App recommendation source / retained recommendations | Existing keys; RcmdController |
+| App recommendation source / personalization / retained recommendations | Existing keys; RcmdController |
 | Dynamic unread check | Existing key; MainController |
 
 The legacy bridge list was reduced from 49 toggles to 5 verified shared-service

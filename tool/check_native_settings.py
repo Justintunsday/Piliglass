@@ -6,6 +6,7 @@ import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
 STUBS = r'''
+void unawaited(Future<void>? future) {}
 class NativeCDNMeasurement {
   final String host;
   final double? megabytesPerSecond;
@@ -25,7 +26,12 @@ class Box {
 class GStorage { static final setting = Box(); }
 class Home {
   bool enableSaveLastData = true;
+  bool personalizedRcmd = true;
   DateTime? lastRefreshAt = DateTime(2026);
+  Future<void> onRefresh() async {}
+  Future<void> setPersonalizedRecommendations(bool value) async {
+    personalizedRcmd = value;
+  }
 }
 class Main { bool checkDynamic = true; }
 class VideoUtils { static bool disableAudioCDN = false; }
@@ -69,6 +75,9 @@ Future<void> main() async {
   expect(!bridge.mainController.checkDynamic, 'unread check must immediately update the active controller');
   await save(SettingBoxKey.disableAudioCDN, false);
   expect(!VideoUtils.disableAudioCDN, 'audio CDN selection must update the playback URL resolver');
+  await save(SettingBoxKey.personalizedRcmd, false);
+  expect(!bridge._homeController.personalizedRcmd,
+    'personalized recommendation setting must update the active feed controller');
   print('$checks native settings checks passed');
 }
 '''

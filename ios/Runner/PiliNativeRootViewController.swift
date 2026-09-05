@@ -3874,7 +3874,7 @@ private struct PiliNativeHomeView: View {
 
   var body: some View {
     NavigationStack {
-      Group {
+      SwiftUI.Group {
         if model.homeLoading && model.homeVideos.isEmpty {
           PiliNativeLoadingView(title: "正在加载推荐")
         } else if let error = model.homeError, model.homeVideos.isEmpty {

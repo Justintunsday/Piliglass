@@ -1355,6 +1355,14 @@ final class IOSNativeUIBridge {
       'needsRestart': true,
     },
     {
+      'key': SettingBoxKey.personalizedRcmd,
+      'title': '个性化推荐',
+      'subtitle': '根据账号的观看、点赞和关注记录调整首页推荐',
+      'group': '推荐与搜索',
+      'icon': 'person.crop.circle.badge.checkmark',
+      'default': true,
+    },
+    {
       'key': SettingBoxKey.enableSaveLastData,
       'title': '保留上次推荐内容',
       'subtitle': '下拉刷新时保留上一次推荐',
@@ -1443,6 +1451,8 @@ final class IOSNativeUIBridge {
       mainController.checkDynamic = value;
     } else if (key == SettingBoxKey.disableAudioCDN) {
       VideoUtils.disableAudioCDN = value;
+    } else if (key == SettingBoxKey.personalizedRcmd) {
+      unawaited(_homeController.setPersonalizedRecommendations(value));
     }
     return _nativeSettingsSnapshot();
   }

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:PiliPlus/http/video.dart';
 import 'package:PiliPlus/pages/rcmd/controller.dart';
 import 'package:PiliPlus/pages/setting/models/model.dart';
@@ -15,6 +17,22 @@ List<SettingsModel> get recommendSettings => [
     setKey: SettingBoxKey.appRcmd,
     defaultVal: true,
     needReboot: true,
+  ),
+  SwitchModel(
+    title: '个性化推荐',
+    subtitle: '根据账号的观看、点赞和关注记录调整首页推荐；关闭后使用非个性化推荐',
+    leading: const Icon(Icons.person_search_outlined),
+    setKey: SettingBoxKey.personalizedRcmd,
+    defaultVal: true,
+    onChanged: (value) {
+      try {
+        unawaited(
+          Get.find<RcmdController>().setPersonalizedRecommendations(value),
+        );
+      } catch (e) {
+        if (kDebugMode) debugPrint('$e');
+      }
+    },
   ),
   SwitchModel(
     title: '保留首页推荐刷新',

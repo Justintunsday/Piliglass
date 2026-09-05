@@ -53,6 +53,7 @@ abstract final class VideoHttp {
   static Future<LoadingState<List<RcmdVideoItemModel>>> rcmdVideoList({
     required int ps,
     required int freshIdx,
+    bool personalized = true,
   }) async {
     final res = await Request().get(
       Api.recommendListWeb,
@@ -64,6 +65,7 @@ abstract final class VideoHttp {
         'fresh_idx': freshIdx,
         'brush': freshIdx,
         'fresh_type': 4,
+        'disable_rcmd': personalized ? 0 : 1,
       }),
     );
     if (res.data['code'] == 0) {
@@ -88,6 +90,7 @@ abstract final class VideoHttp {
   // 添加额外的loginState变量模拟未登录状态
   static Future<LoadingState<List<RcmdVideoItemAppModel>>> rcmdVideoListApp({
     required int freshIdx,
+    bool personalized = true,
   }) async {
     final params = {
       'build': 2001100,
@@ -97,7 +100,7 @@ abstract final class VideoHttp {
       'device': 'pad',
       'device_name': 'android',
       'device_type': 0,
-      'disable_rcmd': 0,
+      'disable_rcmd': personalized ? 0 : 1,
       'flush': 5,
       'fnval': 976,
       'fnver': 0,
