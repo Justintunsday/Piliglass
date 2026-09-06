@@ -13,4 +13,9 @@ struct MP4StartupTests {
         #expect(!HLSVideoEngine.skipsCuePrewarm(containerFormatName: "mpegts"))
         #expect(!HLSVideoEngine.skipsCuePrewarm(containerFormatName: nil))
     }
+
+    @Test func shortVodSegmentsDoNotChangeLiveCadence() {
+        #expect(HLSVideoEngine.targetSegmentDuration == 2)
+        #expect(HLSVideoEngine.liveCutTargetSeconds(for: .standard) == 4)
+    }
 }

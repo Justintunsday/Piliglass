@@ -346,7 +346,7 @@ public struct LoadOptions: Sendable, Equatable {
     /// are overlay-only until the next load. Default empty.
     public var externalSubtitles: [ExternalSubtitleTrack]
 
-    /// Forward-buffer window of the loopback HLS session, in segments (one segment ~ 4 s): how far the
+    /// Forward-buffer window of the loopback HLS session, in segments (PiliGlass VOD uses ~2 s): how far the
     /// producer may race ahead of the playhead AND how many forward segments the on-disk cache keeps
     /// resident (the two are coupled by construction, see `SegmentCache`). Larger values buffer more of
     /// the source up front (network-dropout robustness) at the cost of disk (segments are disk-backed,

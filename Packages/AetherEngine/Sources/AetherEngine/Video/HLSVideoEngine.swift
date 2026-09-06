@@ -599,9 +599,16 @@ public final class HLSVideoEngine: @unchecked Sendable {
     private var hasReportedHDR10Plus = false
     private let hdr10PlusLock = NSLock()
 
-    /// Target segment duration (4 s). Apple spec recommends 6 s; 4 s cuts ~370 ms first-segment
-    /// latency on a 24 fps 1440p LAN source and stays within the spec's 2-6 s range.
-    static let targetSegmentDuration: Double = 4.0
+    /// VOD target segment duration. PiliGlass opens remote DASH fragments, so
+    /// the first segment is on the critical path to the first frame. Two
+    /// seconds stays inside Apple's normal HLS range while roughly halving the
+    /// media that must be read and remuxed before AVPlayer can start.
+    static let targetSegmentDuration: Double = 2.0
+
+    /// Keep the established live cadence independent from the VOD startup
+    /// optimization. Reducing live segments changes hold-back and reload
+    /// behavior, which is unrelated to opening a Bilibili VOD.
+    static let standardLiveCutTargetSeconds: Double = 4.0
 
     /// Live cut target under `LiveJoinProfile.fastZap` (AE#195): cut at every keyframe past 0.5 s, so
     /// segments quantize to the source GOP and the served TARGETDURATION (whose 3 x holdback gates the
@@ -612,7 +619,7 @@ public final class HLSVideoEngine: @unchecked Sendable {
     /// Resolve a host `LiveJoinProfile` to the live segment cut target.
     static func liveCutTargetSeconds(for profile: LiveJoinProfile) -> Double {
         switch profile {
-        case .standard: return targetSegmentDuration
+        case .standard: return standardLiveCutTargetSeconds
         case .fastZap: return fastZapLiveCutTargetSeconds
         }
     }

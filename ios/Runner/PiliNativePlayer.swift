@@ -832,7 +832,9 @@ enum PiliNativePlayerPreferences {
     return [16, 24, 40, 60, 120].contains(value) ? value : 24
   }
   static var forwardBufferSegments: Int {
-    max(4, Int(ceil(Double(bufferDurationSeconds) / 4.0)))
+    // Aether's PiliGlass VOD path uses two-second segments. Preserve the
+    // selected time window after shortening segments for faster first frame.
+    max(4, Int(ceil(Double(bufferDurationSeconds) / 2.0)))
   }
   static var forwardBufferBytes: Int {
     bufferSizeMB * (1 << 20)
@@ -1793,7 +1795,7 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
                 formatHint: "vtt"
               )
             },
-            // Aether cuts VOD into roughly four-second segments. The engine
+            // Aether cuts PiliGlass VOD into roughly two-second segments. The engine
             // applies both limits and stops prefetching when either the time
             // window or the byte budget is reached.
             forwardBufferSegments: PiliNativePlayerPreferences.forwardBufferSegments,
