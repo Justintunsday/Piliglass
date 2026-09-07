@@ -5245,8 +5245,10 @@ private struct PiliNativeVideoDetailView: View {
         Section { warningCard(video) }
       }
       if video.pages.count > 1 {
-        Section("选集") {
-          nativePartsSection(video)
+        Section {
+           nativePartsSection(video)
+        } header: {
+          Text("选集")
         } footer: {
           Text("共 \(video.pages.count) 个视频")
         }
@@ -5456,6 +5458,7 @@ private struct PiliNativeVideoDetailView: View {
     }
   }
 
+  @ViewBuilder
   private var nativeRelatedSection: some View {
     if model.relatedVideosLoading && model.relatedVideos.isEmpty {
       ProgressView("正在加载相关推荐")
