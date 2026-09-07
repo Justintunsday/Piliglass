@@ -5233,38 +5233,41 @@ private struct PiliNativeVideoDetailView: View {
   }
 
   private func nativeIntroductionPage(_ video: PiliNativeVideoDetail) -> some View {
-    ScrollView {
-      LazyVStack(alignment: .leading, spacing: 0) {
+    List {
+      Section {
         nativeOwnerRow(video)
         nativeTitleAndStats(video)
         nativeActionRow(video)
         if let message = model.videoActionMessage {
           Text(message)
-            .font(.caption)
+            .font(.footnote)
             .foregroundColor(message.contains("失败") || message.contains("登录") ? .red : piliAccent)
-            .frame(maxWidth: .infinity, alignment: .center)
-            .padding(.bottom, 10)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        if !video.argueMessage.isEmpty {
-          warningCard(video)
-        }
-        if video.pages.count > 1 {
-          nativePartsSection(video)
-        }
-        if !video.collectionTitle.isEmpty {
-          nativeCollectionRow(video)
-        }
-        if !video.staff.isEmpty {
-          nativeStaffSection(video)
-        }
-        if !video.tags.isEmpty {
-          nativeTagsSection(video)
-        }
-        if showRelated { nativeRelatedSection }
       }
-      .padding(.bottom, 34)
+
+      if !video.argueMessage.isEmpty {
+        Section { warningCard(video) }
+      }
+      if video.pages.count > 1 {
+        Section("选集") { nativePartsSection(video) }
+      }
+      if !video.collectionTitle.isEmpty {
+        Section("合集") { nativeCollectionRow(video) }
+      }
+      if !video.staff.isEmpty {
+        Section("联合创作") { nativeStaffSection(video) }
+      }
+      if !video.tags.isEmpty {
+        Section("标签") { nativeTagsSection(video) }
+      }
+      if showRelated {
+        Section("相关推荐") { nativeRelatedSection }
+      }
     }
-    .background(Color(UIColor.systemBackground))
+    .listStyle(.insetGrouped)
+    .scrollContentBackground(.hidden)
+    .background(Color(UIColor.systemGroupedBackground))
   }
 
   private func nativeOwnerRow(_ video: PiliNativeVideoDetail) -> some View {
@@ -5592,28 +5595,76 @@ private struct PiliNativeVideoDetailView: View {
   }
 
   private var nativeCommentsPage: some View {
-    ScrollView {
-      VStack(alignment: .leading, spacing: 14) {
+    List {
+      Section {
+        if let error = model.commentsError, !model.comments.isEmpty {
+          Text(error).font(.footnote).foregroundColor(.red)
+        }
+
+        if model.commentsLoading && model.comments.isEmpty {
+          HStack(spacing: 9) {
+            ProgressView()
+            Text("正在加载评论")
+          }
+          .font(.footnote)
+          .foregroundColor(.secondary)
+          .frame(maxWidth: .infinity, minHeight: 70)
+        } else if let error = model.commentsError, model.comments.isEmpty {
+          VStack(spacing: 10) {
+            Text(error).font(.subheadline).foregroundColor(.secondary)
+            Button("重试") { model.refreshCurrentVideoDetail() }
+          }
+          .frame(maxWidth: .infinity, minHeight: 90)
+        } else if model.comments.isEmpty {
+          Text("暂时没有评论")
+            .font(.subheadline)
+            .foregroundColor(.secondary)
+            .frame(maxWidth: .infinity, minHeight: 70)
+        } else {
+          ForEach(model.comments) { comment in
+            PiliNativeCommentRow(
+              comment: comment,
+              openMember: { model.openCommentMember(comment) },
+              toggleLike: { model.toggleCommentLike(comment) },
+              reply: { model.beginCommentReply(comment) },
+              openReplies: { model.openCommentThread(comment) }
+            )
+            .padding(.vertical, 5)
+            .onAppear {
+              if comment.id == model.comments.last?.id {
+                model.loadMoreComments()
+              }
+            }
+          }
+
+          if model.commentsLoadingMore {
+            ProgressView("正在加载更多评论")
+              .font(.footnote)
+              .frame(maxWidth: .infinity)
+              .padding(.vertical, 12)
+          } else if model.commentsHasMore {
+            Button("加载更多评论", action: model.loadMoreComments)
+              .frame(maxWidth: .infinity)
+              .foregroundColor(piliAccent)
+          }
+        }
+      } header: {
         HStack {
           Text("热门评论")
-            .font(.headline)
           if model.commentsTotal > 0 {
-            Text(piliCompactNumber(model.commentsTotal))
-              .font(.caption)
-              .foregroundColor(.secondary)
+            Text(piliCompactNumber(model.commentsTotal)).foregroundColor(.secondary)
           }
           Spacer()
-          Label("按热度", systemImage: "line.3.horizontal.decrease")
-            .font(.caption)
-            .foregroundColor(.secondary)
+          Button(action: model.beginDynamicComment) {
+            Label("写评论", systemImage: "square.and.pencil")
+          }
+          .disabled(model.dynamicActionLoading)
         }
-        PiliNativeCommentsSection(model: model, showsHeader: false)
       }
-      .padding(.horizontal, 16)
-      .padding(.top, 14)
-      .padding(.bottom, 30)
     }
-    .background(Color(UIColor.systemBackground))
+    .listStyle(.insetGrouped)
+    .scrollContentBackground(.hidden)
+    .background(Color(UIColor.systemGroupedBackground))
   }
 
   private var nativeCommentComposerBar: some View {
