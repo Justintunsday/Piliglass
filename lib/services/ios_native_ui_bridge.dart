@@ -3095,7 +3095,7 @@ final class IOSNativeUIBridge {
     Map<dynamic, dynamic> arguments,
   ) async {
     final bvid = arguments['bvid']?.toString();
-    final cids = (arguments['cids'] as? List)
+    final cids = (arguments['cids'] as List?)
             ?.map(_asInt)
             .whereType<int>()
             .toSet() ??
