@@ -264,6 +264,15 @@ private final class PiliNativeViewModel: ObservableObject {
   @Published private(set) var searchLoadingMore = false
   @Published private(set) var searchHasMore = false
   @Published private(set) var searchError: String?
+  @Published private(set) var searchHistory: [String] = []
+  @Published private(set) var searchTrending: [String] = []
+  @Published private(set) var searchRecommendations: [String] = []
+  @Published private(set) var searchSuggestions: [String] = []
+  @Published private(set) var searchDiscoveryLoading = false
+  @Published private(set) var searchDiscoveryError: String?
+  @Published private(set) var searchSubmittedKeyword = ""
+  @Published private(set) var searchSuggestionEnabled = true
+  @Published private(set) var searchRecordHistory = true
 
   @Published var isVideoDetailPresented = false
   @Published private(set) var videoTransitionSourceID: String?
@@ -385,6 +394,7 @@ private final class PiliNativeViewModel: ObservableObject {
   @Published private(set) var pendingVideo: PiliNativeVideo?
   private var searchKeyword = ""
   private var searchPage = 1
+  private var searchSuggestionGeneration = UUID()
   private var libraryPage = 1
   private var libraryMediaID: Int?
   private var libraryNextMax: Int?
@@ -1704,10 +1714,86 @@ private final class PiliNativeViewModel: ObservableObject {
     )
   }
 
+  func loadSearchDiscovery() {
+    guard !searchDiscoveryLoading else { return }
+    searchDiscoveryLoading = true
+    searchDiscoveryError = nil
+    channel.invokeMethod("loadNativeSearchDiscovery", arguments: nil) { [weak self] response in
+      DispatchQueue.main.async {
+        guard let self else { return }
+        self.searchDiscoveryLoading = false
+        if let flutterError = response as? FlutterError {
+          self.searchDiscoveryError = flutterError.message ?? "搜索内容加载失败"
+          return
+        }
+        let result = piliDictionary(response)
+        guard result["state"] as? String == "success" else {
+          self.searchDiscoveryError = piliString(result["error"]) ?? "搜索内容加载失败"
+          return
+        }
+        self.searchHistory = (result["history"] as? [Any])?.compactMap { piliString($0) } ?? []
+        self.searchTrending = self.searchKeywords(from: result["trending"])
+        self.searchRecommendations = self.searchKeywords(from: result["recommendations"])
+        self.searchSuggestionEnabled = piliBool(result["suggestionEnabled"])
+        self.searchRecordHistory = piliBool(result["recordHistory"])
+        self.searchDiscoveryError = nil
+      }
+    }
+  }
+
+  private func searchKeywords(from value: Any?) -> [String] {
+    (value as? [Any])?.compactMap {
+      piliString(piliDictionary($0)["keyword"])
+    } ?? []
+  }
+
+  func updateSearchSuggestions(_ input: String) {
+    let keyword = input.trimmingCharacters(in: .whitespacesAndNewlines)
+    let generation = UUID()
+    searchSuggestionGeneration = generation
+    guard searchSuggestionEnabled, !keyword.isEmpty else {
+      searchSuggestions = []
+      return
+    }
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+      guard let self, self.searchSuggestionGeneration == generation else { return }
+      self.channel.invokeMethod(
+        "loadNativeSearchSuggestions",
+        arguments: ["keyword": keyword]
+      ) { [weak self] response in
+        DispatchQueue.main.async {
+          guard let self, self.searchSuggestionGeneration == generation else { return }
+          let result = piliDictionary(response)
+          guard result["state"] as? String == "success" else { return }
+          self.searchSuggestions = (result["items"] as? [Any])?.compactMap { piliString($0) } ?? []
+        }
+      }
+    }
+  }
+
+  func removeSearchHistory(_ keyword: String) {
+    searchHistory.removeAll { $0 == keyword }
+    channel.invokeMethod(
+      "updateNativeSearchHistory",
+      arguments: ["action": "remove", "keyword": keyword]
+    )
+  }
+
+  func clearSearchHistory() {
+    searchHistory = []
+    channel.invokeMethod("updateNativeSearchHistory", arguments: ["action": "clear"])
+  }
+
   func search(_ keyword: String) {
     let value = keyword.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !value.isEmpty else { return }
     searchKeyword = value
+    searchSubmittedKeyword = value
+    searchSuggestions = []
+    if searchRecordHistory {
+      searchHistory.removeAll { $0 == value }
+      searchHistory.insert(value, at: 0)
+    }
     searchPage = 1
     searchResults = []
     searchHasMore = false
@@ -8675,119 +8761,252 @@ private struct PiliNativeAboutSettingsView: View {
 private struct PiliNativeSearchView: View {
   @ObservedObject var model: PiliNativeViewModel
   @State private var keyword = ""
+  @FocusState private var searchFocused: Bool
+
+  private let keywordColumns = [
+    GridItem(.adaptive(minimum: 132), spacing: 9, alignment: .leading),
+  ]
 
   var body: some View {
-    Group {
-      VStack(spacing: 0) {
-        HStack(spacing: 10) {
-          Image(systemName: "magnifyingglass").foregroundColor(.secondary)
-          TextField("搜索视频", text: $keyword, onCommit: submit)
-            .textFieldStyle(PlainTextFieldStyle())
-            .autocapitalization(.none)
-            .disableAutocorrection(true)
-          if !keyword.isEmpty {
-            Button(action: { keyword = "" }) {
-              Image(systemName: "xmark.circle.fill").foregroundColor(.secondary)
-            }
+    VStack(spacing: 0) {
+      HStack(spacing: 10) {
+        Image(systemName: "magnifyingglass").foregroundColor(.secondary)
+        TextField("搜索视频", text: $keyword, onCommit: submit)
+          .textFieldStyle(PlainTextFieldStyle())
+          .autocapitalization(.none)
+          .disableAutocorrection(true)
+          .focused($searchFocused)
+        if !keyword.isEmpty {
+          Button {
+            keyword = ""
+            model.updateSearchSuggestions("")
+            searchFocused = true
+          } label: {
+            Image(systemName: "xmark.circle.fill").foregroundColor(.secondary)
           }
         }
-        .padding(.horizontal, 12)
-        .frame(height: 38)
-        .background(Color(UIColor.secondarySystemBackground))
-        .cornerRadius(10)
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
+      }
+      .padding(.horizontal, 12)
+      .frame(height: 38)
+      .background(Color(UIColor.secondarySystemBackground))
+      .cornerRadius(10)
+      .padding(.horizontal, 14)
+      .padding(.vertical, 10)
 
-        Divider()
+      Divider()
 
-        if model.searchLoading && model.searchResults.isEmpty {
-          PiliNativeLoadingView(title: "正在搜索")
-        } else if let error = model.searchError, model.searchResults.isEmpty {
-          PiliNativeErrorView(message: error, retry: submit)
-        } else if model.searchResults.isEmpty {
-          VStack(spacing: 10) {
-            Image(systemName: "magnifyingglass")
-              .font(.system(size: 34))
-              .foregroundColor(.secondary)
-            Text("输入关键词搜索视频")
-              .font(.subheadline)
-              .foregroundColor(.secondary)
+      searchContent
+    }
+    .navigationBarTitle("搜索", displayMode: .inline)
+    .navigationBarItems(
+      trailing: Button("搜索", action: submit)
+        .disabled(keyword.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+    )
+    .onAppear {
+      model.loadSearchDiscovery()
+      DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { searchFocused = true }
+    }
+    .onChange(of: keyword) { model.updateSearchSuggestions($0) }
+  }
+
+  @ViewBuilder
+  private var searchContent: some View {
+    let value = keyword.trimmingCharacters(in: .whitespacesAndNewlines)
+    if !value.isEmpty,
+       value != model.searchSubmittedKeyword,
+       !model.searchSuggestions.isEmpty {
+      suggestionsView
+    } else if !value.isEmpty, value == model.searchSubmittedKeyword {
+      searchResultsView
+    } else {
+      discoveryView
+    }
+  }
+
+  private var suggestionsView: some View {
+    ScrollView {
+      LazyVStack(spacing: 0) {
+        ForEach(model.searchSuggestions, id: \.self) { suggestion in
+          Button { selectKeyword(suggestion) } label: {
+            HStack(spacing: 12) {
+              Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+              Text(suggestion).foregroundStyle(.primary)
+              Spacer()
+              Image(systemName: "arrow.up.left").font(.caption).foregroundStyle(.tertiary)
+            }
+            .padding(.horizontal, 18)
+            .frame(minHeight: 44)
+            .contentShape(Rectangle())
           }
-          .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else {
-          ScrollView {
-            LazyVStack(spacing: 0) {
-              ForEach(model.searchResults) { video in
-                Button(action: {
-                  model.openVideo(video, sourceID: "search:\(video.id)")
-                }) {
-                  HStack(alignment: .top, spacing: 12) {
-                    PiliRemoteImage(urlString: video.cover)
-                      .frame(width: 128, height: 72)
-                      .clipped()
-                      .cornerRadius(8)
-                      .piliVideoTransitionSource(id: "search:\(video.id)")
-                    VStack(alignment: .leading, spacing: 6) {
-                      Text(video.title)
-                        .font(.subheadline)
-                        .foregroundColor(.primary)
-                        .lineLimit(2)
-                      Text(video.owner)
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                      if !video.viewText.isEmpty {
-                        Text("\(video.viewText) 播放")
-                          .font(.caption2)
-                          .foregroundColor(.secondary)
-                      }
-                    }
-                    Spacer(minLength: 0)
-                  }
-                  .padding(.horizontal, 14)
-                  .padding(.vertical, 10)
-                  .contentShape(Rectangle())
-                }
-                .buttonStyle(PlainButtonStyle())
-                .onAppear {
-                  if video.id == model.searchResults.last?.id {
-                    model.loadMoreSearchResults()
-                  }
-                }
-                Divider().padding(.leading, 154)
-              }
+          .buttonStyle(.plain)
+          Divider().padding(.leading, 48)
+        }
+      }
+    }
+  }
 
-              if model.searchLoadingMore {
-                ProgressView("正在加载更多视频")
-                  .font(.caption)
-                  .padding(.vertical, 18)
-              } else if let error = model.searchError {
-                VStack(spacing: 8) {
-                  Text(error)
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                  Button("重试加载", action: model.loadMoreSearchResults)
-                    .font(.caption)
-                    .foregroundColor(piliAccent)
-                }
-                .padding(.vertical, 14)
-              } else if model.searchHasMore {
-                Button("加载更多视频", action: model.loadMoreSearchResults)
-                  .font(.caption)
-                  .foregroundColor(piliAccent)
-                  .padding(.vertical, 18)
+  private var discoveryView: some View {
+    ScrollView {
+      LazyVStack(alignment: .leading, spacing: 24) {
+        if model.searchDiscoveryLoading,
+           model.searchTrending.isEmpty,
+           model.searchHistory.isEmpty,
+           model.searchRecommendations.isEmpty {
+          HStack { Spacer(); ProgressView("正在加载搜索内容"); Spacer() }
+            .padding(.top, 32)
+        }
+        if let error = model.searchDiscoveryError {
+          HStack {
+            Text(error).font(.caption).foregroundStyle(.secondary)
+            Spacer()
+            Button("重试", action: model.loadSearchDiscovery)
+          }
+          .padding(12)
+          .background(Color(UIColor.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 10))
+        }
+        if !model.searchTrending.isEmpty {
+          keywordSection(title: "大家都在搜", values: model.searchTrending, numbered: true)
+        }
+        if !model.searchHistory.isEmpty {
+          keywordSection(
+            title: "搜索历史",
+            values: model.searchHistory,
+            clearAction: model.clearSearchHistory
+          )
+        }
+        if !model.searchRecommendations.isEmpty {
+          keywordSection(title: "搜索发现", values: model.searchRecommendations)
+        }
+      }
+      .padding(.horizontal, 16)
+      .padding(.vertical, 18)
+    }
+    .refreshable { model.loadSearchDiscovery() }
+  }
+
+  private func keywordSection(
+    title: String,
+    values: [String],
+    numbered: Bool = false,
+    clearAction: (() -> Void)? = nil
+  ) -> some View {
+    VStack(alignment: .leading, spacing: 12) {
+      HStack {
+        Text(title).font(.headline)
+        Spacer()
+        if let clearAction {
+          Button(action: clearAction) {
+            Label("清空", systemImage: "trash").font(.caption)
+          }
+          .foregroundStyle(.secondary)
+        }
+      }
+      LazyVGrid(columns: keywordColumns, alignment: .leading, spacing: 9) {
+        ForEach(Array(values.enumerated()), id: \.offset) { index, value in
+          Button { selectKeyword(value) } label: {
+            HStack(spacing: 7) {
+              if numbered {
+                Text(String(index + 1))
+                  .font(.caption.bold())
+                  .foregroundColor(index < 3 ? piliAccent : Color(UIColor.secondaryLabel))
+                  .frame(width: 17, alignment: .trailing)
+              }
+              Text(value)
+                .font(.subheadline)
+                .lineLimit(1)
+                .foregroundStyle(.primary)
+              Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 10)
+            .frame(maxWidth: .infinity, minHeight: 36)
+            .background(Color(UIColor.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 8))
+          }
+          .buttonStyle(.plain)
+          .contextMenu {
+            if title == "搜索历史" {
+              Button(role: .destructive) { model.removeSearchHistory(value) } label: {
+                Label("删除记录", systemImage: "trash")
               }
             }
           }
         }
       }
-      .navigationBarTitle("搜索", displayMode: .inline)
-      .navigationBarItems(
-        trailing: Button("搜索", action: submit).disabled(keyword.trimmingCharacters(in: .whitespaces).isEmpty)
-      )
     }
   }
 
+  @ViewBuilder
+  private var searchResultsView: some View {
+    if model.searchLoading && model.searchResults.isEmpty {
+      PiliNativeLoadingView(title: "正在搜索")
+    } else if let error = model.searchError, model.searchResults.isEmpty {
+      PiliNativeErrorView(message: error, retry: submit)
+    } else if model.searchResults.isEmpty {
+      VStack(spacing: 10) {
+        Image(systemName: "magnifyingglass")
+          .font(.system(size: 34))
+          .foregroundColor(.secondary)
+        Text("没有找到相关视频")
+          .font(.subheadline)
+          .foregroundColor(.secondary)
+      }
+      .frame(maxWidth: .infinity, maxHeight: .infinity)
+    } else {
+      ScrollView {
+        LazyVStack(spacing: 0) {
+          ForEach(model.searchResults) { video in
+            Button {
+              model.openVideo(video, sourceID: "search:\(video.id)")
+            } label: {
+              HStack(alignment: .top, spacing: 12) {
+                PiliRemoteImage(urlString: video.cover)
+                  .frame(width: 128, height: 72)
+                  .clipped()
+                  .cornerRadius(8)
+                  .piliVideoTransitionSource(id: "search:\(video.id)")
+                VStack(alignment: .leading, spacing: 6) {
+                  Text(video.title).font(.subheadline).foregroundColor(.primary).lineLimit(2)
+                  Text(video.owner).font(.caption).foregroundColor(.secondary)
+                  if !video.viewText.isEmpty {
+                    Text("\(video.viewText) 播放").font(.caption2).foregroundColor(.secondary)
+                  }
+                }
+                Spacer(minLength: 0)
+              }
+              .padding(.horizontal, 14)
+              .padding(.vertical, 10)
+              .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .onAppear {
+              if video.id == model.searchResults.last?.id { model.loadMoreSearchResults() }
+            }
+            Divider().padding(.leading, 154)
+          }
+          if model.searchLoadingMore {
+            ProgressView("正在加载更多视频").font(.caption).padding(.vertical, 18)
+          } else if let error = model.searchError {
+            VStack(spacing: 8) {
+              Text(error).font(.caption).foregroundColor(.secondary)
+              Button("重试加载", action: model.loadMoreSearchResults)
+                .font(.caption).foregroundColor(piliAccent)
+            }
+            .padding(.vertical, 14)
+          } else if model.searchHasMore {
+            Button("加载更多视频", action: model.loadMoreSearchResults)
+              .font(.caption).foregroundColor(piliAccent).padding(.vertical, 18)
+          }
+        }
+      }
+    }
+  }
+
+  private func selectKeyword(_ value: String) {
+    keyword = value
+    submit()
+  }
+
   private func submit() {
+    searchFocused = false
     model.search(keyword)
   }
 }

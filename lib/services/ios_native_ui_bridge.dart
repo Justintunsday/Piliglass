@@ -57,6 +57,7 @@ import 'package:PiliPlus/utils/native_cdn_latency.dart';
 import 'package:PiliPlus/utils/page_utils.dart';
 import 'package:PiliPlus/utils/storage.dart';
 import 'package:PiliPlus/utils/storage_key.dart';
+import 'package:PiliPlus/utils/storage_pref.dart';
 import 'package:PiliPlus/utils/video_utils.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter/widgets.dart';
@@ -215,6 +216,12 @@ final class IOSNativeUIBridge {
         return _testNativePlaybackSources(_arguments(call));
       case 'searchVideos':
         return _searchVideos(_arguments(call));
+      case 'loadNativeSearchDiscovery':
+        return _loadNativeSearchDiscovery();
+      case 'loadNativeSearchSuggestions':
+        return _loadNativeSearchSuggestions(_arguments(call));
+      case 'updateNativeSearchHistory':
+        return _updateNativeSearchHistory(_arguments(call));
       case 'loadNativeLibrary':
         return _loadNativeLibrary(_arguments(call));
       case 'loadNativeProfile':
@@ -1724,6 +1731,9 @@ final class IOSNativeUIBridge {
     }
 
     final page = _asInt(arguments['page']) ?? 1;
+    if (page == 1 && Pref.recordSearchHistory) {
+      await _saveNativeSearchKeyword(keyword);
+    }
     final result = await SearchHttp.searchByType<SearchVideoData>(
       searchType: SearchType.video,
       keyword: keyword,
@@ -1751,6 +1761,118 @@ final class IOSNativeUIBridge {
             .toList(),
       },
     };
+  }
+
+  Future<Map<String, dynamic>> _loadNativeSearchDiscovery() async {
+    final results = await Future.wait<dynamic>([
+      Pref.enableTrending
+          ? SearchHttp.searchTrending(limit: 10)
+          : Future<dynamic>.value(null),
+      Pref.enableSearchRcmd
+          ? SearchHttp.searchRecommend()
+          : Future<dynamic>.value(null),
+    ]);
+
+    List<Map<String, dynamic>> keywords(dynamic result) {
+      if (result case Success(:final response)) {
+        final items = response.list as List? ?? const [];
+        return items
+            .map<Map<String, dynamic>>(
+              (item) => <String, dynamic>{
+                'keyword': item.keyword?.toString() ?? '',
+                'reason': item.recommendReason?.toString() ?? '',
+                'icon': _normalizeURL(item.icon),
+              },
+            )
+            .where((item) => (item['keyword'] as String).isNotEmpty)
+            .toList();
+      }
+      return const [];
+    }
+
+    return {
+      'state': 'success',
+      'trendingEnabled': Pref.enableTrending,
+      'recommendEnabled': Pref.enableSearchRcmd,
+      'suggestionEnabled': Pref.searchSuggestion,
+      'recordHistory': Pref.recordSearchHistory,
+      'history': List<String>.from(
+        GStorage.historyWord.get('cacheList') ?? const <String>[],
+      ),
+      'trending': keywords(results[0]),
+      'recommendations': keywords(results[1]),
+    };
+  }
+
+  Future<Map<String, dynamic>> _loadNativeSearchSuggestions(
+    Map<dynamic, dynamic> arguments,
+  ) async {
+    if (!Pref.searchSuggestion) {
+      return const {'state': 'success', 'items': <String>[]};
+    }
+    final keyword = _nonEmpty(arguments['keyword']?.toString());
+    if (keyword == null) {
+      return const {'state': 'success', 'items': <String>[]};
+    }
+    final result = await SearchHttp.searchSuggest(term: keyword);
+    return switch (result) {
+      Success(:final response) => {
+        'state': 'success',
+        'items': (response.tag ?? const [])
+            .map((item) => item.term ?? '')
+            .where((item) => item.isNotEmpty)
+            .toList(),
+      },
+      Error(:final errMsg, :final code) => {
+        'state': 'error',
+        'error': errMsg ?? '搜索建议加载失败',
+        'code': ?code,
+      },
+      Loading() => const {'state': 'loading'},
+    };
+  }
+
+  Future<Map<String, dynamic>> _updateNativeSearchHistory(
+    Map<dynamic, dynamic> arguments,
+  ) async {
+    final action = arguments['action']?.toString();
+    final keyword = _nonEmpty(arguments['keyword']?.toString());
+    var history = List<String>.from(
+      GStorage.historyWord.get('cacheList') ?? const <String>[],
+    );
+    switch (action) {
+      case 'add':
+        if (keyword != null && Pref.recordSearchHistory) {
+          history
+            ..remove(keyword)
+            ..insert(0, keyword);
+          await GStorage.historyWord.put('cacheList', history);
+        }
+        break;
+      case 'remove':
+        if (keyword != null) {
+          history.remove(keyword);
+          await GStorage.historyWord.put('cacheList', history);
+        }
+        break;
+      case 'clear':
+        history = [];
+        await GStorage.historyWord.delete('cacheList');
+        break;
+      default:
+        break;
+    }
+    return {'state': 'success', 'history': history};
+  }
+
+  Future<void> _saveNativeSearchKeyword(String keyword) async {
+    final history = List<String>.from(
+      GStorage.historyWord.get('cacheList') ?? const <String>[],
+    );
+    history
+      ..remove(keyword)
+      ..insert(0, keyword);
+    await GStorage.historyWord.put('cacheList', history);
   }
 
   Future<Map<String, dynamic>> _loadNativeLibrary(
