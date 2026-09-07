@@ -2597,6 +2597,9 @@ final class IOSNativeUIBridge {
         if (page == 1 && response.hasUpTop()) response.upTop,
         ...response.replies,
       ];
+      final upMid = response.hasSubjectControl()
+          ? response.subjectControl.upMid.toInt()
+          : 0;
       return {
         'state': 'success',
         'total': response.hasSubjectControl()
@@ -2606,7 +2609,7 @@ final class IOSNativeUIBridge {
             replies.isNotEmpty && !response.cursor.isEnd && nextOffset != null,
         'nextOffset': nextOffset,
         'items': replies.asMap().entries.map((entry) {
-          return _grpcCommentMap(entry.value, entry.key);
+          return _grpcCommentMap(entry.value, entry.key, upMid: upMid);
         }).toList(),
       };
     }
@@ -2762,6 +2765,9 @@ final class IOSNativeUIBridge {
     return switch (result) {
       Success(:final response) => () {
         final replies = response.root.replies;
+        final upMid = response.hasSubjectControl()
+            ? response.subjectControl.upMid.toInt()
+            : 0;
         final nextOffset = response.hasPaginationReply()
             ? _nonEmpty(response.paginationReply.nextOffset)
             : null;
@@ -2774,7 +2780,7 @@ final class IOSNativeUIBridge {
               nextOffset != null,
           'nextOffset': nextOffset,
           'items': replies.asMap().entries.map((entry) {
-            return _grpcCommentMap(entry.value, entry.key);
+            return _grpcCommentMap(entry.value, entry.key, upMid: upMid);
           }).toList(),
         };
       }(),
@@ -2787,7 +2793,11 @@ final class IOSNativeUIBridge {
     };
   }
 
-  Map<String, dynamic> _grpcCommentMap(ReplyInfo item, int index) {
+  Map<String, dynamic> _grpcCommentMap(
+    ReplyInfo item,
+    int index, {
+    int upMid = 0,
+  }) {
     final content = item.content;
     final control = item.replyControl;
     final member = item.member;
@@ -2806,6 +2816,24 @@ final class IOSNativeUIBridge {
       'liked': control.action.toInt() == 1,
       'replyCount': item.count.toInt(),
       'level': member.level.toInt(),
+      'isUp': upMid > 0 && item.mid.toInt() == upMid,
+      'isPinned': control.isUpTop,
+      'mentions': content.atNameToMid.map(
+        (name, mid) => MapEntry(name, mid.toInt()),
+      ),
+      'links': content.urls.entries.map((entry) {
+        final url = entry.value;
+        final target = url.pcUrl.isNotEmpty
+            ? url.pcUrl
+            : url.appUrlSchema.isNotEmpty
+            ? url.appUrlSchema
+            : entry.key;
+        return {
+          'text': entry.key,
+          'title': url.title.isEmpty ? entry.key : url.title,
+          'target': target,
+        };
+      }).toList(),
       'pictures': content.pictures
           .map(
             (picture) => {

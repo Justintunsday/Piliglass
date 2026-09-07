@@ -2238,6 +2238,10 @@ private final class PiliNativeViewModel: ObservableObject {
 
   func openCommentMember(_ comment: PiliNativeComment) {
     guard let memberID = comment.memberID else { return }
+    openCommentMember(memberID)
+  }
+
+  func openCommentMember(_ memberID: Int) {
     if isDynamicDetailPresented {
       isDynamicComposerPresented = false
       isCommentThreadPresented = false
@@ -2249,6 +2253,28 @@ private final class PiliNativeViewModel: ObservableObject {
     DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) { [weak self] in
       self?.presentProfile(memberID)
     }
+  }
+
+  func openCommentLink(_ target: String) {
+    let value = target.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !value.isEmpty else { return }
+    let normalized: String
+    if value.range(of: #"^(?:av\d+|BV[0-9A-Za-z]+)$"#, options: .regularExpression) != nil {
+      normalized = "https://www.bilibili.com/video/\(value)"
+    } else if value.hasPrefix("//") {
+      normalized = "https:\(value)"
+    } else {
+      normalized = value
+    }
+    guard let url = URL(string: normalized) else { return }
+    UIApplication.shared.open(url)
+  }
+
+  func seekFromComment(to seconds: Int) {
+    guard isVideoDetailPresented, seconds >= 0 else { return }
+    let target = TimeInterval(seconds)
+    guard nativePlayerSession.duration <= 0 || target <= nativePlayerSession.duration else { return }
+    nativePlayerSession.seek(to: target)
   }
 
   func openDynamicVideo() {
@@ -3455,8 +3481,12 @@ private struct PiliNativeComment: Identifiable {
   var liked: Bool
   let replyCount: Int
   let level: Int
+  let isUp: Bool
+  let isPinned: Bool
   let pictures: [PiliNativeCommentPicture]
   let emotes: [String: PiliNativeCommentEmote]
+  let mentions: [String: Int]
+  let links: [String: PiliNativeCommentLink]
 
   init(map: [String: Any], index: Int) {
     id = piliString(map["id"]) ?? "comment-\(index)"
@@ -3471,6 +3501,8 @@ private struct PiliNativeComment: Identifiable {
     liked = piliBool(map["liked"])
     replyCount = piliInt(map["replyCount"])
     level = piliInt(map["level"])
+    isUp = piliBool(map["isUp"])
+    isPinned = piliBool(map["isPinned"])
     pictures = (map["pictures"] as? [Any])?.compactMap {
       PiliNativeCommentPicture(value: $0)
     } ?? []
@@ -3492,7 +3524,33 @@ private struct PiliNativeComment: Identifiable {
       )
     }
     emotes = Dictionary(uniqueKeysWithValues: emotePairs)
+    let mentionMap = piliDictionary(map["mentions"])
+    mentions = mentionMap.reduce(into: [:]) { output, entry in
+      if let mid = piliOptionalInt(entry.value), mid > 0 {
+        output[entry.key] = mid
+      }
+    }
+    let linkRows = map["links"] as? [Any] ?? []
+    let linkPairs: [(String, PiliNativeCommentLink)] = linkRows.compactMap { row in
+      let value = piliDictionary(row)
+      guard let text = piliString(value["text"]), !text.isEmpty else { return nil }
+      return (
+        text,
+        PiliNativeCommentLink(
+          text: text,
+          title: piliString(value["title"]) ?? text,
+          target: piliString(value["target"]) ?? text
+        )
+      )
+    }
+    links = Dictionary(uniqueKeysWithValues: linkPairs)
   }
+}
+
+private struct PiliNativeCommentLink: Hashable {
+  let text: String
+  let title: String
+  let target: String
 }
 
 private struct PiliNativeCommentPicture: Hashable {
@@ -5561,7 +5619,10 @@ private struct PiliNativeVideoDetailView: View {
               openMember: { model.openCommentMember(comment) },
               toggleLike: { model.toggleCommentLike(comment) },
               reply: { model.beginCommentReply(comment) },
-              openReplies: { model.openCommentThread(comment) }
+              openReplies: { model.openCommentThread(comment) },
+              openMention: { model.openCommentMember($0) },
+              openLink: { model.openCommentLink($0) },
+              seek: { model.seekFromComment(to: $0) }
             )
             .padding(.vertical, 5)
             .onAppear {
@@ -6335,7 +6396,12 @@ private struct PiliNativeCommentsSection: View {
               openMember: { model.openCommentMember(comment) },
               toggleLike: { model.toggleCommentLike(comment) },
               reply: { model.beginCommentReply(comment) },
-              openReplies: { model.openCommentThread(comment) }
+              openReplies: { model.openCommentThread(comment) },
+              openMention: { model.openCommentMember($0) },
+              openLink: { model.openCommentLink($0) },
+              seek: model.isVideoDetailPresented
+                ? { model.seekFromComment(to: $0) }
+                : nil
             )
             .onAppear {
               if comment.id == model.comments.last?.id {
@@ -6436,7 +6502,12 @@ private struct PiliNativeCommentThreadView: View {
               comment: root,
               openMember: { model.openCommentMember(root) },
               toggleLike: { model.toggleCommentLike(root) },
-              reply: { model.beginCommentReply(root) }
+              reply: { model.beginCommentReply(root) },
+              openMention: { model.openCommentMember($0) },
+              openLink: { model.openCommentLink($0) },
+              seek: model.isVideoDetailPresented
+                ? { model.seekFromComment(to: $0) }
+                : nil
             )
           }
 
@@ -6468,7 +6539,12 @@ private struct PiliNativeCommentThreadView: View {
                   comment: comment,
                   openMember: { model.openCommentMember(comment) },
                   toggleLike: { model.toggleThreadCommentLike(comment) },
-                  reply: { model.beginCommentReply(comment, root: root) }
+                  reply: { model.beginCommentReply(comment, root: root) },
+                  openMention: { model.openCommentMember($0) },
+                  openLink: { model.openCommentLink($0) },
+                  seek: model.isVideoDetailPresented
+                    ? { model.seekFromComment(to: $0) }
+                    : nil
                 )
                 .onAppear {
                   if comment.id == model.commentThreadItems.last?.id {
@@ -6532,20 +6608,22 @@ private struct PiliNativeCommentThreadView: View {
 
 /// Mirrors PiliPlus' original comment renderer: bracketed tokens are matched
 /// against Content.emotes and replaced with an inline image at size * 20pt.
-private final class PiliNativeMultilineLabel: UILabel {
+private final class PiliNativeMultilineTextView: UITextView {
   override func layoutSubviews() {
     super.layoutSubviews()
     let availableWidth = bounds.width
-    if availableWidth > 0 && abs(preferredMaxLayoutWidth - availableWidth) > 0.5 {
-      preferredMaxLayoutWidth = availableWidth
+    if availableWidth > 0 && abs(preferredTextWidth - availableWidth) > 0.5 {
+      preferredTextWidth = availableWidth
       invalidateIntrinsicContentSize()
     }
   }
 
+  private var preferredTextWidth: CGFloat = 0
+
   override var intrinsicContentSize: CGSize {
-    guard preferredMaxLayoutWidth > 0 else { return super.intrinsicContentSize }
+    guard preferredTextWidth > 0 else { return super.intrinsicContentSize }
     return sizeThatFits(
-      CGSize(width: preferredMaxLayoutWidth, height: CGFloat.greatestFiniteMagnitude)
+      CGSize(width: preferredTextWidth, height: CGFloat.greatestFiniteMagnitude)
     )
   }
 }
@@ -6553,8 +6631,13 @@ private final class PiliNativeMultilineLabel: UILabel {
 private struct PiliNativeCommentRichText: UIViewRepresentable {
   let message: String
   let emotes: [String: PiliNativeCommentEmote]
+  let mentions: [String: Int]
+  let links: [String: PiliNativeCommentLink]
   let textStyle: UIFont.TextStyle
   let textColor: UIColor
+  let openMention: ((Int) -> Void)?
+  let openLink: ((String) -> Void)?
+  let seek: ((Int) -> Void)?
 
   private static let imageCache: NSCache<NSURL, UIImage> = {
     let cache = NSCache<NSURL, UIImage>()
@@ -6566,42 +6649,61 @@ private struct PiliNativeCommentRichText: UIViewRepresentable {
   init(
     message: String,
     emotes: [String: PiliNativeCommentEmote],
+    mentions: [String: Int] = [:],
+    links: [String: PiliNativeCommentLink] = [:],
     textStyle: UIFont.TextStyle = .subheadline,
-    textColor: UIColor = .label
+    textColor: UIColor = .label,
+    openMention: ((Int) -> Void)? = nil,
+    openLink: ((String) -> Void)? = nil,
+    seek: ((Int) -> Void)? = nil
   ) {
     self.message = message
     self.emotes = emotes
+    self.mentions = mentions
+    self.links = links
     self.textStyle = textStyle
     self.textColor = textColor
+    self.openMention = openMention
+    self.openLink = openLink
+    self.seek = seek
   }
 
   func makeCoordinator() -> Coordinator {
     Coordinator(parent: self)
   }
 
-  func makeUIView(context: Context) -> UILabel {
-    let label = PiliNativeMultilineLabel()
-    label.backgroundColor = .clear
-    label.numberOfLines = 0
-    label.lineBreakMode = .byWordWrapping
-    label.adjustsFontForContentSizeCategory = true
-    label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-    context.coordinator.label = label
-    return label
+  func makeUIView(context: Context) -> UITextView {
+    let textView = PiliNativeMultilineTextView()
+    textView.backgroundColor = .clear
+    textView.isEditable = false
+    textView.isSelectable = true
+    textView.isScrollEnabled = false
+    textView.adjustsFontForContentSizeCategory = true
+    textView.textContainerInset = .zero
+    textView.textContainer.lineFragmentPadding = 0
+    textView.linkTextAttributes = [
+      .foregroundColor: UIColor(red: 251.0 / 255, green: 114.0 / 255, blue: 153.0 / 255, alpha: 1),
+    ]
+    textView.delegate = context.coordinator
+    textView.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+    context.coordinator.textView = textView
+    return textView
   }
 
-  func updateUIView(_ label: UILabel, context: Context) {
+  func updateUIView(_ textView: UITextView, context: Context) {
     context.coordinator.parent = self
-    context.coordinator.render(in: label)
+    context.coordinator.render(in: textView)
   }
 
-  final class Coordinator {
+  final class Coordinator: NSObject, UITextViewDelegate {
     var parent: PiliNativeCommentRichText
-    weak var label: UILabel?
+    weak var textView: UITextView?
     private var requestedURLs = Set<String>()
     private struct RenderInput: Equatable {
       let message: String
       let emotes: [String: PiliNativeCommentEmote]
+      let mentions: [String: Int]
+      let links: [String: PiliNativeCommentLink]
       let font: UIFont
       let color: UIColor
     }
@@ -6611,11 +6713,12 @@ private struct PiliNativeCommentRichText: UIViewRepresentable {
       self.parent = parent
     }
 
-    func render(in label: UILabel, force: Bool = false) {
+    func render(in textView: UITextView, force: Bool = false) {
       let font = UIFont.preferredFont(forTextStyle: parent.textStyle)
       let input = RenderInput(
-        message: parent.message, emotes: parent.emotes, font: font,
-        color: parent.textColor.resolvedColor(with: label.traitCollection)
+        message: parent.message, emotes: parent.emotes,
+        mentions: parent.mentions, links: parent.links, font: font,
+        color: parent.textColor.resolvedColor(with: textView.traitCollection)
       )
       // Playback/UI updates do not change the comment text. Avoid rebuilding
       // regexes, text attachments and label layout on every such update.
@@ -6627,21 +6730,23 @@ private struct PiliNativeCommentRichText: UIViewRepresentable {
       ]
       let output = NSMutableAttributedString(string: "")
       let source = parent.message as NSString
-      let keys = parent.emotes.keys.sorted { $0.count > $1.count }
-      guard !keys.isEmpty else {
-        label.attributedText = NSAttributedString(
-          string: parent.message,
-          attributes: attributes
-        )
-        label.accessibilityLabel = parent.message
+      let specialTokens = Set(
+        Array(parent.emotes.keys)
+          + parent.mentions.keys.map { "@\($0)" }
+          + Array(parent.links.keys)
+      ).sorted { $0.count > $1.count }
+      var patterns = specialTokens.map { NSRegularExpression.escapedPattern(for: $0) }
+      if parent.seek != nil { patterns.append(#"(?:\d+[:：])?\d+[:：]\d+"#) }
+      if parent.openLink != nil { patterns.append(#"https?://[^\s]+"#) }
+      guard !patterns.isEmpty else {
+        textView.attributedText = NSAttributedString(string: parent.message, attributes: attributes)
+        textView.accessibilityLabel = parent.message
         return
       }
 
-      let pattern = keys
-        .map { NSRegularExpression.escapedPattern(for: $0) }
-        .joined(separator: "|")
+      let pattern = patterns.joined(separator: "|")
       guard let regex = try? NSRegularExpression(pattern: pattern) else {
-        label.attributedText = NSAttributedString(
+        textView.attributedText = NSAttributedString(
           string: parent.message,
           attributes: attributes
         )
@@ -6671,6 +6776,27 @@ private struct PiliNativeCommentRichText: UIViewRepresentable {
         if let emote = parent.emotes[token] {
           output.append(attachment(for: emote, font: font))
           requestImageIfNeeded(emote)
+        } else if token.hasPrefix("@"),
+                  let mid = parent.mentions[String(token.dropFirst())],
+                  let actionURL = actionURL(kind: "mention", value: String(mid)) {
+          var linkAttributes = attributes
+          linkAttributes[.link] = actionURL
+          output.append(NSAttributedString(string: token, attributes: linkAttributes))
+        } else if let link = parent.links[token],
+                  let actionURL = actionURL(kind: "link", value: link.target) {
+          var linkAttributes = attributes
+          linkAttributes[.link] = actionURL
+          output.append(NSAttributedString(string: link.title, attributes: linkAttributes))
+        } else if let seconds = timestampSeconds(token),
+                  let actionURL = actionURL(kind: "seek", value: String(seconds)) {
+          var linkAttributes = attributes
+          linkAttributes[.link] = actionURL
+          output.append(NSAttributedString(string: " \(token) ", attributes: linkAttributes))
+        } else if token.range(of: #"^https?://"#, options: .regularExpression) != nil,
+                  let actionURL = actionURL(kind: "link", value: token) {
+          var linkAttributes = attributes
+          linkAttributes[.link] = actionURL
+          output.append(NSAttributedString(string: token, attributes: linkAttributes))
         } else {
           output.append(NSAttributedString(string: token, attributes: attributes))
         }
@@ -6685,8 +6811,50 @@ private struct PiliNativeCommentRichText: UIViewRepresentable {
           )
         )
       }
-      label.attributedText = output
-      label.accessibilityLabel = parent.message
+      textView.attributedText = output
+      textView.accessibilityLabel = parent.message
+      textView.invalidateIntrinsicContentSize()
+    }
+
+    private func timestampSeconds(_ value: String) -> Int? {
+      guard parent.seek != nil else { return nil }
+      let parts = value.replacingOccurrences(of: "：", with: ":").split(separator: ":")
+      guard parts.count == 2 || parts.count == 3,
+            parts.allSatisfy({ Int($0) != nil }) else { return nil }
+      let numbers = parts.compactMap { Int($0) }
+      if numbers.count == 2 { return numbers[0] * 60 + numbers[1] }
+      return numbers[0] * 3600 + numbers[1] * 60 + numbers[2]
+    }
+
+    private func actionURL(kind: String, value: String) -> URL? {
+      var components = URLComponents()
+      components.scheme = "piliglass-comment"
+      components.host = kind
+      components.queryItems = [URLQueryItem(name: "value", value: value)]
+      return components.url
+    }
+
+    func textView(
+      _ textView: UITextView,
+      shouldInteractWith URL: URL,
+      in characterRange: NSRange,
+      interaction: UITextItemInteraction
+    ) -> Bool {
+      guard URL.scheme == "piliglass-comment",
+            let components = URLComponents(url: URL, resolvingAgainstBaseURL: false),
+            let value = components.queryItems?.first(where: { $0.name == "value" })?.value
+      else { return true }
+      switch URL.host {
+      case "mention":
+        if let mid = Int(value) { parent.openMention?(mid) }
+      case "link":
+        parent.openLink?(value)
+      case "seek":
+        if let seconds = Int(value) { parent.seek?(seconds) }
+      default:
+        return true
+      }
+      return false
     }
 
     private func attachment(
@@ -6733,9 +6901,9 @@ private struct PiliNativeCommentRichText: UIViewRepresentable {
         PiliNativeCommentRichText.imageCache.setObject(image, forKey: url as NSURL, cost: cost)
         DispatchQueue.main.async {
           self.requestedURLs.remove(emote.url)
-          guard let label = self.label else { return }
-          self.render(in: label, force: true)
-          label.invalidateIntrinsicContentSize()
+          guard let textView = self.textView else { return }
+          self.render(in: textView, force: true)
+          textView.invalidateIntrinsicContentSize()
         }
       }.resume()
     }
@@ -6749,19 +6917,28 @@ private struct PiliNativeCommentRow: View {
   let toggleLike: () -> Void
   let reply: () -> Void
   let openReplies: () -> Void
+  let openMention: ((Int) -> Void)?
+  let openLink: ((String) -> Void)?
+  let seek: ((Int) -> Void)?
 
   init(
     comment: PiliNativeComment,
     openMember: @escaping () -> Void,
     toggleLike: @escaping () -> Void,
     reply: @escaping () -> Void = {},
-    openReplies: @escaping () -> Void = {}
+    openReplies: @escaping () -> Void = {},
+    openMention: ((Int) -> Void)? = nil,
+    openLink: ((String) -> Void)? = nil,
+    seek: ((Int) -> Void)? = nil
   ) {
     self.comment = comment
     self.openMember = openMember
     self.toggleLike = toggleLike
     self.reply = reply
     self.openReplies = openReplies
+    self.openMention = openMention
+    self.openLink = openLink
+    self.seek = seek
   }
 
   var body: some View {
@@ -6781,6 +6958,15 @@ private struct PiliNativeCommentRow: View {
           if comment.level > 0 {
             PiliOriginalLevelBadge(level: comment.level, height: 11)
           }
+          if comment.isUp {
+            Text("UP")
+              .font(.system(size: 9, weight: .semibold))
+              .foregroundStyle(.white)
+              .padding(.horizontal, 4)
+              .padding(.vertical, 1)
+              .background(piliAccent, in: RoundedRectangle(cornerRadius: 3))
+              .accessibilityLabel("UP主")
+          }
           Spacer()
           Button(action: toggleLike) {
             Label(comment.like > 0 ? String(comment.like) : "", systemImage: comment.liked ? "hand.thumbsup.fill" : "hand.thumbsup")
@@ -6790,12 +6976,30 @@ private struct PiliNativeCommentRow: View {
           .buttonStyle(.borderless)
         }
 
-        PiliNativeCommentRichText(
-          message: comment.message,
-          emotes: comment.emotes
-        )
+        HStack(alignment: .top, spacing: 5) {
+          if comment.isPinned {
+            Text("TOP")
+              .font(.system(size: 9, weight: .semibold))
+              .foregroundStyle(piliAccent)
+              .padding(.horizontal, 4)
+              .padding(.vertical, 1)
+              .overlay(
+                RoundedRectangle(cornerRadius: 3).stroke(piliAccent, lineWidth: 0.75)
+              )
+              .accessibilityLabel("置顶评论")
+          }
+          PiliNativeCommentRichText(
+            message: comment.message,
+            emotes: comment.emotes,
+            mentions: comment.mentions,
+            links: comment.links,
+            openMention: openMention,
+            openLink: openLink,
+            seek: seek
+          )
           .frame(maxWidth: .infinity, alignment: .leading)
           .fixedSize(horizontal: false, vertical: true)
+        }
 
         if !comment.pictures.isEmpty {
           ScrollView(.horizontal, showsIndicators: false) {
