@@ -105,7 +105,7 @@ jobs:
 
       - name: Build iOS
         run: |
-          flutter build ios --release --no-codesign --dart-define-from-file=pili_release.json --no-pub
+          flutter build ios --release --no-codesign --dart-define-from-file=pili_release.json --no-pub --verbose
           runner_binary="build/ios/iphoneos/Runner.app/Runner"
           aether_ffmpeg_order="$(otool -L "$runner_binary" | grep -n '/Libavcodec.framework/' | head -1 | cut -d: -f1)"
           legacy_ffmpeg_order="$(otool -L "$runner_binary" | grep -n '/Avcodec.framework/' | head -1 | cut -d: -f1)"
