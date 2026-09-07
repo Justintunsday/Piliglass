@@ -34,10 +34,13 @@ import 'package:PiliPlus/models/common/dynamic/dynamics_type.dart';
 import 'package:PiliPlus/models/common/nav_bar_config.dart';
 import 'package:PiliPlus/models/common/search/search_type.dart';
 import 'package:PiliPlus/models/common/video/cdn_type.dart';
+import 'package:PiliPlus/models/common/video/source_type.dart';
 import 'package:PiliPlus/models/common/video/video_quality.dart';
 import 'package:PiliPlus/models/common/video/video_type.dart';
 import 'package:PiliPlus/models/dynamics/result.dart';
 import 'package:PiliPlus/models/search/result.dart';
+import 'package:PiliPlus/models_new/download/bili_download_entry_info.dart';
+import 'package:PiliPlus/models_new/video/video_detail/data.dart';
 import 'package:PiliPlus/pages/dynamics/controller.dart';
 import 'package:PiliPlus/pages/dynamics_tab/controller.dart';
 import 'package:PiliPlus/pages/main/controller.dart';
@@ -258,6 +261,14 @@ final class IOSNativeUIBridge {
         return _loadNativeCommentReplies(_arguments(call));
       case 'loadNativeDownloads':
         return _loadNativeDownloads();
+      case 'loadNativeDownloadOptions':
+        return _loadNativeDownloadOptions(_arguments(call));
+      case 'startNativeDownloads':
+        return _startNativeDownloads(_arguments(call));
+      case 'controlNativeDownload':
+        return _controlNativeDownload(_arguments(call));
+      case 'playNativeDownload':
+        return _playNativeDownload(_arguments(call));
       // Pre-warm playback URLs and subtitle files while the native shell shows
       // the detail page. Responses are memoized for _fetchResultTTL so the
       // later loadNativePlayback/loadNativePlaybackMetadata calls become
@@ -3000,6 +3011,7 @@ final class IOSNativeUIBridge {
           final progress = total > 0 ? item.downloadedBytes / total : 0.0;
           return {
             'id': '${item.cid}-${entry.key}',
+            'cid': item.cid,
             'aid': item.avid,
             'bvid': item.bvid,
             'title': item.showTitle,
@@ -3011,11 +3023,203 @@ final class IOSNativeUIBridge {
                 ? '已缓存'
                 : '${(progress * 100).round()}%',
             'badge': item.qualityPithyDescription,
+            'status': item.status.name,
+            'statusText': item.isCompleted ? '已缓存' : item.status.message,
+            'isCompleted': item.isCompleted,
+            'canPause': service.curDownload.value?.cid == item.cid &&
+                item.status.isDownloading,
+            'canResume': !item.isCompleted && !item.status.isDownloading,
           };
         }).toList(),
       };
     } catch (error) {
       return {'state': 'error', 'error': '离线缓存读取失败：$error'};
+    }
+  }
+
+  Future<Map<String, dynamic>> _loadNativeDownloadOptions(
+    Map<dynamic, dynamic> arguments,
+  ) async {
+    final bvid = arguments['bvid']?.toString();
+    if (bvid == null || bvid.isEmpty) {
+      return const {'state': 'error', 'error': '视频参数无效'};
+    }
+    final result = await VideoHttp.videoIntro(bvid: bvid);
+    return switch (result) {
+      Loading() => const {'state': 'loading'},
+      Error(:final errMsg) => {
+          'state': 'error',
+          'error': errMsg ?? '缓存信息加载失败',
+        },
+      Success(:final response) => await _nativeDownloadOptions(response),
+    };
+  }
+
+  Future<Map<String, dynamic>> _nativeDownloadOptions(
+    VideoDetailData video,
+  ) async {
+    final service = Get.find<DownloadService>();
+    await service.waitForInitialization;
+    final existing = <int>{
+      ...service.downloadList.map((item) => item.cid).whereType<int>(),
+      ...service.waitDownloadQueue.map((item) => item.cid).whereType<int>(),
+    };
+    final defaultQuality = GStorage.setting.get(
+      SettingBoxKey.defaultVideoQa,
+      defaultValue: VideoQuality.high1080.code,
+    );
+    return {
+      'state': 'success',
+      'defaultQuality': defaultQuality,
+      'qualities': VideoQuality.values
+          .map((quality) => {
+                'value': quality.code,
+                'label': quality.desc,
+                'shortLabel': quality.shortDesc,
+              })
+          .toList(),
+      'parts': (video.pages ?? const [])
+          .where((page) => page.cid != null)
+          .map((page) => {
+                'cid': page.cid,
+                'index': page.page,
+                'title': page.part ?? '视频分P',
+                'durationText': _durationText(page.duration ?? 0),
+                'cached': existing.contains(page.cid),
+              })
+          .toList(),
+    };
+  }
+
+  Future<Map<String, dynamic>> _startNativeDownloads(
+    Map<dynamic, dynamic> arguments,
+  ) async {
+    final bvid = arguments['bvid']?.toString();
+    final cids = (arguments['cids'] as? List)
+            ?.map(_asInt)
+            .whereType<int>()
+            .toSet() ??
+        const <int>{};
+    final qualityCode = _asInt(arguments['quality']);
+    final quality = VideoQuality.values
+        .where((item) => item.code == qualityCode)
+        .firstOrNull;
+    if (bvid == null || bvid.isEmpty || cids.isEmpty || quality == null) {
+      return const {'state': 'error', 'error': '请选择要缓存的分P和画质'};
+    }
+    final result = await VideoHttp.videoIntro(bvid: bvid);
+    return switch (result) {
+      Loading() => const {'state': 'loading'},
+      Error(:final errMsg) => {
+          'state': 'error',
+          'error': errMsg ?? '视频信息加载失败',
+        },
+      Success(:final response) => await () async {
+          final service = Get.find<DownloadService>();
+          await service.waitForInitialization;
+          final pages = (response.pages ?? const [])
+              .where((page) => page.cid != null && cids.contains(page.cid))
+              .toList();
+          for (final page in pages) {
+            service.downloadVideo(page, response, null, quality);
+          }
+          return {
+            'state': 'success',
+            'count': pages.length,
+            'message': pages.isEmpty ? '所选视频已在缓存列表中' : '已加入 ${pages.length} 个缓存任务',
+          };
+        }(),
+    };
+  }
+
+  Future<Map<String, dynamic>> _controlNativeDownload(
+    Map<dynamic, dynamic> arguments,
+  ) async {
+    final cid = _asInt(arguments['cid']);
+    final action = arguments['action']?.toString();
+    if (cid == null || action == null) {
+      return const {'state': 'error', 'error': '缓存任务参数无效'};
+    }
+    try {
+      final service = Get.find<DownloadService>();
+      await service.waitForInitialization;
+      final entry = <BiliDownloadEntryInfo>[
+        ...service.downloadList,
+        ...service.waitDownloadQueue,
+      ].where((item) => item.cid == cid).firstOrNull;
+      if (entry == null) {
+        return const {'state': 'error', 'error': '缓存任务不存在'};
+      }
+      switch (action) {
+        case 'pause':
+          if (service.curDownload.value?.cid == cid &&
+              entry.status.isDownloading) {
+            await service.cancelDownload(
+              isDelete: false,
+              downloadNext: false,
+            );
+          }
+          break;
+        case 'resume':
+          await service.startDownload(entry);
+          break;
+        case 'delete':
+          await service.deleteDownload(
+            entry: entry,
+            removeList: service.downloadList.contains(entry),
+            removeQueue: service.waitDownloadQueue.contains(entry),
+          );
+          break;
+        case 'danmaku':
+          final success = await service.downloadDanmaku(
+            entry: entry,
+            isUpdate: true,
+          );
+          if (!success) {
+            return const {'state': 'error', 'error': '弹幕更新失败'};
+          }
+          break;
+        default:
+          return const {'state': 'error', 'error': '不支持的缓存操作'};
+      }
+      return {'state': 'success'};
+    } catch (error) {
+      return {'state': 'error', 'error': '缓存操作失败：$error'};
+    }
+  }
+
+  Future<Map<String, dynamic>> _playNativeDownload(
+    Map<dynamic, dynamic> arguments,
+  ) async {
+    final cid = _asInt(arguments['cid']);
+    if (cid == null) {
+      return const {'state': 'error', 'error': '缓存视频参数无效'};
+    }
+    try {
+      final service = Get.find<DownloadService>();
+      await service.waitForInitialization;
+      final entry = service.downloadList
+          .where((item) => item.cid == cid && item.isCompleted)
+          .firstOrNull;
+      if (entry == null) {
+        return const {'state': 'error', 'error': '视频尚未缓存完成'};
+      }
+      final route = PageUtils.toVideoPage(
+        aid: entry.avid,
+        cid: entry.cid!,
+        cover: entry.cover,
+        title: entry.showTitle,
+        isVertical: entry.pageData?.isVertical ?? false,
+        extraArguments: {
+          'sourceType': SourceType.file,
+          'entry': entry,
+          'dirPath': entry.entryDirPath,
+        },
+      );
+      if (route != null) unawaited(route);
+      return const {'state': 'success'};
+    } catch (error) {
+      return {'state': 'error', 'error': '离线视频打开失败：$error'};
     }
   }
 

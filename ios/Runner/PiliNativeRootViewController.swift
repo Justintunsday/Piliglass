@@ -379,6 +379,15 @@ private final class PiliNativeViewModel: ObservableObject {
   @Published private(set) var downloads: [PiliNativeDownload] = []
   @Published private(set) var downloadsLoading = false
   @Published private(set) var downloadsError: String?
+  @Published var isDownloadOptionsPresented = false
+  @Published private(set) var downloadOptionsLoading = false
+  @Published private(set) var downloadOptionsError: String?
+  @Published private(set) var downloadParts: [PiliNativeDownloadPart] = []
+  @Published private(set) var downloadQualities: [PiliNativeVideoQualityOption] = []
+  @Published var selectedDownloadCIDs: Set<Int> = []
+  @Published var selectedDownloadQuality = 80
+  @Published private(set) var downloadActionLoading = false
+  @Published private(set) var downloadActionMessage: String?
 
   @Published private(set) var comments: [PiliNativeComment] = []
   @Published private(set) var commentsLoading = false
@@ -391,6 +400,7 @@ private final class PiliNativeViewModel: ObservableObject {
   let flutterPlayerSurface: PiliNativeFlutterPlayerSurface
   let nativePlayerSession = PiliNativePlayerSession()
   private var snapshotInFlight = false
+  private var downloadsRefreshInFlight = false
   @Published private(set) var pendingVideo: PiliNativeVideo?
   private var searchKeyword = ""
   private var searchPage = 1
@@ -2146,12 +2156,19 @@ private final class PiliNativeViewModel: ObservableObject {
 
   func presentDownloads() {
     isDownloadsPresented = true
-    downloads = []
+    refreshDownloads(clearExisting: true)
+  }
+
+  func refreshDownloads(clearExisting: Bool = false) {
+    guard !downloadsRefreshInFlight else { return }
+    downloadsRefreshInFlight = true
+    if clearExisting { downloads = [] }
     downloadsError = nil
-    downloadsLoading = true
+    downloadsLoading = downloads.isEmpty
     channel.invokeMethod("loadNativeDownloads", arguments: nil) { [weak self] response in
       DispatchQueue.main.async {
         guard let self = self else { return }
+        self.downloadsRefreshInFlight = false
         self.downloadsLoading = false
         if let flutterError = response as? FlutterError {
           self.downloadsError = flutterError.message ?? "离线缓存读取失败"
@@ -2171,19 +2188,114 @@ private final class PiliNativeViewModel: ObservableObject {
   }
 
   func openDownload(_ download: PiliNativeDownload) {
-    var map: [String: Any] = [
-      "id": download.id,
-      "title": download.title,
-      "owner": download.subtitle,
-      "durationText": "",
-    ]
-    if let aid = download.aid { map["aid"] = aid }
-    if let bvid = download.bvid { map["bvid"] = bvid }
-    if let cover = download.cover { map["cover"] = cover }
-    let video = PiliNativeVideo(map: map, index: 0)
-    isDownloadsPresented = false
-    DispatchQueue.main.asyncAfter(deadline: .now() + 0.18) { [weak self] in
-      self?.openVideo(video)
+    guard download.isCompleted, let cid = download.cid else {
+      controlDownload(download, action: download.canPause ? "pause" : "resume")
+      return
+    }
+    downloadsError = nil
+    channel.invokeMethod("playNativeDownload", arguments: ["cid": cid]) { [weak self] response in
+      DispatchQueue.main.async {
+        guard let self else { return }
+        let result = piliDictionary(response)
+        if result["state"] as? String == "success" {
+          self.isDownloadsPresented = false
+        } else {
+          self.downloadsError = (response as? FlutterError)?.message
+            ?? result["error"] as? String
+            ?? "离线视频打开失败"
+        }
+      }
+    }
+  }
+
+  func controlDownload(_ download: PiliNativeDownload, action: String) {
+    guard let cid = download.cid else { return }
+    channel.invokeMethod(
+      "controlNativeDownload",
+      arguments: ["cid": cid, "action": action]
+    ) { [weak self] response in
+      DispatchQueue.main.async {
+        guard let self else { return }
+        let result = piliDictionary(response)
+        if result["state"] as? String == "success" {
+          self.refreshDownloads()
+        } else {
+          self.downloadsError = (response as? FlutterError)?.message
+            ?? result["error"] as? String
+            ?? "缓存操作失败"
+        }
+      }
+    }
+  }
+
+  func presentDownloadOptions(video: PiliNativeVideoDetail, selectedPart: Int) {
+    guard !video.bvid.isEmpty else { return }
+    isDownloadOptionsPresented = true
+    downloadOptionsLoading = true
+    downloadOptionsError = nil
+    downloadActionMessage = nil
+    downloadParts = []
+    selectedDownloadCIDs = []
+    channel.invokeMethod("loadNativeDownloadOptions", arguments: ["bvid": video.bvid]) { [weak self] response in
+      DispatchQueue.main.async {
+        guard let self else { return }
+        self.downloadOptionsLoading = false
+        let result = piliDictionary(response)
+        guard result["state"] as? String == "success" else {
+          self.downloadOptionsError = (response as? FlutterError)?.message
+            ?? result["error"] as? String
+            ?? "缓存信息加载失败"
+          return
+        }
+        let partRows = result["parts"] as? [Any] ?? []
+        self.downloadParts = partRows.enumerated().map {
+          PiliNativeDownloadPart(map: piliDictionary($0.element), fallbackIndex: $0.offset)
+        }
+        let qualityRows = result["qualities"] as? [Any] ?? []
+        self.downloadQualities = qualityRows.enumerated().compactMap {
+          PiliNativeVideoQualityOption(map: piliDictionary($0.element), index: $0.offset)
+        }
+        let proposedQuality = piliInt(result["defaultQuality"])
+        self.selectedDownloadQuality = self.downloadQualities.contains(where: { $0.value == proposedQuality })
+          ? proposedQuality
+          : (self.downloadQualities.first(where: { $0.value == 80 })?.value
+             ?? self.downloadQualities.last?.value
+             ?? 80)
+        if let current = self.downloadParts.first(where: { $0.index == selectedPart && !$0.cached }) {
+          self.selectedDownloadCIDs = [current.cid]
+        } else if let first = self.downloadParts.first(where: { !$0.cached }) {
+          self.selectedDownloadCIDs = [first.cid]
+        }
+      }
+    }
+  }
+
+  func startSelectedDownloads(video: PiliNativeVideoDetail) {
+    guard !downloadActionLoading, !selectedDownloadCIDs.isEmpty else { return }
+    downloadActionLoading = true
+    downloadActionMessage = nil
+    channel.invokeMethod(
+      "startNativeDownloads",
+      arguments: [
+        "bvid": video.bvid,
+        "cids": Array(selectedDownloadCIDs),
+        "quality": selectedDownloadQuality,
+      ]
+    ) { [weak self] response in
+      DispatchQueue.main.async {
+        guard let self else { return }
+        self.downloadActionLoading = false
+        let result = piliDictionary(response)
+        if result["state"] as? String == "success" {
+          self.downloadActionMessage = result["message"] as? String ?? "已加入缓存任务"
+          self.videoActionMessage = self.downloadActionMessage
+          self.isDownloadOptionsPresented = false
+        } else {
+          self.downloadActionMessage = (response as? FlutterError)?.message
+            ?? result["error"] as? String
+            ?? "加入缓存失败"
+        }
+      }
     }
   }
 
@@ -3673,6 +3785,7 @@ private struct PiliNativeCommentEmote: Hashable {
 
 private struct PiliNativeDownload: Identifiable {
   let id: String
+  let cid: Int?
   let aid: Int?
   let bvid: String?
   let title: String
@@ -3681,9 +3794,14 @@ private struct PiliNativeDownload: Identifiable {
   let progress: Double
   let progressText: String
   let badge: String
+  let statusText: String
+  let isCompleted: Bool
+  let canPause: Bool
+  let canResume: Bool
 
   init(map: [String: Any], index: Int) {
     id = piliString(map["id"]) ?? "download-\(index)"
+    cid = piliOptionalInt(map["cid"])
     aid = piliOptionalInt(map["aid"])
     bvid = piliString(map["bvid"])
     title = piliString(map["title"]) ?? "离线视频"
@@ -3692,6 +3810,28 @@ private struct PiliNativeDownload: Identifiable {
     progress = min(max(piliDouble(map["progress"]), 0), 1)
     progressText = piliString(map["progressText"]) ?? ""
     badge = piliString(map["badge"]) ?? ""
+    statusText = piliString(map["statusText"]) ?? progressText
+    isCompleted = piliBool(map["isCompleted"])
+    canPause = piliBool(map["canPause"])
+    canResume = piliBool(map["canResume"])
+  }
+}
+
+private struct PiliNativeDownloadPart: Identifiable {
+  let cid: Int
+  let index: Int
+  let title: String
+  let durationText: String
+  let cached: Bool
+
+  var id: Int { cid }
+
+  init(map: [String: Any], fallbackIndex: Int) {
+    cid = piliInt(map["cid"])
+    index = piliOptionalInt(map["index"]) ?? fallbackIndex + 1
+    title = piliString(map["title"]) ?? "P\(index)"
+    durationText = piliString(map["durationText"]) ?? ""
+    cached = piliBool(map["cached"])
   }
 }
 
@@ -5410,6 +5550,12 @@ private struct PiliNativeVideoDetailView: View {
         Section("相关推荐") { nativeRelatedSection }
       }
     }
+    .sheet(isPresented: $model.isDownloadOptionsPresented) {
+      if let video = model.videoDetail {
+        PiliNativeDownloadOptionsView(video: video, model: model)
+          .piliEdgeSwipeBack { model.isDownloadOptionsPresented = false }
+      }
+    }
     .listStyle(.insetGrouped)
     .scrollContentBackground(.hidden)
     .background(Color(UIColor.systemGroupedBackground))
@@ -5511,6 +5657,9 @@ private struct PiliNativeVideoDetailView: View {
         }
         Button { model.performVideoAction("share", video: video) } label: {
           PiliNativeVideoMetric(icon: "square.and.arrow.up", value: video.share, title: "分享")
+        }
+        Button { model.presentDownloadOptions(video: video, selectedPart: selectedPart) } label: {
+          PiliNativeVideoMetric(icon: "arrow.down.circle", value: 0, title: "缓存")
         }
       }
       .buttonStyle(.borderless)
@@ -8095,9 +8244,128 @@ private struct PiliQRCodeView: View {
 
 // MARK: - Native downloads
 
+private struct PiliNativeDownloadOptionsView: View {
+  let video: PiliNativeVideoDetail
+  @ObservedObject var model: PiliNativeViewModel
+  @Environment(\.presentationMode) private var presentationMode
+
+  private var availableParts: [PiliNativeDownloadPart] {
+    model.downloadParts.filter { !$0.cached }
+  }
+
+  var body: some View {
+    NavigationView {
+      Group {
+        if model.downloadOptionsLoading {
+          PiliNativeLoadingView(title: "正在读取可缓存内容")
+        } else if let error = model.downloadOptionsError {
+          PiliNativeErrorView(message: error) {
+            model.presentDownloadOptions(video: video, selectedPart: 1)
+          }
+        } else {
+          List {
+            Section("缓存画质") {
+              Picker("最高画质", selection: $model.selectedDownloadQuality) {
+                ForEach(model.downloadQualities) { quality in
+                  Text(quality.label).tag(quality.value)
+                }
+              }
+              .pickerStyle(.menu)
+            }
+
+            Section {
+              if model.downloadParts.isEmpty {
+                Text("没有可缓存的视频分P")
+                  .foregroundStyle(.secondary)
+              } else {
+                ForEach(model.downloadParts) { part in
+                  Button {
+                    guard !part.cached else { return }
+                    if model.selectedDownloadCIDs.contains(part.cid) {
+                      model.selectedDownloadCIDs.remove(part.cid)
+                    } else {
+                      model.selectedDownloadCIDs.insert(part.cid)
+                    }
+                  } label: {
+                    HStack(spacing: 10) {
+                      Image(systemName: part.cached
+                        ? "checkmark.circle.fill"
+                        : model.selectedDownloadCIDs.contains(part.cid)
+                          ? "checkmark.circle.fill"
+                          : "circle")
+                        .foregroundStyle(part.cached ? .secondary : piliAccent)
+                      VStack(alignment: .leading, spacing: 3) {
+                        Text("P\(part.index) · \(part.title)")
+                          .foregroundStyle(.primary)
+                        if !part.durationText.isEmpty {
+                          Text(part.durationText)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        }
+                      }
+                      Spacer()
+                      if part.cached {
+                        Text("已在缓存列表")
+                          .font(.caption)
+                          .foregroundStyle(.secondary)
+                      }
+                    }
+                    .contentShape(Rectangle())
+                  }
+                  .buttonStyle(.plain)
+                  .disabled(part.cached)
+                }
+              }
+            } header: {
+              HStack {
+                Text("选择分P")
+                Spacer()
+                if availableParts.count > 1 {
+                  Button(model.selectedDownloadCIDs.count == availableParts.count ? "取消全选" : "全选") {
+                    if model.selectedDownloadCIDs.count == availableParts.count {
+                      model.selectedDownloadCIDs.removeAll()
+                    } else {
+                      model.selectedDownloadCIDs = Set(availableParts.map(\.cid))
+                    }
+                  }
+                  .textCase(nil)
+                }
+              }
+            }
+
+            if let message = model.downloadActionMessage {
+              Section {
+                Text(message)
+                  .foregroundStyle(message.contains("失败") ? .red : piliAccent)
+              }
+            }
+          }
+          .listStyle(.insetGrouped)
+        }
+      }
+      .navigationBarTitle("离线缓存", displayMode: .inline)
+      .navigationBarItems(
+        leading: Button("取消") { presentationMode.wrappedValue.dismiss() },
+        trailing: Button {
+          model.startSelectedDownloads(video: video)
+        } label: {
+          if model.downloadActionLoading {
+            ProgressView().controlSize(.small)
+          } else {
+            Text("缓存\(model.selectedDownloadCIDs.isEmpty ? "" : "（\(model.selectedDownloadCIDs.count)）")")
+          }
+        }
+        .disabled(model.downloadActionLoading || model.selectedDownloadCIDs.isEmpty)
+      )
+    }
+    .navigationViewStyle(StackNavigationViewStyle())
+  }
+}
+
 private struct PiliNativeDownloadsView: View {
   @ObservedObject var model: PiliNativeViewModel
   @Environment(\.presentationMode) private var presentationMode
+  private let timer = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
 
   var body: some View {
     NavigationView {
@@ -8113,8 +8381,14 @@ private struct PiliNativeDownloadsView: View {
           }
           .refreshable { model.presentDownloads() }
         } else {
-          List(model.downloads) { item in
-            Button(action: { model.openDownload(item) }) {
+          List {
+            if let error = model.downloadsError {
+              Text(error)
+                .font(.footnote)
+                .foregroundStyle(.red)
+            }
+            ForEach(model.downloads) { item in
+              Button(action: { model.openDownload(item) }) {
               HStack(spacing: 11) {
                 PiliRemoteImage(urlString: item.cover)
                   .frame(width: 116, height: 66)
@@ -8135,7 +8409,7 @@ private struct PiliNativeDownloadsView: View {
                   ProgressView(value: item.progress)
                     .tint(piliAccent)
                   HStack {
-                    Text(item.progressText)
+                    Text(item.statusText.isEmpty ? item.progressText : item.statusText)
                     Spacer()
                     Text(item.badge)
                   }
@@ -8146,6 +8420,35 @@ private struct PiliNativeDownloadsView: View {
               .padding(.vertical, 5)
             }
             .buttonStyle(PlainButtonStyle())
+            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+              Button(role: .destructive) {
+                model.controlDownload(item, action: "delete")
+              } label: {
+                Label("删除", systemImage: "trash")
+              }
+            }
+            .contextMenu {
+              if item.canPause {
+                Button { model.controlDownload(item, action: "pause") } label: {
+                  Label("暂停", systemImage: "pause")
+                }
+              } else if item.canResume {
+                Button { model.controlDownload(item, action: "resume") } label: {
+                  Label("继续", systemImage: "play")
+                }
+              }
+              if item.isCompleted {
+                Button { model.controlDownload(item, action: "danmaku") } label: {
+                  Label("更新弹幕", systemImage: "text.bubble")
+                }
+              }
+              Button(role: .destructive) {
+                model.controlDownload(item, action: "delete")
+              } label: {
+                Label("删除缓存", systemImage: "trash")
+              }
+            }
+            }
           }
           .listStyle(PlainListStyle())
           .refreshable { model.presentDownloads() }
@@ -8157,6 +8460,9 @@ private struct PiliNativeDownloadsView: View {
       )
     }
     .navigationViewStyle(StackNavigationViewStyle())
+    .onReceive(timer) { _ in
+      if model.isDownloadsPresented { model.refreshDownloads() }
+    }
   }
 }
 
