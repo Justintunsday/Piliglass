@@ -218,7 +218,7 @@ def production_swift():
     def section(start, end):
         return source[source.index(start):source.index(end, source.index(start))]
     fixtures = FIXTURES.replace('// PRODUCTION_ACCENT', section('private let piliAccent =', 'private extension Notification.Name'))
-    return fixtures + section('private struct PiliNativePrimaryDestinations:', '// MARK: - Root tabs') + section('private struct PiliNativeVideo:', 'private struct PiliNativeVideoPart:') + section(
+    return navigation.home.LOCALIZATION + '\n' + fixtures + section('private struct PiliNativePrimaryDestinations:', '// MARK: - Root tabs') + section('private struct PiliNativeVideo:', 'private struct PiliNativeVideoPart:') + section(
         'private struct PiliNativeLibraryItem:', 'private struct PiliNativeMessage:') + section(
         'private struct PiliNativeComment:', 'private struct PiliNativeDownload:') + section(
         'private struct PiliNativeAccount {', '// MARK: - Native navigation gestures') + section(

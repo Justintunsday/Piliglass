@@ -27,6 +27,11 @@
 		<false/>
 		<key>CFBundleDevelopmentRegion</key>
 		<string>$(DEVELOPMENT_LANGUAGE)</string>
+		<key>CFBundleLocalizations</key>
+		<array>
+			<string>en</string>
+			<string>zh-Hans</string>
+		</array>
 		<key>CFBundleDisplayName</key>
 		<string>PiliPlus</string>
 		<key>CFBundleExecutable</key>

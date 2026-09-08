@@ -11,7 +11,7 @@ import plistlib
 import shutil
 import time
 
-from preview_ios_home import ROOT, run
+from preview_ios_home import ROOT, run, LOCALIZATION, copy_localizations
 
 OUTPUT = ROOT / "build/video-load-check"
 BUNDLE_ID = "dev.piliglass.videoloadcheck"
@@ -229,7 +229,7 @@ def production_swift():
         a = source.index(start)
         return source[a:source.index(end, a)]
 
-    return FIXTURES + section(player, "struct PiliNativeDanmakuRule:", "@MainActor\nfinal class PiliNativePlayerSession") + section(
+    return LOCALIZATION + "\n" + FIXTURES + section(player, "struct PiliNativeDanmakuRule:", "@MainActor\nfinal class PiliNativePlayerSession") + section(
         player, "private final class PiliNativeDanmakuView:", "private final class PiliNativePlayerGradientView:") + section(
         root, "private struct PiliNativeComment:", "private struct PiliNativeDownload:") + section(
         root, "private struct PiliNativeCommentsSection:", "private struct PiliNativeDynamicComposerView:") + section(
@@ -245,6 +245,7 @@ def main():
     swift.write_text(production_swift(), encoding="utf-8")
     app = OUTPUT / "LoadCheck.app"
     app.mkdir(exist_ok=True)
+    copy_localizations(app)
     with (app / "Info.plist").open("wb") as stream:
         plistlib.dump(dict(CFBundleIdentifier=BUNDLE_ID, CFBundleExecutable="LoadCheck",
             CFBundleName="Video Load Check", CFBundlePackageType="APPL", CFBundleVersion="1",

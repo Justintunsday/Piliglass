@@ -547,7 +547,7 @@ final class IOSNativeUIBridge {
       Loading() => const {'state': 'loading'},
       Error(:final errMsg, :final code) => {
         'state': 'error',
-        'error': errMsg ?? '视频简介加载失败',
+        'error': errMsg ?? (DateFormatUtils.isEnglish ? 'Unable to load the video description' : '视频简介加载失败'),
         'code': ?code,
       },
       Success(:final response) => {
@@ -606,7 +606,7 @@ final class IOSNativeUIBridge {
                       'collection-${entry.key}',
                   'aid': item.aid ?? item.arc?.aid,
                   'bvid': item.bvid,
-                  'title': item.arc?.title ?? item.title ?? '未命名视频',
+                  'title': item.arc?.title ?? item.title ?? (DateFormatUtils.isEnglish ? 'Untitled video' : '未命名视频'),
                   'cover': _normalizeURL(item.arc?.pic),
                   'owner': item.arc?.author?.name ?? '',
                   'viewText': _compactNumber(item.arc?.stat?.view),
@@ -669,7 +669,7 @@ final class IOSNativeUIBridge {
     final result = await VideoHttp.relatedVideoList(bvid: bvid);
     return switch (result) {
       Loading() => const {'state': 'loading'},
-      Error(:final errMsg) => {'state': 'error', 'error': errMsg ?? '相关推荐加载失败'},
+      Error(:final errMsg) => {'state': 'error', 'error': errMsg ?? (DateFormatUtils.isEnglish ? 'Could not load related videos' : '相关推荐加载失败')},
       Success(:final response) => {
         'state': 'success',
         'items': (response ?? const []).asMap().entries.map((entry) {
@@ -739,7 +739,7 @@ final class IOSNativeUIBridge {
       Loading() => const {'state': 'loading'},
       Error(:final errMsg, :final code) => {
         'state': 'error',
-        'error': errMsg ?? '播放地址获取失败',
+        'error': errMsg ?? (DateFormatUtils.isEnglish ? 'Unable to get the playback URL' : '播放地址获取失败'),
         'code': ?code,
       },
       Success(:final response) => await () async {
@@ -1132,7 +1132,7 @@ final class IOSNativeUIBridge {
       Loading() => const {'state': 'loading'},
       Error(:final errMsg, :final code) => {
         'state': 'error',
-        'error': errMsg ?? '弹幕加载失败',
+        'error': errMsg ?? (DateFormatUtils.isEnglish ? 'Unable to load danmaku' : '弹幕加载失败'),
         'code': ?code,
       },
       Success(:final response) => {
@@ -1187,7 +1187,7 @@ final class IOSNativeUIBridge {
       Loading() => const {'state': 'loading'},
       Error(:final errMsg, :final code) => {
         'state': 'error',
-        'error': errMsg ?? '弹幕发送失败',
+        'error': errMsg ?? (DateFormatUtils.isEnglish ? 'Could not send danmaku' : '弹幕发送失败'),
         'code': ?code,
       },
       Success(:final response) => {
@@ -1224,7 +1224,7 @@ final class IOSNativeUIBridge {
             },
             Error(:final errMsg) => {
               'state': 'error',
-              'error': errMsg ?? '点赞失败',
+              'error': errMsg ?? (DateFormatUtils.isEnglish ? 'Unable to like' : '点赞失败'),
             },
             _ => const {'state': 'error', 'error': '点赞失败'},
           };
@@ -1234,7 +1234,7 @@ final class IOSNativeUIBridge {
         final result = await VideoHttp.coinVideo(bvid: bvid, multiply: 1);
         return switch (result) {
           Success() => const {'state': 'success', 'message': '投币成功'},
-          Error(:final errMsg) => {'state': 'error', 'error': errMsg ?? '投币失败'},
+          Error(:final errMsg) => {'state': 'error', 'error': errMsg ?? (DateFormatUtils.isEnglish ? 'Unable to send coins' : '投币失败')},
           _ => const {'state': 'error', 'error': '投币失败'},
         };
       case 'favorite':
@@ -1263,7 +1263,7 @@ final class IOSNativeUIBridge {
             },
             Error(:final errMsg) => {
               'state': 'error',
-              'error': errMsg ?? '收藏失败',
+              'error': errMsg ?? (DateFormatUtils.isEnglish ? 'Unable to add to favorites' : '收藏失败'),
             },
             _ => const {'state': 'error', 'error': '收藏失败'},
           };
@@ -1288,7 +1288,7 @@ final class IOSNativeUIBridge {
           },
           Error(:final errMsg) => {
             'state': 'error',
-            'error': errMsg ?? '一键三连失败',
+            'error': errMsg ?? (DateFormatUtils.isEnglish ? 'Unable to like, coin and favorite' : '一键三连失败'),
           },
           _ => const {'state': 'error', 'error': '一键三连失败'},
         };
@@ -1632,7 +1632,7 @@ final class IOSNativeUIBridge {
       },
       Error(:final errMsg, :final code) => {
         'state': 'error',
-        'error': errMsg ?? '动态详情加载失败',
+        'error': errMsg ?? (DateFormatUtils.isEnglish ? 'Could not load activity details' : '动态详情加载失败'),
         'code': ?code,
       },
       Loading() => const {'state': 'loading'},
@@ -1658,7 +1658,7 @@ final class IOSNativeUIBridge {
       Success() => {'state': 'success', 'liked': !liked},
       Error(:final errMsg, :final code) => {
         'state': 'error',
-        'error': errMsg ?? '动态点赞失败',
+        'error': errMsg ?? (DateFormatUtils.isEnglish ? 'Could not like activity' : '动态点赞失败'),
         'code': ?code,
       },
       Loading() => const {'state': 'loading'},
@@ -1689,7 +1689,7 @@ final class IOSNativeUIBridge {
       },
       Error(:final errMsg, :final code) => {
         'state': 'error',
-        'error': errMsg ?? '动态转发失败',
+        'error': errMsg ?? (DateFormatUtils.isEnglish ? 'Could not repost activity' : '动态转发失败'),
         'code': ?code,
       },
       Loading() => const {'state': 'loading'},
@@ -1756,7 +1756,7 @@ final class IOSNativeUIBridge {
       Loading() => const {'state': 'loading'},
       Error(:final errMsg, :final code) => {
         'state': 'error',
-        'error': errMsg ?? '搜索失败',
+        'error': errMsg ?? (DateFormatUtils.isEnglish ? 'Search failed' : '搜索失败'),
         'code': ?code,
       },
       Success(:final response) => {
@@ -1836,7 +1836,7 @@ final class IOSNativeUIBridge {
       },
       Error(:final errMsg, :final code) => {
         'state': 'error',
-        'error': errMsg ?? '搜索建议加载失败',
+        'error': errMsg ?? (DateFormatUtils.isEnglish ? 'Unable to load search suggestions' : '搜索建议加载失败'),
         'code': ?code,
       },
       Loading() => const {'state': 'loading'},
@@ -1947,7 +1947,7 @@ final class IOSNativeUIBridge {
           },
           Error(:final errMsg) => {
             'state': 'error',
-            'error': errMsg ?? '动态加载失败',
+            'error': errMsg ?? (DateFormatUtils.isEnglish ? 'Could not load activity' : '动态加载失败'),
           },
           Loading() => const {'state': 'loading'},
         };
@@ -1976,7 +1976,7 @@ final class IOSNativeUIBridge {
           },
           Error(:final errMsg) => {
             'state': 'error',
-            'error': errMsg ?? '追番加载失败',
+            'error': errMsg ?? (DateFormatUtils.isEnglish ? 'Unable to load followed series' : '追番加载失败'),
           },
           Loading() => const {'state': 'loading'},
         };
@@ -2020,7 +2020,7 @@ final class IOSNativeUIBridge {
         ? const {'state': 'success'}
         : {
             'state': 'error',
-            'error': result.data['message']?.toString() ?? '保存失败',
+            'error': result.data['message']?.toString() ?? (DateFormatUtils.isEnglish ? 'Could not save' : '保存失败'),
           };
   }
 
@@ -2036,7 +2036,7 @@ final class IOSNativeUIBridge {
       Loading() => const {'state': 'loading'},
       Error(:final errMsg, :final code) => {
         'state': 'error',
-        'error': errMsg ?? '个人空间加载失败',
+        'error': errMsg ?? (DateFormatUtils.isEnglish ? 'Unable to load the profile' : '个人空间加载失败'),
         'code': ?code,
       },
       Success(:final response) => () {
@@ -2046,7 +2046,7 @@ final class IOSNativeUIBridge {
           'state': 'success',
           'profile': {
             'mid': mid,
-            'name': card?.name ?? '用户 $mid',
+            'name': card?.name ?? (DateFormatUtils.isEnglish ? 'User $mid' : '用户 $mid'),
             'face': _normalizeURL(card?.face),
             'topImage': _normalizeURL(response.images?.imgUrl),
             'sign': card?.sign ?? '',
@@ -2126,7 +2126,7 @@ final class IOSNativeUIBridge {
       Loading() => const {'state': 'loading'},
       Error(:final errMsg, :final code) => {
         'state': 'error',
-        'error': errMsg ?? '用户投稿加载失败',
+        'error': errMsg ?? (DateFormatUtils.isEnglish ? 'Could not load user videos' : '用户投稿加载失败'),
         'code': ?code,
       },
       Success(:final response) => () {
@@ -2166,7 +2166,7 @@ final class IOSNativeUIBridge {
       Loading() => const {'state': 'loading'},
       Error(:final errMsg, :final code) => {
         'state': 'error',
-        'error': errMsg ?? '登录二维码获取失败',
+        'error': errMsg ?? (DateFormatUtils.isEnglish ? 'Could not get sign-in QR code' : '登录二维码获取失败'),
         'code': ?code,
       },
       Success(:final response) => () {
@@ -2210,7 +2210,7 @@ final class IOSNativeUIBridge {
       }
       return {
         'state': 'waiting',
-        'message': result['msg']?.toString() ?? '等待扫码确认',
+        'message': result['msg']?.toString() ?? (DateFormatUtils.isEnglish ? 'Waiting for QR code confirmation' : '等待扫码确认'),
         'code': ?code,
       };
     } catch (error) {
@@ -2229,7 +2229,7 @@ final class IOSNativeUIBridge {
     );
     return switch (result) {
       Loading() => const {'state': 'loading'},
-      Error(:final errMsg) => {'state': 'error', 'error': errMsg ?? '私信会话加载失败'},
+      Error(:final errMsg) => {'state': 'error', 'error': errMsg ?? (DateFormatUtils.isEnglish ? 'Unable to load conversations' : '私信会话加载失败')},
       Success(:final response) => () {
         _nativeSessionOffsets = response.paginationParams.offsets;
         return {
@@ -2307,7 +2307,7 @@ final class IOSNativeUIBridge {
         Loading() => const {'state': 'loading'},
         Error(:final errMsg) => {
           'state': 'error',
-          'error': errMsg ?? '聊天记录加载失败',
+          'error': errMsg ?? (DateFormatUtils.isEnglish ? 'Could not load chat history' : '聊天记录加载失败'),
         },
         Success(:final response) => () {
           final messages = response.messages
@@ -2418,7 +2418,7 @@ final class IOSNativeUIBridge {
     );
     return switch (result) {
       Success() => const {'state': 'success'},
-      Error(:final errMsg) => {'state': 'error', 'error': errMsg ?? '消息发送失败'},
+      Error(:final errMsg) => {'state': 'error', 'error': errMsg ?? (DateFormatUtils.isEnglish ? 'Could not send message' : '消息发送失败')},
       Loading() => const {'state': 'loading'},
     };
   }
@@ -2440,7 +2440,7 @@ final class IOSNativeUIBridge {
       case Loading():
         return const {'state': 'loading'};
       case Error(:final errMsg):
-        return {'state': 'error', 'error': errMsg ?? '图片上传失败'};
+        return {'state': 'error', 'error': errMsg ?? (DateFormatUtils.isEnglish ? 'Unable to upload the image' : '图片上传失败')};
       case Success(:final response):
         final imageMessage = {
           'url': response.imageUrl,
@@ -2460,7 +2460,7 @@ final class IOSNativeUIBridge {
           Success() => const {'state': 'success'},
           Error(:final errMsg) => {
             'state': 'error',
-            'error': errMsg ?? '图片消息发送失败',
+            'error': errMsg ?? (DateFormatUtils.isEnglish ? 'Could not send image message' : '图片消息发送失败'),
           },
           Loading() => const {'state': 'loading'},
         };
@@ -2484,7 +2484,7 @@ final class IOSNativeUIBridge {
     );
     return switch (result) {
       Success() => const {'state': 'success'},
-      Error(:final errMsg) => {'state': 'error', 'error': errMsg ?? '消息撤回失败'},
+      Error(:final errMsg) => {'state': 'error', 'error': errMsg ?? (DateFormatUtils.isEnglish ? 'Could not recall message' : '消息撤回失败')},
       Loading() => const {'state': 'loading'},
     };
   }
@@ -2554,7 +2554,7 @@ final class IOSNativeUIBridge {
           Loading() => const {'state': 'loading'},
           Error(:final errMsg) => {
             'state': 'error',
-            'error': errMsg ?? '回复消息加载失败',
+            'error': errMsg ?? (DateFormatUtils.isEnglish ? 'Unable to load replies' : '回复消息加载失败'),
           },
           Success(:final response) => {
             'state': 'success',
@@ -2568,14 +2568,14 @@ final class IOSNativeUIBridge {
               return {
                 'id': item.id?.toString() ?? 'reply-${entry.key}',
                 'kind': 'reply',
-                'author': item.user?.nickname ?? '用户',
+                'author': item.user?.nickname ?? (DateFormatUtils.isEnglish ? 'User' : '用户'),
                 'memberId': item.user?.mid,
                 'avatar': _normalizeURL(item.user?.avatar),
-                'body': item.item?.rootReplyContent ?? '回复了你',
+                'body': item.item?.rootReplyContent ?? (DateFormatUtils.isEnglish ? 'Replied to you' : '回复了你'),
                 'context': item.item?.sourceContent ?? '',
                 'time': DateFormatUtils.format(item.replyTime),
                 'badge': item.counts != null && item.counts! > 1
-                    ? '${item.counts} 条回复'
+                    ? (DateFormatUtils.isEnglish ? '${item.counts} replies' : '${item.counts} 条回复')
                     : '回复',
               };
             }).toList(),
@@ -2591,7 +2591,7 @@ final class IOSNativeUIBridge {
           Loading() => const {'state': 'loading'},
           Error(:final errMsg) => {
             'state': 'error',
-            'error': errMsg ?? '@消息加载失败',
+            'error': errMsg ?? (DateFormatUtils.isEnglish ? 'Unable to load mentions' : '@消息加载失败'),
           },
           Success(:final response) => {
             'state': 'success',
@@ -2605,7 +2605,7 @@ final class IOSNativeUIBridge {
               return {
                 'id': item.id?.toString() ?? 'at-${entry.key}',
                 'kind': 'at',
-                'author': item.user?.nickname ?? '用户',
+                'author': item.user?.nickname ?? (DateFormatUtils.isEnglish ? 'User' : '用户'),
                 'memberId': item.user?.mid,
                 'avatar': _normalizeURL(item.user?.avatar),
                 'body': '在内容中提到了你',
@@ -2627,7 +2627,7 @@ final class IOSNativeUIBridge {
           Loading() => const {'state': 'loading'},
           Error(:final errMsg) => {
             'state': 'error',
-            'error': errMsg ?? '点赞消息加载失败',
+            'error': errMsg ?? (DateFormatUtils.isEnglish ? 'Unable to load likes' : '点赞消息加载失败'),
           },
           Success(:final response) => () {
             final items = [
@@ -2659,7 +2659,7 @@ final class IOSNativeUIBridge {
                   'cover': _normalizeURL(item.item?.image),
                   'time': DateFormatUtils.format(item.likeTime),
                   'badge': item.counts != null && item.counts! > 1
-                      ? '${item.counts} 个赞'
+                      ? (DateFormatUtils.isEnglish ? '${item.counts} likes' : '${item.counts} 个赞')
                       : '点赞',
                 };
               }).toList(),
@@ -2673,7 +2673,7 @@ final class IOSNativeUIBridge {
         Loading() => const {'state': 'loading'},
         Error(:final errMsg) => {
           'state': 'error',
-          'error': errMsg ?? '系统通知加载失败',
+          'error': errMsg ?? (DateFormatUtils.isEnglish ? 'Unable to load system notifications' : '系统通知加载失败'),
         },
         Success(:final response) => () {
           final items = response ?? const [];
@@ -2686,7 +2686,7 @@ final class IOSNativeUIBridge {
               return {
                 'id': item.id?.toString() ?? 'system-${entry.key}',
                 'kind': 'system',
-                'author': item.title ?? '系统通知',
+                'author': item.title ?? (DateFormatUtils.isEnglish ? 'System notifications' : '系统通知'),
                 'body': item.content ?? '',
                 'context': '',
                 'time': item.timeAt ?? '',
@@ -2761,7 +2761,7 @@ final class IOSNativeUIBridge {
       Loading() => const {'state': 'loading'},
       Error(:final errMsg, :final code) => {
         'state': 'error',
-        'error': errMsg ?? '评论加载失败',
+        'error': errMsg ?? (DateFormatUtils.isEnglish ? 'Could not load comments' : '评论加载失败'),
         'code': ?code,
       },
       Success(:final response) => () {
@@ -2786,12 +2786,13 @@ final class IOSNativeUIBridge {
               'id': item.rpid?.toString() ?? 'comment-${entry.key}',
               'rpid': item.rpid,
               'memberId': _asInt(item.member?.mid),
-              'author': item.member?.uname ?? '用户',
+              'author': item.member?.uname ?? (DateFormatUtils.isEnglish ? 'User' : '用户'),
               'avatar': _normalizeURL(item.member?.avatar),
               'message': item.content?.message ?? '',
-              'time':
-                  item.replyControl?.timeDesc ??
-                  DateFormatUtils.format(item.ctime),
+              'time': DateFormatUtils.localizedServerTime(
+                item.replyControl?.timeDesc,
+                item.ctime,
+              ),
               'location': item.replyControl?.location ?? '',
               'like': item.like ?? 0,
               'liked': item.action == 1,
@@ -2870,7 +2871,7 @@ final class IOSNativeUIBridge {
       },
       Error(:final errMsg, :final code) => {
         'state': 'error',
-        'error': errMsg ?? '评论发布失败',
+        'error': errMsg ?? (DateFormatUtils.isEnglish ? 'Could not post comment' : '评论发布失败'),
         'code': ?code,
       },
       Loading() => const {'state': 'loading'},
@@ -2919,7 +2920,7 @@ final class IOSNativeUIBridge {
       }(),
       Error(:final errMsg, :final code) => {
         'state': 'error',
-        'error': errMsg ?? '二级评论加载失败',
+        'error': errMsg ?? (DateFormatUtils.isEnglish ? 'Could not load replies' : '二级评论加载失败'),
         'code': ?code,
       },
       Loading() => const {'state': 'loading'},
@@ -2941,9 +2942,10 @@ final class IOSNativeUIBridge {
       'author': member.name.isEmpty ? '用户' : member.name,
       'avatar': _normalizeURL(member.face),
       'message': content.message,
-      'time': control.timeDesc.isNotEmpty
-          ? control.timeDesc
-          : DateFormatUtils.format(item.ctime.toInt()),
+      'time': DateFormatUtils.localizedServerTime(
+        control.timeDesc.isNotEmpty ? control.timeDesc : null,
+        item.ctime.toInt(),
+      ),
       'location': control.location,
       'like': item.like.toInt(),
       'liked': control.action.toInt() == 1,
@@ -3049,7 +3051,7 @@ final class IOSNativeUIBridge {
       Loading() => const {'state': 'loading'},
       Error(:final errMsg) => {
           'state': 'error',
-          'error': errMsg ?? '缓存信息加载失败',
+          'error': errMsg ?? (DateFormatUtils.isEnglish ? 'Could not load cache information' : '缓存信息加载失败'),
         },
       Success(:final response) => await _nativeDownloadOptions(response),
     };
@@ -3083,7 +3085,7 @@ final class IOSNativeUIBridge {
           .map((page) => {
                 'cid': page.cid,
                 'index': page.page,
-                'title': page.part ?? '视频分P',
+                'title': page.part ?? (DateFormatUtils.isEnglish ? 'Video part' : '视频分P'),
                 'durationText': _durationText(page.duration ?? 0),
                 'cached': existing.contains(page.cid),
               })
@@ -3112,7 +3114,7 @@ final class IOSNativeUIBridge {
       Loading() => const {'state': 'loading'},
       Error(:final errMsg) => {
           'state': 'error',
-          'error': errMsg ?? '视频信息加载失败',
+          'error': errMsg ?? (DateFormatUtils.isEnglish ? 'Unable to load video information' : '视频信息加载失败'),
         },
       Success(:final response) => await () async {
           final service = Get.find<DownloadService>();
@@ -3126,7 +3128,7 @@ final class IOSNativeUIBridge {
           return {
             'state': 'success',
             'count': pages.length,
-            'message': pages.isEmpty ? '所选视频已在缓存列表中' : '已加入 ${pages.length} 个缓存任务',
+            'message': pages.isEmpty ? '所选视频已在缓存列表中' : (DateFormatUtils.isEnglish ? '${pages.length} downloads queued' : '已加入 ${pages.length} 个缓存任务'),
           };
         }(),
     };
@@ -3235,7 +3237,7 @@ final class IOSNativeUIBridge {
       Loading() => const {'state': 'loading'},
       Error(:final errMsg, :final code) => {
         'state': 'error',
-        'error': errMsg ?? '观看记录加载失败',
+        'error': errMsg ?? (DateFormatUtils.isEnglish ? 'Unable to load watch history' : '观看记录加载失败'),
         'code': ?code,
       },
       Success(:final response) => () {
@@ -3258,7 +3260,7 @@ final class IOSNativeUIBridge {
             return {
               'id': 'history-${item.kid ?? entry.key}',
               'kind': 'video',
-              'title': item.title ?? '未命名内容',
+              'title': item.title ?? (DateFormatUtils.isEnglish ? 'Untitled content' : '未命名内容'),
               'subtitle': item.authorName ?? item.showTitle ?? '',
               'cover': _normalizeURL(
                 _nonEmpty(item.cover) ??
@@ -3290,7 +3292,7 @@ final class IOSNativeUIBridge {
       Loading() => const {'state': 'loading'},
       Error(:final errMsg, :final code) => {
         'state': 'error',
-        'error': errMsg ?? '稍后再看加载失败',
+        'error': errMsg ?? (DateFormatUtils.isEnglish ? 'Unable to load Watch Later' : '稍后再看加载失败'),
         'code': ?code,
       },
       Success(:final response) => {
@@ -3306,7 +3308,7 @@ final class IOSNativeUIBridge {
           return {
             'id': 'later-${item.aid ?? entry.key}',
             'kind': 'video',
-            'title': item.title ?? '未命名视频',
+            'title': item.title ?? (DateFormatUtils.isEnglish ? 'Untitled video' : '未命名视频'),
             'subtitle': item.owner?.name ?? item.subtitle ?? '',
             'cover': _normalizeURL(item.pic),
             'aid': item.aid,
@@ -3339,7 +3341,7 @@ final class IOSNativeUIBridge {
       Loading() => const {'state': 'loading'},
       Error(:final errMsg, :final code) => {
         'state': 'error',
-        'error': errMsg ?? '收藏夹加载失败',
+        'error': errMsg ?? (DateFormatUtils.isEnglish ? 'Could not load favorites' : '收藏夹加载失败'),
         'code': ?code,
       },
       Success(:final response) => {
@@ -3355,7 +3357,7 @@ final class IOSNativeUIBridge {
             'subtitle': item.intro ?? item.upper?.name ?? '',
             'cover': _normalizeURL(item.cover),
             'folderId': item.id,
-            'trailingText': '${item.mediaCount} 个内容',
+            'trailingText': (DateFormatUtils.isEnglish ? '${item.mediaCount} items' : '${item.mediaCount} 个内容'),
             'badge': item.attr == 23 ? '私密' : '',
             'fallbackRoute': '/fav',
           };
@@ -3381,12 +3383,12 @@ final class IOSNativeUIBridge {
       Loading() => const {'state': 'loading'},
       Error(:final errMsg, :final code) => {
         'state': 'error',
-        'error': errMsg ?? '收藏夹内容加载失败',
+        'error': errMsg ?? (DateFormatUtils.isEnglish ? 'Unable to load favorites' : '收藏夹内容加载失败'),
         'code': ?code,
       },
       Success(:final response) => {
         'state': 'success',
-        'title': response.info?.title ?? '收藏夹',
+        'title': response.info?.title ?? (DateFormatUtils.isEnglish ? 'Favorites folder' : '收藏夹'),
         'subtitle': response.info?.intro ?? '',
         'hasMore': response.hasMore ?? false,
         'items': (response.medias ?? const []).asMap().entries.map((entry) {
@@ -3394,7 +3396,7 @@ final class IOSNativeUIBridge {
           return {
             'id': 'favorite-${item.id ?? entry.key}',
             'kind': 'video',
-            'title': item.title ?? '未命名内容',
+            'title': item.title ?? (DateFormatUtils.isEnglish ? 'Untitled content' : '未命名内容'),
             'subtitle': item.upper?.name ?? item.intro ?? '',
             'cover': _normalizeURL(item.cover),
             'aid': item.id,
@@ -3435,7 +3437,7 @@ final class IOSNativeUIBridge {
       Success(:final response) => {
         'state': 'success',
         'title': pageTitle,
-        'subtitle': '共 ${response.total ?? 0} 人',
+        'subtitle': (DateFormatUtils.isEnglish ? '${response.total ?? 0} people' : '共 ${response.total ?? 0} 人'),
         'hasMore':
             (response.list?.isNotEmpty ?? false) &&
             page * 20 < (response.total ?? 0),
@@ -3444,7 +3446,7 @@ final class IOSNativeUIBridge {
           return {
             'id': '${followers ? 'follower' : 'following'}-${item.mid}',
             'kind': 'member',
-            'title': item.uname ?? '用户 ${item.mid}',
+            'title': item.uname ?? (DateFormatUtils.isEnglish ? 'User ${item.mid}' : '用户 ${item.mid}'),
             'subtitle': item.sign ?? '',
             'cover': _normalizeURL(item.face),
             'memberId': item.mid,
@@ -3467,7 +3469,7 @@ final class IOSNativeUIBridge {
       Loading() => const {'state': 'loading'},
       Error(:final errMsg, :final code) => {
         'state': 'error',
-        'error': errMsg ?? '订阅加载失败',
+        'error': errMsg ?? (DateFormatUtils.isEnglish ? 'Unable to load subscriptions' : '订阅加载失败'),
         'code': ?code,
       },
       Success(:final response) => {
@@ -3484,12 +3486,12 @@ final class IOSNativeUIBridge {
           return {
             'id': 'subscription-${item.id ?? entry.key}',
             'kind': 'subscription',
-            'title': item.title ?? '未命名订阅',
+            'title': item.title ?? (DateFormatUtils.isEnglish ? 'Untitled subscription' : '未命名订阅'),
             'subtitle': item.upper?.name ?? item.intro ?? '',
             'cover': _normalizeURL(item.cover),
             'folderId': item.id,
             'folderType': item.type,
-            'trailingText': '${item.mediaCount ?? 0} 个视频',
+            'trailingText': (DateFormatUtils.isEnglish ? '${item.mediaCount ?? 0} videos' : '${item.mediaCount ?? 0} 个视频'),
             'badge': item.state == 1 ? '已失效' : typeText,
             'fallbackRoute': '/subscription',
           };
@@ -3511,12 +3513,12 @@ final class IOSNativeUIBridge {
       Loading() => const {'state': 'loading'},
       Error(:final errMsg, :final code) => {
         'state': 'error',
-        'error': errMsg ?? '订阅内容加载失败',
+        'error': errMsg ?? (DateFormatUtils.isEnglish ? 'Unable to load subscription content' : '订阅内容加载失败'),
         'code': ?code,
       },
       Success(:final response) => {
         'state': 'success',
-        'title': response.info?.title ?? '订阅内容',
+        'title': response.info?.title ?? (DateFormatUtils.isEnglish ? 'Subscription content' : '订阅内容'),
         'subtitle': response.info?.intro ?? '',
         'hasMore':
             (response.medias?.isNotEmpty ?? false) &&
@@ -3526,7 +3528,7 @@ final class IOSNativeUIBridge {
           return {
             'id': 'subscription-video-${item.id ?? entry.key}',
             'kind': 'video',
-            'title': item.title ?? '未命名视频',
+            'title': item.title ?? (DateFormatUtils.isEnglish ? 'Untitled video' : '未命名视频'),
             'subtitle': '',
             'cover': _normalizeURL(item.cover),
             'aid': item.id,
@@ -3561,7 +3563,7 @@ final class IOSNativeUIBridge {
       Loading() => const {'state': 'loading'},
       Error(:final errMsg, :final code) => {
         'state': 'error',
-        'error': errMsg ?? '加载失败',
+        'error': errMsg ?? (DateFormatUtils.isEnglish ? 'Unable to load' : '加载失败'),
         'code': ?code,
       },
       Success(:final response) => {
@@ -3732,7 +3734,7 @@ final class IOSNativeUIBridge {
           : 'loggedOut',
       'isLogin': mainController.accountService.isLogin.value,
       'mid': info.mid,
-      'name': info.uname ?? '点击登录',
+      'name': info.uname ?? (DateFormatUtils.isEnglish ? 'Tap to sign in' : '点击登录'),
       'face': _normalizeURL(info.face),
       'money': info.money ?? 0,
       'level': level?.currentLevel ?? 0,
@@ -3839,10 +3841,24 @@ final class IOSNativeUIBridge {
 
   static String _compactNumber(int? value) {
     if (value == null || value <= 0) return '';
-    if (value >= 100000000) {
-      return '${(value / 100000000).toStringAsFixed(1)}亿';
+    if (DateFormatUtils.isEnglish) {
+      if (value >= 1_000_000_000) {
+        return '${(value / 1_000_000_000).toStringAsFixed(1)}B';
+      }
+      if (value >= 1_000_000) {
+        return '${(value / 1_000_000).toStringAsFixed(1)}M';
+      }
+      if (value >= 1_000) {
+        return '${(value / 1_000).toStringAsFixed(1)}K';
+      }
+    } else {
+      if (value >= 100_000_000) {
+        return '${(value / 100_000_000).toStringAsFixed(1)}亿';
+      }
+      if (value >= 10_000) {
+        return '${(value / 10_000).toStringAsFixed(1)}万';
+      }
     }
-    if (value >= 10000) return '${(value / 10000).toStringAsFixed(1)}万';
     return value.toString();
   }
 

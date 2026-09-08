@@ -306,7 +306,7 @@ private final class PiliNativeHTTPRangeReader: IOReader, @unchecked Sendable {
       throw NSError(
         domain: "PiliNativeHTTPRangeReader",
         code: http.statusCode,
-        userInfo: [NSLocalizedDescriptionKey: "CDN 拒绝音轨请求（HTTP \(http.statusCode)）"]
+        userInfo: [NSLocalizedDescriptionKey: piliLocalizedFormat("CDN 拒绝音轨请求（HTTP %d）", http.statusCode)]
       )
     }
 
@@ -423,7 +423,10 @@ struct PiliNativeDanmakuSettingsView: View {
         Section {
           Toggle("显示弹幕", isOn: $session.danmakuEnabled)
         } footer: {
-          Text("只影响\(session.danmakuProfile.title)，两套显示与屏蔽设置独立保存。")
+          Text(verbatim: piliLocalizedFormat(
+            "只影响%@，两套显示与屏蔽设置独立保存。",
+            piliLocalized(session.danmakuProfile.title)
+          ))
         }
         Section {
           Toggle("屏蔽顶部弹幕", isOn: blocked(5))
@@ -435,7 +438,10 @@ struct PiliNativeDanmakuSettingsView: View {
           Text("彩色弹幕保留文字并转为白色，与原版一致。滚动筛选包含逆向弹幕。")
         }
         Section("智能云屏蔽") {
-          Text("屏蔽等级：\(Int(session.danmakuSettings.weight))")
+          Text(verbatim: piliLocalizedFormat(
+            "屏蔽等级：%d",
+            Int(session.danmakuSettings.weight)
+          ))
           Slider(value: binding(\.weight), in: 0...11, step: 1)
           Text("0 级关闭；等级越高，保留的弹幕越少。")
             .font(.caption).foregroundStyle(.secondary)
@@ -444,22 +450,37 @@ struct PiliNativeDanmakuSettingsView: View {
           NavigationLink {
             PiliNativeDanmakuRulesView(session: session)
           } label: {
-            Label("关键词 / 正则 / 用户（\(session.danmakuRules.count)）", systemImage: "line.3.horizontal.decrease.circle")
+            Label(
+              piliLocalizedFormat("关键词 / 正则 / 用户（%d）", session.danmakuRules.count),
+              systemImage: "line.3.horizontal.decrease.circle"
+            )
           }
         }
         Section("显示设置") {
-          Text("显示区域：\(Int((session.danmakuSettings.area * 100).rounded()))%")
+          Text(verbatim: piliLocalizedFormat(
+            "显示区域：%d%%",
+            Int((session.danmakuSettings.area * 100).rounded())
+          ))
           Slider(value: binding(\.area), in: 0.25...1, step: 0.25)
-          Text("不透明度：\(Int((session.danmakuSettings.opacity * 100).rounded()))%")
+          Text(verbatim: piliLocalizedFormat(
+            "不透明度：%d%%",
+            Int((session.danmakuSettings.opacity * 100).rounded())
+          ))
           Slider(value: binding(\.opacity), in: 0...1, step: 0.1)
-          Text("字体大小：\(Int((session.danmakuSettings.fontScale * 100).rounded()))%")
+          Text(verbatim: piliLocalizedFormat(
+            "字体大小：%d%%",
+            Int((session.danmakuSettings.fontScale * 100).rounded())
+          ))
           Slider(value: binding(\.fontScale), in: 0.5...2.5, step: 0.1)
-          Text("滚动时长：\(session.danmakuSettings.duration, specifier: "%.1f") 秒")
+          Text(verbatim: piliLocalizedFormat(
+            "滚动时长：%.1f 秒",
+            session.danmakuSettings.duration
+          ))
           Slider(value: binding(\.duration), in: 1...20, step: 0.5)
         }
         if let error = session.danmakuSettingsError {
           Section {
-            Text(error).foregroundStyle(.red)
+            Text(piliLocalizedDisplay(error)).foregroundStyle(.red)
             Button("重试加载") { session.loadDanmakuSettings() }
             if session.danmakuSettingsLoaded {
               Button("重试保存") { session.updateDanmakuSettings(session.danmakuSettings) }
@@ -468,7 +489,7 @@ struct PiliNativeDanmakuSettingsView: View {
         }
       }
       .disabled(!session.danmakuSettingsLoaded && session.danmakuSettingsBusy)
-      .navigationTitle("\(session.danmakuProfile.title)弹幕设置")
+      .navigationTitle(piliLocalizedFormat("%@弹幕设置", piliLocalized(session.danmakuProfile.title)))
       .navigationBarTitleDisplayMode(.inline)
       .toolbar {
         ToolbarItem(placement: .confirmationAction) {
@@ -493,7 +514,11 @@ private struct PiliNativeDanmakuRulesView: View {
     List {
       Picker("规则类型", selection: $type) {
         ForEach(0..<3) { index in
-          Text("\(labels[index])(\(session.danmakuRules.filter { $0.type == index }.count))").tag(index)
+          Text(verbatim: piliLocalizedFormat(
+            "%@(%d)",
+            piliLocalized(labels[index]),
+            session.danmakuRules.filter { $0.type == index }.count
+          )).tag(index)
         }
       }.pickerStyle(.segmented)
       Section {
@@ -502,7 +527,7 @@ private struct PiliNativeDanmakuRulesView: View {
         ForEach(rules) { rule in
           VStack(alignment: .leading, spacing: 4) {
             Text(rule.filter).textSelection(.enabled)
-            Text(rule.id < 0 ? "本地规则" : "账号规则")
+            Text(piliLocalized(rule.id < 0 ? "本地规则" : "账号规则"))
               .font(.caption).foregroundStyle(.secondary)
           }
           .swipeActions {
@@ -517,7 +542,10 @@ private struct PiliNativeDanmakuRulesView: View {
           }
         }
       } footer: {
-        Text(type == 2 ? "添加时输入用户 UID；列表展示用于匹配弹幕发送者的 CRC32 哈希。" : "关键词区分大小写；正则忽略大小写，无需输入首尾斜线。")
+        Text(piliLocalized(type == 2
+          ? "添加时输入用户 UID；列表展示用于匹配弹幕发送者的 CRC32 哈希。"
+          : "关键词区分大小写；正则忽略大小写，无需输入首尾斜线。"
+        ))
       }
       Section {
         Button("同步账号屏蔽规则") { session.performDanmakuSettings(["action": "sync"]) }
@@ -525,7 +553,7 @@ private struct PiliNativeDanmakuRulesView: View {
         Text("同步会刷新账号规则，保留本地规则。未登录时仍可管理本地规则。")
           .font(.caption).foregroundStyle(.secondary)
         if session.danmakuSettingsBusy { ProgressView() }
-        if let error = session.danmakuSettingsError { Text(error).foregroundStyle(.red) }
+        if let error = session.danmakuSettingsError { Text(piliLocalizedDisplay(error)).foregroundStyle(.red) }
       }
     }
     .disabled(session.danmakuSettingsBusy)
@@ -564,16 +592,18 @@ private struct PiliNativeDanmakuRuleEditor: View {
   var body: some View {
     NavigationStack {
       Form {
-        TextField(type == 2 ? "用户 UID" : (type == 1 ? "正则表达式" : "关键词"), text: $text, axis: .vertical)
+        TextField(piliLocalized(type == 2 ? "用户 UID" : (type == 1 ? "正则表达式" : "关键词")), text: $text, axis: .vertical)
           .keyboardType(type == 2 ? .numberPad : .default)
           .textInputAutocapitalization(.never).autocorrectionDisabled()
         if editing == nil {
           Toggle("保存到账号", isOn: $cloud).disabled(!session.danmakuAccountLoggedIn)
         }
-        if let error = validationError ?? session.danmakuSettingsError { Text(error).foregroundStyle(.red) }
+        if let error = validationError ?? session.danmakuSettingsError {
+          Text(piliLocalizedDisplay(error)).foregroundStyle(.red)
+        }
         if session.danmakuSettingsBusy { ProgressView() }
       }
-      .navigationTitle(editing == nil ? "添加屏蔽规则" : "编辑屏蔽规则")
+      .navigationTitle(piliLocalized(editing == nil ? "添加屏蔽规则" : "编辑屏蔽规则"))
       .navigationBarTitleDisplayMode(.inline)
       .toolbar {
         ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() }.disabled(session.danmakuSettingsBusy) }
@@ -593,7 +623,7 @@ private struct PiliNativeDanmakuRuleEditor: View {
     if type == 1, value.count > 1, value.hasPrefix("/"), value.hasSuffix("/") {
       value = String(value.dropFirst().dropLast())
     }
-    guard !value.isEmpty else { validationError = "输入内容不能为空"; return }
+    guard !value.isEmpty else { validationError = piliLocalized("输入内容不能为空"); return }
     // Dart validates the ECMAScript pattern before persisting or calling the
     // server. ICU/NSRegularExpression would reject some valid Dart patterns.
     validationError = nil
@@ -849,7 +879,7 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
   @Published private(set) var currentTime: TimeInterval = 0
   @Published private(set) var duration: TimeInterval = 0
   @Published private(set) var errorMessage: String?
-  @Published private(set) var qualityLabel = "清晰度"
+  @Published private(set) var qualityLabel = piliLocalized("清晰度")
   @Published private(set) var qualities: [PiliNativePlayerQuality] = []
   @Published private(set) var subtitleOptions: [PiliNativeSubtitleOption] = []
   @Published private(set) var selectedSubtitleID: String?
@@ -876,7 +906,7 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
   private var playbackRateBeforeHold: Float?
   @Published private(set) var isHDR = false
   @Published private(set) var hdrBrightnessActive = false
-  @Published private(set) var videoTitle = "正在播放"
+  @Published private(set) var videoTitle = piliLocalized("正在播放")
   @Published private(set) var videoLikeCount = 0
   @Published private(set) var videoReplyCount = 0
   @Published private(set) var videoFavoriteCount = 0
@@ -1060,6 +1090,8 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
     }
 
     self.segments = segments
+    // Keep the source label for selection identity; translate only when it is
+    // rendered in a control or menu.
     self.qualityLabel = quality
     self.qualities = qualities
     isHDR = segments.contains(where: { $0.isHDR })
@@ -1146,7 +1178,7 @@ final class PiliNativePlayerSession: NSObject, ObservableObject {
   func requestDanmakuSend(_ content: String) {
     let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmed.isEmpty else { return }
-    danmakuStatusMessage = "正在发送弹幕…"
+    danmakuStatusMessage = piliLocalized("正在发送弹幕…")
     onDanmakuSendRequested?(trimmed, Int(max(0, currentTime) * 1000))
   }
 
@@ -2536,7 +2568,7 @@ final class PiliNativePlayerViewController: UIViewController, UIGestureRecognize
     configureButton(danmakuSettingsButton, image: "slider.horizontal.3", action: #selector(toggleDanmakuSettings))
     configureTextButton(danmakuButton, title: "弹幕", action: #selector(toggleDanmaku))
     configureTextButton(subtitleButton, title: "字幕", action: nil)
-    subtitleButton.accessibilityLabel = "字幕"
+    subtitleButton.accessibilityLabel = piliLocalized("字幕")
     configureTextButton(qualityButton, title: "清晰度", action: nil)
     configureTextButton(speedButton, title: "1.0x", action: #selector(changeSpeed))
     configureTextButton(
@@ -2559,11 +2591,11 @@ final class PiliNativePlayerViewController: UIViewController, UIGestureRecognize
     slider.addTarget(self, action: #selector(scrubStarted), for: .touchDown)
     slider.addTarget(self, action: #selector(scrubChanged), for: .valueChanged)
     slider.addTarget(self, action: #selector(scrubEnded), for: [.touchUpInside, .touchUpOutside, .touchCancel])
-    slider.accessibilityLabel = "播放进度"
-    playButton.accessibilityLabel = "暂停或播放"
-    backButton.accessibilityLabel = "退出播放器"
-    lockButton.accessibilityLabel = "锁定播放器"
-    danmakuSettingsButton.accessibilityLabel = "弹幕设置"
+    slider.accessibilityLabel = piliLocalized("播放进度")
+    playButton.accessibilityLabel = piliLocalized("暂停或播放")
+    backButton.accessibilityLabel = piliLocalized("退出播放器")
+    lockButton.accessibilityLabel = piliLocalized("锁定播放器")
+    danmakuSettingsButton.accessibilityLabel = piliLocalized("弹幕设置")
     if fullscreenPresentation {
       buildFullscreenControls()
     } else {
@@ -2594,7 +2626,7 @@ final class PiliNativePlayerViewController: UIViewController, UIGestureRecognize
       toastLabel.widthAnchor.constraint(lessThanOrEqualTo: view.widthAnchor, multiplier: 0.7),
     ])
     speedHoldLabel.translatesAutoresizingMaskIntoConstraints = false
-    speedHoldLabel.text = "  ▶▶  2× 倍速播放中  "
+    speedHoldLabel.text = "  ▶▶  \(piliLocalized("2× 倍速播放中"))  "
     speedHoldLabel.font = .systemFont(ofSize: 14, weight: .semibold)
     speedHoldLabel.textColor = .white
     speedHoldLabel.backgroundColor = UIColor.black.withAlphaComponent(0.65)
@@ -2807,7 +2839,7 @@ final class PiliNativePlayerViewController: UIViewController, UIGestureRecognize
     danmakuButton.setImage(UIImage(systemName: "text.bubble.fill"), for: .normal)
     danmakuButton.tintColor = .white
     danmakuButton.setTitle(nil, for: .normal)
-    danmakuButton.accessibilityLabel = "弹幕开关"
+    danmakuButton.accessibilityLabel = piliLocalized("弹幕开关")
     danmakuButton.backgroundColor = .clear
     danmakuButton.setPreferredSymbolConfiguration(UIImage.SymbolConfiguration(pointSize: 23), forImageIn: .normal)
     [subtitleButton, speedButton, qualityButton].forEach {
@@ -2948,7 +2980,7 @@ final class PiliNativePlayerViewController: UIViewController, UIGestureRecognize
       buffering ? self?.spinner.startAnimating() : self?.spinner.stopAnimating()
     }.store(in: &cancellables)
     session.$errorMessage.receive(on: DispatchQueue.main).sink { [weak self] message in
-      self?.errorLabel.text = message
+      self?.errorLabel.text = message.map(piliLocalizedDisplay)
       self?.errorLabel.isHidden = message == nil
     }.store(in: &cancellables)
     session.$duration.receive(on: DispatchQueue.main).sink { [weak self] duration in
@@ -2982,7 +3014,7 @@ final class PiliNativePlayerViewController: UIViewController, UIGestureRecognize
     session.$danmakuEnabled.receive(on: DispatchQueue.main).sink { [weak self] enabled in
       guard let self else { return }
       self.danmakuButton.setTitle(
-        self.fullscreenPresentation ? nil : (enabled ? "弹幕开" : "弹幕关"),
+        self.fullscreenPresentation ? nil : piliLocalized(enabled ? "弹幕开" : "弹幕关"),
         for: .normal
       )
       self.danmakuButton.setImage(
@@ -2999,13 +3031,13 @@ final class PiliNativePlayerViewController: UIViewController, UIGestureRecognize
       self?.updateSubtitleMenu()
     }.store(in: &cancellables)
     session.$qualityLabel.receive(on: DispatchQueue.main).sink { [weak self] label in
-      self?.qualityButton.setTitle(label, for: .normal)
+      self?.qualityButton.setTitle(piliLocalizedDisplay(label), for: .normal)
     }.store(in: &cancellables)
     session.$qualities.receive(on: DispatchQueue.main).sink { [weak self] qualities in
       self?.updateQualityMenu(qualities)
     }.store(in: &cancellables)
     session.$playbackRate.receive(on: DispatchQueue.main).sink { [weak self] rate in
-      self?.speedButton.setTitle(rate == 1 ? "倍速" : "\(rate)×", for: .normal)
+      self?.speedButton.setTitle(rate == 1 ? piliLocalized("倍速") : "\(rate)×", for: .normal)
     }.store(in: &cancellables)
     session.$pictureInPicturePlayer.receive(on: DispatchQueue.main).sink { [weak self] player in
       self?.configurePictureInPicture(player: player)
@@ -3032,7 +3064,7 @@ final class PiliNativePlayerViewController: UIViewController, UIGestureRecognize
       self?.loadOwnerImage(url)
     }.store(in: &cancellables)
     session.$danmakuStatusMessage.receive(on: DispatchQueue.main).sink { [weak self] message in
-      self?.toastLabel.text = message.map { "  \($0)  " }
+      self?.toastLabel.text = message.map { "  \(piliLocalizedDisplay($0))  " }
       self?.toastLabel.isHidden = message == nil
     }.store(in: &cancellables)
     session.$danmakuComposerRequest
@@ -3080,7 +3112,7 @@ final class PiliNativePlayerViewController: UIViewController, UIGestureRecognize
 
   private func updateSubtitleMenu() {
     let off = UIAction(
-      title: "关闭字幕",
+      title: piliLocalized("关闭字幕"),
       state: session.selectedSubtitleID == nil ? .on : .off
     ) { [weak self] _ in self?.session.selectSubtitle(nil) }
     let tracks = session.subtitleOptions.map { option in
@@ -3097,7 +3129,7 @@ final class PiliNativePlayerViewController: UIViewController, UIGestureRecognize
 
   private func updateQualityMenu(_ qualities: [PiliNativePlayerQuality]) {
     qualityButton.menu = UIMenu(children: qualities.map { quality in
-      UIAction(title: quality.label) { [weak self] _ in
+      UIAction(title: piliLocalizedDisplay(quality.label)) { [weak self] _ in
         self?.session.selectQuality(quality.value)
       }
     })
@@ -3113,7 +3145,7 @@ final class PiliNativePlayerViewController: UIViewController, UIGestureRecognize
   }
 
   private func configureTextButton(_ button: UIButton, title: String, action: Selector?) {
-    button.setTitle(title, for: .normal)
+    button.setTitle(piliLocalized(title), for: .normal)
     button.setTitleColor(.white, for: .normal)
     button.titleLabel?.font = .systemFont(ofSize: 12, weight: .semibold)
     button.backgroundColor = UIColor.black.withAlphaComponent(0.42)
@@ -3160,16 +3192,16 @@ final class PiliNativePlayerViewController: UIViewController, UIGestureRecognize
 
   @objc private func showDanmakuComposer() {
     controlsHideTask?.cancel()
-    let alert = UIAlertController(title: "发送弹幕", message: nil, preferredStyle: .alert)
+    let alert = UIAlertController(title: piliLocalized("发送弹幕"), message: nil, preferredStyle: .alert)
     alert.addTextField { field in
-      field.placeholder = "发个友善的弹幕见证当下"
+      field.placeholder = piliLocalized("发个友善的弹幕见证当下")
       field.clearButtonMode = .whileEditing
       field.returnKeyType = .send
     }
-    alert.addAction(UIAlertAction(title: "取消", style: .cancel) { [weak self] _ in
+    alert.addAction(UIAlertAction(title: piliLocalized("取消"), style: .cancel) { [weak self] _ in
       self?.scheduleControlsHide()
     })
-    alert.addAction(UIAlertAction(title: "发送", style: .default) { [weak self, weak alert] _ in
+    alert.addAction(UIAlertAction(title: piliLocalized("发送"), style: .default) { [weak self, weak alert] _ in
       guard let self,
             let raw = alert?.textFields?.first?.text,
             !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
@@ -3194,21 +3226,21 @@ final class PiliNativePlayerViewController: UIViewController, UIGestureRecognize
   @objc private func showMoreMenu() {
     controlsHideTask?.cancel()
     let menu = UIAlertController(title: nil, message: nil, preferredStyle: .actionSheet)
-    menu.addAction(UIAlertAction(title: "评论", style: .default) { [weak self] _ in
+    menu.addAction(UIAlertAction(title: piliLocalized("评论"), style: .default) { [weak self] _ in
       self?.requestComment()
     })
-    menu.addAction(UIAlertAction(title: "收藏", style: .default) { [weak self] _ in
+    menu.addAction(UIAlertAction(title: piliLocalized("收藏"), style: .default) { [weak self] _ in
       self?.requestFavorite()
     })
     if pictureInPictureController != nil {
-      menu.addAction(UIAlertAction(title: "画中画", style: .default) { [weak self] _ in
+      menu.addAction(UIAlertAction(title: piliLocalized("画中画"), style: .default) { [weak self] _ in
         self?.togglePictureInPicture()
       })
     }
-    menu.addAction(UIAlertAction(title: "弹幕设置", style: .default) { [weak self] _ in
+    menu.addAction(UIAlertAction(title: piliLocalized("弹幕设置"), style: .default) { [weak self] _ in
       self?.setDanmakuSettingsVisible(true, animated: true)
     })
-    menu.addAction(UIAlertAction(title: "取消", style: .cancel) { [weak self] _ in
+    menu.addAction(UIAlertAction(title: piliLocalized("取消"), style: .cancel) { [weak self] _ in
       self?.scheduleControlsHide()
     })
     if let popover = menu.popoverPresentationController {
@@ -3222,13 +3254,13 @@ final class PiliNativePlayerViewController: UIViewController, UIGestureRecognize
     controlsHideTask?.cancel()
     let menu = UIAlertController(title: nil, message: nil, preferredStyle: .actionSheet)
     if pictureInPictureController != nil {
-      menu.addAction(UIAlertAction(title: "画中画", style: .default) { [weak self] _ in
+      menu.addAction(UIAlertAction(title: piliLocalized("画中画"), style: .default) { [weak self] _ in
         self?.togglePictureInPicture()
       })
     }
     menu.addAction(
       UIAlertAction(
-        title: session.danmakuEnabled ? "关闭弹幕" : "打开弹幕",
+        title: piliLocalized(session.danmakuEnabled ? "关闭弹幕" : "打开弹幕"),
         style: .default
       ) { [weak self] _ in
         self?.session.danmakuEnabled.toggle()
@@ -3237,12 +3269,16 @@ final class PiliNativePlayerViewController: UIViewController, UIGestureRecognize
     )
     if !session.subtitleOptions.isEmpty {
       menu.addAction(UIAlertAction(
-        title: session.selectedSubtitleID == nil ? "✓ 关闭字幕" : "关闭字幕",
+        title: session.selectedSubtitleID == nil
+          ? "✓ \(piliLocalized("关闭字幕"))"
+          : piliLocalized("关闭字幕"),
         style: .default
       ) { [weak self] _ in self?.session.selectSubtitle(nil) })
       for option in session.subtitleOptions {
         menu.addAction(UIAlertAction(
-          title: option.id == session.selectedSubtitleID ? "✓ \(option.label)" : option.label,
+          title: option.id == session.selectedSubtitleID
+            ? "✓ \(option.label)"
+            : option.label,
           style: .default
         ) { [weak self] _ in self?.session.selectSubtitle(option.id) })
       }
@@ -3250,7 +3286,9 @@ final class PiliNativePlayerViewController: UIViewController, UIGestureRecognize
     for quality in session.qualities {
       menu.addAction(
         UIAlertAction(
-          title: quality.label == session.qualityLabel ? "✓ \(quality.label)" : quality.label,
+          title: quality.label == session.qualityLabel
+            ? "✓ \(piliLocalizedDisplay(quality.label))"
+            : piliLocalizedDisplay(quality.label),
           style: .default
         ) { [weak self] _ in
           self?.session.selectQuality(quality.value)
@@ -3258,7 +3296,7 @@ final class PiliNativePlayerViewController: UIViewController, UIGestureRecognize
         }
       )
     }
-    menu.addAction(UIAlertAction(title: "取消", style: .cancel) { [weak self] _ in
+    menu.addAction(UIAlertAction(title: piliLocalized("取消"), style: .cancel) { [weak self] _ in
       self?.scheduleControlsHide()
     })
     if let popover = menu.popoverPresentationController {
@@ -3355,7 +3393,7 @@ final class PiliNativePlayerViewController: UIViewController, UIGestureRecognize
 
   private func showControllerToast(_ message: String) {
     toastLabel.layer.removeAllAnimations()
-    toastLabel.text = "  \(message)  "
+    toastLabel.text = "  \(piliLocalizedDisplay(message))  "
     toastLabel.alpha = 1
     toastLabel.isHidden = false
     UIView.animate(
@@ -3494,13 +3532,25 @@ final class PiliNativePlayerViewController: UIViewController, UIGestureRecognize
   }
 
   private static func formatMetric(_ value: Int) -> String {
-    if value >= 100_000_000 {
-      return String(format: "%.1f亿", Double(value) / 100_000_000)
-        .replacingOccurrences(of: ".0亿", with: "亿")
-    }
-    if value >= 10_000 {
-      return String(format: "%.1f万", Double(value) / 10_000)
-        .replacingOccurrences(of: ".0万", with: "万")
+    if piliNativeIsEnglish() {
+      if value >= 1_000_000_000 {
+        return String(format: "%.1fB", Double(value) / 1_000_000_000)
+      }
+      if value >= 1_000_000 {
+        return String(format: "%.1fM", Double(value) / 1_000_000)
+      }
+      if value >= 1_000 {
+        return String(format: "%.1fK", Double(value) / 1_000)
+      }
+    } else {
+      if value >= 100_000_000 {
+        return String(format: "%.1f亿", Double(value) / 100_000_000)
+          .replacingOccurrences(of: ".0亿", with: "亿")
+      }
+      if value >= 10_000 {
+        return String(format: "%.1f万", Double(value) / 10_000)
+          .replacingOccurrences(of: ".0万", with: "万")
+      }
     }
     return String(value)
   }

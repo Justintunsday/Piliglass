@@ -247,7 +247,7 @@ static NSString *const PiliNativeUIChannelName = @"piliglass/native_ui";
     NSString *symbol = [self symbolForTitle:title selected:NO];
     NSString *selectedSymbol = [self symbolForTitle:title selected:YES];
     UITabBarItem *item = [[UITabBarItem alloc]
-        initWithTitle:title
+        initWithTitle:NSLocalizedString(title, nil)
                 image:[UIImage systemImageNamed:symbol]
         selectedImage:[UIImage systemImageNamed:selectedSymbol]];
     item.tag = index;

@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:ui' as ui;
 
 import 'package:PiliPlus/build_config.dart';
 import 'package:PiliPlus/common/constants.dart';
@@ -49,6 +50,21 @@ import 'package:window_manager/window_manager.dart' hide calcWindowPosition;
 WebViewEnvironment? webViewEnvironment;
 
 EdgeInsets? tmpPadding;
+
+Locale _resolvedIOSLocale() {
+  // Match the native bundle's supported locales. This keeps Flutter's
+  // Material chrome aligned with SwiftUI when the preferred language is not
+  // one of the two translations shipped by the app.
+  for (final locale in ui.PlatformDispatcher.instance.locales) {
+    if (locale.languageCode.toLowerCase() == 'en') {
+      return const Locale('en', 'US');
+    }
+    if (locale.languageCode.toLowerCase() == 'zh') {
+      return const Locale('zh', 'CN');
+    }
+  }
+  return const Locale('en', 'US');
+}
 
 Future<void> _initDownPath() async {
   if (PlatformUtils.isDesktop) {
@@ -275,7 +291,9 @@ class MyApp extends StatelessWidget {
       darkTheme: dark,
       themeMode: ThemeUtils.themeMode = Pref.themeMode,
       localizationsDelegates: GlobalMaterialLocalizations.delegates,
-      locale: const Locale("zh", "CN"),
+      // iOS follows the same resolved system/per-app language as the native
+      // SwiftUI surface. Other platforms retain their existing Chinese UI.
+      locale: Platform.isIOS ? _resolvedIOSLocale() : const Locale('zh', 'CN'),
       fallbackLocale: const Locale("zh", "CN"),
       supportedLocales: const [Locale("zh", "CN"), Locale("en", "US")],
       initialRoute: '/',

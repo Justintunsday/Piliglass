@@ -103,6 +103,9 @@ jobs:
       - name: Verify current native settings and reject obsolete options
         run: python3 tool/check_native_settings.py
 
+      - name: Verify English and Chinese localization
+        run: python3 tool/check_ios_localization.py
+
       - name: Build iOS
         run: |
           flutter build ios --release --no-codesign --dart-define-from-file=pili_release.json --no-pub --verbose

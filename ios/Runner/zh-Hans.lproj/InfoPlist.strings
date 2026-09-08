@@ -1,0 +1,4 @@
+"NSPhotoLibraryUsageDescription" = "请允许 APP 将图片保存到相册。";
+"NSCameraUsageDescription" = "PiliGlass 需要访问相机。";
+"NSAppleMusicUsageDescription" = "PiliGlass 需要访问媒体资料库。";
+"NSLocalNetworkUsageDescription" = "需要访问本地网络以发现和连接 DLNA 投屏设备。";

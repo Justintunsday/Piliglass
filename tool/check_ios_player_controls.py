@@ -226,7 +226,7 @@ def production_swift():
                       source.index('struct PiliNativePlayerView:')]
     preferences = source[source.index('enum PiliNativePlaybackEndMode:'):
                          source.index('@MainActor\nfinal class PiliNativePlayerSession')]
-    return FIXTURES.replace('// PRODUCTION_SPEED_METHODS', speed) + preferences + controls
+    return navigation.home.LOCALIZATION + '\n' + FIXTURES.replace('// PRODUCTION_SPEED_METHODS', speed) + preferences + controls
 
 
 if __name__ == '__main__':

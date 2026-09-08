@@ -158,7 +158,7 @@ def production_swift():
     source = (ROOT / 'ios/Runner/PiliNativeRootViewController.swift').read_text(encoding='utf-8')
     def section(start, end):
         return source[source.index(start):source.index(end, source.index(start))]
-    return FIXTURES + section('private struct PiliNativeDynamic:', 'private struct PiliNativeMessage:') + section(
+    return navigation.home.LOCALIZATION + '\n' + FIXTURES + section('private struct PiliNativeDynamic:', 'private struct PiliNativeMessage:') + section(
         'private struct PiliNativeComment:', 'private struct PiliNativeDownload:') + section(
         'private struct PiliNativeDynamicRow:', 'private struct PiliNativeAvatar:') + section(
         'private struct PiliNativeCommentRow:', '// MARK: - Native messages') + section(

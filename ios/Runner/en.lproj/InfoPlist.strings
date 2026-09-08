@@ -1,0 +1,4 @@
+"NSPhotoLibraryUsageDescription" = "Allow PiliGlass to save images to your Photos library.";
+"NSCameraUsageDescription" = "PiliGlass needs access to your camera.";
+"NSAppleMusicUsageDescription" = "PiliGlass needs access to your media library.";
+"NSLocalNetworkUsageDescription" = "PiliGlass uses the local network to discover and connect to DLNA devices.";

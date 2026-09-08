@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 import platform
 import plistlib
+import shutil
 import subprocess
 import time
 
@@ -15,6 +16,12 @@ import time
 ROOT = Path(__file__).resolve().parents[1]
 OUTPUT = ROOT / "build" / "home-preview"
 BUNDLE_ID = "dev.piliglass.homepreview"
+LOCALIZATION = (ROOT / "ios/Runner/PiliNativeLocalization.swift").read_text(encoding="utf-8")
+
+
+def copy_localizations(app):
+    for locale in ['en', 'zh-Hans']:
+        shutil.copytree(ROOT / f'ios/Runner/{locale}.lproj', app / f'{locale}.lproj', dirs_exist_ok=True)
 
 
 def run(*args):
@@ -228,12 +235,13 @@ private struct PiliNativeSettingsView: View {
   var body: some View { Text("设置") }
 }
 '''
-    swift.write_text(FIXTURES + source[transition_start:transition_end]
+    swift.write_text(LOCALIZATION + "\n" + FIXTURES + source[transition_start:transition_end]
                      + source[navigation_start:navigation_end] + placeholders
                      + source[start:end] + source[option_start:option_end]
                      + source[settings_start:settings_end] + APP)
     app = OUTPUT / "HomePreview.app"
     app.mkdir(exist_ok=True)
+    copy_localizations(app)
     info = {
         "CFBundleIdentifier": BUNDLE_ID,
         "CFBundleExecutable": "HomePreview",
@@ -279,7 +287,8 @@ private struct PiliNativeSettingsView: View {
         subprocess.run(["xcrun", "simctl", "terminate", udid, BUNDLE_ID], capture_output=True)
         report_file.unlink(missing_ok=True)
         run("xcrun", "simctl", "ui", udid, "appearance", appearance)
-        run("xcrun", "simctl", "launch", udid, BUNDLE_ID, *args)
+        run("xcrun", "simctl", "launch", udid, BUNDLE_ID,
+            "-AppleLanguages", "(zh-Hans)", "-AppleLocale", "zh_CN", *args)
         for _ in range(30):
             if report_file.exists():
                 break

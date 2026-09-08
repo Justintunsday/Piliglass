@@ -215,7 +215,7 @@ final class PiliNativeRootViewController: UIViewController {
         model.originalPlayerDidClose()
         result(nil)
       case "nativePlayerFailed":
-        model.originalPlayerDidFail(piliString(call.arguments) ?? "原版播放器启动失败")
+        model.originalPlayerDidFail(piliLocalizedDisplay(piliString(call.arguments) ?? "原版播放器启动失败"))
         result(nil)
       default:
         result(FlutterMethodNotImplemented)
@@ -342,8 +342,8 @@ private final class PiliNativeViewModel: ObservableObject {
   @Published var isDynamicComposerPresented = false
   @Published var dynamicComposerText = ""
   @Published private(set) var dynamicComposerMode = "comment"
-  @Published private(set) var dynamicComposerTitle = "发表评论"
-  @Published private(set) var dynamicComposerHint = "友善地发表一条评论"
+  @Published private(set) var dynamicComposerTitle = piliLocalized("发表评论")
+  @Published private(set) var dynamicComposerHint = piliLocalized("友善地发表一条评论")
   @Published var isCommentThreadPresented = false
   @Published private(set) var commentThreadRoot: PiliNativeComment?
   @Published private(set) var commentThreadItems: [PiliNativeComment] = []
@@ -372,7 +372,7 @@ private final class PiliNativeViewModel: ObservableObject {
   @Published private(set) var loginQRCodeURL = ""
   @Published private(set) var loginLoading = false
   @Published private(set) var loginPolling = false
-  @Published private(set) var loginMessage = "使用哔哩哔哩客户端扫码登录"
+  @Published private(set) var loginMessage = piliLocalized("使用哔哩哔哩客户端扫码登录")
   @Published private(set) var loginExpiresIn = 0
 
   @Published var isDownloadsPresented = false
@@ -453,7 +453,7 @@ private final class PiliNativeViewModel: ObservableObject {
       self.channel.invokeMethod("nativeDanmakuSettings", arguments: arguments) { response in
         DispatchQueue.main.async {
           if let error = response as? FlutterError {
-            completion(["state": "error", "error": error.message ?? "弹幕设置操作失败"])
+            completion(["state": "error", "error": piliLocalizedDisplay(error.message ?? "弹幕设置操作失败")])
           } else {
             completion(piliDictionary(response))
           }
@@ -544,7 +544,7 @@ private final class PiliNativeViewModel: ObservableObject {
         guard let self = self else { return }
         self.snapshotInFlight = false
         if let error = response as? FlutterError {
-          self.homeError = error.message ?? "原生界面数据加载失败"
+          self.homeError = piliLocalizedDisplay(error.message ?? "原生界面数据加载失败")
           self.homeLoading = false
           return
         }
@@ -585,7 +585,9 @@ private final class PiliNativeViewModel: ObservableObject {
     let state = section["state"] as? String ?? "loading"
     homeLoading = state == "loading" && homeVideos.isEmpty
     homeLoadingMore = false
-    homeError = state == "error" ? section["error"] as? String ?? "首页加载失败" : nil
+    homeError = state == "error"
+      ? piliLocalizedDisplay(section["error"] as? String ?? "首页加载失败")
+      : nil
     if let rows = section["items"] as? [Any] {
       homeVideos = rows.enumerated().map {
         PiliNativeVideo(map: piliDictionary($0.element), index: $0.offset)
@@ -623,7 +625,9 @@ private final class PiliNativeViewModel: ObservableObject {
     let state = section["state"] as? String ?? "loading"
     dynamicsLoading = state == "loading" && dynamics.isEmpty
     dynamicsLoadingMore = false
-    dynamicsError = state == "error" ? section["error"] as? String ?? "动态加载失败" : nil
+    dynamicsError = state == "error"
+      ? piliLocalizedDisplay(section["error"] as? String ?? "动态加载失败")
+      : nil
     if let rows = section["items"] as? [Any] {
       dynamics = rows.enumerated().map {
         PiliNativeDynamic(map: piliDictionary($0.element), index: $0.offset)
@@ -648,10 +652,10 @@ private final class PiliNativeViewModel: ObservableObject {
         if let error = response as? FlutterError {
           if section == "home" {
             self.homeLoading = false
-            self.homeError = error.message ?? "刷新失败"
+            self.homeError = piliLocalizedDisplay(error.message ?? "刷新失败")
           } else if section == "dynamics" {
             self.dynamicsLoading = false
-            self.dynamicsError = error.message ?? "刷新失败"
+            self.dynamicsError = piliLocalizedDisplay(error.message ?? "刷新失败")
           }
           return
         }
@@ -765,12 +769,12 @@ private final class PiliNativeViewModel: ObservableObject {
               self.isVideoDetailPresented else { return }
         self.videoDetailLoading = false
         if let flutterError = response as? FlutterError {
-          self.videoDetailError = flutterError.message ?? "视频详情加载失败"
+          self.videoDetailError = piliLocalizedDisplay(flutterError.message ?? "视频详情加载失败")
           return
         }
         let result = piliDictionary(response)
         guard result["state"] as? String == "success" else {
-          self.videoDetailError = result["error"] as? String ?? "视频详情加载失败"
+          self.videoDetailError = piliLocalizedDisplay(result["error"] as? String ?? "视频详情加载失败")
           return
         }
         let detail = PiliNativeVideoDetail(map: piliDictionary(result["video"]))
@@ -808,7 +812,7 @@ private final class PiliNativeViewModel: ObservableObject {
           self.pendingNativeAutoplay = false
           self.loadNativePlayback(video: detail, cid: cid, autoplayOverride: autoplayOverride)
         } else {
-          self.originalPlayerError = "视频没有可播放的分P"
+          self.originalPlayerError = piliLocalized("视频没有可播放的分P")
         }
         if let aid = detail.aid {
           self.loadComments(oid: aid, type: 1)
@@ -855,12 +859,12 @@ private final class PiliNativeViewModel: ObservableObject {
               self.videoDetail?.bvid == bvid else { return }
         self.relatedVideosLoading = false
         if let error = response as? FlutterError {
-          self.relatedVideosError = error.message ?? "相关推荐加载失败"
+          self.relatedVideosError = piliLocalizedDisplay(error.message ?? "相关推荐加载失败")
           return
         }
         let result = piliDictionary(response)
         guard result["state"] as? String == "success" else {
-          self.relatedVideosError = result["error"] as? String ?? "相关推荐加载失败"
+          self.relatedVideosError = piliLocalizedDisplay(result["error"] as? String ?? "相关推荐加载失败")
           return
         }
         let rows = result["items"] as? [Any] ?? []
@@ -930,14 +934,14 @@ private final class PiliNativeViewModel: ObservableObject {
       DispatchQueue.main.async {
         guard let self = self, self.nativePlaybackGeneration == generation else { return }
         if let flutterError = response as? FlutterError {
-          let message = flutterError.message ?? "播放地址获取失败"
+          let message = piliLocalizedDisplay(flutterError.message ?? "播放地址获取失败")
           self.originalPlayerError = message
           self.nativePlayerSession.fail(message)
           return
         }
         let result = piliDictionary(response)
         guard result["state"] as? String == "success" else {
-          let message = result["error"] as? String ?? "播放地址获取失败"
+          let message = piliLocalizedDisplay(result["error"] as? String ?? "播放地址获取失败")
           self.originalPlayerError = message
           self.nativePlayerSession.fail(message)
           return
@@ -976,7 +980,7 @@ private final class PiliNativeViewModel: ObservableObject {
           }
         }
         guard !segments.isEmpty else {
-          let message = "没有可用的原生播放地址"
+          let message = piliLocalized("没有可用的原生播放地址")
           self.originalPlayerError = message
           self.nativePlayerSession.fail(message)
           return
@@ -1019,9 +1023,9 @@ private final class PiliNativeViewModel: ObservableObject {
           )
           self.nativePlayerSession.prepareDanmaku()
           if resumeAt > 0 {
-            self.videoActionMessage = "已切换清晰度"
+            self.videoActionMessage = piliLocalized("已切换清晰度")
           } else if initialResume > 0 {
-            self.videoActionMessage = "已定位至上次播放位置"
+            self.videoActionMessage = piliLocalized("已定位至上次播放位置")
           }
         }
         if self.nativePlaybackAwaitingMetadata == generation {
@@ -1075,7 +1079,7 @@ private final class PiliNativeViewModel: ObservableObject {
            lastCID > 0, lastCID != cid,
            video.pages.contains(where: { $0.cid == lastCID }) {
           self.nativePlayerCID = lastCID
-          self.videoActionMessage = "正在定位上次播放的分P"
+          self.videoActionMessage = piliLocalized("正在定位上次播放的分P")
           self.loadNativePlayback(video: video, cid: lastCID)
           return
         }
@@ -1186,13 +1190,13 @@ private final class PiliNativeViewModel: ObservableObject {
       DispatchQueue.main.async {
         guard let self else { return }
         if let error = response as? FlutterError {
-          self.nativePlayerSession.reportDanmakuSendResult(error.message ?? "弹幕发送失败")
+          self.nativePlayerSession.reportDanmakuSendResult(piliLocalizedDisplay(error.message ?? "弹幕发送失败"))
           return
         }
         let result = piliDictionary(response)
         guard result["state"] as? String == "success" else {
           self.nativePlayerSession.reportDanmakuSendResult(
-            result["error"] as? String ?? "弹幕发送失败"
+            piliLocalizedDisplay(result["error"] as? String ?? "弹幕发送失败")
           )
           return
         }
@@ -1266,11 +1270,11 @@ private final class PiliNativeViewModel: ObservableObject {
 
   func selectOriginalPlayerPart(_ part: PiliNativeVideoPart) {
     guard let cid = part.cid, let video = videoDetail else {
-      videoActionMessage = "播放器尚未就绪"
+      videoActionMessage = piliLocalized("播放器尚未就绪")
       return
     }
     nativePlayerCID = cid
-    videoActionMessage = "正在切换到 P\(part.index)"
+    videoActionMessage = piliLocalizedFormat("正在切换到 P%d", part.index)
     loadNativePlayback(video: video, cid: cid, quality: nativePlayerQuality)
   }
 
@@ -1278,12 +1282,12 @@ private final class PiliNativeViewModel: ObservableObject {
     reportNativePlaybackProgress(nativePlayerSession.currentTime)
     switch PiliNativePlayerPreferences.endMode {
     case .stop:
-      videoActionMessage = "播放完毕"
+      videoActionMessage = piliLocalized("播放完毕")
     case .repeatOne:
-      videoActionMessage = "正在循环播放"
+      videoActionMessage = piliLocalized("正在循环播放")
       nativePlayerSession.seek(to: 0, autoplay: true)
     case .playNext:
-      if !playNextNativeVideo() { videoActionMessage = "播放列表已结束" }
+      if !playNextNativeVideo() { videoActionMessage = piliLocalized("播放列表已结束") }
     }
   }
 
@@ -1293,7 +1297,7 @@ private final class PiliNativeViewModel: ObservableObject {
     if let cid = nativePlayerCID,
        let index = video.pages.firstIndex(where: { $0.cid == cid }),
        video.pages.indices.contains(index + 1) {
-      videoActionMessage = "正在播放下一集"
+      videoActionMessage = piliLocalized("正在播放下一集")
       let part = video.pages[index + 1]
       guard let nextCID = part.cid else { return false }
       nativePlayerCID = nextCID
@@ -1307,7 +1311,7 @@ private final class PiliNativeViewModel: ObservableObject {
     }
     if let index = video.collectionItems.firstIndex(where: { $0.bvid == video.bvid }),
        video.collectionItems.indices.contains(index + 1) {
-      videoActionMessage = "正在播放合集下一集"
+      videoActionMessage = piliLocalized("正在播放合集下一集")
       openVideo(video.collectionItems[index + 1], forceAutoplay: true)
       return true
     }
@@ -1376,12 +1380,12 @@ private final class PiliNativeViewModel: ObservableObject {
               self.videoDetail?.bvid == video.bvid else { return }
         self.videoActionLoading = false
         if let error = response as? FlutterError {
-          self.videoActionMessage = error.message ?? "操作失败"
+          self.videoActionMessage = piliLocalizedDisplay(error.message ?? "操作失败")
           return
         }
         let result = piliDictionary(response)
         guard result["state"] as? String == "success" else {
-          self.videoActionMessage = result["error"] as? String ?? "操作失败"
+          self.videoActionMessage = piliLocalizedDisplay(result["error"] as? String ?? "操作失败")
           return
         }
         if action == "share", let rawURL = piliString(result["shareURL"]), let url = URL(string: rawURL) {
@@ -1397,7 +1401,7 @@ private final class PiliNativeViewModel: ObservableObject {
             self.refreshCurrentVideoDetail()
           }
         }
-        self.videoActionMessage = result["message"] as? String ?? "操作成功"
+        self.videoActionMessage = piliLocalizedDisplay(result["message"] as? String ?? "操作成功")
       }
     }
   }
@@ -1523,12 +1527,12 @@ private final class PiliNativeViewModel: ObservableObject {
         guard let self = self else { return }
         self.settingsLoading = false
         if let error = response as? FlutterError {
-          self.settingsError = error.message ?? "设置加载失败"
+          self.settingsError = piliLocalizedDisplay(error.message ?? "设置加载失败")
           return
         }
         let result = piliDictionary(response)
         guard result["state"] as? String == "success" else {
-          self.settingsError = result["error"] as? String ?? "设置加载失败"
+          self.settingsError = piliLocalizedDisplay(result["error"] as? String ?? "设置加载失败")
           return
         }
         self.applySettingsSnapshot(result)
@@ -1551,7 +1555,7 @@ private final class PiliNativeViewModel: ObservableObject {
           self.applySettingsSnapshot(result)
         } else {
           let message = (response as? FlutterError)?.message
-            ?? (result["error"] as? String) ?? "设置保存失败"
+            ?? piliLocalizedDisplay((result["error"] as? String) ?? "设置保存失败")
           self.loadSettings()
           self.settingsError = message
         }
@@ -1573,7 +1577,7 @@ private final class PiliNativeViewModel: ObservableObject {
           self.applySettingsSnapshot(result)
         } else {
           let message = (response as? FlutterError)?.message
-            ?? (result["error"] as? String) ?? "默认画质保存失败"
+            ?? piliLocalizedDisplay((result["error"] as? String) ?? "默认画质保存失败")
           self.loadSettings()
           self.settingsError = message
         }
@@ -1603,7 +1607,7 @@ private final class PiliNativeViewModel: ObservableObject {
           self.applySettingsSnapshot(result)
         } else {
           self.playbackLatencyError = (response as? FlutterError)?.message
-            ?? result["error"] as? String ?? "线路检测失败，请重试"
+            ?? piliLocalizedDisplay(result["error"] as? String ?? "线路检测失败，请重试")
         }
       }
     }
@@ -1622,15 +1626,15 @@ private final class PiliNativeViewModel: ObservableObject {
         guard let self else { return }
         self.playbackSourceSaving = false
         if let error = response as? FlutterError {
-          self.playbackSourceError = error.message ?? "播放源保存失败"
+          self.playbackSourceError = piliLocalizedDisplay(error.message ?? "播放源保存失败")
           return
         }
         let result = piliDictionary(response)
         if result["state"] as? String == "success" {
           self.applySettingsSnapshot(result)
-          self.playbackSourceMessage = "已保存，下次打开视频或直播时生效。"
+          self.playbackSourceMessage = piliLocalized("已保存，下次打开视频或直播时生效。")
         } else {
-          self.playbackSourceError = result["error"] as? String ?? "播放源保存失败"
+          self.playbackSourceError = piliLocalizedDisplay(result["error"] as? String ?? "播放源保存失败")
         }
       }
     }
@@ -1640,7 +1644,7 @@ private final class PiliNativeViewModel: ObservableObject {
     playbackSources = (result["playbackSources"] as? [[String: Any]] ?? []).compactMap {
       guard let value = piliString($0["value"]), let label = piliString($0["label"]) else { return nil }
       return PiliNativePlaybackSourceOption(
-        value: value, label: label,
+        value: value, label: piliLocalizedDisplay(label),
         speedText: piliString($0["speedText"]) ?? "",
         latencyState: piliString($0["latencyState"]) ?? "untested"
       )
@@ -1672,7 +1676,7 @@ private final class PiliNativeViewModel: ObservableObject {
     } else {
       comments = []
       commentsTotal = item.comment
-      commentsError = "该动态没有可用的评论编号"
+      commentsError = piliLocalized("该动态没有可用的评论编号")
     }
     loadDynamicDetail()
   }
@@ -1733,12 +1737,12 @@ private final class PiliNativeViewModel: ObservableObject {
         guard let self else { return }
         self.searchDiscoveryLoading = false
         if let flutterError = response as? FlutterError {
-          self.searchDiscoveryError = flutterError.message ?? "搜索内容加载失败"
+          self.searchDiscoveryError = piliLocalizedDisplay(flutterError.message ?? "搜索内容加载失败")
           return
         }
         let result = piliDictionary(response)
         guard result["state"] as? String == "success" else {
-          self.searchDiscoveryError = piliString(result["error"]) ?? "搜索内容加载失败"
+          self.searchDiscoveryError = piliLocalizedDisplay(piliString(result["error"]) ?? "搜索内容加载失败")
           return
         }
         self.searchHistory = (result["history"] as? [Any])?.compactMap { piliString($0) } ?? []
@@ -1831,12 +1835,12 @@ private final class PiliNativeViewModel: ObservableObject {
         self.searchLoading = false
         self.searchLoadingMore = false
         if let error = response as? FlutterError {
-          self.searchError = error.message ?? "搜索失败"
+          self.searchError = piliLocalizedDisplay(error.message ?? "搜索失败")
           return
         }
         let result = piliDictionary(response)
         if result["state"] as? String == "error" {
-          self.searchError = result["error"] as? String ?? "搜索失败"
+          self.searchError = piliLocalizedDisplay(result["error"] as? String ?? "搜索失败")
           return
         }
         let rows = result["items"] as? [Any] ?? []
@@ -1872,23 +1876,23 @@ private final class PiliNativeViewModel: ObservableObject {
     loginPolling = false
     loginQRCodeURL = ""
     loginExpiresIn = 0
-    loginMessage = "正在生成登录二维码"
+    loginMessage = piliLocalized("正在生成登录二维码")
     channel.invokeMethod("startNativeLogin", arguments: nil) { [weak self] response in
       DispatchQueue.main.async {
         guard let self = self else { return }
         self.loginLoading = false
         if let flutterError = response as? FlutterError {
-          self.loginMessage = flutterError.message ?? "登录二维码获取失败"
+          self.loginMessage = piliLocalizedDisplay(flutterError.message ?? "登录二维码获取失败")
           return
         }
         let result = piliDictionary(response)
         guard result["state"] as? String == "success" else {
-          self.loginMessage = result["error"] as? String ?? "登录二维码获取失败"
+          self.loginMessage = piliLocalizedDisplay(result["error"] as? String ?? "登录二维码获取失败")
           return
         }
         self.loginQRCodeURL = piliString(result["url"]) ?? ""
         self.loginExpiresIn = piliInt(result["expiresIn"])
-        self.loginMessage = "使用哔哩哔哩客户端扫码并确认"
+        self.loginMessage = piliLocalized("使用哔哩哔哩客户端扫码并确认")
       }
     }
   }
@@ -1896,7 +1900,7 @@ private final class PiliNativeViewModel: ObservableObject {
   func pollNativeLogin() {
     guard isLoginPresented, !loginQRCodeURL.isEmpty, !loginPolling else { return }
     guard loginExpiresIn > 0 else {
-      loginMessage = "二维码已过期，请刷新"
+      loginMessage = piliLocalized("二维码已过期，请刷新")
       return
     }
     loginExpiresIn = max(0, loginExpiresIn - 2)
@@ -1906,22 +1910,22 @@ private final class PiliNativeViewModel: ObservableObject {
         guard let self = self else { return }
         self.loginPolling = false
         if let flutterError = response as? FlutterError {
-          self.loginMessage = flutterError.message ?? "登录状态检查失败"
+          self.loginMessage = piliLocalizedDisplay(flutterError.message ?? "登录状态检查失败")
           return
         }
         let result = piliDictionary(response)
         switch result["state"] as? String {
         case "success":
-          self.loginMessage = result["message"] as? String ?? "登录成功"
+          self.loginMessage = piliLocalizedDisplay(result["message"] as? String ?? "登录成功")
           self.isLoginPresented = false
           self.requestSnapshot()
         case "expired":
           self.loginExpiresIn = 0
-          self.loginMessage = result["message"] as? String ?? "二维码已过期，请刷新"
+          self.loginMessage = piliLocalizedDisplay(result["message"] as? String ?? "二维码已过期，请刷新")
         case "error":
-          self.loginMessage = result["message"] as? String ?? "登录状态检查失败"
+          self.loginMessage = piliLocalizedDisplay(result["message"] as? String ?? "登录状态检查失败")
         default:
-          self.loginMessage = result["message"] as? String ?? "等待扫码确认"
+          self.loginMessage = piliLocalizedDisplay(result["message"] as? String ?? "等待扫码确认")
         }
       }
     }
@@ -1968,12 +1972,12 @@ private final class PiliNativeViewModel: ObservableObject {
         self.messagesLoading = false
         self.messagesLoadingMore = false
         if let flutterError = response as? FlutterError {
-          self.messagesError = flutterError.message ?? "消息加载失败"
+          self.messagesError = piliLocalizedDisplay(flutterError.message ?? "消息加载失败")
           return
         }
         let result = piliDictionary(response)
         guard result["state"] as? String == "success" else {
-          self.messagesError = result["error"] as? String ?? "消息加载失败"
+          self.messagesError = piliLocalizedDisplay(result["error"] as? String ?? "消息加载失败")
           return
         }
         let rows = result["items"] as? [Any] ?? []
@@ -2014,7 +2018,7 @@ private final class PiliNativeViewModel: ObservableObject {
       return
     }
     guard message.talkerID != nil else {
-      messagesError = "该折叠会话暂无可用的私信对象"
+      messagesError = piliLocalized("该折叠会话暂无可用的私信对象")
       return
     }
     selectedChat = message
@@ -2056,12 +2060,12 @@ private final class PiliNativeViewModel: ObservableObject {
         self.chatLoading = false
         self.chatLoadingMore = false
         if let error = response as? FlutterError {
-          self.chatError = error.message ?? "聊天记录加载失败"
+          self.chatError = piliLocalizedDisplay(error.message ?? "聊天记录加载失败")
           return
         }
         let result = piliDictionary(response)
         guard result["state"] as? String == "success" else {
-          self.chatError = result["error"] as? String ?? "聊天记录加载失败"
+          self.chatError = piliLocalizedDisplay(result["error"] as? String ?? "聊天记录加载失败")
           return
         }
         let rows = result["items"] as? [Any] ?? []
@@ -2106,7 +2110,7 @@ private final class PiliNativeViewModel: ObservableObject {
         if success {
           self.loadChat(refresh: true)
         } else {
-          self.chatError = result["error"] as? String ?? "消息发送失败"
+          self.chatError = piliLocalizedDisplay(result["error"] as? String ?? "消息发送失败")
         }
         completion(success)
       }
@@ -2128,7 +2132,7 @@ private final class PiliNativeViewModel: ObservableObject {
         if result["state"] as? String == "success" {
           self.loadChat(refresh: true)
         } else {
-          self.chatError = result["error"] as? String ?? "图片消息发送失败"
+          self.chatError = piliLocalizedDisplay(result["error"] as? String ?? "图片消息发送失败")
         }
       }
     }
@@ -2148,7 +2152,7 @@ private final class PiliNativeViewModel: ObservableObject {
         if result["state"] as? String == "success" {
           self.loadChat(refresh: true)
         } else {
-          self.chatError = result["error"] as? String ?? "消息撤回失败"
+          self.chatError = piliLocalizedDisplay(result["error"] as? String ?? "消息撤回失败")
         }
       }
     }
@@ -2171,12 +2175,12 @@ private final class PiliNativeViewModel: ObservableObject {
         self.downloadsRefreshInFlight = false
         self.downloadsLoading = false
         if let flutterError = response as? FlutterError {
-          self.downloadsError = flutterError.message ?? "离线缓存读取失败"
+          self.downloadsError = piliLocalizedDisplay(flutterError.message ?? "离线缓存读取失败")
           return
         }
         let result = piliDictionary(response)
         guard result["state"] as? String == "success" else {
-          self.downloadsError = result["error"] as? String ?? "离线缓存读取失败"
+          self.downloadsError = piliLocalizedDisplay(result["error"] as? String ?? "离线缓存读取失败")
           return
         }
         let rows = result["items"] as? [Any] ?? []
@@ -2202,7 +2206,7 @@ private final class PiliNativeViewModel: ObservableObject {
         } else {
           self.downloadsError = (response as? FlutterError)?.message
             ?? result["error"] as? String
-            ?? "离线视频打开失败"
+            ?? piliLocalized("离线视频打开失败")
         }
       }
     }
@@ -2222,7 +2226,7 @@ private final class PiliNativeViewModel: ObservableObject {
         } else {
           self.downloadsError = (response as? FlutterError)?.message
             ?? result["error"] as? String
-            ?? "缓存操作失败"
+            ?? piliLocalized("缓存操作失败")
         }
       }
     }
@@ -2244,7 +2248,7 @@ private final class PiliNativeViewModel: ObservableObject {
         guard result["state"] as? String == "success" else {
           self.downloadOptionsError = (response as? FlutterError)?.message
             ?? result["error"] as? String
-            ?? "缓存信息加载失败"
+            ?? piliLocalized("缓存信息加载失败")
           return
         }
         let partRows = result["parts"] as? [Any] ?? []
@@ -2287,13 +2291,13 @@ private final class PiliNativeViewModel: ObservableObject {
         self.downloadActionLoading = false
         let result = piliDictionary(response)
         if result["state"] as? String == "success" {
-          self.downloadActionMessage = result["message"] as? String ?? "已加入缓存任务"
+          self.downloadActionMessage = piliLocalizedDisplay(result["message"] as? String ?? "已加入缓存任务")
           self.videoActionMessage = self.downloadActionMessage
           self.isDownloadOptionsPresented = false
         } else {
           self.downloadActionMessage = (response as? FlutterError)?.message
             ?? result["error"] as? String
-            ?? "加入缓存失败"
+            ?? piliLocalized("加入缓存失败")
         }
       }
     }
@@ -2361,12 +2365,12 @@ private final class PiliNativeViewModel: ObservableObject {
         self.commentsLoading = false
         self.commentsLoadingMore = false
         if let flutterError = response as? FlutterError {
-          self.commentsError = flutterError.message ?? "评论加载失败"
+          self.commentsError = piliLocalizedDisplay(flutterError.message ?? "评论加载失败")
           return
         }
         let result = piliDictionary(response)
         guard result["state"] as? String == "success" else {
-          self.commentsError = result["error"] as? String ?? "评论加载失败"
+          self.commentsError = piliLocalizedDisplay(result["error"] as? String ?? "评论加载失败")
           return
         }
         let rows = result["items"] as? [Any] ?? []
@@ -2410,7 +2414,7 @@ private final class PiliNativeViewModel: ObservableObject {
         guard let self = self else { return }
         let result = piliDictionary(response)
         guard result["state"] as? String == "success" else {
-          self.commentsError = result["error"] as? String ?? "评论点赞失败"
+          self.commentsError = piliLocalizedDisplay(result["error"] as? String ?? "评论点赞失败")
           return
         }
         let nowLiked = piliBool(result["liked"])
@@ -2517,7 +2521,7 @@ private final class PiliNativeViewModel: ObservableObject {
         guard let self = self, self.selectedDynamic?.sourceID == sourceID else { return }
         self.dynamicDetailLoading = false
         if let flutterError = response as? FlutterError {
-          self.dynamicMessage = flutterError.message ?? "动态详情加载失败"
+          self.dynamicMessage = piliLocalizedDisplay(flutterError.message ?? "动态详情加载失败")
           PiliNativeDiagnosticLog.shared.append(
             "Dynamic detail Flutter error id=\(sourceID): "
               + "\(flutterError.message ?? "unknown")"
@@ -2526,7 +2530,7 @@ private final class PiliNativeViewModel: ObservableObject {
         }
         let result = piliDictionary(response)
         guard result["state"] as? String == "success" else {
-          self.dynamicMessage = result["error"] as? String ?? "动态详情加载失败"
+          self.dynamicMessage = piliLocalizedDisplay(result["error"] as? String ?? "动态详情加载失败")
           PiliNativeDiagnosticLog.shared.append(
             "Dynamic detail failed id=\(sourceID) code=\(piliString(result["code"]) ?? "none") "
               + "error=\(self.dynamicMessage ?? "unknown")"
@@ -2546,7 +2550,7 @@ private final class PiliNativeViewModel: ObservableObject {
   func toggleDynamicLike() {
     guard let item = selectedDynamic, !dynamicActionLoading else { return }
     guard let sourceID = item.validSourceID else {
-      dynamicMessage = "该动态缺少有效编号，请刷新动态列表后重试"
+      dynamicMessage = piliLocalized("该动态缺少有效编号，请刷新动态列表后重试")
       return
     }
     dynamicActionLoading = true
@@ -2560,7 +2564,7 @@ private final class PiliNativeViewModel: ObservableObject {
         self.dynamicActionLoading = false
         let result = piliDictionary(response)
         guard result["state"] as? String == "success" else {
-          self.dynamicMessage = result["error"] as? String ?? "动态点赞失败"
+          self.dynamicMessage = piliLocalizedDisplay(result["error"] as? String ?? "动态点赞失败")
           return
         }
         let nowLiked = piliBool(result["liked"])
@@ -2576,15 +2580,15 @@ private final class PiliNativeViewModel: ObservableObject {
 
   func beginDynamicComment() {
     guard commentOID != nil else {
-      dynamicMessage = "该动态暂时无法评论"
+      dynamicMessage = piliLocalized("该动态暂时无法评论")
       return
     }
     composerRootRpid = nil
     composerParentRpid = nil
     dynamicMessage = nil
     dynamicComposerMode = "comment"
-    dynamicComposerTitle = "发表评论"
-    dynamicComposerHint = "友善地发表一条评论"
+    dynamicComposerTitle = piliLocalized("发表评论")
+    dynamicComposerHint = piliLocalized("友善地发表一条评论")
     dynamicComposerText = ""
     isDynamicComposerPresented = true
   }
@@ -2592,9 +2596,9 @@ private final class PiliNativeViewModel: ObservableObject {
   func beginDynamicRepost() {
     dynamicMessage = nil
     dynamicComposerMode = "repost"
-    dynamicComposerTitle = "转发动态"
-    dynamicComposerHint = "说点什么吧"
-    dynamicComposerText = "转发动态"
+    dynamicComposerTitle = piliLocalized("转发动态")
+    dynamicComposerHint = piliLocalized("说点什么吧")
+    dynamicComposerText = piliLocalized("转发动态")
     composerRootRpid = nil
     composerParentRpid = nil
     isDynamicComposerPresented = true
@@ -2602,7 +2606,7 @@ private final class PiliNativeViewModel: ObservableObject {
 
   func beginCommentReply(_ comment: PiliNativeComment, root: PiliNativeComment? = nil) {
     guard commentOID != nil else {
-      dynamicMessage = "该评论区暂时无法回复"
+      dynamicMessage = piliLocalized("该评论区暂时无法回复")
       return
     }
     let rootComment = root ?? comment
@@ -2610,8 +2614,8 @@ private final class PiliNativeViewModel: ObservableObject {
     composerRootRpid = rootComment.rpid
     composerParentRpid = comment.rpid
     dynamicComposerMode = "reply"
-    dynamicComposerTitle = "回复 \(comment.author)"
-    dynamicComposerHint = "回复 @\(comment.author)"
+    dynamicComposerTitle = piliLocalizedFormat("回复 %@", comment.author)
+    dynamicComposerHint = piliLocalizedFormat("回复 @%@", comment.author)
     dynamicComposerText = ""
     isDynamicComposerPresented = true
   }
@@ -2620,7 +2624,7 @@ private final class PiliNativeViewModel: ObservableObject {
     guard !dynamicActionLoading else { return }
     let text = dynamicComposerText.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !text.isEmpty else {
-      dynamicMessage = "内容不能为空"
+      dynamicMessage = piliLocalized("内容不能为空")
       return
     }
     dynamicActionLoading = true
@@ -2629,7 +2633,7 @@ private final class PiliNativeViewModel: ObservableObject {
     if dynamicComposerMode == "repost" {
       guard let sourceID = selectedDynamic?.validSourceID else {
         dynamicActionLoading = false
-        dynamicMessage = "该动态缺少有效编号，请刷新动态列表后重试"
+        dynamicMessage = piliLocalized("该动态缺少有效编号，请刷新动态列表后重试")
         return
       }
       channel.invokeMethod(
@@ -2641,12 +2645,12 @@ private final class PiliNativeViewModel: ObservableObject {
           self.dynamicActionLoading = false
           let result = piliDictionary(response)
           guard result["state"] as? String == "success" else {
-            self.dynamicMessage = result["error"] as? String ?? "动态转发失败"
+            self.dynamicMessage = piliLocalizedDisplay(result["error"] as? String ?? "动态转发失败")
             return
           }
           self.selectedDynamic?.forward += 1
           self.syncSelectedDynamicToList()
-          self.dynamicMessage = result["message"] as? String ?? "转发成功"
+          self.dynamicMessage = piliLocalizedDisplay(result["message"] as? String ?? "转发成功")
           self.isDynamicComposerPresented = false
           self.loadDynamicDetail()
         }
@@ -2656,7 +2660,7 @@ private final class PiliNativeViewModel: ObservableObject {
 
     guard let oid = commentOID else {
       dynamicActionLoading = false
-      dynamicMessage = "评论参数无效"
+        dynamicMessage = piliLocalized("评论参数无效")
       return
     }
     let root = composerRootRpid
@@ -2674,10 +2678,10 @@ private final class PiliNativeViewModel: ObservableObject {
         self.dynamicActionLoading = false
         let result = piliDictionary(response)
         guard result["state"] as? String == "success" else {
-          self.dynamicMessage = result["error"] as? String ?? "评论发布失败"
+          self.dynamicMessage = piliLocalizedDisplay(result["error"] as? String ?? "评论发布失败")
           return
         }
-        self.dynamicMessage = result["message"] as? String ?? "发布成功"
+        self.dynamicMessage = piliLocalizedDisplay(result["message"] as? String ?? "发布成功")
         self.isDynamicComposerPresented = false
         if self.isVideoDetailPresented { self.refreshCurrentVideoDetail() }
         if self.isDynamicDetailPresented { self.loadDynamicDetail() }
@@ -2767,7 +2771,7 @@ private final class PiliNativeViewModel: ObservableObject {
         self.commentThreadLoadingMore = false
         let result = piliDictionary(response)
         guard result["state"] as? String == "success" else {
-          self.commentThreadError = result["error"] as? String ?? "二级评论加载失败"
+          self.commentThreadError = piliLocalizedDisplay(result["error"] as? String ?? "二级评论加载失败")
           return
         }
         let rows = result["items"] as? [Any] ?? []
@@ -2810,7 +2814,7 @@ private final class PiliNativeViewModel: ObservableObject {
         guard let self = self else { return }
         let result = piliDictionary(response)
         guard result["state"] as? String == "success" else {
-          self.commentThreadError = result["error"] as? String ?? "评论点赞失败"
+          self.commentThreadError = piliLocalizedDisplay(result["error"] as? String ?? "评论点赞失败")
           return
         }
         let nowLiked = piliBool(result["liked"])
@@ -2842,7 +2846,7 @@ private final class PiliNativeViewModel: ObservableObject {
 
   func presentLibrary(_ kind: String, title: String) {
     libraryKind = kind
-    libraryTitle = title
+    libraryTitle = piliLocalized(title)
     librarySubtitle = ""
     libraryItems = []
     libraryMediaID = nil
@@ -2881,12 +2885,12 @@ private final class PiliNativeViewModel: ObservableObject {
         self.libraryLoading = false
         self.libraryLoadingMore = false
         if let error = response as? FlutterError {
-          self.libraryError = error.message ?? "列表加载失败"
+          self.libraryError = piliLocalizedDisplay(error.message ?? "列表加载失败")
           return
         }
         let result = piliDictionary(response)
         guard result["state"] as? String == "success" else {
-          self.libraryError = result["error"] as? String ?? "列表加载失败"
+          self.libraryError = piliLocalizedDisplay(result["error"] as? String ?? "列表加载失败")
           return
         }
         let rows = result["items"] as? [Any] ?? []
@@ -2899,7 +2903,10 @@ private final class PiliNativeViewModel: ObservableObject {
         } else {
           self.libraryItems = newItems
         }
-        self.libraryTitle = piliString(result["title"]) ?? self.libraryTitle
+        if let title = piliString(result["title"]) {
+          self.libraryTitle = ["history", "later", "favorites", "following", "followers", "subscriptions"].contains(self.libraryKind)
+            ? piliLocalized(title) : title
+        }
         self.librarySubtitle = piliString(result["subtitle"]) ?? ""
         self.libraryHasMore = piliBool(result["hasMore"])
         self.libraryNextMax = piliOptionalInt(result["nextMax"])
@@ -2975,7 +2982,7 @@ private final class PiliNativeViewModel: ObservableObject {
 
   func returnToLibraryRoot() {
     libraryKind = libraryParentKind ?? "favorites"
-    libraryTitle = libraryParentTitle ?? "我的收藏"
+    libraryTitle = libraryParentTitle ?? piliLocalized("我的收藏")
     librarySubtitle = ""
     libraryMediaID = nil
     libraryParentKind = nil
@@ -2985,7 +2992,7 @@ private final class PiliNativeViewModel: ObservableObject {
   }
 
   private func openLibraryFallback(item: PiliNativeLibraryItem) {
-    libraryError = "该内容类型尚未提供原生操作"
+    libraryError = piliLocalized("该内容类型尚未提供原生操作")
   }
 
   func loadMineFavorites() {
@@ -3000,7 +3007,9 @@ private final class PiliNativeViewModel: ObservableObject {
         self.mineFavoritesLoading = false
         let result = piliDictionary(response)
         guard piliString(result["state"]) == "success" else {
-          self.mineFavoritesError = (response as? FlutterError)?.message ?? piliString(result["error"]) ?? "收藏夹加载失败"
+          self.mineFavoritesError = piliLocalizedDisplay(
+            (response as? FlutterError)?.message ?? piliString(result["error"]) ?? "收藏夹加载失败"
+          )
           return
         }
         self.mineFavorites = (result["items"] as? [Any] ?? []).enumerated().map {
@@ -3012,7 +3021,7 @@ private final class PiliNativeViewModel: ObservableObject {
 
   func openFavoriteFolder(_ item: PiliNativeLibraryItem) {
     libraryKind = "favorites"
-    libraryTitle = "我的收藏"
+    libraryTitle = piliLocalized("我的收藏")
     openLibraryItem(item)
     isLibraryPresented = true
   }
@@ -3046,7 +3055,9 @@ private final class PiliNativeViewModel: ObservableObject {
         self.profileSectionLoading = false
         let result = piliDictionary(response)
         guard piliString(result["state"]) == "success" else {
-          self.profileSectionError = (response as? FlutterError)?.message ?? piliString(result["error"]) ?? "内容加载失败"
+          self.profileSectionError = piliLocalizedDisplay(
+            (response as? FlutterError)?.message ?? piliString(result["error"]) ?? "内容加载失败"
+          )
           return
         }
         let rows = result["items"] as? [Any] ?? []
@@ -3089,7 +3100,11 @@ private final class PiliNativeViewModel: ObservableObject {
         guard let self, self.profileMID == mid, self.account.mid == mid else { completion("账号已切换"); return }
         let result = piliDictionary(response)
         if piliString(result["state"]) == "success" { self.loadProfile(); completion(nil) }
-        else { completion((response as? FlutterError)?.message ?? piliString(result["error"]) ?? "保存失败") }
+        else {
+          completion(piliLocalizedDisplay(
+            (response as? FlutterError)?.message ?? piliString(result["error"]) ?? "保存失败"
+          ))
+        }
       }
     }
   }
@@ -3118,12 +3133,12 @@ private final class PiliNativeViewModel: ObservableObject {
         guard let self = self, self.profileMID == memberID else { return }
         self.profileLoading = false
         if let flutterError = response as? FlutterError {
-          self.profileError = flutterError.message ?? "个人空间加载失败"
+          self.profileError = piliLocalizedDisplay(flutterError.message ?? "个人空间加载失败")
           return
         }
         let result = piliDictionary(response)
         guard result["state"] as? String == "success" else {
-          self.profileError = result["error"] as? String ?? "个人空间加载失败"
+          self.profileError = piliLocalizedDisplay(result["error"] as? String ?? "个人空间加载失败")
           return
         }
         self.profile = PiliNativeProfile(map: piliDictionary(result["profile"]))
@@ -3165,12 +3180,12 @@ private final class PiliNativeViewModel: ObservableObject {
         self.profileVideosLoading = false
         self.profileVideosLoadingMore = false
         if let flutterError = response as? FlutterError {
-          self.profileVideosError = flutterError.message ?? "用户投稿加载失败"
+          self.profileVideosError = piliLocalizedDisplay(flutterError.message ?? "用户投稿加载失败")
           return
         }
         let result = piliDictionary(response)
         guard result["state"] as? String == "success" else {
-          self.profileVideosError = result["error"] as? String ?? "用户投稿加载失败"
+          self.profileVideosError = piliLocalizedDisplay(result["error"] as? String ?? "用户投稿加载失败")
           return
         }
         let rows = result["items"] as? [Any] ?? []
@@ -3217,7 +3232,7 @@ private final class PiliNativeViewModel: ObservableObject {
           self.profile?.isFollowing = piliBool(result["isFollowing"])
           self.profileMessage = result["message"] as? String
         } else {
-          self.profileMessage = result["error"] as? String ?? "操作失败"
+          self.profileMessage = piliLocalizedDisplay(result["error"] as? String ?? "操作失败")
         }
       }
     }
@@ -3250,7 +3265,7 @@ private struct PiliNativeVideo: Identifiable {
     id = "\(sourceID)-\(index)"
     aid = piliOptionalInt(map["aid"])
     bvid = piliString(map["bvid"])
-    title = piliString(map["title"]) ?? "未命名视频"
+    title = piliString(map["title"]) ?? piliLocalized("未命名视频")
     cover = piliString(map["cover"])
     owner = piliString(map["owner"]) ?? ""
     viewText = piliString(map["viewText"]) ?? ""
@@ -3284,7 +3299,7 @@ private struct PiliNativeVideoTag: Identifiable {
   let type: String
 
   init(map: [String: Any], index: Int) {
-    name = piliString(map["name"]) ?? "标签"
+    name = piliString(map["name"]) ?? piliLocalized("标签")
     type = piliString(map["type"]) ?? ""
     id = "\(piliOptionalInt(map["id"]) ?? index)-\(name)"
   }
@@ -3299,7 +3314,7 @@ private struct PiliNativeVideoStaff: Identifiable {
 
   init(map: [String: Any], index: Int) {
     memberID = piliOptionalInt(map["id"])
-    name = piliString(map["name"]) ?? "创作成员"
+    name = piliString(map["name"]) ?? piliLocalized("创作成员")
     title = piliString(map["title"]) ?? ""
     face = piliString(map["face"])
     id = "\(memberID ?? index)-\(name)"
@@ -3344,7 +3359,7 @@ private struct PiliNativeVideoDetail {
     aid = piliOptionalInt(map["aid"])
     bvid = piliString(map["bvid"]) ?? ""
     cid = piliOptionalInt(map["cid"])
-    title = piliString(map["title"]) ?? "未命名视频"
+    title = piliString(map["title"]) ?? piliLocalized("未命名视频")
     cover = piliString(map["cover"])
     durationText = piliString(map["durationText"]) ?? ""
     owner = piliString(map["owner"]) ?? ""
@@ -3363,7 +3378,7 @@ private struct PiliNativeVideoDetail {
     coinCount = piliInt(map["coinCount"])
     favorited = piliBool(map["favorited"])
     relationLoaded = piliBool(map["relationLoaded"])
-    copyrightText = piliString(map["copyrightText"]) ?? ""
+    copyrightText = piliLocalized(piliString(map["copyrightText"]) ?? "")
     isVertical = piliBool(map["isVertical"])
     argueMessage = piliString(map["argueMessage"]) ?? ""
     collectionTitle = piliString(map["collectionTitle"]) ?? ""
@@ -3398,7 +3413,7 @@ private struct PiliNativeVideoQualityOption: Identifiable {
   init?(map: [String: Any], index: Int) {
     guard let value = piliOptionalInt(map["value"]) else { return nil }
     self.value = value
-    label = piliString(map["label"]) ?? "画质 \(index + 1)"
+    label = piliString(map["label"]) ?? piliLocalizedFormat("画质 %d", index + 1)
     shortLabel = piliString(map["shortLabel"]) ?? label
   }
 }
@@ -3413,10 +3428,10 @@ private struct PiliNativePlaybackSourceOption: Identifiable {
   var latencyText: String {
     if !speedText.isEmpty { return speedText }
     switch latencyState {
-    case "unsupported": return "此视频可能无法替换为该CDN"
-    case "timeout": return "超时"
-    case "unavailable": return "不可用"
-    default: return "未检测"
+    case "unsupported": return piliLocalized("此视频可能无法替换为该CDN")
+    case "timeout": return piliLocalized("超时")
+    case "unavailable": return piliLocalized("不可用")
+    default: return piliLocalized("未检测")
     }
   }
 }
@@ -3436,7 +3451,7 @@ private struct PiliNativeSetting: Identifiable {
     id = key
     title = piliString(map["title"]) ?? key
     subtitle = piliString(map["subtitle"]) ?? ""
-    group = piliString(map["group"]) ?? "其他"
+    group = piliString(map["group"]) ?? piliLocalized("其他")
     icon = piliString(map["icon"]) ?? "gearshape"
     value = piliBool(map["value"])
     needsRestart = piliBool(map["needsRestart"])
@@ -3470,7 +3485,7 @@ private struct PiliNativeLibraryItem: Identifiable {
     sourceID = piliString(map["id"]) ?? "library-\(index)"
     id = sourceID
     kind = piliString(map["kind"]) ?? "video"
-    title = piliString(map["title"]) ?? "未命名内容"
+    title = piliString(map["title"]) ?? piliLocalized("未命名内容")
     subtitle = piliString(map["subtitle"]) ?? ""
     cover = piliString(map["cover"])
     aid = piliOptionalInt(map["aid"])
@@ -3481,7 +3496,7 @@ private struct PiliNativeLibraryItem: Identifiable {
     durationText = piliString(map["durationText"]) ?? ""
     progressText = piliString(map["progressText"]) ?? ""
     progress = min(max(piliDouble(map["progress"]), 0), 1)
-    badge = piliString(map["badge"]) ?? ""
+    badge = piliLocalized(piliString(map["badge"]) ?? "")
     trailingText = piliString(map["trailingText"]) ?? ""
     viewText = piliString(map["viewText"]) ?? ""
     danmakuText = piliString(map["danmakuText"]) ?? ""
@@ -3597,13 +3612,13 @@ private struct PiliNativeMessage: Identifiable {
     kind = piliString(map["kind"]) ?? "system"
     talkerID = piliOptionalInt(map["talkerId"])
     memberID = piliOptionalInt(map["memberId"])
-    author = piliString(map["author"]) ?? "消息"
+    author = piliString(map["author"]) ?? piliLocalized("消息")
     avatar = piliString(map["avatar"])
     body = piliString(map["body"]) ?? ""
     context = piliString(map["context"]) ?? ""
     cover = piliString(map["cover"])
     time = piliString(map["time"]) ?? ""
-    badge = piliString(map["badge"]) ?? ""
+    badge = piliLocalized(piliString(map["badge"]) ?? "")
     unreadCount = piliOptionalInt(map["unreadCount"]) ?? 0
     hasUnread = piliBool(map["hasUnread"])
     isMuted = piliBool(map["isMuted"])
@@ -3690,7 +3705,7 @@ private struct PiliNativeComment: Identifiable {
     id = piliString(map["id"]) ?? "comment-\(index)"
     rpid = piliInt(map["rpid"])
     memberID = piliOptionalInt(map["memberId"])
-    author = piliString(map["author"]) ?? "用户"
+    author = piliString(map["author"]) ?? piliLocalized("用户")
     avatar = piliString(map["avatar"])
     message = piliString(map["message"]) ?? ""
     time = piliString(map["time"]) ?? ""
@@ -3804,13 +3819,13 @@ private struct PiliNativeDownload: Identifiable {
     cid = piliOptionalInt(map["cid"])
     aid = piliOptionalInt(map["aid"])
     bvid = piliString(map["bvid"])
-    title = piliString(map["title"]) ?? "离线视频"
+    title = piliString(map["title"]) ?? piliLocalized("离线视频")
     subtitle = piliString(map["subtitle"]) ?? ""
     cover = piliString(map["cover"])
     progress = min(max(piliDouble(map["progress"]), 0), 1)
     progressText = piliString(map["progressText"]) ?? ""
-    badge = piliString(map["badge"]) ?? ""
-    statusText = piliString(map["statusText"]) ?? progressText
+    badge = piliLocalized(piliString(map["badge"]) ?? "")
+    statusText = piliLocalized(piliString(map["statusText"]) ?? progressText)
     isCompleted = piliBool(map["isCompleted"])
     canPause = piliBool(map["canPause"])
     canResume = piliBool(map["canResume"])
@@ -3853,7 +3868,7 @@ private struct PiliNativeAccount {
   init(map: [String: Any] = [:]) {
     isLogin = piliBool(map["isLogin"])
     mid = piliOptionalInt(map["mid"])
-    name = piliString(map["name"]) ?? "点击登录"
+    name = piliString(map["name"]) ?? piliLocalized("点击登录")
     face = piliString(map["face"]) ?? piliString(map["avatarFallback"])
     level = piliInt(map["level"])
     money = piliDouble(map["money"])
@@ -3888,7 +3903,7 @@ private struct PiliNativeProfile {
 
   init(map: [String: Any]) {
     mid = piliInt(map["mid"])
-    name = piliString(map["name"]) ?? "用户"
+    name = piliString(map["name"]) ?? piliLocalized("用户")
     face = piliString(map["face"])
     topImage = piliString(map["topImage"])
     sign = piliString(map["sign"]) ?? ""
@@ -4053,7 +4068,7 @@ private struct PiliNativeRootView: View {
         content(for: item.element)
           .tabItem {
             tabIcon(for: item.element, selected: model.selectedIndex == item.offset)
-            Text(tabLabel(for: item.element))
+            Text(verbatim: "\(piliLocalized(item.element))\(model.tabTitles[item.offset].contains("动态") && !model.dynamicBadge.isEmpty ? " \(model.dynamicBadge)" : "")")
           }
           .tag(item.offset)
       }
@@ -4377,7 +4392,7 @@ private struct PiliNativeDynamicRow: View {
         Button(action: action) {
           VStack(alignment: .leading, spacing: 7) {
             HStack {
-              Text(item.author.isEmpty ? "动态" : item.author)
+              Text(item.author.isEmpty ? piliLocalized("动态") : item.author)
                 .font(.subheadline)
                 .fontWeight(.semibold)
                 .foregroundColor(.primary)
@@ -4529,7 +4544,8 @@ private struct PiliNativeDynamicPicturesView: View {
                 cornerRadius: 8
               )
               .frame(maxWidth: .infinity, alignment: .leading)
-            }.buttonStyle(PlainButtonStyle()).accessibilityLabel("预览图片 \(index + 1)")
+            }.buttonStyle(PlainButtonStyle())
+              .accessibilityLabel(Text(verbatim: piliLocalizedFormat("预览图片 %d", index + 1)))
           }
         }
         .frame(maxWidth: maxWidth, alignment: .leading)
@@ -4672,8 +4688,12 @@ private struct PiliNativeMineView: View {
             }
             if model.account.isLogin {
               HStack(spacing: 12) {
-                Text(String(format: "硬币 %.1f", model.account.money))
-                Text(verbatim: model.account.nextExp > 0 ? "经验 \(model.account.currentExp)/\(model.account.nextExp)" : "经验 \(model.account.currentExp) · 已满级")
+                Text(piliLocalizedFormat("硬币 %.1f", model.account.money))
+                Text(
+                  model.account.nextExp > 0
+                    ? piliLocalizedFormat("经验 %d/%d", model.account.currentExp, model.account.nextExp)
+                    : piliLocalizedFormat("经验 %d · 已满级", model.account.currentExp)
+                )
                   .lineLimit(1).minimumScaleFactor(0.7)
               }.font(.caption).foregroundStyle(.secondary)
               ProgressView(value: experienceProgress)
@@ -4707,7 +4727,7 @@ private struct PiliNativeMineView: View {
             Image(systemName: item.1)
               .font(.system(size: 17, weight: .semibold)).foregroundStyle(piliProfileAccent)
               .frame(width: 28, height: 28).background(piliProfileAccent.opacity(0.12), in: RoundedRectangle(cornerRadius: 7))
-            Text(item.0).foregroundStyle(.primary)
+            Text(piliLocalized(item.0)).foregroundStyle(.primary)
             Spacer()
             Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.tertiary)
           }
@@ -4780,10 +4800,10 @@ private struct PiliNativeMineView: View {
       .buttonStyle(.plain)
 
       Button { appearance = (appearance + 1) % 3 } label: {
-        nativeRow(title: "外观", detail: appearanceTitle, icon: appearance == 2 ? "moon.fill" : "circle.lefthalf.filled")
+        nativeRow(title: "外观", detail: piliLocalized(appearanceTitle), icon: appearance == 2 ? "moon.fill" : "circle.lefthalf.filled")
       }
       .buttonStyle(.plain)
-      .accessibilityLabel("切换主题，当前\(appearanceTitle)")
+      .accessibilityLabel(Text(verbatim: "\(piliLocalized("切换主题，当前"))\(piliLocalized(appearanceTitle))"))
     }
   }
 
@@ -4791,7 +4811,7 @@ private struct PiliNativeMineView: View {
     HStack(spacing: 13) {
       Image(systemName: icon).font(.system(size: 17, weight: .semibold)).foregroundStyle(piliProfileAccent)
         .frame(width: 28, height: 28).background(piliProfileAccent.opacity(0.12), in: RoundedRectangle(cornerRadius: 7))
-      Text(title).foregroundStyle(.primary)
+      Text(piliLocalized(title)).foregroundStyle(.primary)
       Spacer()
       if let detail { Text(detail).foregroundStyle(.secondary) }
       Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.tertiary)
@@ -4813,7 +4833,7 @@ private struct PiliNativeMineView: View {
   }
 
   private func toolbarButton(_ title: String, _ icon: String, action: @escaping () -> Void) -> some View {
-    Button(action: action) { Image(systemName: icon) }.accessibilityLabel(title)
+    Button(action: action) { Image(systemName: icon) }.accessibilityLabel(piliLocalized(title))
   }
 
   private func openAccount(section: Int) {
@@ -4835,7 +4855,7 @@ private struct PiliNativeAccountStat: View {
     Button(action: action) {
       VStack(spacing: 9) {
         Text(String(value)).font(.system(size: 21, weight: .semibold)).foregroundColor(.primary)
-        Text(title).font(.system(size: 14)).foregroundColor(.secondary)
+        Text(piliLocalized(title)).font(.system(size: 14)).foregroundColor(.secondary)
       }
       .frame(minWidth: 60)
     }
@@ -4942,7 +4962,7 @@ private struct PiliNativeProfileView: View {
           Button {
             if profile.isSelf { editing = true } else { model.toggleProfileFollow() }
           } label: {
-            Text(profile.isSelf ? "编辑资料" : profile.isFollowing ? "已关注" : "+ 关注")
+            Text(piliLocalized(profile.isSelf ? "编辑资料" : profile.isFollowing ? "已关注" : "+ 关注"))
               .font(.system(size: 15, weight: .semibold)).frame(maxWidth: .infinity)
           }.modifier(PiliNativeGlassButton(prominent: true)).disabled(model.profileActionLoading)
         }.padding(.top, 8)
@@ -4963,14 +4983,16 @@ private struct PiliNativeProfileView: View {
       if !profile.official.isEmpty {
         Label(profile.official, systemImage: "checkmark.seal.fill").font(.caption).foregroundStyle(.secondary)
       }
-      if let message = model.profileMessage { Text(message).font(.caption).foregroundStyle(.secondary) }
+      if let message = model.profileMessage {
+        Text(piliLocalizedDisplay(message)).font(.caption).foregroundStyle(.secondary)
+      }
     }.padding(.horizontal, 20).padding(.bottom, 12)
   }
 
   private func profileStat(_ value: Int, _ title: String) -> some View {
     VStack(spacing: 3) {
       Text(piliCompactNumber(value)).font(.system(size: 16))
-      Text(title).font(.system(size: 12)).foregroundStyle(.secondary)
+      Text(piliLocalized(title)).font(.system(size: 12)).foregroundStyle(.secondary)
     }.frame(maxWidth: .infinity)
   }
 
@@ -4979,7 +5001,7 @@ private struct PiliNativeProfileView: View {
       ForEach(sections.indices, id: \.self) { index in
         Button { query = ""; model.selectProfileSection(index) } label: {
           VStack(spacing: 11) {
-            Text(sections[index]).font(.system(size: 16, weight: model.profileSection == index ? .semibold : .regular))
+            Text(piliLocalized(sections[index])).font(.system(size: 16, weight: model.profileSection == index ? .semibold : .regular))
               .foregroundStyle(model.profileSection == index ? piliProfileAccent : Color.primary)
             Capsule().fill(model.profileSection == index ? piliProfileAccent : Color.clear).frame(width: 30, height: 3)
           }.frame(maxWidth: .infinity).padding(.top, 9)
@@ -4997,7 +5019,11 @@ private struct PiliNativeProfileView: View {
         profileVideoGrid(profile, limit: 4, title: "最新投稿")
       }.padding(.top, 14)
     } else if model.profileSection == 2 {
-      profileVideoGrid(profile, limit: nil, title: "全部投稿 · \(profile.videoCount)").padding(.top, 14)
+      profileVideoGrid(
+        profile,
+        limit: nil,
+        title: piliLocalizedFormat("全部投稿 · %d", profile.videoCount)
+      ).padding(.top, 14)
     } else {
       LazyVStack(spacing: 0) {
         if model.profileSection == 1 {
@@ -5020,10 +5046,14 @@ private struct PiliNativeProfileView: View {
         }
         if model.profileSectionLoading { ProgressView().padding(24) }
         else if let error = model.profileSectionError {
-          Text(error).font(.caption).foregroundStyle(.secondary).padding(12)
+          Text(piliLocalizedDisplay(error)).font(.caption).foregroundStyle(.secondary).padding(12)
           Button("重试加载") { model.loadProfileSection() }.padding(.bottom, 20)
         } else if model.profileDynamics.isEmpty && model.profileCollections.isEmpty {
-          PiliNativeEmptyView(icon: model.profileSection == 1 ? "text.bubble" : "rectangle.stack", title: "暂无\(sections[model.profileSection])", subtitle: "未公开或还没有发布内容")
+          PiliNativeEmptyView(
+            icon: model.profileSection == 1 ? "text.bubble" : "rectangle.stack",
+            title: piliLocalizedFormat("暂无%@", piliLocalized(sections[model.profileSection])),
+            subtitle: "未公开或还没有发布内容"
+          )
             .frame(minHeight: 160)
         } else if model.profileSectionHasMore {
           Button("加载更多") { model.loadProfileSection() }.padding(24)
@@ -5045,7 +5075,7 @@ private struct PiliNativeProfileView: View {
     VStack(alignment: .leading, spacing: 12) {
       Label("个人简介", systemImage: "quote.bubble")
         .font(.headline)
-      Text(profile.sign.isEmpty ? "这个人很神秘，什么都没有写。" : profile.sign)
+      Text(profile.sign.isEmpty ? piliLocalized("这个人很神秘，什么都没有写。") : profile.sign)
         .font(.subheadline)
         .foregroundColor(.secondary)
         .fixedSize(horizontal: false, vertical: true)
@@ -5076,7 +5106,7 @@ private struct PiliNativeProfileView: View {
   private func profileVideoGrid(_ profile: PiliNativeProfile, limit: Int?, title: String) -> some View {
     VStack(alignment: .leading, spacing: 13) {
       HStack {
-        Label(title, systemImage: "play.rectangle")
+        Label(piliLocalizedDisplay(title), systemImage: "play.rectangle")
           .font(.headline)
         Spacer()
         if model.profileSection == 0 && profile.videos.count > 4 {
@@ -5093,7 +5123,7 @@ private struct PiliNativeProfileView: View {
         PiliNativeEmptyView(
           icon: "video.slash",
           title: "暂无公开视频",
-          subtitle: model.profileVideosError ?? "该用户还没有发布视频"
+          subtitle: model.profileVideosError ?? piliLocalized("该用户还没有发布视频")
         )
         .frame(height: 150)
       } else {
@@ -5113,7 +5143,7 @@ private struct PiliNativeProfileView: View {
         if limit == nil {
           if let error = model.profileVideosError {
             VStack(spacing: 8) {
-              Text(error)
+              Text(piliLocalizedDisplay(error))
                 .font(.caption)
                 .foregroundColor(.secondary)
               Button("重试加载", action: model.reloadProfileVideos)
@@ -5155,7 +5185,7 @@ private struct PiliNativeProfileView: View {
         profileDetailRow("认证", profile.official, "checkmark.seal")
       }
       Divider().padding(.leading, 38)
-      profileDetailRow("投稿", "\(profile.videoCount) 个视频", "play.rectangle")
+      profileDetailRow("投稿", piliLocalizedFormat("%d 个视频", profile.videoCount), "play.rectangle")
     }
     .padding(16)
     .background(Color(UIColor.systemBackground))
@@ -5168,7 +5198,7 @@ private struct PiliNativeProfileView: View {
       Image(systemName: icon)
         .foregroundColor(piliAccent)
         .frame(width: 26)
-      Text(title)
+      Text(piliLocalized(title))
         .foregroundColor(.secondary)
       Spacer()
       Text(value)
@@ -5256,13 +5286,13 @@ private struct PiliNativeProfileEditor: View {
           TextEditor(text: $sign).frame(minHeight: 120).accessibilityLabel("个性签名")
           Text("\(sign.count)/70").font(.caption).foregroundStyle(.secondary)
         }
-        if let error { Text(error).foregroundStyle(.red) }
+        if let error { Text(piliLocalizedDisplay(error)).foregroundStyle(.red) }
       }
       .navigationTitle("编辑资料").navigationBarTitleDisplayMode(.inline)
       .toolbar {
         ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() }.disabled(saving) }
         ToolbarItem(placement: .confirmationAction) {
-          Button(saving ? "保存中…" : "保存") {
+          Button(piliLocalized(saving ? "保存中…" : "保存")) {
             saving = true; error = nil
             model.saveProfileSign(sign) { message in
               saving = false
@@ -5454,7 +5484,7 @@ private struct PiliNativeVideoDetailView: View {
 
       if let error = model.originalPlayerError {
         HStack(spacing: 10) {
-          Text(error)
+          Text(piliLocalizedDisplay(error))
             .font(.caption)
             .foregroundColor(.white)
           Spacer(minLength: 0)
@@ -5494,10 +5524,9 @@ private struct PiliNativeVideoDetailView: View {
     HStack(spacing: 12) {
       Picker("视频内容", selection: $selectedTab) {
         Text("简介").tag(PiliNativeVideoDetailTab.introduction)
-        Text(
-          model.commentsTotal > 0
-            ? "评论 \(piliCompactNumber(model.commentsTotal))"
-            : "评论"
+        Text(verbatim: model.commentsTotal > 0
+          ? piliLocalizedFormat("评论 %@", piliCompactNumber(model.commentsTotal))
+          : piliLocalized("评论")
         ).tag(PiliNativeVideoDetailTab.comments)
       }
       .pickerStyle(.segmented)
@@ -5518,9 +5547,9 @@ private struct PiliNativeVideoDetailView: View {
         nativeTitleAndStats(video)
         nativeActionRow(video)
         if let message = model.videoActionMessage {
-          Text(message)
+          Text(piliLocalizedDisplay(message))
             .font(.footnote)
-            .foregroundColor(message.contains("失败") || message.contains("登录") ? .red : piliAccent)
+                  .foregroundColor(piliNativeMessageIsError(message) ? .red : piliAccent)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
       }
@@ -5534,7 +5563,7 @@ private struct PiliNativeVideoDetailView: View {
         } header: {
           Text("选集")
         } footer: {
-          Text("共 \(video.pages.count) 个视频")
+          Text(verbatim: piliLocalizedFormat("%d 个视频", video.pages.count))
         }
       }
       if !video.collectionTitle.isEmpty {
@@ -5568,7 +5597,7 @@ private struct PiliNativeVideoDetailView: View {
           .frame(width: 36, height: 36)
           .clipShape(Circle())
         VStack(alignment: .leading, spacing: 3) {
-          Text(video.owner.isEmpty ? "UP 主" : video.owner)
+      Text(video.owner.isEmpty ? piliLocalized("UP 主") : video.owner)
             .font(.body.weight(.semibold))
           Text([video.copyrightText, video.bvid].filter { !$0.isEmpty }.joined(separator: " · "))
             .font(.footnote)
@@ -5591,7 +5620,7 @@ private struct PiliNativeVideoDetailView: View {
   private func nativeTitleAndStats(_ video: PiliNativeVideoDetail) -> some View {
     VStack(alignment: .leading, spacing: 9) {
       DisclosureGroup(isExpanded: $descriptionExpanded) {
-        Text(video.description.isEmpty ? "暂无简介" : video.description)
+        Text(video.description.isEmpty ? piliLocalized("暂无简介") : video.description)
           .font(.body)
           .foregroundStyle(video.description.isEmpty ? .secondary : .primary)
           .fixedSize(horizontal: false, vertical: true)
@@ -5695,7 +5724,7 @@ private struct PiliNativeVideoDetailView: View {
         VStack(alignment: .leading, spacing: 4) {
           Text(video.collectionTitle)
             .font(.body)
-          Text("合集共 \(video.collectionCount) 个视频")
+          Text(piliLocalizedFormat("合集共 %d 个视频", video.collectionCount))
             .font(.footnote)
             .foregroundStyle(.secondary)
         }
@@ -5759,7 +5788,7 @@ private struct PiliNativeVideoDetailView: View {
         .frame(maxWidth: .infinity, minHeight: 70)
     } else if model.relatedVideos.isEmpty {
       if let error = model.relatedVideosError {
-        Text(error).font(.footnote).foregroundStyle(.secondary)
+        Text(piliLocalizedDisplay(error)).font(.footnote).foregroundStyle(.secondary)
       } else {
         Text("暂无相关推荐").font(.footnote).foregroundStyle(.secondary)
       }
@@ -5825,7 +5854,7 @@ private struct PiliNativeVideoDetailView: View {
     List {
       Section {
         if let error = model.commentsError, !model.comments.isEmpty {
-          Text(error).font(.footnote).foregroundColor(.red)
+          Text(piliLocalizedDisplay(error)).font(.footnote).foregroundColor(.red)
         }
 
         if model.commentsLoading && model.comments.isEmpty {
@@ -5838,7 +5867,7 @@ private struct PiliNativeVideoDetailView: View {
           .frame(maxWidth: .infinity, minHeight: 70)
         } else if let error = model.commentsError, model.comments.isEmpty {
           VStack(spacing: 10) {
-            Text(error).font(.subheadline).foregroundColor(.secondary)
+            Text(piliLocalizedDisplay(error)).font(.subheadline).foregroundColor(.secondary)
             Button("重试", action: model.retryComments)
           }
           .frame(maxWidth: .infinity, minHeight: 90)
@@ -5943,7 +5972,7 @@ private struct PiliNativeVideoDetailView: View {
             .clipShape(Circle())
             .overlay(Circle().stroke(piliAccent.opacity(0.25), lineWidth: 2))
           VStack(alignment: .leading, spacing: 3) {
-            Text(video.owner.isEmpty ? "UP 主" : video.owner)
+            Text(video.owner.isEmpty ? piliLocalized("UP 主") : video.owner)
               .font(.headline)
               .foregroundColor(.primary)
             Text([video.copyrightText, video.bvid].filter { !$0.isEmpty }.joined(separator: " · "))
@@ -5997,9 +6026,9 @@ private struct PiliNativeVideoDetailView: View {
       if model.videoActionLoading {
         ProgressView().frame(maxWidth: .infinity)
       } else if let message = model.videoActionMessage {
-        Text(message)
+        Text(piliLocalizedDisplay(message))
           .font(.caption)
-          .foregroundColor(message.contains("失败") || message.contains("登录") ? .red : piliAccent)
+          .foregroundColor(piliNativeMessageIsError(message) ? .red : piliAccent)
           .frame(maxWidth: .infinity, alignment: .center)
       }
     }
@@ -6039,7 +6068,7 @@ private struct PiliNativeVideoDetailView: View {
 
       Button(action: toggleDescription) {
         HStack(spacing: 5) {
-          Text(descriptionExpanded ? "收起简介" : "展开完整简介")
+          Text(piliLocalized(descriptionExpanded ? "收起简介" : "展开完整简介"))
           Image(systemName: descriptionExpanded ? "chevron.up" : "chevron.down")
           Spacer(minLength: 0)
         }
@@ -6068,7 +6097,7 @@ private struct PiliNativeVideoDetailView: View {
         Label("选集", systemImage: "list.number")
           .font(.headline)
         Spacer()
-        Text("\(video.pages.count) 个视频")
+        Text(piliLocalizedFormat("%d 个视频", video.pages.count))
           .font(.caption)
           .foregroundColor(.secondary)
       }
@@ -6115,7 +6144,7 @@ private struct PiliNativeVideoDetailView: View {
         .cornerRadius(12)
       VStack(alignment: .leading, spacing: 4) {
         Text(video.collectionTitle).font(.headline)
-        Text("合集共 \(video.collectionCount) 个视频")
+        Text(piliLocalizedFormat("合集共 %d 个视频", video.collectionCount))
           .font(.caption)
           .foregroundColor(.secondary)
       }
@@ -6201,7 +6230,7 @@ private struct PiliNativeVideoCollectionView: View {
     NavigationView {
       List {
         Section(
-          header: Text("共 \(video.collectionItems.count) 个视频"),
+          header: Text(piliLocalizedFormat("共 %d 个视频", video.collectionItems.count)),
           footer: Text("选择后会继续使用当前原生播放器播放该合集视频。")
         ) {
           ForEach(video.collectionItems) { item in
@@ -6431,7 +6460,7 @@ private struct PiliNativeVideoMetric: View {
   var body: some View {
     VStack(spacing: 5) {
       Image(systemName: icon).font(.title3)
-      Text(value > 0 ? piliCompactNumber(value) : title)
+      Text(value > 0 ? piliCompactNumber(value) : piliLocalized(title))
         .font(.caption)
         .lineLimit(1)
     }
@@ -6458,7 +6487,7 @@ private struct PiliNativeDynamicDetailView: View {
                     .frame(width: 48, height: 48)
                     .clipShape(Circle())
                   VStack(alignment: .leading, spacing: 3) {
-                    Text(item.author.isEmpty ? "动态" : item.author)
+                    Text(item.author.isEmpty ? piliLocalized("动态") : item.author)
                       .font(.headline)
                       .foregroundColor(.primary)
                     Text(item.time)
@@ -6538,7 +6567,7 @@ private struct PiliNativeDynamicDetailView: View {
                   .font(.caption)
                   .frame(maxWidth: .infinity, alignment: .center)
               } else if let message = model.dynamicMessage {
-                Text(message)
+                Text(piliLocalizedDisplay(message))
                   .font(.caption)
                   .foregroundColor(.secondary)
                   .frame(maxWidth: .infinity, alignment: .center)
@@ -6599,7 +6628,7 @@ private struct PiliNativeCommentsSection: View {
       }
 
       if let error = model.commentsError, !model.comments.isEmpty {
-        Text(error)
+        Text(piliLocalizedDisplay(error))
           .font(.caption)
           .foregroundColor(.red)
           .frame(maxWidth: .infinity, alignment: .leading)
@@ -6614,7 +6643,7 @@ private struct PiliNativeCommentsSection: View {
         .foregroundColor(.secondary)
         .frame(maxWidth: .infinity, minHeight: 70)
       } else if let error = model.commentsError, model.comments.isEmpty {
-        Text(error)
+        Text(piliLocalizedDisplay(error))
           .font(.subheadline)
           .foregroundColor(.secondary)
           .frame(maxWidth: .infinity, minHeight: 70)
@@ -6693,7 +6722,7 @@ private struct PiliNativeDynamicComposerView: View {
             }
           }
           if let message = model.dynamicMessage {
-            Text(message).foregroundStyle(.red)
+            Text(piliLocalizedDisplay(message)).foregroundStyle(.red)
           }
           if model.dynamicActionLoading {
             ProgressView("正在发布")
@@ -6710,7 +6739,7 @@ private struct PiliNativeDynamicComposerView: View {
           }
         }
         ToolbarItem(placement: .confirmationAction) {
-          Button(model.dynamicComposerMode == "repost" ? "转发" : "发布") {
+          Button(piliLocalized(model.dynamicComposerMode == "repost" ? "转发" : "发布")) {
             model.publishDynamicComposer()
           }
           .disabled(
@@ -6749,7 +6778,7 @@ private struct PiliNativeCommentThreadView: View {
           Section {
             if let error = model.commentThreadError,
                !model.commentThreadItems.isEmpty {
-              Text(error)
+              Text(piliLocalizedDisplay(error))
                 .font(.footnote)
                 .foregroundStyle(.red)
             }
@@ -6760,7 +6789,7 @@ private struct PiliNativeCommentThreadView: View {
             } else if let error = model.commentThreadError,
                       model.commentThreadItems.isEmpty {
               VStack(spacing: 10) {
-                Text(error).foregroundStyle(.secondary)
+                Text(piliLocalizedDisplay(error)).foregroundStyle(.secondary)
                 Button("重试", action: model.loadCommentThread)
               }
               .frame(maxWidth: .infinity, minHeight: 100)
@@ -6801,7 +6830,7 @@ private struct PiliNativeCommentThreadView: View {
             }
           } header: {
             Text(model.commentThreadTotal > 0
-              ? "\(model.commentThreadTotal) 条回复"
+              ? piliLocalizedFormat("%d 条回复", model.commentThreadTotal)
               : "回复")
           }
         }
@@ -7246,7 +7275,7 @@ private struct PiliNativeCommentRow: View {
                   PiliNativeCommentPictureView(picture: picture)
                 }
                 .buttonStyle(.borderless)
-                .accessibilityLabel("预览图片 \(index + 1)")
+                .accessibilityLabel(piliLocalizedFormat("预览图片 %d", index + 1))
               }
             }
           }
@@ -7258,7 +7287,7 @@ private struct PiliNativeCommentRow: View {
           Button("回复", action: reply)
             .buttonStyle(.borderless)
           if comment.replyCount > 0 {
-            Button("\(comment.replyCount) 条回复", action: openReplies)
+            Button(piliLocalizedFormat("%d 条回复", comment.replyCount), action: openReplies)
               .buttonStyle(.borderless)
               .foregroundStyle(piliAccent)
           }
@@ -7346,7 +7375,10 @@ private struct PiliNativeImagePreview: View {
             .frame(width: 44, height: 44)
         }.accessibilityLabel("关闭图片预览")
         Spacer()
-        Text(gallery.pictures.isEmpty ? "图片预览" : "\(selection + 1) / \(gallery.pictures.count)")
+        Text(verbatim: gallery.pictures.isEmpty
+          ? piliLocalized("图片预览")
+          : "\(selection + 1) / \(gallery.pictures.count)"
+        )
           .monospacedDigit().accessibilityIdentifier("image-preview-index")
         Spacer()
         if gallery.pictures.count > 1 {
@@ -7374,7 +7406,8 @@ private struct PiliNativeImagePreview: View {
         }
         .tabViewStyle(PageTabViewStyle(indexDisplayMode: .never))
       }
-      Text("双指缩放 · 双击放大或还原" + (gallery.pictures.count > 1 ? " · 左右切换" : ""))
+      Text(verbatim: piliLocalized("双指缩放 · 双击放大或还原")
+        + (gallery.pictures.count > 1 ? " · \(piliLocalized("左右切换"))" : ""))
         .font(.caption).foregroundStyle(.white.opacity(0.65))
         .padding(.vertical, 12)
     }
@@ -7404,7 +7437,7 @@ private final class PiliNativePreviewImageLoader: ObservableObject {
     guard image == nil else { return }
     error = nil
     guard let url = URL(string: url), ["https", "http"].contains(url.scheme?.lowercased() ?? "") else {
-      error = "图片地址无效"
+      error = piliLocalized("图片地址无效")
       return
     }
     if let cached = Self.cache.object(forKey: url as NSURL) {
@@ -7419,14 +7452,14 @@ private final class PiliNativePreviewImageLoader: ObservableObject {
       try Task.checkCancellation()
       guard let response = response as? HTTPURLResponse, (200..<300).contains(response.statusCode),
             let decoded = UIImage(data: data), decoded.size.width > 0, decoded.size.height > 0 else {
-        error = "图片加载失败，请重试"
+        error = piliLocalized("图片加载失败，请重试")
         return
       }
       let cost = Int(decoded.size.width * decoded.size.height * decoded.scale * decoded.scale * 4)
       Self.cache.setObject(decoded, forKey: url as NSURL, cost: cost)
       image = decoded
     } catch {
-      if !Task.isCancelled { self.error = "图片加载失败，请检查网络后重试" }
+      if !Task.isCancelled { self.error = piliLocalized("图片加载失败，请检查网络后重试") }
     }
   }
 }
@@ -7446,7 +7479,7 @@ private struct PiliNativeImagePreviewPage: View {
       } else if let error = loader.error {
         VStack(spacing: 16) {
           Image(systemName: "photo.badge.exclamationmark").font(.largeTitle)
-          Text(error).multilineTextAlignment(.center)
+          Text(piliLocalizedDisplay(error)).multilineTextAlignment(.center)
           Button("重新加载图片") { retry += 1 }.buttonStyle(.bordered)
         }.padding(24)
       } else {
@@ -7487,7 +7520,7 @@ private final class PiliNativeZoomImageScrollView: UIScrollView, UIScrollViewDel
     bouncesZoom = true
     imageView.contentMode = .scaleAspectFit
     imageView.isAccessibilityElement = true
-    imageView.accessibilityLabel = "预览大图"
+    imageView.accessibilityLabel = piliLocalized("预览大图")
     addSubview(imageView)
     let doubleTap = UITapGestureRecognizer(target: self, action: #selector(toggleZoom(_:)))
     doubleTap.numberOfTapsRequired = 2
@@ -7541,7 +7574,7 @@ private final class PiliNativeZoomImageScrollView: UIScrollView, UIScrollViewDel
     let vertical = max(0, (bounds.height - imageView.frame.height) / 2)
     let inset = UIEdgeInsets(top: vertical, left: horizontal, bottom: vertical, right: horizontal)
     if contentInset != inset { contentInset = inset }
-    imageView.accessibilityValue = String(format: "%.1f 倍", zoomScale / max(minimumZoomScale, 0.0001))
+    imageView.accessibilityValue = piliLocalizedFormat("%.1f 倍", Double(zoomScale / max(minimumZoomScale, 0.0001)))
   }
 
   @objc private func toggleZoom(_ gesture: UITapGestureRecognizer) {
@@ -7616,7 +7649,7 @@ private struct PiliNativeMessagesView: View {
             model.loadMessages(kind: kind.id, refresh: true)
           } label: {
             VStack(spacing: 8) {
-              Text(kind.title)
+              Text(piliLocalized(kind.title))
                 .font(.system(size: 14, weight: model.messageKind == kind.id ? .semibold : .regular))
                 .foregroundColor(model.messageKind == kind.id ? piliAccent : .secondary)
                 .padding(.horizontal, 12)
@@ -7627,8 +7660,8 @@ private struct PiliNativeMessagesView: View {
             .padding(.top, 8)
           }
           .buttonStyle(PlainButtonStyle())
-          .accessibilityLabel("\(kind.title)消息")
-          .accessibilityValue(model.messageKind == kind.id ? "已选中" : "")
+          .accessibilityLabel(Text(verbatim: "\(piliLocalized(kind.title))\(piliLocalized("消息"))"))
+          .accessibilityValue(model.messageKind == kind.id ? piliLocalized("已选中") : "")
         }
       }
       .padding(.horizontal, 8)
@@ -7664,7 +7697,7 @@ private struct PiliNativeMessagesView: View {
           if let error = model.messagesError {
             HStack(spacing: 8) {
               Image(systemName: "exclamationmark.circle")
-              Text(error).lineLimit(2)
+              Text(piliLocalizedDisplay(error)).lineLimit(2)
               Spacer(minLength: 0)
               Button("重试") { model.loadMoreMessages() }
             }
@@ -7866,7 +7899,7 @@ private struct PiliNativeChatView: View {
                 Text(chat.author)
                   .font(.subheadline.weight(.semibold))
                   .lineLimit(1)
-                Text(chat.isLive ? "直播中" : "私信")
+                Text(piliLocalized(chat.isLive ? "直播中" : "私信"))
                   .font(.caption2)
                   .foregroundColor(chat.isLive ? piliAccent : .secondary)
               }
@@ -8057,7 +8090,7 @@ private struct PiliNativeChatBubble: View {
               .clipped()
               .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
           } else if message.emotes.isEmpty || message.isRecalled {
-            Text(message.isRecalled ? "已撤回" : message.text)
+            Text(verbatim: message.isRecalled ? piliLocalized("已撤回") : message.text)
               .font(.body)
               .foregroundColor(message.isOwner ? .white : .primary)
               .textSelection(.enabled)
@@ -8183,7 +8216,7 @@ private struct PiliNativeLoginView: View {
           .multilineTextAlignment(.center)
 
         if model.loginExpiresIn > 0 {
-          Text("有效期剩余 \(model.loginExpiresIn) 秒")
+          Text(piliLocalizedFormat("有效期剩余 %d 秒", model.loginExpiresIn))
             .font(.caption)
             .foregroundColor(.secondary)
         }
@@ -8267,7 +8300,7 @@ private struct PiliNativeDownloadOptionsView: View {
             Section("缓存画质") {
               Picker("最高画质", selection: $model.selectedDownloadQuality) {
                 ForEach(model.downloadQualities) { quality in
-                  Text(quality.label).tag(quality.value)
+                  Text(piliLocalized(quality.label)).tag(quality.value)
                 }
               }
               .pickerStyle(.menu)
@@ -8321,7 +8354,7 @@ private struct PiliNativeDownloadOptionsView: View {
                 Text("选择分P")
                 Spacer()
                 if availableParts.count > 1 {
-                  Button(model.selectedDownloadCIDs.count == availableParts.count ? "取消全选" : "全选") {
+                  Button(piliLocalized(model.selectedDownloadCIDs.count == availableParts.count ? "取消全选" : "全选")) {
                     if model.selectedDownloadCIDs.count == availableParts.count {
                       model.selectedDownloadCIDs.removeAll()
                     } else {
@@ -8335,8 +8368,8 @@ private struct PiliNativeDownloadOptionsView: View {
 
             if let message = model.downloadActionMessage {
               Section {
-                Text(message)
-                  .foregroundStyle(message.contains("失败") ? .red : piliAccent)
+                Text(piliLocalizedDisplay(message))
+                  .foregroundStyle(piliNativeMessageIsError(message) ? .red : piliAccent)
               }
             }
           }
@@ -8352,7 +8385,9 @@ private struct PiliNativeDownloadOptionsView: View {
           if model.downloadActionLoading {
             ProgressView().controlSize(.small)
           } else {
-            Text("缓存\(model.selectedDownloadCIDs.isEmpty ? "" : "（\(model.selectedDownloadCIDs.count)）")")
+            Text(verbatim: model.selectedDownloadCIDs.isEmpty
+              ? piliLocalized("缓存")
+              : piliLocalizedFormat("缓存（%d）", model.selectedDownloadCIDs.count))
           }
         }
         .disabled(model.downloadActionLoading || model.selectedDownloadCIDs.isEmpty)
@@ -8383,7 +8418,7 @@ private struct PiliNativeDownloadsView: View {
         } else {
           List {
             if let error = model.downloadsError {
-              Text(error)
+              Text(piliLocalizedDisplay(error))
                 .font(.footnote)
                 .foregroundStyle(.red)
             }
@@ -8476,7 +8511,7 @@ private struct PiliNativeLibraryView: View {
     NavigationView {
       Group {
         if model.libraryLoading && model.libraryItems.isEmpty {
-          PiliNativeLoadingView(title: "正在加载\(model.libraryTitle)")
+          PiliNativeLoadingView(title: piliLocalizedFormat("正在加载%@", model.libraryTitle))
         } else if let error = model.libraryError, model.libraryItems.isEmpty {
           PiliNativeErrorView(message: error) { model.loadLibrary(refresh: true) }
         } else if model.libraryItems.isEmpty {
@@ -8601,7 +8636,7 @@ private struct PiliNativeLibraryRow: View {
               .foregroundColor(piliAccent)
           }
         }
-        Text(item.subtitle.isEmpty ? "这个人很神秘，什么都没有写" : item.subtitle)
+        Text(item.subtitle.isEmpty ? piliLocalized("这个人很神秘，什么都没有写") : item.subtitle)
           .font(.caption)
           .foregroundColor(.secondary)
           .lineLimit(2)
@@ -8714,29 +8749,40 @@ private struct PiliNativeSettingsView: View {
     return keyword.isEmpty || text.localizedCaseInsensitiveContains(keyword)
   }
 
+  private func localizedSearchTerms(_ terms: [String]) -> String {
+    terms.flatMap { [$0, piliLocalized($0)] }.joined(separator: " ")
+  }
+
+  private func localizedSettingSearchText(_ setting: PiliNativeSetting) -> String {
+    localizedSearchTerms([setting.title, setting.subtitle, setting.group])
+  }
+
   var body: some View {
     Form {
       if let error = model.settingsError {
         Section {
-          Text(error).font(.footnote).foregroundStyle(.red)
+          Text(piliLocalizedDisplay(error)).font(.footnote).foregroundStyle(.red)
           Button("重新加载网络设置", action: model.loadSettings)
         }
       }
-      if matches("播放器 播放 自动播放 下一集 循环 后台 锁屏 默认倍速 双击 暂停 长按 2x 锁定 电量 控件 缓冲 大小 时长") {
+      if matches(localizedSearchTerms([
+        "播放器", "播放", "自动播放", "下一集", "循环", "后台", "锁屏", "默认倍速",
+        "双击", "暂停", "长按", "2x", "锁定", "电量", "控件", "缓冲", "大小", "时长"
+      ])) {
         Section("播放器") {
           NavigationLink(destination: PiliNativePlayerSettingsView()) {
             settingLabel("播放器设置", subtitle: "播放默认值、视频缓冲、手势与横屏控件", icon: "play.rectangle")
           }
         }
       }
-      if matches("播放源 CDN 视频 直播 线路 画质 分辨率 音频") {
+      if matches(localizedSearchTerms(["播放源", "CDN", "视频", "直播", "线路", "画质", "分辨率", "音频"])) {
         Section("画质与线路") {
           if !model.videoQualityOptions.isEmpty {
             Picker("默认视频分辨率", selection: Binding(
               get: { model.defaultVideoQuality }, set: { model.setDefaultVideoQuality($0) }
             )) {
               ForEach(model.videoQualityOptions) { quality in
-                Text(quality.label).tag(quality.value)
+                Text(piliLocalized(quality.label)).tag(quality.value)
               }
             }
           }
@@ -8745,7 +8791,9 @@ private struct PiliNativeSettingsView: View {
           }
         }
       }
-      if matches("弹幕 简易 完整 筛选 屏蔽 关键词 正则 用户 字体 不透明度 显示区域 滚动") {
+      if matches(localizedSearchTerms([
+        "弹幕", "简易", "完整", "筛选", "屏蔽", "关键词", "正则", "用户", "字体", "不透明度", "显示区域", "滚动"
+      ])) {
         Section {
           Button { danmakuProfile = .simple } label: {
             settingLabel("简易播放器弹幕设置", subtitle: "竖屏播放区的显示与屏蔽规则", icon: "text.bubble")
@@ -8757,13 +8805,15 @@ private struct PiliNativeSettingsView: View {
           Text("两套设置独立保存，与播放器内的弹幕面板共用同一份配置。")
         }
       }
-      if matches("视频详情 相关推荐 简介") {
+      if matches(localizedSearchTerms(["视频详情", "相关推荐", "简介"])) {
         Section("视频详情") {
           Toggle("显示相关推荐", isOn: $showRelated)
           Toggle("默认展开视频简介", isOn: $expandIntro)
         }
       }
-      let items = model.settings.filter { $0.key != "disableAudioCDN" && matches($0.title + " " + $0.subtitle) }
+      let items = model.settings.filter {
+        $0.key != "disableAudioCDN" && matches(localizedSettingSearchText($0))
+      }
       if !items.isEmpty {
         Section("推荐与网络") {
           ForEach(items) { item in
@@ -8777,14 +8827,14 @@ private struct PiliNativeSettingsView: View {
         }
       }
       if model.settingsLoading { Section { ProgressView("正在加载网络设置") } }
-      if matches("诊断 日志 播放器 排查") {
+      if matches(localizedSearchTerms(["诊断", "日志", "播放器", "排查"])) {
         Section("诊断") {
           NavigationLink(destination: PiliNativeDiagnosticLogSettingsView()) {
             settingLabel("播放器诊断日志", subtitle: "查看、复制或分享播放日志", icon: "doc.text.magnifyingglass")
           }
         }
       }
-      if matches("关于 版本 项目 PiliGlass") {
+      if matches(localizedSearchTerms(["关于", "版本", "项目", "PiliGlass"])) {
         Section {
           NavigationLink(destination: PiliNativeAboutSettingsView()) {
             Label("关于 PiliGlass", systemImage: "info.circle")
@@ -8809,8 +8859,8 @@ private struct PiliNativeSettingsView: View {
     HStack(spacing: 12) {
       Image(systemName: icon).frame(width: 24).foregroundStyle(piliAccent)
       VStack(alignment: .leading, spacing: 4) {
-        Text(title).foregroundStyle(Color.primary)
-        Text(subtitle).font(.caption).foregroundStyle(Color.secondary)
+        Text(piliLocalized(title)).foregroundStyle(Color.primary)
+        Text(piliLocalized(subtitle)).font(.caption).foregroundStyle(Color.secondary)
       }
     }.padding(.vertical, 3)
   }
@@ -8834,7 +8884,7 @@ private struct PiliNativePlayerSettingsView: View {
         Toggle("打开视频自动播放", isOn: $autoplay)
         Picker("视频播完后", selection: $endMode) {
           ForEach(PiliNativePlaybackEndMode.allCases) { mode in
-            Text(mode.title).tag(mode)
+            Text(piliLocalized(mode.title)).tag(mode)
           }
         }
         Picker("默认播放倍速", selection: $defaultRate) {
@@ -8848,12 +8898,15 @@ private struct PiliNativePlayerSettingsView: View {
       Section {
         Picker("缓冲大小", selection: $bufferSizeMB) {
           ForEach([64, 128, 256, 512, 1024], id: \.self) { size in
-            Text(size >= 1024 ? "1 GB" : "\(size) MB").tag(size)
+            Text(verbatim: size >= 1024 ? "1 GB" : "\(size) MB").tag(size)
           }
         }
         Picker("缓冲时长", selection: $bufferDurationSeconds) {
           ForEach([16, 24, 40, 60, 120], id: \.self) { seconds in
-            Text(seconds >= 60 ? "\(seconds / 60) 分钟" : "\(seconds) 秒").tag(seconds)
+            Text(verbatim: seconds >= 60
+              ? piliLocalizedFormat("%d 分钟", seconds / 60)
+              : piliLocalizedFormat("%d 秒", seconds)
+            ).tag(seconds)
           }
         }
       } header: { Text("视频缓冲") } footer: {
@@ -8870,7 +8923,7 @@ private struct PiliNativePlayerSettingsView: View {
         Toggle("显示时间与电量", isOn: $showStatus)
         Picker("播放控件自动隐藏", selection: $hideDelay) {
           ForEach([3.0, 5.0, 8.0], id: \.self) { delay in
-            Text("\(Int(delay)) 秒后").tag(delay)
+            Text(verbatim: piliLocalizedFormat("%d 秒后", Int(delay))).tag(delay)
           }
         }
       }
@@ -8917,22 +8970,26 @@ private struct PiliNativePlaybackSourceSettingsView: View {
         }
         .disabled(model.playbackLatencyTesting)
         if let error = model.playbackLatencyError {
-          Text(error).font(.footnote).foregroundStyle(.red)
+          Text(piliLocalizedDisplay(error)).font(.footnote).foregroundStyle(.red)
         }
         ForEach(model.playbackSources) { source in
           Button(action: { model.setPlaybackSource(source.value) }) {
             HStack(spacing: 10) {
               VStack(alignment: .leading, spacing: 4) {
-                Text(source.label).foregroundStyle(Color.primary)
+                Text(piliLocalizedDisplay(source.label)).foregroundStyle(Color.primary)
                 if source.value == "auto",
                    let selected = model.playbackSources.first(where: { $0.value == model.automaticPlaybackSource }) {
-                  Text("当前最优：\(selected.label) · \(selected.latencyText)")
+                Text(verbatim: piliLocalizedFormat(
+                  "当前最优：%@ · %@",
+                  piliLocalizedDisplay(selected.label),
+                  selected.latencyText
+                ))
                     .font(.caption).foregroundStyle(Color.secondary)
                 }
               }
               Spacer(minLength: 4)
               if source.value != "auto" {
-                Text(model.playbackLatencyTesting ? "检测中" : source.latencyText)
+                Text(verbatim: model.playbackLatencyTesting ? piliLocalized("检测中") : source.latencyText)
                   .font(.caption.monospacedDigit()).foregroundStyle(Color.secondary)
                   .fixedSize(horizontal: true, vertical: false)
               }
@@ -8975,12 +9032,12 @@ private struct PiliNativePlaybackSourceSettingsView: View {
           ProgressView("正在保存")
         }
         if let error = model.playbackSourceError {
-          Text(error).foregroundColor(.red)
+          Text(piliLocalizedDisplay(error)).foregroundColor(.red)
         } else if let message = model.playbackSourceMessage {
-          Text(message).foregroundColor(.secondary)
+          Text(piliLocalizedDisplay(message)).foregroundColor(.secondary)
         }
         if let error = model.settingsError {
-          Text(error).foregroundColor(.red)
+          Text(piliLocalizedDisplay(error)).foregroundColor(.red)
         }
       }
     }
@@ -9000,7 +9057,7 @@ private struct PiliNativeDiagnosticLogSettingsView: View {
 
   var body: some View {
     ScrollView {
-      Text(logText.isEmpty ? "暂时没有播放器日志" : logText)
+      Text(logText.isEmpty ? piliLocalized("暂时没有播放器日志") : logText)
         .font(.system(size: 11, design: .monospaced))
         .foregroundColor(.primary)
         .textSelection(.enabled)
@@ -9163,7 +9220,7 @@ private struct PiliNativeSearchView: View {
         }
         if let error = model.searchDiscoveryError {
           HStack {
-            Text(error).font(.caption).foregroundStyle(.secondary)
+            Text(piliLocalizedDisplay(error)).font(.caption).foregroundStyle(.secondary)
             Spacer()
             Button("重试", action: model.loadSearchDiscovery)
           }
@@ -9198,7 +9255,7 @@ private struct PiliNativeSearchView: View {
   ) -> some View {
     VStack(alignment: .leading, spacing: 12) {
       HStack {
-        Text(title).font(.headline)
+        Text(piliLocalized(title)).font(.headline)
         Spacer()
         if let clearAction {
           Button(action: clearAction) {
@@ -9273,7 +9330,7 @@ private struct PiliNativeSearchView: View {
                   Text(video.title).font(.subheadline).foregroundColor(.primary).lineLimit(2)
                   Text(video.owner).font(.caption).foregroundColor(.secondary)
                   if !video.viewText.isEmpty {
-                    Text("\(video.viewText) 播放").font(.caption2).foregroundColor(.secondary)
+                    Text(piliLocalizedFormat("%@ 播放", video.viewText)).font(.caption2).foregroundColor(.secondary)
                   }
                 }
                 Spacer(minLength: 0)
@@ -9292,7 +9349,7 @@ private struct PiliNativeSearchView: View {
             ProgressView("正在加载更多视频").font(.caption).padding(.vertical, 18)
           } else if let error = model.searchError {
             VStack(spacing: 8) {
-              Text(error).font(.caption).foregroundColor(.secondary)
+              Text(piliLocalizedDisplay(error)).font(.caption).foregroundColor(.secondary)
               Button("重试加载", action: model.loadMoreSearchResults)
                 .font(.caption).foregroundColor(piliAccent)
             }
@@ -9325,7 +9382,7 @@ private struct PiliNativeLoadingView: View {
   var body: some View {
     VStack(spacing: 12) {
       ProgressView()
-      Text(title).font(.subheadline).foregroundColor(.secondary)
+      Text(piliLocalizedDisplay(title)).font(.subheadline).foregroundColor(.secondary)
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity)
   }
@@ -9340,7 +9397,7 @@ private struct PiliNativeErrorView: View {
       Image(systemName: "exclamationmark.triangle")
         .font(.system(size: 32))
         .foregroundColor(.secondary)
-      Text(message)
+      Text(piliLocalizedDisplay(message))
         .font(.subheadline)
         .multilineTextAlignment(.center)
         .foregroundColor(.secondary)
@@ -9362,9 +9419,9 @@ private struct PiliNativeEmptyView: View {
       Image(systemName: icon)
         .font(.system(size: 36))
         .foregroundColor(.secondary)
-      Text(title)
+      Text(piliLocalizedDisplay(title))
         .font(.headline)
-      Text(subtitle)
+      Text(piliLocalizedDisplay(subtitle))
         .font(.subheadline)
         .foregroundColor(.secondary)
         .multilineTextAlignment(.center)
@@ -9383,7 +9440,7 @@ private struct PiliNativeLoggedOutView: View {
       Image(systemName: "person.crop.circle.badge.exclamationmark")
         .font(.system(size: 44))
         .foregroundColor(.secondary)
-      Text(title).font(.headline)
+      Text(piliLocalizedDisplay(title)).font(.headline)
       Button("登录", action: action)
         .foregroundColor(.white)
         .padding(.horizontal, 28)
@@ -9545,7 +9602,7 @@ private struct PiliOriginalLevelBadge: View {
       }
     }
     .frame(width: height * 2, height: height)
-    .accessibilityLabel(Text("\(normalizedLevel)级"))
+    .accessibilityLabel(Text(piliLocalizedFormat("%d级", normalizedLevel)))
   }
 
   private var normalizedLevel: Int { min(max(level, 0), 6) }
@@ -9755,11 +9812,23 @@ private func piliBool(_ value: Any?) -> Bool {
 }
 
 private func piliCompactNumber(_ value: Int) -> String {
-  if value >= 100_000_000 {
-    return String(format: "%.1f亿", Double(value) / 100_000_000)
-  }
-  if value >= 10_000 {
-    return String(format: "%.1f万", Double(value) / 10_000)
+  if piliNativeIsEnglish() {
+    if value >= 1_000_000_000 {
+      return String(format: "%.1fB", Double(value) / 1_000_000_000)
+    }
+    if value >= 1_000_000 {
+      return String(format: "%.1fM", Double(value) / 1_000_000)
+    }
+    if value >= 1_000 {
+      return String(format: "%.1fK", Double(value) / 1_000)
+    }
+  } else {
+    if value >= 100_000_000 {
+      return String(format: "%.1f亿", Double(value) / 100_000_000)
+    }
+    if value >= 10_000 {
+      return String(format: "%.1f万", Double(value) / 10_000)
+    }
   }
   return String(value)
 }

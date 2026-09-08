@@ -159,6 +159,19 @@ final class MenuNavigationTests: XCTestCase {
     app.launch()
   }
 
+  func testEnglishLocalization() {
+    app.terminate()
+    app.launchArguments = ["-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
+    app.launch()
+    XCTAssertTrue(app.tabBars.buttons["Home"].waitForExistence(timeout: 5))
+    XCTAssertTrue(app.tabBars.buttons["Me"].exists)
+    app.tabBars.buttons["Me"].tap()
+    XCTAssertTrue(app.buttons["Settings"].waitForExistence(timeout: 5))
+    app.buttons["Settings"].tap()
+    XCTAssertTrue(app.navigationBars["Settings"].waitForExistence(timeout: 5))
+    screenshot("english-settings")
+  }
+
   func screenshot(_ name: String) {
     let attachment = XCTAttachment(screenshot: app.screenshot())
     attachment.name = name
@@ -365,7 +378,7 @@ def production_swift():
   @ObservedObject var model: PiliNativeViewModel
   var body: some View {{ Text("{title}").navigationTitle("{title}").navigationBarTitleDisplayMode(.inline) }}
 }}\n'''
-    return fixtures + preferences + profiles + section('private struct PiliEdgeSwipeBackModifier:',
+    return home.LOCALIZATION + '\n' + fixtures + preferences + profiles + section('private struct PiliEdgeSwipeBackModifier:',
                               'private struct PiliNativeDynamicsView:') + section(
         'private struct PiliNativeLibraryView:', '// MARK: - Native settings') + section(
         'private struct PiliNativeSettingsView:', 'private struct PiliNativeDanmakuPreferencesPage:') + section(
@@ -391,6 +404,22 @@ def write_project():
     products = obj('PBXGroup', name='Products', children=[app_product, test_product], sourceTree='<group>')
     group = obj('PBXGroup', children=[main, tests, products], sourceTree='<group>')
 
+    # Ship the production catalogs so both Chinese tests and the English
+    # smoke test exercise real resource lookup, including variable labels.
+    localization_children = []
+    for locale in ['en', 'zh-Hans']:
+        directory = OUTPUT / f'{locale}.lproj'
+        directory.mkdir(exist_ok=True)
+        (directory / 'Localizable.strings').write_bytes(
+            (ROOT / f'ios/Runner/{locale}.lproj/Localizable.strings').read_bytes())
+        localization_children.append(obj('PBXFileReference', lastKnownFileType='text.plist.strings',
+            name=locale, path=f'{locale}.lproj/Localizable.strings', sourceTree='<group>'))
+    localization = obj('PBXVariantGroup', name='Localizable.strings',
+                       children=localization_children, sourceTree='<group>')
+    objects[group]['children'].append(localization)
+    resources = obj('PBXResourcesBuildPhase', buildActionMask=2147483647,
+                    files=[obj('PBXBuildFile', fileRef=localization)], runOnlyForDeploymentPostprocessing=0)
+
     def configurations(settings):
         configs = [obj('XCBuildConfiguration', name=name, buildSettings=settings) for name in ['Debug','Release']]
         return obj('XCConfigurationList', buildConfigurations=configs, defaultConfigurationIsVisible=0, defaultConfigurationName='Debug')
@@ -409,13 +438,13 @@ def write_project():
 
     app_target = obj('PBXNativeTarget', name='MenuPreview', productName='MenuPreview',
                      productReference=app_product, productType='com.apple.product-type.application',
-                     buildConfigurationList=app_config, buildPhases=[sources(main)], buildRules=[], dependencies=[])
+                     buildConfigurationList=app_config, buildPhases=[sources(main), resources], buildRules=[], dependencies=[])
     test_target = obj('PBXNativeTarget', name='MenuNavigationTests', productName='MenuNavigationTests',
                       productReference=test_product, productType='com.apple.product-type.bundle.ui-testing',
                       buildConfigurationList=test_config, buildPhases=[sources(tests)], buildRules=[], dependencies=[])
     project = obj('PBXProject', attributes=dict(LastUpgradeCheck='2600', TargetAttributes={test_target: dict(TestTargetID=app_target)}),
                   buildConfigurationList=project_config, compatibilityVersion='Xcode 14.0', developmentRegion='en',
-                  hasScannedForEncodings=0, knownRegions=['en','Base'], mainGroup=group, productRefGroup=products,
+                  hasScannedForEncodings=0, knownRegions=['en','zh-Hans','Base'], mainGroup=group, productRefGroup=products,
                   projectDirPath='', projectRoot='', targets=[app_target,test_target])
     proxy = obj('PBXContainerItemProxy', containerPortal=project, proxyType=1, remoteGlobalIDString=app_target, remoteInfo='MenuPreview')
     dependency = obj('PBXTargetDependency', target=app_target, targetProxy=proxy)
