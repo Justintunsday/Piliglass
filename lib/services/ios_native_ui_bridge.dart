@@ -810,18 +810,47 @@ final class IOSNativeUIBridge {
           for (final format in response.supportFormats ?? const [])
             if (format.quality != null) format.quality!: format,
         };
+        final descriptionByQuality = <int, String>{
+          for (var index = 0; index < qualityValues.length; index++)
+            if (index < qualityDescriptions.length)
+              qualityValues[index]: qualityDescriptions[index].toString(),
+        };
+        // Match the original Flutter player's quality menu: support_formats
+        // supplies the advertised order and labels, while the DASH tracks
+        // decide which entries are genuinely selectable. accept_quality can
+        // omit 1080P+, high-frame-rate and 4K entries even when their tracks
+        // are already present in the same response.
+        final playableQualityValues = response.dash?.video
+                ?.map((item) => item.quality.code)
+                .toSet() ??
+            const <int>{};
+        final menuQualityValues = <int>[];
+        void addMenuQuality(int value) {
+          if ((playableQualityValues.isEmpty ||
+                  playableQualityValues.contains(value)) &&
+              !menuQualityValues.contains(value)) {
+            menuQualityValues.add(value);
+          }
+        }
+        for (final format in response.supportFormats ?? const []) {
+          if (format.quality case final value?) addMenuQuality(value);
+        }
+        for (final value in qualityValues) {
+          addMenuQuality(value);
+        }
+        for (final value in playableQualityValues) {
+          addMenuQuality(value);
+        }
         final qualities = <Map<String, dynamic>>[];
-        for (var index = 0; index < qualityValues.length; index++) {
-          final value = qualityValues[index];
+        for (final value in menuQualityValues) {
           final format = formatByQuality[value];
           qualities.add({
             'value': value,
             'label':
                 format?.newDesc ??
                 format?.displayDesc ??
-                (index < qualityDescriptions.length
-                    ? qualityDescriptions[index].toString()
-                    : '${value}P'),
+                descriptionByQuality[value] ??
+                '${value}P',
             'codecs': format?.codecs ?? const <String>[],
             'hdr': value == 125 || value == 126 || value == 129,
           });
@@ -833,9 +862,13 @@ final class IOSNativeUIBridge {
           final requested = videos
               .where((item) => item.quality.code == quality)
               .toList();
+          final responseQuality = response.quality;
           final actualQuality = requested.isNotEmpty
               ? quality
-              : response.quality ?? videos.first.quality.code;
+              : responseQuality != null &&
+                    videos.any((item) => item.quality.code == responseQuality)
+              ? responseQuality
+              : videos.first.quality.code;
           final candidates = videos
               .where((item) => item.quality.code == actualQuality)
               .toList();
