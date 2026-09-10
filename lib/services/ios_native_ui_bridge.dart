@@ -97,6 +97,10 @@ final class IOSNativeUIBridge {
   PbMap<int, im_proto.Offset>? _nativeSessionOffsets;
 
   static const _fetchResultTTL = Duration(minutes: 30);
+  // Playback responses can contain several signed URLs and subtitle rows.
+  // Keep the memoized fast path useful without allowing a long browsing
+  // session to retain an unbounded number of video responses.
+  static const _fetchCacheMaxEntries = 48;
   final Map<String, ({DateTime at, Map<String, dynamic> data})> _fetchCache = {};
   final Map<String, Future<Map<String, dynamic>>> _inFlightFetches = {};
 
@@ -326,7 +330,22 @@ final class IOSNativeUIBridge {
       _fetchCache.remove(key);
       return null;
     }
+    // Dart's insertion-ordered Map gives us a compact LRU implementation:
+    // move a hit to the end while preserving its original timestamp so a hit
+    // does not extend the 30-minute freshness window.
+    _fetchCache
+      ..remove(key)
+      ..[key] = entry;
     return entry.data;
+  }
+
+  void _storeFetch(String key, Map<String, dynamic> data) {
+    _fetchCache
+      ..remove(key)
+      ..[key] = (at: DateTime.now(), data: data);
+    while (_fetchCache.length > _fetchCacheMaxEntries) {
+      _fetchCache.remove(_fetchCache.keys.first);
+    }
   }
 
   Future<Map<String, dynamic>> _dedupedFetch(
@@ -342,7 +361,7 @@ final class IOSNativeUIBridge {
     try {
       final data = await future;
       if (data['state'] == 'success') {
-        _fetchCache[key] = (at: DateTime.now(), data: data);
+        _storeFetch(key, data);
       }
       return data;
     } finally {

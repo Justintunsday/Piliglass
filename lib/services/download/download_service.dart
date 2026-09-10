@@ -52,6 +52,14 @@ class DownloadService extends GetxService {
 
   DownloadManager? _downloadManager;
   DownloadManager? _audioDownloadManager;
+  // Dio can report progress for every received chunk. Rebuilding all
+  // download observers for each callback is needlessly expensive on fast
+  // connections, especially while the native download list is visible.
+  // Keep the entry fields up to date on every callback, but cap UI refreshes
+  // to a smooth, predictable cadence. State-changing callbacks still call
+  // _updateCurStatus and therefore refresh immediately.
+  static const _progressRefreshInterval = Duration(milliseconds: 120);
+  DateTime? _lastProgressRefreshAt;
 
   late Future<void> waitForInitialization;
 
@@ -453,7 +461,16 @@ class DownloadService extends GetxService {
       entry
         ..downloadedBytes = progress
         ..status = DownloadStatus.downloading;
-      curDownload.refresh();
+      final now = DateTime.now();
+      final shouldRefresh =
+          progress == 0 ||
+          _lastProgressRefreshAt == null ||
+          now.difference(_lastProgressRefreshAt!) >=
+              _progressRefreshInterval;
+      if (shouldRefresh) {
+        _lastProgressRefreshAt = now;
+        curDownload.refresh();
+      }
     }
   }
 
