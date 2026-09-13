@@ -659,6 +659,11 @@
 "预览大图" = "Preview image";
 "首页" = "Home";
 "首页加载失败" = "Could not load home";
+"为你推荐" = "For You";
+"发现此刻值得看的内容" = "Discover something worth watching now";
+"今日精选" = "Today's Pick";
+"继续发现" = "Keep Exploring";
+"%d 个推荐" = "%d recommendations";
 "默认倍速" = "Default speed";
 "默认展开视频简介" = "Expand video description by default";
 "默认播放倍速" = "Default playback speed";

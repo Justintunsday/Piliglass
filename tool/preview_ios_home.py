@@ -82,6 +82,7 @@ private final class PiliNativeViewModel: ObservableObject {
   func userSelectedTab(_ index: Int) { selectedIndex = index }
   func refresh(_ section: String) {}
   func loadMore(_ section: String) {}
+  func prewarmHomeFirstVideoIfNeeded(_ video: PiliNativeVideo) {}
   func openVideo(_ video: PiliNativeVideo, sourceID: String? = nil) {}
   func openRoute(_ route: String) {}
 }
@@ -214,6 +215,8 @@ def main():
         raise SystemExit("The home preview requires macOS and Xcode.")
     OUTPUT.mkdir(parents=True, exist_ok=True)
     source = (ROOT / "ios/Runner/PiliNativeRootViewController.swift").read_text()
+    design_start = source.index("private enum PiliNativeDesign")
+    design_end = source.index("private extension Notification.Name", design_start)
     start = source.index("private struct PiliNativeHomeView:")
     end = source.index("private struct PiliNativeDynamicsView:", start)
     swift = OUTPUT / "HomePreview.swift"
@@ -235,7 +238,8 @@ private struct PiliNativeSettingsView: View {
   var body: some View { Text("设置") }
 }
 '''
-    swift.write_text(LOCALIZATION + "\n" + FIXTURES + source[transition_start:transition_end]
+    swift.write_text(LOCALIZATION + "\n" + FIXTURES + source[design_start:design_end]
+                     + source[transition_start:transition_end]
                      + source[navigation_start:navigation_end] + placeholders
                      + source[start:end] + source[option_start:option_end]
                      + source[settings_start:settings_end] + APP)
