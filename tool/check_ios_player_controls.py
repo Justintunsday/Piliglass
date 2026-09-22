@@ -157,7 +157,7 @@ final class PlayerControlsTests: XCTestCase {
   }
   func launch(embedded: Bool = false) {
     XCUIDevice.shared.orientation = embedded ? .portrait : .landscapeLeft
-    app.launchArguments = embedded ? ["embedded"] : []
+    app.launchArguments = ["-AppleLanguages", "(zh-Hans)", "-AppleLocale", "zh_CN"] + (embedded ? ["embedded"] : [])
     app.launch()
     XCTAssertTrue(state.waitForExistence(timeout: 10))
     if !embedded {

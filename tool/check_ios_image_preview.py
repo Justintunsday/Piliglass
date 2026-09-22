@@ -92,7 +92,7 @@ final class ImagePreviewTests: XCTestCase {
   override func setUpWithError() throws { continueAfterFailure = false }
   func launch(_ mode: String) {
     XCUIDevice.shared.orientation = .portrait
-    app.launchArguments = [mode]
+    app.launchArguments = ["-AppleLanguages", "(zh-Hans)", "-AppleLocale", "zh_CN", mode]
     app.launch()
     XCTAssertTrue(app.buttons["预览图片 1"].waitForExistence(timeout: 10))
   }

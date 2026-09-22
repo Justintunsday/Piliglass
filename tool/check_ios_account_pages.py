@@ -123,7 +123,10 @@ import XCTest
 final class AccountPageTests: XCTestCase {
   let app = XCUIApplication()
   override func setUpWithError() throws { continueAfterFailure = false }
-  func launch(_ mode: String = "self") { app.launchArguments = [mode]; app.launch() }
+  func launch(_ mode: String = "self") {
+    app.launchArguments = ["-AppleLanguages", "(zh-Hans)", "-AppleLocale", "zh_CN", mode]
+    app.launch()
+  }
   func capture(_ name: String) {
     let attachment = XCTAttachment(screenshot: app.screenshot())
     attachment.name = name; attachment.lifetime = .keepAlways; add(attachment)
