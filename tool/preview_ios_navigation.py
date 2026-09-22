@@ -49,8 +49,8 @@ MODEL = r'''
   let searchRecommendations: [String] = []
   let searchDiscoveryLoading = false
   let searchDiscoveryError: String? = nil
-  let searchSubmittedKeyword = ""
-  func search(_ text: String) {}
+  @Published var searchSubmittedKeyword = ""
+  func search(_ text: String) { searchSubmittedKeyword = text.trimmingCharacters(in: .whitespacesAndNewlines) }
   func loadSearchDiscovery() {}
   func updateSearchSuggestions(_ input: String) {}
   func removeSearchHistory(_ keyword: String) {}
@@ -213,7 +213,7 @@ final class MenuNavigationTests: XCTestCase {
     let search = app.buttons["搜索"]
     XCTAssertTrue(search.waitForExistence(timeout: 8))
     XCTAssertGreaterThan(search.frame.width, app.frame.width * 0.45)
-    XCTAssertFalse(app.navigationBars.staticTexts["PiliGlass"].exists)
+    XCTAssertTrue(app.navigationBars.staticTexts["PiliGlass"].exists)
     search.tap()
     assertPage("搜索")
     screenshot("search-pushed")
@@ -259,7 +259,7 @@ final class MenuNavigationTests: XCTestCase {
     if !gesture.isHittable { app.swipeUp() }
     XCTAssertTrue(gesture.isHittable)
     let initial = gesture.value as? String
-    gesture.tap()
+    gesture.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap()
     let changed = NSPredicate(format: "value != %@", initial ?? "1")
     expectation(for: changed, evaluatedWith: gesture)
     waitForExpectations(timeout: 5)
@@ -323,7 +323,8 @@ final class MenuNavigationTests: XCTestCase {
     card.tap()
     XCTAssertTrue(app.staticTexts["video-detail"].waitForExistence(timeout: 8))
     XCTAssertTrue(app.staticTexts["已退出 1 次"].exists)
-    edgeBack()
+    app.buttons["关闭视频"].tap()
+    XCTAssertFalse(app.staticTexts["video-detail"].exists)
     XCTAssertTrue(app.tabBars.buttons["首页"].waitForExistence(timeout: 8))
     card.tap()
     XCTAssertTrue(app.staticTexts["video-detail"].waitForExistence(timeout: 8))
@@ -332,6 +333,10 @@ final class MenuNavigationTests: XCTestCase {
 
   func testVideoZoomCancelledGestureAndSearchReturn() {
     app.buttons["搜索"].tap()
+    let field = app.textFields["搜索视频"]
+    XCTAssertTrue(field.waitForExistence(timeout: 8))
+    field.tap()
+    field.typeText("travel\n")
     let card = app.buttons.containing(.staticText, identifier: "山海之间，记录旅途的风景").firstMatch
     XCTAssertTrue(card.waitForExistence(timeout: 8))
     card.tap()
@@ -344,8 +349,8 @@ final class MenuNavigationTests: XCTestCase {
     XCTAssertTrue(app.staticTexts["video-detail"].exists)
     XCTAssertTrue(app.staticTexts["已退出 0 次"].exists)
     screenshot("video-zoom-cancelled-back")
-    edgeBack()
-    // A completed dismissal must preserve the search stack and result card.
+    app.buttons["关闭视频"].tap()
+    // Dismissing the video must preserve the search stack and result card.
     XCTAssertTrue(app.navigationBars["搜索"].waitForExistence(timeout: 8))
     XCTAssertTrue(card.isHittable)
     XCTAssertFalse(app.tabBars.firstMatch.isHittable)

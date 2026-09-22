@@ -2507,7 +2507,7 @@ final class PiliNativePlayerViewController: UIViewController, UIGestureRecognize
   func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
     if gestureRecognizer is UILongPressGestureRecognizer {
       return PiliNativePlayerPreferences.holdDoubleSpeed
-        && session.isReady && session.isPlaying && !controlsLocked
+        && session.isReady && !controlsLocked
         && !settingsPanelVisible && !isScrubbing
     }
     return true
