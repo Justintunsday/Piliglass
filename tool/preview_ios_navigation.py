@@ -346,7 +346,7 @@ final class MenuNavigationTests: XCTestCase {
 def production_swift():
     source = (ROOT / "ios/Runner/PiliNativeRootViewController.swift").read_text(encoding='utf-8')
     player = (ROOT / "ios/Runner/PiliNativePlayer.swift").read_text(encoding='utf-8')
-    preferences = player[player.index('enum PiliNativePlayerPreferences {'):
+    preferences = player[player.index('enum PiliNativePlaybackEndMode:'):
                          player.index('@MainActor\nfinal class PiliNativePlayerSession')]
     profiles = player[player.index('enum PiliNativeDanmakuProfile:'):player.index('struct PiliNativeDanmakuSettingsView:')]
 
