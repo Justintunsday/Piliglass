@@ -922,7 +922,6 @@ abstract final class PiliScheme {
           progress: progress,
           off: off,
           dimension: res!.dimension,
-          title: res.title,
           extraArguments: extraArguments,
         );
       }
