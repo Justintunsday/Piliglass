@@ -4922,14 +4922,14 @@ private struct PiliNativeMineView: View {
                 if model.account.isLogin { PiliOriginalLevelBadge(level: model.account.level, height: 12) }
               }
               if model.account.isLogin {
-                HStack(spacing: PiliNativeDesign.spaceM) {
+                VStack(alignment: .leading, spacing: PiliNativeDesign.spaceXS) {
                   Text(piliLocalizedFormat("硬币 %.1f", model.account.money))
                   Text(
                     model.account.nextExp > 0
                       ? piliLocalizedFormat("经验 %d/%d", model.account.currentExp, model.account.nextExp)
                       : piliLocalizedFormat("经验 %d · 已满级", model.account.currentExp)
                   )
-                    .lineLimit(1).minimumScaleFactor(0.7)
+                    .lineLimit(1)
                 }.font(PiliNativeDesign.caption).foregroundStyle(.secondary)
                 ProgressView(value: experienceProgress)
                   .tint(piliProfileAccent).accessibilityLabel("等级经验")

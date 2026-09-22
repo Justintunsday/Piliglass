@@ -164,6 +164,9 @@ final class PlayerControlsTests: XCTestCase {
       let landscape = NSPredicate { _, _ in self.app.frame.width > self.app.frame.height }
       expectation(for: landscape, evaluatedWith: app)
       waitForExpectations(timeout: 10)
+      if !app.buttons["720P"].isHittable {
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+      }
       XCTAssertTrue(app.buttons["720P"].waitForExistence(timeout: 8))
     }
   }
@@ -192,10 +195,9 @@ final class PlayerControlsTests: XCTestCase {
     XCTAssertTrue(state.label.contains("playing=false"))
     XCTAssertTrue(state.label.contains("rates=[2.0, 1.5]"), "A paused video must not boost")
     let slider = app.sliders["播放进度"]
-    // A rejected long press on a paused video may toggle the chrome as a
-    // single tap. Resume then pause to explicitly reveal it before scrubbing.
-    left.doubleTap()
-    left.doubleTap()
+    // A paused long press can toggle the chrome. A single tap reveals it
+    // without changing playback state before scrubbing.
+    if !slider.isHittable { left.tap() }
     XCTAssertTrue(state.label.contains("playing=false"))
     XCTAssertTrue(slider.waitForExistence(timeout: 8), "Keep the native accessible UISlider")
     slider.adjust(toNormalizedSliderPosition: 0.75)
