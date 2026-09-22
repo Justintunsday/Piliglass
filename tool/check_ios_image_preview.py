@@ -50,6 +50,13 @@ private struct PiliOriginalLevelBadge: View {
 private struct PiliNativeCommentRichText: View {
   let message: String
   let emotes: [String: PiliNativeCommentEmote]
+  init(message: String, emotes: [String: PiliNativeCommentEmote],
+       mentions: [String: Int] = [:], links: [String: PiliNativeCommentLink] = [:],
+       openMention: ((Int) -> Void)? = nil, openLink: ((String) -> Void)? = nil,
+       seek: ((Int) -> Void)? = nil) {
+    self.message = message
+    self.emotes = emotes
+  }
   var body: some View { Text(message) }
 }
 @main

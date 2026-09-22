@@ -43,7 +43,13 @@ MODEL = r'''
   let searchResults = [PiliNativeVideo(id: 1)]
   let searchLoading = false, searchLoadingMore = false, searchHasMore = false
   let searchError: String? = nil
+  let searchSuggestions: [String] = []
+  let searchDiscoveryLoading = false
+  let searchSubmittedKeyword = ""
   func search(_ text: String) {}
+  func loadSearchDiscovery() {}
+  func updateSearchSuggestions(_ input: String) {}
+  func removeSearchHistory(_ keyword: String) {}
   func loadMoreSearchResults() {}
   @Published var libraryTitle = "我的收藏"
   @Published var libraryKind = "favorites"
