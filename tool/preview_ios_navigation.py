@@ -378,7 +378,7 @@ def production_swift():
   @ObservedObject var model: PiliNativeViewModel
   var body: some View {{ Text("{title}").navigationTitle("{title}").navigationBarTitleDisplayMode(.inline) }}
 }}\n'''
-    return home.LOCALIZATION + '\n' + fixtures + preferences + profiles + section('private struct PiliEdgeSwipeBackModifier:',
+    return home.LOCALIZATION + '\n' + fixtures + section('private enum PiliNativeDesign', 'private extension Notification.Name') + preferences + profiles + section('private struct PiliEdgeSwipeBackModifier:',
                               'private struct PiliNativeDynamicsView:') + section(
         'private struct PiliNativeLibraryView:', '// MARK: - Native settings') + section(
         'private struct PiliNativeSettingsView:', 'private struct PiliNativeDanmakuPreferencesPage:') + section(
