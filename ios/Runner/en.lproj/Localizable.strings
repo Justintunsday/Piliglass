@@ -670,3 +670,9 @@
 "默认画质保存失败" = "Could not save default quality";
 "默认视频分辨率" = "Default video quality";
 "默认（可输入 CDN 域名）" = "Default (enter a CDN host)";
+"首条推荐" = "First recommendation";
+"暂无推荐内容" = "No recommendations yet";
+"还没有关注动态" = "No activity yet";
+"关注喜欢的创作者后，更新会显示在这里" = "Follow creators you like to see their updates here";
+"关注更新" = "Following updates";
+"%d 条动态" = "%d updates";
