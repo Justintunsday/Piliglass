@@ -136,7 +136,7 @@ final class AccountPageTests: XCTestCase {
     XCTAssertTrue(app.navigationBars["我的"].waitForExistence(timeout: 10))
     XCTAssertTrue(app.buttons["设置"].exists)
     XCTAssertTrue(app.staticTexts["硬币 948.6"].exists)
-    XCTAssertTrue(app.staticTexts["经验 19735/28800"].exists)
+    XCTAssertTrue(app.staticTexts["经验 19,735/28,800"].exists)
     XCTAssertTrue(app.buttons["离线缓存"].exists)
     capture("mine-native-top")
     let folder = app.buttons["favorite-folder-0"]

@@ -195,9 +195,7 @@ final class PlayerControlsTests: XCTestCase {
     XCTAssertTrue(state.label.contains("playing=false"))
     XCTAssertTrue(state.label.contains("rates=[2.0, 1.5]"), "A paused video must not boost")
     let slider = app.sliders["播放进度"]
-    // A paused long press can toggle the chrome. A single tap reveals it
-    // without changing playback state before scrubbing.
-    if !slider.isHittable { left.tap() }
+    // Pausing reveals the controls, including the seek slider.
     XCTAssertTrue(state.label.contains("playing=false"))
     XCTAssertTrue(slider.waitForExistence(timeout: 8), "Keep the native accessible UISlider")
     slider.adjust(toNormalizedSliderPosition: 0.75)

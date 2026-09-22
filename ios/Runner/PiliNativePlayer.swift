@@ -3154,7 +3154,14 @@ final class PiliNativePlayerViewController: UIViewController, UIGestureRecognize
     if let action = action { button.addTarget(self, action: action, for: .touchUpInside) }
   }
 
-  @objc private func togglePlayback() { session.togglePlayback(); scheduleControlsHide() }
+  @objc private func togglePlayback() {
+    session.togglePlayback()
+    if !session.isPlaying {
+      controlsHideTask?.cancel()
+      chromeViews.forEach { $0.alpha = 1 }
+    }
+    scheduleControlsHide()
+  }
   @objc private func toggleDanmaku() { session.danmakuEnabled.toggle(); scheduleControlsHide() }
   @objc private func changeSpeed() { session.cyclePlaybackRate(); scheduleControlsHide() }
   @objc private func toggleFullscreen() { session.isFullscreen.toggle() }

@@ -210,7 +210,7 @@ final class MenuNavigationTests: XCTestCase {
   }
 
   func testSearchButtonAndInteractiveBack() {
-    let search = app.navigationBars.buttons["搜索"]
+    let search = app.buttons["搜索"]
     XCTAssertTrue(search.waitForExistence(timeout: 8))
     XCTAssertGreaterThan(search.frame.width, app.frame.width * 0.45)
     XCTAssertFalse(app.navigationBars.staticTexts["PiliGlass"].exists)
@@ -256,8 +256,13 @@ final class MenuNavigationTests: XCTestCase {
     assertPage("播放器设置")
     let gesture = app.switches["双击暂停或继续"]
     XCTAssertTrue(gesture.waitForExistence(timeout: 8))
+    if !gesture.isHittable { app.swipeUp() }
+    XCTAssertTrue(gesture.isHittable)
     let initial = gesture.value as? String
     gesture.tap()
+    let changed = NSPredicate(format: "value != %@", initial ?? "1")
+    expectation(for: changed, evaluatedWith: gesture)
+    waitForExpectations(timeout: 5)
     let updated = gesture.value as? String
     XCTAssertNotEqual(initial, updated)
     XCTAssertFalse(app.switches["双击快退/快进"].exists)
@@ -301,7 +306,7 @@ final class MenuNavigationTests: XCTestCase {
   func testHomeButtonsSurviveTabSwitches() {
     openMine()
     app.tabBars.buttons["首页"].tap()
-    XCTAssertTrue(app.navigationBars.buttons["搜索"].waitForExistence(timeout: 8))
+    XCTAssertTrue(app.buttons["搜索"].waitForExistence(timeout: 8))
     XCTAssertTrue(app.navigationBars.buttons["消息"].exists)
     XCTAssertTrue(app.navigationBars.buttons["我的"].exists)
     screenshot("home-toolbar-after-tab-switch")
@@ -326,7 +331,7 @@ final class MenuNavigationTests: XCTestCase {
   }
 
   func testVideoZoomCancelledGestureAndSearchReturn() {
-    app.navigationBars.buttons["搜索"].tap()
+    app.buttons["搜索"].tap()
     let card = app.buttons.containing(.staticText, identifier: "山海之间，记录旅途的风景").firstMatch
     XCTAssertTrue(card.waitForExistence(timeout: 8))
     card.tap()
