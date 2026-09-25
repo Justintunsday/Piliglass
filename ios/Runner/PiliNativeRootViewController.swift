@@ -12,8 +12,8 @@ private let piliNativeChannelName = "piliglass/native_ui"
 private let piliAccent = Color(red: 251.0 / 255, green: 114.0 / 255, blue: 153.0 / 255)
 private let piliProfileAccent = piliAccent
 
-// Editorial surfaces keep the native shell recognizably PiliGlass in both appearances.
-// Spacing and type are shared by the feed, activity, account, and detail screens.
+// System surfaces and text styles keep every native destination consistent
+// with iOS while the accent preserves PiliGlass's identity.
 private enum PiliNativeDesign {
   static let spaceXS: CGFloat = 4
   static let spaceS: CGFloat = 8
@@ -22,44 +22,28 @@ private enum PiliNativeDesign {
   static let spaceXL: CGFloat = 32
 
   static let radiusS: CGFloat = 8
-  static let radiusM: CGFloat = 16
-  static let radiusL: CGFloat = 24
+  static let radiusM: CGFloat = 14
+  static let radiusL: CGFloat = 18
   static let touchTarget: CGFloat = 44
   static let readableWidth: CGFloat = 960
   static let focusedWidth: CGFloat = 720
 
-  static let background = Color(uiColor: UIColor { traits in
-    traits.userInterfaceStyle == .dark
-      ? UIColor(red: 18 / 255, green: 19 / 255, blue: 23 / 255, alpha: 1)
-      : UIColor(red: 248 / 255, green: 246 / 255, blue: 244 / 255, alpha: 1)
-  })
-  static let surface = Color(uiColor: UIColor { traits in
-    traits.userInterfaceStyle == .dark
-      ? UIColor(red: 35 / 255, green: 36 / 255, blue: 41 / 255, alpha: 1)
-      : UIColor(red: 239 / 255, green: 235 / 255, blue: 232 / 255, alpha: 1)
-  })
-  static let elevatedSurface = Color(uiColor: UIColor { traits in
-    traits.userInterfaceStyle == .dark
-      ? UIColor(red: 28 / 255, green: 29 / 255, blue: 34 / 255, alpha: 1)
-      : UIColor(red: 255 / 255, green: 254 / 255, blue: 252 / 255, alpha: 1)
-  })
-  static let subtleFill = Color(uiColor: UIColor { traits in
-    traits.userInterfaceStyle == .dark
-      ? UIColor(red: 48 / 255, green: 49 / 255, blue: 54 / 255, alpha: 1)
-      : UIColor(red: 230 / 255, green: 226 / 255, blue: 222 / 255, alpha: 1)
-  })
-  static let divider = Color(uiColor: .separator).opacity(0.28)
+  static let background = Color(uiColor: .systemGroupedBackground)
+  static let surface = Color(uiColor: .tertiarySystemGroupedBackground)
+  static let elevatedSurface = Color(uiColor: .secondarySystemGroupedBackground)
+  static let subtleFill = Color(uiColor: .tertiarySystemFill)
+  static let divider = Color(uiColor: .separator).opacity(0.5)
   static let accentText = Color(uiColor: UIColor { traits in
     traits.userInterfaceStyle == .dark
       ? UIColor(red: 255 / 255, green: 151 / 255, blue: 178 / 255, alpha: 1)
       : UIColor(red: 165 / 255, green: 43 / 255, blue: 81 / 255, alpha: 1)
   })
 
-  static let display = Font.system(size: 30, weight: .bold, design: .serif)
-  static let heading = Font.system(size: 20, weight: .semibold, design: .default)
-  static let subheading = Font.system(size: 17, weight: .medium, design: .default)
-  static let body = Font.system(size: 15, weight: .regular, design: .default)
-  static let caption = Font.system(size: 12, weight: .regular, design: .default)
+  static let display = Font.system(.largeTitle, design: .default).weight(.bold)
+  static let heading = Font.system(.title2, design: .default).weight(.semibold)
+  static let subheading = Font.system(.headline, design: .default)
+  static let body = Font.system(.body, design: .default)
+  static let caption = Font.system(.caption, design: .default)
 }
 
 private struct PiliNativePageChrome: ViewModifier {
@@ -4159,8 +4143,6 @@ private struct PiliNativeRootView: View {
       }
     }
     .tint(piliAccent)
-    .toolbarBackground(PiliNativeDesign.elevatedSurface, for: .tabBar)
-    .toolbarBackground(.visible, for: .tabBar)
     .preferredColorScheme(appearance == 1 ? .light : appearance == 2 ? .dark : nil)
     .environment(\.piliVideoTransitionNamespace, videoTransitionNamespace)
     .sheet(isPresented: $model.isLibraryPresented) {
@@ -4228,26 +4210,11 @@ private struct PiliNativeRootView: View {
   @ViewBuilder
   private func tabIcon(for title: String, selected: Bool) -> some View {
     if title.contains("动态") {
-      PiliOriginalIcon(
-        family: .custom,
-        codePoint: selected ? 0xe80a : 0xe80b,
-        fallback: "sparkles",
-        size: 21
-      )
+      Image(systemName: selected ? "rectangle.stack.fill" : "rectangle.stack")
     } else if title.contains("我") || title.contains("账号") {
-      PiliOriginalIcon(
-        family: .material,
-        codePoint: selected ? 0xe491 : 0xe497,
-        fallback: selected ? "person.fill" : "person",
-        size: 22
-      )
+      Image(systemName: selected ? "person.crop.circle.fill" : "person.crop.circle")
     } else {
-      PiliOriginalIcon(
-        family: .material,
-        codePoint: selected ? 0xe318 : 0xf107,
-        fallback: selected ? "house.fill" : "house",
-        size: 22
-      )
+      Image(systemName: selected ? "house.fill" : "house")
     }
   }
 
@@ -4261,9 +4228,6 @@ private struct PiliNativeRootView: View {
 
 private struct PiliNativeHomeView: View {
   @ObservedObject var model: PiliNativeViewModel
-  private let columns = [
-    GridItem(.adaptive(minimum: 160, maximum: 280), spacing: PiliNativeDesign.spaceM, alignment: .top),
-  ]
 
   var body: some View {
     NavigationStack {
@@ -4301,7 +4265,7 @@ private struct PiliNativeHomeView: View {
                     .fixedSize()
                 }
 
-                LazyVGrid(columns: columns, spacing: PiliNativeDesign.spaceL) {
+                LazyVStack(spacing: 0) {
                   ForEach(Array(model.homeVideos.dropFirst())) { video in
                     PiliNativeVideoCard(video: video) {
                       model.openVideo(video, sourceID: "home:\(video.id)")
@@ -4311,8 +4275,14 @@ private struct PiliNativeHomeView: View {
                         model.loadMore("home")
                       }
                     }
+                    if video.id != model.homeVideos.last?.id {
+                      Divider().padding(.leading, 148)
+                    }
                   }
                 }
+                .padding(.horizontal, PiliNativeDesign.spaceM)
+                .background(PiliNativeDesign.elevatedSurface)
+                .clipShape(RoundedRectangle(cornerRadius: PiliNativeDesign.radiusM, style: .continuous))
               }
 
               if model.homeLoadingMore {
@@ -4333,16 +4303,13 @@ private struct PiliNativeHomeView: View {
           .refreshable { model.refresh("home") }
         }
       }
-      .navigationBarTitle("", displayMode: .inline)
-      .navigationBarItems(
-        leading: Text("PiliGlass")
-          .font(.system(size: 17, weight: .bold, design: .serif))
-          .foregroundStyle(PiliNativeDesign.accentText),
-        trailing: HStack(spacing: PiliNativeDesign.spaceS) {
+      .navigationTitle("PiliGlass")
+      .navigationBarTitleDisplayMode(.large)
+      .toolbar {
+        ToolbarItemGroup(placement: .topBarTrailing) {
           if model.account.isLogin {
             Button(action: { model.openRoute("/whisper") }) {
               Image(systemName: "bell")
-                .frame(width: PiliNativeDesign.touchTarget, height: PiliNativeDesign.touchTarget)
             }
             .accessibilityLabel("消息")
           }
@@ -4355,24 +4322,17 @@ private struct PiliNativeHomeView: View {
               Image(systemName: "person.crop.circle")
             }
           }
-          .frame(width: PiliNativeDesign.touchTarget, height: PiliNativeDesign.touchTarget)
           .accessibilityLabel("我的")
         }
-      )
+      }
       .modifier(PiliNativePrimaryDestinations(model: model, tab: .home))
     }
   }
 
   private var homeHeader: some View {
     VStack(alignment: .leading, spacing: PiliNativeDesign.spaceM) {
-      VStack(alignment: .leading, spacing: PiliNativeDesign.spaceXS) {
-        Text("PILIGLASS  /  DISCOVER")
-          .font(PiliNativeDesign.caption.weight(.semibold))
-          .tracking(1.6)
-          .foregroundStyle(PiliNativeDesign.accentText)
-        Text("为你推荐")
-          .font(PiliNativeDesign.display)
-      }
+      Text("为你推荐")
+        .font(PiliNativeDesign.heading)
 
       Button(action: { model.isSearchPresented = true }) {
         HStack(spacing: PiliNativeDesign.spaceS) {
@@ -4381,18 +4341,12 @@ private struct PiliNativeHomeView: View {
           Text("搜索视频")
             .font(PiliNativeDesign.body)
           Spacer(minLength: 0)
-          Image(systemName: "arrow.up.left")
-            .font(.caption.weight(.semibold))
         }
         .foregroundStyle(.secondary)
         .padding(.horizontal, PiliNativeDesign.spaceM)
         .frame(minHeight: PiliNativeDesign.touchTarget)
-        .background(PiliNativeDesign.elevatedSurface)
+        .background(PiliNativeDesign.subtleFill)
         .clipShape(RoundedRectangle(cornerRadius: PiliNativeDesign.radiusM, style: .continuous))
-        .overlay {
-          RoundedRectangle(cornerRadius: PiliNativeDesign.radiusM, style: .continuous)
-            .stroke(PiliNativeDesign.divider, lineWidth: 1)
-        }
       }
       .buttonStyle(.plain)
       .accessibilityLabel("搜索")
@@ -4464,10 +4418,6 @@ private struct PiliNativeFeaturedVideoCard: View {
       }
       .background(PiliNativeDesign.elevatedSurface)
       .clipShape(RoundedRectangle(cornerRadius: PiliNativeDesign.radiusL, style: .continuous))
-      .overlay {
-        RoundedRectangle(cornerRadius: PiliNativeDesign.radiusL, style: .continuous)
-          .stroke(PiliNativeDesign.divider, lineWidth: 1)
-      }
     }
     .buttonStyle(.plain)
     .accessibilityLabel("\(video.title)，\(video.owner)")
@@ -4480,11 +4430,11 @@ private struct PiliNativeVideoCard: View {
 
   var body: some View {
     Button(action: action) {
-      VStack(alignment: .leading, spacing: PiliNativeDesign.spaceS) {
+      HStack(alignment: .top, spacing: PiliNativeDesign.spaceS + 4) {
         ZStack(alignment: .bottomTrailing) {
           PiliRemoteImage(urlString: video.cover)
             .aspectRatio(16 / 9, contentMode: .fill)
-            .frame(maxWidth: .infinity)
+            .frame(width: 120, height: 76)
             .clipped()
             .background(PiliNativeDesign.subtleFill)
           if !video.durationText.isEmpty {
@@ -4495,37 +4445,34 @@ private struct PiliNativeVideoCard: View {
               .padding(.vertical, PiliNativeDesign.spaceXS)
               .background(.black.opacity(0.72))
               .clipShape(Capsule())
-              .padding(PiliNativeDesign.spaceS)
+              .padding(PiliNativeDesign.spaceXS)
           }
         }
-        .clipShape(RoundedRectangle(cornerRadius: PiliNativeDesign.radiusM, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: PiliNativeDesign.radiusS, style: .continuous))
         .piliVideoTransitionSource(id: "home:\(video.id)")
 
-        Text(video.title)
-          .font(PiliNativeDesign.body.weight(.medium))
-          .foregroundColor(.primary)
-          .lineLimit(2)
-          .multilineTextAlignment(.leading)
-          .fixedSize(horizontal: false, vertical: true)
-          .frame(minHeight: 40, alignment: .topLeading)
-          .frame(maxWidth: .infinity, alignment: .leading)
-
-        HStack(spacing: PiliNativeDesign.spaceS) {
-          Label(video.owner, systemImage: "person")
+        VStack(alignment: .leading, spacing: PiliNativeDesign.spaceXS) {
+          Text(video.title)
+            .font(PiliNativeDesign.body.weight(.medium))
+            .foregroundStyle(.primary)
+            .lineLimit(2)
+            .multilineTextAlignment(.leading)
+            .frame(maxWidth: .infinity, alignment: .leading)
+          Spacer(minLength: 0)
+          Text(video.owner)
             .lineLimit(1)
-            .truncationMode(.tail)
           if !video.viewText.isEmpty {
             Label(video.viewText, systemImage: "play.rectangle")
               .lineLimit(1)
           }
-          Spacer(minLength: 0)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
         .font(PiliNativeDesign.caption)
-        .foregroundColor(.secondary)
+        .foregroundStyle(.secondary)
+        .frame(height: 76, alignment: .topLeading)
       }
       .frame(maxWidth: .infinity, alignment: .leading)
-      .clipped()
+      .padding(.vertical, PiliNativeDesign.spaceS + 4)
+      .contentShape(Rectangle())
     }
     .frame(maxWidth: .infinity, minHeight: PiliNativeDesign.touchTarget, alignment: .leading)
     .buttonStyle(PlainButtonStyle())
@@ -4571,10 +4518,6 @@ private struct PiliNativeDynamicsView: View {
                 }
                 .background(PiliNativeDesign.elevatedSurface)
                 .clipShape(RoundedRectangle(cornerRadius: PiliNativeDesign.radiusM, style: .continuous))
-                .overlay {
-                  RoundedRectangle(cornerRadius: PiliNativeDesign.radiusM, style: .continuous)
-                    .stroke(PiliNativeDesign.divider, lineWidth: 1)
-                }
                 .onAppear {
                   if item.id == model.dynamics.last?.id {
                     model.loadMore("dynamics")
@@ -4962,10 +4905,6 @@ private struct PiliNativeMineView: View {
       .padding(PiliNativeDesign.spaceM)
       .background(PiliNativeDesign.elevatedSurface)
       .clipShape(RoundedRectangle(cornerRadius: PiliNativeDesign.radiusL, style: .continuous))
-      .overlay {
-        RoundedRectangle(cornerRadius: PiliNativeDesign.radiusL, style: .continuous)
-          .stroke(PiliNativeDesign.divider, lineWidth: 1)
-      }
       .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
       .listRowBackground(Color.clear)
       .listRowSeparator(.hidden)
@@ -4974,37 +4913,27 @@ private struct PiliNativeMineView: View {
 
   private var servicesSection: some View {
     Section("我的服务") {
-      LazyVGrid(
-        columns: [GridItem(.adaptive(minimum: 136), spacing: PiliNativeDesign.spaceS)],
-        spacing: PiliNativeDesign.spaceS
-      ) {
-        ForEach(shortcuts.indices, id: \.self) { index in
-          let item = shortcuts[index]
-          Button { protectedRoute(item.2, requiresLogin: item.2 != "/download") } label: {
-            HStack(spacing: PiliNativeDesign.spaceS) {
-              Image(systemName: item.1)
-                .font(.system(size: 18, weight: .semibold))
-                .foregroundStyle(piliProfileAccent)
-                .frame(width: 32, height: 32)
-                .background(piliProfileAccent.opacity(0.12), in: RoundedRectangle(cornerRadius: PiliNativeDesign.radiusS))
-              Text(piliLocalized(item.0))
-                .font(PiliNativeDesign.body.weight(.medium))
-                .foregroundStyle(.primary)
-                .lineLimit(1)
-              Spacer(minLength: 0)
-            }
-            .padding(.horizontal, PiliNativeDesign.spaceS)
-            .frame(maxWidth: .infinity, minHeight: 56)
-            .background(PiliNativeDesign.elevatedSurface)
-            .clipShape(RoundedRectangle(cornerRadius: PiliNativeDesign.radiusM, style: .continuous))
-            .contentShape(Rectangle())
+      ForEach(shortcuts.indices, id: \.self) { index in
+        let item = shortcuts[index]
+        Button { protectedRoute(item.2, requiresLogin: item.2 != "/download") } label: {
+          HStack(spacing: PiliNativeDesign.spaceM) {
+            Image(systemName: item.1)
+              .font(.body.weight(.medium))
+              .foregroundStyle(piliProfileAccent)
+              .frame(width: 28, height: 28)
+            Text(piliLocalized(item.0))
+              .foregroundStyle(.primary)
+            Spacer(minLength: 0)
+            Image(systemName: "chevron.right")
+              .font(.caption.weight(.semibold))
+              .foregroundStyle(.tertiary)
           }
-          .buttonStyle(.plain)
+          .frame(minHeight: PiliNativeDesign.touchTarget)
+          .contentShape(Rectangle())
         }
+        .buttonStyle(.plain)
+        .accessibilityLabel(piliLocalized(item.0))
       }
-      .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
-      .listRowBackground(Color.clear)
-      .listRowSeparator(.hidden)
     }
   }
 
