@@ -112,6 +112,7 @@ final class PlayerPreviewApp: UIResponder, UIApplicationDelegate {
 
   func application(_ application: UIApplication,
                    didFinishLaunchingWithOptions options: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
+    UserDefaults.standard.set(60.0, forKey: PiliNativePlayerPreferences.hideDelayKey)
     let controller = PiliNativePlayerViewController(session: session, fullscreen: !embedded)
     // Use the UIKit controller as the window root so its supported orientations
     // apply directly, without a SwiftUI preview host retaining a portrait frame.

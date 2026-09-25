@@ -47,6 +47,7 @@ private final class PiliNativeViewModel: ObservableObject {
   func loadMoreComments() { loadMoreCalls += 1 }
   func beginDynamicComment() {}
   func openCommentMember(_ comment: PiliNativeComment) {}
+  func openCommentMember(_ memberID: Int) {}
   func toggleCommentLike(_ comment: PiliNativeComment) {}
   func beginCommentReply(_ comment: PiliNativeComment) {}
   func openCommentThread(_ comment: PiliNativeComment) {}
