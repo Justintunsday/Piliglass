@@ -50,6 +50,13 @@ private struct PiliOriginalLevelBadge: View {
 private struct PiliNativeCommentRichText: View {
   let message: String
   let emotes: [String: PiliNativeCommentEmote]
+  init(message: String, emotes: [String: PiliNativeCommentEmote],
+       mentions: [String: Int] = [:], links: [String: PiliNativeCommentLink] = [:],
+       openMention: ((Int) -> Void)? = nil, openLink: ((String) -> Void)? = nil,
+       seek: ((Int) -> Void)? = nil) {
+    self.message = message
+    self.emotes = emotes
+  }
   var body: some View { Text(message) }
 }
 @main
@@ -92,7 +99,7 @@ final class ImagePreviewTests: XCTestCase {
   override func setUpWithError() throws { continueAfterFailure = false }
   func launch(_ mode: String) {
     XCUIDevice.shared.orientation = .portrait
-    app.launchArguments = [mode]
+    app.launchArguments = ["-AppleLanguages", "(zh-Hans)", "-AppleLocale", "zh_CN", mode]
     app.launch()
     XCTAssertTrue(app.buttons["预览图片 1"].waitForExistence(timeout: 10))
   }
@@ -158,7 +165,7 @@ def production_swift():
     source = (ROOT / 'ios/Runner/PiliNativeRootViewController.swift').read_text(encoding='utf-8')
     def section(start, end):
         return source[source.index(start):source.index(end, source.index(start))]
-    return navigation.home.LOCALIZATION + '\n' + FIXTURES + section('private struct PiliNativeDynamic:', 'private struct PiliNativeMessage:') + section(
+    return navigation.home.LOCALIZATION + '\n' + FIXTURES + section('private enum PiliNativeDesign', 'private extension Notification.Name') + section('private struct PiliNativeDynamic:', 'private struct PiliNativeMessage:') + section(
         'private struct PiliNativeComment:', 'private struct PiliNativeDownload:') + section(
         'private struct PiliNativeDynamicRow:', 'private struct PiliNativeAvatar:') + section(
         'private struct PiliNativeCommentRow:', '// MARK: - Native messages') + section(

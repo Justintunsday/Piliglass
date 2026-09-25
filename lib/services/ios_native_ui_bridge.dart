@@ -1634,6 +1634,7 @@ final class IOSNativeUIBridge {
         final sample = await VideoHttp.videoUrl(
           cid: 196018899,
           bvid: 'BV1fK4y1t7hj',
+          qn: 80,
           tryLook: !Accounts.get(AccountType.video).isLogin,
           videoType: VideoType.ugc,
         ).timeout(const Duration(seconds: 6));

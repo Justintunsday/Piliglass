@@ -9,6 +9,7 @@ abstract final class DateFormatUtils {
   static final _shortFormatD = DateFormat('MM-dd HH:mm');
   static final longFormatD = DateFormat('yyyy-MM-dd HH:mm');
   static final longFormatDs = DateFormat('yyyy-MM-dd HH:mm:ss');
+  static final only0_9 = DateFormat('yyyyMMddHHmmss');
 
   /// The native iOS surface and the Flutter bridge both follow the same
   /// supported-language fallback: Chinese wins when it appears before English

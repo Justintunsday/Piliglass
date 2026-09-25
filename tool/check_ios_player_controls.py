@@ -112,6 +112,7 @@ final class PlayerPreviewApp: UIResponder, UIApplicationDelegate {
 
   func application(_ application: UIApplication,
                    didFinishLaunchingWithOptions options: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
+    UserDefaults.standard.set(60.0, forKey: PiliNativePlayerPreferences.hideDelayKey)
     let controller = PiliNativePlayerViewController(session: session, fullscreen: !embedded)
     // Use the UIKit controller as the window root so its supported orientations
     // apply directly, without a SwiftUI preview host retaining a portrait frame.
@@ -157,13 +158,16 @@ final class PlayerControlsTests: XCTestCase {
   }
   func launch(embedded: Bool = false) {
     XCUIDevice.shared.orientation = embedded ? .portrait : .landscapeLeft
-    app.launchArguments = embedded ? ["embedded"] : []
+    app.launchArguments = ["-AppleLanguages", "(zh-Hans)", "-AppleLocale", "zh_CN"] + (embedded ? ["embedded"] : [])
     app.launch()
     XCTAssertTrue(state.waitForExistence(timeout: 10))
     if !embedded {
       let landscape = NSPredicate { _, _ in self.app.frame.width > self.app.frame.height }
       expectation(for: landscape, evaluatedWith: app)
       waitForExpectations(timeout: 10)
+      if !app.buttons["720P"].isHittable {
+        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+      }
       XCTAssertTrue(app.buttons["720P"].waitForExistence(timeout: 8))
     }
   }
@@ -192,10 +196,7 @@ final class PlayerControlsTests: XCTestCase {
     XCTAssertTrue(state.label.contains("playing=false"))
     XCTAssertTrue(state.label.contains("rates=[2.0, 1.5]"), "A paused video must not boost")
     let slider = app.sliders["播放进度"]
-    // A rejected long press on a paused video may toggle the chrome as a
-    // single tap. Resume then pause to explicitly reveal it before scrubbing.
-    left.doubleTap()
-    left.doubleTap()
+    // Pausing reveals the controls, including the seek slider.
     XCTAssertTrue(state.label.contains("playing=false"))
     XCTAssertTrue(slider.waitForExistence(timeout: 8), "Keep the native accessible UISlider")
     slider.adjust(toNormalizedSliderPosition: 0.75)

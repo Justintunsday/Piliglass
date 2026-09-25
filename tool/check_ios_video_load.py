@@ -35,6 +35,7 @@ private struct PiliOriginalLevelBadge: View {
   var body: some View { Text("LV\(level)") }
 }
 private final class PiliNativeViewModel: ObservableObject {
+  let isVideoDetailPresented = false
   @Published var comments = (0..<1000).map {
     PiliNativeComment(map: ["message": "大量评论布局测试 \($0) " + String(repeating: "保留评论内容、图片和回复功能。", count: 3)], index: $0)
   }
@@ -46,11 +47,14 @@ private final class PiliNativeViewModel: ObservableObject {
   func loadMoreComments() { loadMoreCalls += 1 }
   func beginDynamicComment() {}
   func openCommentMember(_ comment: PiliNativeComment) {}
+  func openCommentMember(_ memberID: Int) {}
   func toggleCommentLike(_ comment: PiliNativeComment) {}
   func beginCommentReply(_ comment: PiliNativeComment) {}
   func openCommentThread(_ comment: PiliNativeComment) {}
+  func openCommentLink(_ target: String) {}
+  func seekFromComment(to seconds: Int) {}
 }
-private final class CountingLabel: UILabel {
+private final class CountingTextView: UITextView {
   var assignments = 0
   override var attributedText: NSAttributedString? {
     didSet { assignments += 1 }
@@ -91,7 +95,7 @@ private func check(model: PiliNativeViewModel, scrollToEnd: () -> Void) async {
     if !condition { failures.append(name) }
   }
   func labels(_ view: UIView) -> Int {
-    (view is PiliNativeMultilineLabel ? 1 : 0) + view.subviews.reduce(0) { $0 + labels($1) }
+    (view is PiliNativeMultilineTextView ? 1 : 0) + view.subviews.reduce(0) { $0 + labels($1) }
   }
   let window = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
     .flatMap(\.windows).first { $0.isKeyWindow }!
@@ -104,7 +108,7 @@ private func check(model: PiliNativeViewModel, scrollToEnd: () -> Void) async {
   try? await Task.sleep(nanoseconds: 1_000_000_000)
   expect(model.loadMoreCalls > 0, "paginationStillWorksAtEnd")
 
-  let label = CountingLabel()
+  let label = CountingTextView()
   let rich = PiliNativeCommentRichText(message: "原始评论 [表情]", emotes: [:])
   let coordinator = rich.makeCoordinator()
   for _ in 0..<1000 { coordinator.render(in: label) }
@@ -229,11 +233,11 @@ def production_swift():
         a = source.index(start)
         return source[a:source.index(end, a)]
 
-    return LOCALIZATION + "\n" + FIXTURES + section(player, "struct PiliNativeDanmakuRule:", "@MainActor\nfinal class PiliNativePlayerSession") + section(
+    return LOCALIZATION + "\n" + FIXTURES + section(root, "private enum PiliNativeDesign", "private extension Notification.Name") + section(player, "struct PiliNativeDanmakuRule:", "@MainActor\nfinal class PiliNativePlayerSession") + section(
         player, "private final class PiliNativeDanmakuView:", "private final class PiliNativePlayerGradientView:") + section(
         root, "private struct PiliNativeComment:", "private struct PiliNativeDownload:") + section(
         root, "private struct PiliNativeCommentsSection:", "private struct PiliNativeDynamicComposerView:") + section(
-        root, "private final class PiliNativeMultilineLabel:", "// MARK: - Native messages") + section(
+        root, "private final class PiliNativeMultilineTextView:", "// MARK: - Native messages") + section(
         root, "private func piliDictionary(", "private func piliCompactNumber(")
 
 

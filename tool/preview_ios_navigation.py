@@ -43,7 +43,18 @@ MODEL = r'''
   let searchResults = [PiliNativeVideo(id: 1)]
   let searchLoading = false, searchLoadingMore = false, searchHasMore = false
   let searchError: String? = nil
-  func search(_ text: String) {}
+  let searchSuggestions: [String] = []
+  let searchHistory: [String] = []
+  let searchTrending: [String] = []
+  let searchRecommendations: [String] = []
+  let searchDiscoveryLoading = false
+  let searchDiscoveryError: String? = nil
+  @Published var searchSubmittedKeyword = ""
+  func search(_ text: String) { searchSubmittedKeyword = text.trimmingCharacters(in: .whitespacesAndNewlines) }
+  func loadSearchDiscovery() {}
+  func updateSearchSuggestions(_ input: String) {}
+  func removeSearchHistory(_ keyword: String) {}
+  func clearSearchHistory() {}
   func loadMoreSearchResults() {}
   @Published var libraryTitle = "我的收藏"
   @Published var libraryKind = "favorites"
@@ -199,10 +210,10 @@ final class MenuNavigationTests: XCTestCase {
   }
 
   func testSearchButtonAndInteractiveBack() {
-    let search = app.navigationBars.buttons["搜索"]
+    let search = app.buttons["搜索"]
     XCTAssertTrue(search.waitForExistence(timeout: 8))
     XCTAssertGreaterThan(search.frame.width, app.frame.width * 0.45)
-    XCTAssertFalse(app.navigationBars.staticTexts["PiliGlass"].exists)
+    XCTAssertTrue(app.navigationBars.staticTexts["PiliGlass"].exists)
     search.tap()
     assertPage("搜索")
     screenshot("search-pushed")
@@ -245,8 +256,13 @@ final class MenuNavigationTests: XCTestCase {
     assertPage("播放器设置")
     let gesture = app.switches["双击暂停或继续"]
     XCTAssertTrue(gesture.waitForExistence(timeout: 8))
+    if !gesture.isHittable { app.swipeUp() }
+    XCTAssertTrue(gesture.isHittable)
     let initial = gesture.value as? String
-    gesture.tap()
+    gesture.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap()
+    let changed = NSPredicate(format: "value != %@", initial ?? "1")
+    expectation(for: changed, evaluatedWith: gesture)
+    waitForExpectations(timeout: 5)
     let updated = gesture.value as? String
     XCTAssertNotEqual(initial, updated)
     XCTAssertFalse(app.switches["双击快退/快进"].exists)
@@ -290,7 +306,7 @@ final class MenuNavigationTests: XCTestCase {
   func testHomeButtonsSurviveTabSwitches() {
     openMine()
     app.tabBars.buttons["首页"].tap()
-    XCTAssertTrue(app.navigationBars.buttons["搜索"].waitForExistence(timeout: 8))
+    XCTAssertTrue(app.buttons["搜索"].waitForExistence(timeout: 8))
     XCTAssertTrue(app.navigationBars.buttons["消息"].exists)
     XCTAssertTrue(app.navigationBars.buttons["我的"].exists)
     screenshot("home-toolbar-after-tab-switch")
@@ -307,7 +323,8 @@ final class MenuNavigationTests: XCTestCase {
     card.tap()
     XCTAssertTrue(app.staticTexts["video-detail"].waitForExistence(timeout: 8))
     XCTAssertTrue(app.staticTexts["已退出 1 次"].exists)
-    edgeBack()
+    app.buttons["关闭视频"].tap()
+    XCTAssertFalse(app.staticTexts["video-detail"].exists)
     XCTAssertTrue(app.tabBars.buttons["首页"].waitForExistence(timeout: 8))
     card.tap()
     XCTAssertTrue(app.staticTexts["video-detail"].waitForExistence(timeout: 8))
@@ -315,7 +332,11 @@ final class MenuNavigationTests: XCTestCase {
   }
 
   func testVideoZoomCancelledGestureAndSearchReturn() {
-    app.navigationBars.buttons["搜索"].tap()
+    app.buttons["搜索"].tap()
+    let field = app.textFields["搜索视频"]
+    XCTAssertTrue(field.waitForExistence(timeout: 8))
+    field.tap()
+    field.typeText("travel\n")
     let card = app.buttons.containing(.staticText, identifier: "山海之间，记录旅途的风景").firstMatch
     XCTAssertTrue(card.waitForExistence(timeout: 8))
     card.tap()
@@ -328,8 +349,8 @@ final class MenuNavigationTests: XCTestCase {
     XCTAssertTrue(app.staticTexts["video-detail"].exists)
     XCTAssertTrue(app.staticTexts["已退出 0 次"].exists)
     screenshot("video-zoom-cancelled-back")
-    edgeBack()
-    // A completed dismissal must preserve the search stack and result card.
+    app.buttons["关闭视频"].tap()
+    // Dismissing the video must preserve the search stack and result card.
     XCTAssertTrue(app.navigationBars["搜索"].waitForExistence(timeout: 8))
     XCTAssertTrue(card.isHittable)
     XCTAssertFalse(app.tabBars.firstMatch.isHittable)
@@ -346,7 +367,7 @@ final class MenuNavigationTests: XCTestCase {
 def production_swift():
     source = (ROOT / "ios/Runner/PiliNativeRootViewController.swift").read_text(encoding='utf-8')
     player = (ROOT / "ios/Runner/PiliNativePlayer.swift").read_text(encoding='utf-8')
-    preferences = player[player.index('enum PiliNativePlayerPreferences {'):
+    preferences = player[player.index('enum PiliNativePlaybackEndMode:'):
                          player.index('@MainActor\nfinal class PiliNativePlayerSession')]
     profiles = player[player.index('enum PiliNativeDanmakuProfile:'):player.index('struct PiliNativeDanmakuSettingsView:')]
 
@@ -378,7 +399,7 @@ def production_swift():
   @ObservedObject var model: PiliNativeViewModel
   var body: some View {{ Text("{title}").navigationTitle("{title}").navigationBarTitleDisplayMode(.inline) }}
 }}\n'''
-    return home.LOCALIZATION + '\n' + fixtures + preferences + profiles + section('private struct PiliEdgeSwipeBackModifier:',
+    return home.LOCALIZATION + '\n' + fixtures + section('private enum PiliNativeDesign', 'private extension Notification.Name') + preferences + profiles + section('private struct PiliEdgeSwipeBackModifier:',
                               'private struct PiliNativeDynamicsView:') + section(
         'private struct PiliNativeLibraryView:', '// MARK: - Native settings') + section(
         'private struct PiliNativeSettingsView:', 'private struct PiliNativeDanmakuPreferencesPage:') + section(

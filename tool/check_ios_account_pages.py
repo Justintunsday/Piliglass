@@ -123,7 +123,10 @@ import XCTest
 final class AccountPageTests: XCTestCase {
   let app = XCUIApplication()
   override func setUpWithError() throws { continueAfterFailure = false }
-  func launch(_ mode: String = "self") { app.launchArguments = [mode]; app.launch() }
+  func launch(_ mode: String = "self") {
+    app.launchArguments = ["-AppleLanguages", "(zh-Hans)", "-AppleLocale", "zh_CN", mode]
+    app.launch()
+  }
   func capture(_ name: String) {
     let attachment = XCTAttachment(screenshot: app.screenshot())
     attachment.name = name; attachment.lifetime = .keepAlways; add(attachment)
@@ -133,7 +136,7 @@ final class AccountPageTests: XCTestCase {
     XCTAssertTrue(app.navigationBars["我的"].waitForExistence(timeout: 10))
     XCTAssertTrue(app.buttons["设置"].exists)
     XCTAssertTrue(app.staticTexts["硬币 948.6"].exists)
-    XCTAssertTrue(app.staticTexts["经验 19735/28800"].exists)
+    XCTAssertTrue(app.staticTexts["经验 19,735/28,800"].exists)
     XCTAssertTrue(app.buttons["离线缓存"].exists)
     capture("mine-native-top")
     let folder = app.buttons["favorite-folder-0"]

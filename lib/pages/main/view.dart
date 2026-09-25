@@ -61,6 +61,9 @@ class _MainAppState extends PopScopeState<MainApp>
     if (Platform.isIOS) {
       (_nativeUIBridge = IOSNativeUIBridge(_mainController)).start();
     }
+    if (Platform.isMacOS) {
+      HardwareKeyboard.instance.addHandler(_handleKeyEvent);
+    }
     if (PlatformUtils.isDesktop) {
       windowManager
         ..addListener(this)
@@ -69,8 +72,8 @@ class _MainAppState extends PopScopeState<MainApp>
         trayManager.addListener(this);
         _handleTray();
       }
-    } else {
-      // FlutterSmartDialog throws
+    }
+    if (!PlatformUtils.isDesktop) {
       PiliScheme.init();
     }
   }
@@ -128,6 +131,9 @@ class _MainAppState extends PopScopeState<MainApp>
 
   @override
   void dispose() {
+    if (Platform.isMacOS) {
+      HardwareKeyboard.instance.removeHandler(_handleKeyEvent);
+    }
     if (PlatformUtils.isDesktop) {
       trayManager.removeListener(this);
       windowManager.removeListener(this);
@@ -137,6 +143,13 @@ class _MainAppState extends PopScopeState<MainApp>
     _nativeUIBridge?.dispose();
     GStorage.close();
     super.dispose();
+  }
+
+  bool _handleKeyEvent(KeyEvent event) {
+    return event is KeyDownEvent &&
+        event.logicalKey == LogicalKeyboardKey.keyR &&
+        HardwareKeyboard.instance.isMetaPressed &&
+        _mainController.refreshRecommendations();
   }
 
   @override
@@ -223,19 +236,29 @@ class _MainAppState extends PopScopeState<MainApp>
     }
   }
 
+  double? _opacity;
+
+  Future<void>? _setOpacity(double opacity) {
+    if (Platform.isWindows && _opacity != opacity) {
+      _opacity = opacity;
+      return windowManager.setOpacity(opacity);
+    }
+    return null;
+  }
+
+  @override
+  Future<void>? onWindowFocus() {
+    return _setOpacity(1.0);
+  }
+
   /// https://github.com/leanflutter/window_manager/issues/571
   Future<void> _hide() async {
-    if (Platform.isWindows) {
-      await windowManager.setOpacity(0.0);
-    }
+    await _setOpacity(0.0);
     await windowManager.hide();
   }
 
-  Future<void> _show() async {
-    if (Platform.isWindows) {
-      await windowManager.setOpacity(1.0);
-    }
-    await windowManager.show();
+  Future<void> _show() {
+    return windowManager.show();
   }
 
   @override
@@ -505,11 +528,7 @@ class _MainAppState extends PopScopeState<MainApp>
           child: bottomNav,
         );
       }
-      padding = .only(
-        top: _padding.top,
-        left: _padding.left,
-        right: _padding.right,
-      );
+      padding = _padding.copyWith(bottom: 0);
     } else {
       sideBar = DecoratedBox(
         decoration: BoxDecoration(
