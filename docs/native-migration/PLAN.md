@@ -80,7 +80,7 @@ Player orchestration -> Playback / Subtitle / Danmaku repositories
 | P01b | 提取 DesignSystem、Bridge codec；同步 preview 源读取 | 行为正文对照、iOS release+全 preview | 已验证 9d9fb2f |
 | P02a | 以专属状态协议拆出 Search（见 SEARCH.md）与跨文件共享支持组件 | 行为正文/fixture contract 对照、完整 iOS release+preview | 已验证 662f739 |
 | P02b | 分批拆 Home/Account、DTO 与播放器控制/弹幕组件 | 导航/生命周期/布局回归和 iOS release | 待开始；按领域接口切片穿插推进 |
-| P03 | 第一个 SearchRepository protocol+typed result+Flutter adapter，调用方注入依赖 | adapter 参数/返回/失败契约、现有搜索路径与 CI | 待开始 |
+| P03 | SearchRepository、typed result、可取消 bridge、独立 Search model；显式排序历史副作用 | Swift 6 strict core fixtures、现有搜索路径、完整 release+preview CI | 实施中，待 CI |
 | P04 | URLSession client+只读 discovery native slice；运行时切换前先满足 P05 最小账户 context 边界 | URLProtocol HTTP/API error/取消 fixture；真实 API/账户对照；CI | 待开始 |
 | P05 | 认证/Cookie/签名/用途账户 snapshot 边界，逐项 native cutover | 固定签名、登录/退出/换号/重启实际验收、CI | 待开始 |
 | P06 | Home/Video/Profile/Library/Comments/Dynamics REST 逐领域迁移 | 每个领域独立 commit+fixture+原路径对照+CI；不跨领域大提交 | 待开始 |

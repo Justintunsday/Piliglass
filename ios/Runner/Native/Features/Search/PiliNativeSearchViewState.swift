@@ -1,7 +1,7 @@
 import Combine
 
 // The search feature reads this state without knowing the root host or transport.
-// The existing root model supplies it while repository migration is in progress.
+// A feature model supplies it through an injected repository.
 @MainActor
 protocol PiliNativeSearchViewState: ObservableObject {
   var searchResults: [PiliNativeVideo] { get }
@@ -24,4 +24,5 @@ protocol PiliNativeSearchViewState: ObservableObject {
   func search(_ keyword: String)
   func loadMoreSearchResults()
   func openSearchVideo(_ video: PiliNativeVideo, sourceID: String)
+  func cancelSearchRequests()
 }

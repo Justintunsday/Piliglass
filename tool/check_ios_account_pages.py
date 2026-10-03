@@ -2,7 +2,7 @@
 import json
 import platform
 from pathlib import Path
-from ios_native_sources import read_native_root
+from ios_native_sources import read_native_root, read_native_source
 import preview_ios_navigation as navigation
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -45,6 +45,7 @@ private struct PiliNativeSearchView: View {
 }
 @MainActor
 private final class PiliNativeViewModel: ObservableObject {
+  var searchModel: PiliNativeViewModel { self }
   @Published var account = PiliNativeAccount(map: ProcessInfo.processInfo.arguments.contains("guest") ? [:] : [
     "isLogin": true, "mid": 123, "name": "原生界面预览", "face": "avatar", "level": 5,
     "money": 948.6, "currentExp": 19735, "nextExp": 28800, "vip": true,
@@ -222,7 +223,7 @@ def production_swift():
     def section(start, end):
         return source[source.index(start):source.index(end, source.index(start))]
     fixtures = FIXTURES.replace('// PRODUCTION_ACCENT', section('private let piliAccent =', 'private extension Notification.Name'))
-    return navigation.home.LOCALIZATION + '\n' + fixtures + section('private struct PiliNativePrimaryDestinations:', '// MARK: - Root tabs') + section('private struct PiliNativeVideo:', 'private struct PiliNativeVideoPart:') + section(
+    return navigation.home.LOCALIZATION + '\n' + read_native_source('Native/Domain/Search/PiliSearchRepository.swift') + fixtures + section('private struct PiliNativePrimaryDestinations:', '// MARK: - Root tabs') + section('private struct PiliNativeVideo:', 'private struct PiliNativeVideoPart:') + section(
         'private struct PiliNativeLibraryItem:', 'private struct PiliNativeMessage:') + section(
         'private struct PiliNativeComment:', 'private struct PiliNativeDownload:') + section(
         'private struct PiliNativeAccount {', '// MARK: - Native navigation gestures') + section(

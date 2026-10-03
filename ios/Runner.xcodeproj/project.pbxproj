@@ -38,6 +38,12 @@
 		AE06323AF14C207EAE90D276 /* PiliNativeErrorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 439934FE0D77583DFBD517D1 /* PiliNativeErrorView.swift */; };
 		A766855DD076D65FB77CA9AD /* PiliRemoteImage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7EB61B9041D1CD63EE17B789 /* PiliRemoteImage.swift */; };
 		02AD4F49447B46B46B3114FC /* PiliNativeSearchViewState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9FD52C9D64C19486FBCC1699 /* PiliNativeSearchViewState.swift */; };
+		8DBA8EAA2BA66A14E16572CE /* PiliBridgeValue.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D758D68DE7833EA3EF81573 /* PiliBridgeValue.swift */; };
+		D7158898A6D2B20371F765E0 /* PiliBridgeMethodInvoker.swift in Sources */ = {isa = PBXBuildFile; fileRef = E2B13872212C101413227F15 /* PiliBridgeMethodInvoker.swift */; };
+		5ABF2F3DE55D5414FE255ADC /* PiliFlutterMethodTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9502310A8C5B2A0CC5E850C6 /* PiliFlutterMethodTransport.swift */; };
+		F6B8A25D5C0F042031679891 /* PiliSearchRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = 08B00D2CCFD7D4B9CAF83389 /* PiliSearchRepository.swift */; };
+		27F43E30F31E07BC9E6F2AB2 /* PiliFlutterSearchRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8D9659B48F0D517D83780632 /* PiliFlutterSearchRepository.swift */; };
+		7AC69F7CAF683449ED96B8A2 /* PiliNativeSearchModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 05E5DBF530AE7419F92A8238 /* PiliNativeSearchModel.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -97,6 +103,12 @@
 		439934FE0D77583DFBD517D1 /* PiliNativeErrorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PiliNativeErrorView.swift; sourceTree = "<group>"; };
 		7EB61B9041D1CD63EE17B789 /* PiliRemoteImage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PiliRemoteImage.swift; sourceTree = "<group>"; };
 		9FD52C9D64C19486FBCC1699 /* PiliNativeSearchViewState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PiliNativeSearchViewState.swift; sourceTree = "<group>"; };
+		0D758D68DE7833EA3EF81573 /* PiliBridgeValue.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PiliBridgeValue.swift; sourceTree = "<group>"; };
+		E2B13872212C101413227F15 /* PiliBridgeMethodInvoker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PiliBridgeMethodInvoker.swift; sourceTree = "<group>"; };
+		9502310A8C5B2A0CC5E850C6 /* PiliFlutterMethodTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PiliFlutterMethodTransport.swift; sourceTree = "<group>"; };
+		08B00D2CCFD7D4B9CAF83389 /* PiliSearchRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PiliSearchRepository.swift; sourceTree = "<group>"; };
+		8D9659B48F0D517D83780632 /* PiliFlutterSearchRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PiliFlutterSearchRepository.swift; sourceTree = "<group>"; };
+		05E5DBF530AE7419F92A8238 /* PiliNativeSearchModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PiliNativeSearchModel.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -187,6 +199,8 @@
 		8CE5C8FE3101320DFB8A03DC /* Native */ = {
 			isa = PBXGroup;
 			children = (
+				1C4369FEE8B6786EF94AE699 /* Domain */,
+				8B27EB6D10F8ABF893C8A9EA /* Data */,
 				463022D16AAF0A411A6FD10B /* Features */,
 				C8D81EE0F70D1FD606EAD9D8 /* Bridge */,
 				B4699A207DA919C4F5129082 /* DesignSystem */,
@@ -199,6 +213,9 @@
 			isa = PBXGroup;
 			children = (
 				0592CB5E6B585A3BE490437D /* Models */,
+				0D758D68DE7833EA3EF81573 /* PiliBridgeValue.swift */,
+				E2B13872212C101413227F15 /* PiliBridgeMethodInvoker.swift */,
+				9502310A8C5B2A0CC5E850C6 /* PiliFlutterMethodTransport.swift */,
 				14351E5D231457A4EE82BFAB /* PiliBridgeValues.swift */,
 				E8FF79C4D06885FE940EB1C7 /* PiliNativeFlutterPlayerSurface.swift */,
 			);
@@ -256,6 +273,7 @@
 		2A6FB215DF27CE869417DA28 /* Search */ = {
 			isa = PBXGroup;
 			children = (
+				05E5DBF530AE7419F92A8238 /* PiliNativeSearchModel.swift */,
 				58252B1EBC4CE9DBE2C8233A /* PiliNativeSearchView.swift */,
 				9FD52C9D64C19486FBCC1699 /* PiliNativeSearchViewState.swift */,
 			);
@@ -293,6 +311,38 @@
 				50D2EED0FFA88671B4AA4D40 /* PiliVideoTransitionSource.swift */,
 			);
 			path = Navigation;
+			sourceTree = "<group>";
+		};
+		1C4369FEE8B6786EF94AE699 /* Domain */ = {
+			isa = PBXGroup;
+			children = (
+				399C0B2B14E7230C6F9F99F3 /* Search */,
+			);
+			path = Domain;
+			sourceTree = "<group>";
+		};
+		399C0B2B14E7230C6F9F99F3 /* Search */ = {
+			isa = PBXGroup;
+			children = (
+				08B00D2CCFD7D4B9CAF83389 /* PiliSearchRepository.swift */,
+			);
+			path = Search;
+			sourceTree = "<group>";
+		};
+		8B27EB6D10F8ABF893C8A9EA /* Data */ = {
+			isa = PBXGroup;
+			children = (
+				39B21B59271CD3B79CF16A05 /* Search */,
+			);
+			path = Data;
+			sourceTree = "<group>";
+		};
+		39B21B59271CD3B79CF16A05 /* Search */ = {
+			isa = PBXGroup;
+			children = (
+				8D9659B48F0D517D83780632 /* PiliFlutterSearchRepository.swift */,
+			);
+			path = Search;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -491,6 +541,12 @@
 				AE06323AF14C207EAE90D276 /* PiliNativeErrorView.swift in Sources */,
 				A766855DD076D65FB77CA9AD /* PiliRemoteImage.swift in Sources */,
 				02AD4F49447B46B46B3114FC /* PiliNativeSearchViewState.swift in Sources */,
+				8DBA8EAA2BA66A14E16572CE /* PiliBridgeValue.swift in Sources */,
+				D7158898A6D2B20371F765E0 /* PiliBridgeMethodInvoker.swift in Sources */,
+				5ABF2F3DE55D5414FE255ADC /* PiliFlutterMethodTransport.swift in Sources */,
+				F6B8A25D5C0F042031679891 /* PiliSearchRepository.swift in Sources */,
+				27F43E30F31E07BC9E6F2AB2 /* PiliFlutterSearchRepository.swift in Sources */,
+				7AC69F7CAF683449ED96B8A2 /* PiliNativeSearchModel.swift in Sources */,
 				C0D200000000000000000002 /* PiliNativeRootViewController.swift in Sources */,
 				C0D300000000000000000002 /* PiliNativePlayer.swift in Sources */,
 				C0D100000000000000000003 /* PiliNativeContainerViewController.m in Sources */,

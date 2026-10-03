@@ -48,6 +48,7 @@ private struct PreviewAccount {
   let face: String? = "0"
 }
 private final class PiliNativeViewModel: ObservableObject {
+  var searchModel: PiliNativeViewModel { self }
   let playbackSource = "auto"
   let automaticPlaybackSource: String? = "ali"
   let playbackSources = [

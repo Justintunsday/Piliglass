@@ -54,6 +54,7 @@ struct PiliNativeSearchView<Model: PiliNativeSearchViewState>: View {
       DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { searchFocused = true }
     }
     .onChange(of: keyword) { model.updateSearchSuggestions($0) }
+    .onDisappear { model.cancelSearchRequests() }
   }
 
   @ViewBuilder

@@ -13,6 +13,20 @@ struct PiliNativeVideo: Identifiable {
   let durationText: String
   let pubdateText: String
 
+  init(summary: PiliSearchVideoSummary, index: Int) {
+    sourceID = summary.sourceID
+    id = "\(sourceID)-\(index)"
+    aid = summary.aid
+    bvid = summary.bvid
+    title = summary.title ?? piliLocalized("未命名视频")
+    cover = summary.cover
+    owner = summary.owner
+    viewText = summary.viewText
+    danmakuText = summary.danmakuText
+    durationText = summary.durationText
+    pubdateText = summary.pubdateText
+  }
+
   init(map: [String: Any], index: Int) {
     sourceID = piliString(map["id"]) ?? "video"
     id = "\(sourceID)-\(index)"

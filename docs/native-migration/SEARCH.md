@@ -34,13 +34,18 @@ Flutter errors。Root/Feature 注入 Repository，不再直接调用搜索 chann
 `_loadNativeSearchDiscovery`（1830）、`_loadNativeSearchSuggestions`（1871）、
 `_updateNativeSearchHistory`（1899）。行号是本次审查时的定位参考。
 
-- 视频第一页按设置在 HTTP 请求之前写历史，不能再写一次；保留分页/dedup。
+- 视频第一页按设置在 HTTP 请求之前写历史，保留分页/dedup。Native 显式调用
+  `recordHistory`，与 remove/clear 排序；视频调用传 `recordHistory: false` 跳过重复写入。
+  旧 bridge caller 不传参数时继续原来的自动记录。权威开关仍由 Dart 的 add 操作检查。
 - discovery 的两个网络分区独立失败时仍返回成功与空分区；保留开关/Hive 历史。
 - 禁用联想或空词返回成功空列表；250 ms debounce 属于 Feature。
 - remove/clear 不受历史记录开关限制；本阶段不替换 Hive 存储。
 
 调用方须解决当前时序漏洞：query generation 处理重复词和 A→B→A；提交时取消
 并失效待返回的联想；discovery/history mutation revision 防止清除后的历史回写。
+record/remove/clear 使用统一队列，page one 等待自己的 record 结果，discovery 等待
+已请求的写操作。clear 不等待视频 HTTP；历史保存失败时阻止本次 HTTP，保留原有
+错误行为。视图关闭取消读取，已请求的持久化操作继续完成且不回写过时快照。
 Swift Task 取消只丢弃 adapter 结果，现有 Dart transport 和已执行的历史副作用不能
 因此撤销。若提前恢复 continuation，必须恰好恢复一次并忽略迟到 callback。
 

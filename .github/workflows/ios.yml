@@ -16,6 +16,8 @@ on:
       - "tool/native_migration_inventory.py"
       - "tool/check_ios_localization.py"
       - "tool/ios_native_sources.py"
+      - "tool/check_native_search.py"
+      - "tool/check_native_search.swift"
       - ".github/workflows/ios.yml"
   pull_request:
     paths:
@@ -30,6 +32,8 @@ on:
       - "tool/native_migration_inventory.py"
       - "tool/check_ios_localization.py"
       - "tool/ios_native_sources.py"
+      - "tool/check_native_search.py"
+      - "tool/check_native_search.swift"
       - ".github/workflows/ios.yml"
   workflow_call:
     inputs:
@@ -45,6 +49,21 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  native-search-core:
+    name: Verify native search contracts with Swift 6
+    runs-on: macos-26
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - name: Compile and verify production search core
+        run: python3 tool/check_native_search.py
+      - name: Upload native search contract evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: native-search-contracts
+          path: build/native-search-check/
+          if-no-files-found: warn
   build-macos-app:
     name: Build SwiftUI root + Flutter features
     runs-on: macos-26

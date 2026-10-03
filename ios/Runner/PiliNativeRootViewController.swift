@@ -40,7 +40,10 @@ final class PiliNativeRootViewController: UIViewController {
   )
   private lazy var model = PiliNativeViewModel(
     channel: channel,
-    flutterPlayerSurface: flutterPlayerSurface
+    flutterPlayerSurface: flutterPlayerSurface,
+    searchRepository: PiliFlutterSearchRepository(
+      invoker: PiliBridgeMethodInvoker(transport: PiliFlutterMethodTransport(channel: channel))
+    )
   )
   private var hostingController: UIHostingController<PiliNativeRootView>?
   private var isNativeRootVisible = true
@@ -194,7 +197,7 @@ final class PiliNativeRootViewController: UIViewController {
 // MARK: - View model and channel models
 
 @MainActor
-private final class PiliNativeViewModel: ObservableObject, PiliNativeSearchViewState {
+private final class PiliNativeViewModel: ObservableObject {
   @Published private(set) var tabTitles = ["首页", "动态", "我的"]
   @Published private(set) var selectedIndex = 0
   @Published private(set) var dynamicBadge = ""
@@ -214,21 +217,6 @@ private final class PiliNativeViewModel: ObservableObject, PiliNativeSearchViewS
   @Published private(set) var mineFavoritesError: String?
   private var mineFavoritesRequest = UUID()
   @Published var isSearchPresented = false
-  @Published private(set) var searchResults: [PiliNativeVideo] = []
-  @Published private(set) var searchLoading = false
-  @Published private(set) var searchLoadingMore = false
-  @Published private(set) var searchHasMore = false
-  @Published private(set) var searchError: String?
-  @Published private(set) var searchHistory: [String] = []
-  @Published private(set) var searchTrending: [String] = []
-  @Published private(set) var searchRecommendations: [String] = []
-  @Published private(set) var searchSuggestions: [String] = []
-  @Published private(set) var searchDiscoveryLoading = false
-  @Published private(set) var searchDiscoveryError: String?
-  @Published private(set) var searchSubmittedKeyword = ""
-  @Published private(set) var searchSuggestionEnabled = true
-  @Published private(set) var searchRecordHistory = true
-
   @Published var isVideoDetailPresented = false
   @Published private(set) var videoTransitionSourceID: String?
   @Published private(set) var videoDetail: PiliNativeVideoDetail?
@@ -351,15 +339,13 @@ private final class PiliNativeViewModel: ObservableObject, PiliNativeSearchViewS
   @Published private(set) var commentsError: String?
   @Published private(set) var commentsTotal = 0
 
+  let searchModel: PiliNativeSearchModel
   private let channel: FlutterMethodChannel
   let flutterPlayerSurface: PiliNativeFlutterPlayerSurface
   let nativePlayerSession = PiliNativePlayerSession()
   private var snapshotInFlight = false
   private var downloadsRefreshInFlight = false
   @Published private(set) var pendingVideo: PiliNativeVideo?
-  private var searchKeyword = ""
-  private var searchPage = 1
-  private var searchSuggestionGeneration = UUID()
   private var libraryPage = 1
   private var libraryMediaID: Int?
   private var libraryNextMax: Int?
@@ -399,10 +385,15 @@ private final class PiliNativeViewModel: ObservableObject, PiliNativeSearchViewS
 
   init(
     channel: FlutterMethodChannel,
-    flutterPlayerSurface: PiliNativeFlutterPlayerSurface
+    flutterPlayerSurface: PiliNativeFlutterPlayerSurface,
+    searchRepository: any PiliSearchRepository
   ) {
     self.channel = channel
     self.flutterPlayerSurface = flutterPlayerSurface
+    self.searchModel = PiliNativeSearchModel(repository: searchRepository)
+    self.searchModel.onOpenVideo = { [weak self] video, sourceID in
+      self?.openVideo(video, sourceID: sourceID)
+    }
     nativePlayerSession.onDanmakuSettingsRequested = { [weak self] arguments, completion in
       guard let self else { return }
       self.channel.invokeMethod("nativeDanmakuSettings", arguments: arguments) { response in
@@ -1681,148 +1672,6 @@ private final class PiliNativeViewModel: ObservableObject, PiliNativeSearchViewS
       "openRoute",
       arguments: ["route": route, "parameters": parameters]
     )
-  }
-
-  func loadSearchDiscovery() {
-    guard !searchDiscoveryLoading else { return }
-    searchDiscoveryLoading = true
-    searchDiscoveryError = nil
-    channel.invokeMethod("loadNativeSearchDiscovery", arguments: nil) { [weak self] response in
-      DispatchQueue.main.async {
-        guard let self else { return }
-        self.searchDiscoveryLoading = false
-        if let flutterError = response as? FlutterError {
-          self.searchDiscoveryError = piliLocalizedDisplay(flutterError.message ?? "搜索内容加载失败")
-          return
-        }
-        let result = piliDictionary(response)
-        guard result["state"] as? String == "success" else {
-          self.searchDiscoveryError = piliLocalizedDisplay(piliString(result["error"]) ?? "搜索内容加载失败")
-          return
-        }
-        self.searchHistory = (result["history"] as? [Any])?.compactMap { piliString($0) } ?? []
-        self.searchTrending = self.searchKeywords(from: result["trending"])
-        self.searchRecommendations = self.searchKeywords(from: result["recommendations"])
-        self.searchSuggestionEnabled = piliBool(result["suggestionEnabled"])
-        self.searchRecordHistory = piliBool(result["recordHistory"])
-        self.searchDiscoveryError = nil
-      }
-    }
-  }
-
-  private func searchKeywords(from value: Any?) -> [String] {
-    (value as? [Any])?.compactMap {
-      piliString(piliDictionary($0)["keyword"])
-    } ?? []
-  }
-
-  func updateSearchSuggestions(_ input: String) {
-    let keyword = input.trimmingCharacters(in: .whitespacesAndNewlines)
-    let generation = UUID()
-    searchSuggestionGeneration = generation
-    guard searchSuggestionEnabled, !keyword.isEmpty else {
-      searchSuggestions = []
-      return
-    }
-    DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
-      guard let self, self.searchSuggestionGeneration == generation else { return }
-      self.channel.invokeMethod(
-        "loadNativeSearchSuggestions",
-        arguments: ["keyword": keyword]
-      ) { [weak self] response in
-        DispatchQueue.main.async {
-          guard let self, self.searchSuggestionGeneration == generation else { return }
-          let result = piliDictionary(response)
-          guard result["state"] as? String == "success" else { return }
-          self.searchSuggestions = (result["items"] as? [Any])?.compactMap { piliString($0) } ?? []
-        }
-      }
-    }
-  }
-
-  func removeSearchHistory(_ keyword: String) {
-    searchHistory.removeAll { $0 == keyword }
-    channel.invokeMethod(
-      "updateNativeSearchHistory",
-      arguments: ["action": "remove", "keyword": keyword]
-    )
-  }
-
-  func clearSearchHistory() {
-    searchHistory = []
-    channel.invokeMethod("updateNativeSearchHistory", arguments: ["action": "clear"])
-  }
-
-  func openSearchVideo(_ video: PiliNativeVideo, sourceID: String) {
-    openVideo(video, sourceID: sourceID)
-  }
-
-  func search(_ keyword: String) {
-    let value = keyword.trimmingCharacters(in: .whitespacesAndNewlines)
-    guard !value.isEmpty else { return }
-    searchKeyword = value
-    searchSubmittedKeyword = value
-    searchSuggestions = []
-    if searchRecordHistory {
-      searchHistory.removeAll { $0 == value }
-      searchHistory.insert(value, at: 0)
-    }
-    searchPage = 1
-    searchResults = []
-    searchHasMore = false
-    searchLoading = true
-    searchLoadingMore = false
-    searchError = nil
-    requestSearchPage(1, append: false)
-  }
-
-  func loadMoreSearchResults() {
-    guard searchHasMore, !searchLoading, !searchLoadingMore,
-          !searchKeyword.isEmpty else { return }
-    searchLoadingMore = true
-    requestSearchPage(searchPage, append: true)
-  }
-
-  private func requestSearchPage(_ page: Int, append: Bool) {
-    let keyword = searchKeyword
-    channel.invokeMethod(
-      "searchVideos",
-      arguments: ["keyword": keyword, "page": page]
-    ) { [weak self] response in
-      DispatchQueue.main.async {
-        guard let self = self, self.searchKeyword == keyword else { return }
-        self.searchLoading = false
-        self.searchLoadingMore = false
-        if let error = response as? FlutterError {
-          self.searchError = piliLocalizedDisplay(error.message ?? "搜索失败")
-          return
-        }
-        let result = piliDictionary(response)
-        if result["state"] as? String == "error" {
-          self.searchError = piliLocalizedDisplay(result["error"] as? String ?? "搜索失败")
-          return
-        }
-        let rows = result["items"] as? [Any] ?? []
-        let startIndex = append ? self.searchResults.count : 0
-        let newItems = rows.enumerated().map {
-          PiliNativeVideo(
-            map: piliDictionary($0.element),
-            index: startIndex + $0.offset
-          )
-        }
-        if append {
-          let existingSourceIDs = Set(self.searchResults.map(\.sourceID))
-          self.searchResults.append(
-            contentsOf: newItems.filter { !existingSourceIDs.contains($0.sourceID) }
-          )
-        } else {
-          self.searchResults = newItems
-        }
-        self.searchHasMore = piliBool(result["hasMore"]) && !newItems.isEmpty
-        self.searchPage = page + 1
-        self.searchError = nil
-      }
-    }
   }
 
   func presentNativeLogin() {
@@ -3940,7 +3789,7 @@ private struct PiliNativePrimaryDestinations: ViewModifier {
         for: .tabBar
       )
       .navigationDestination(isPresented: presentation($model.isSearchPresented)) {
-        PiliNativeSearchView(model: model)
+        PiliNativeSearchView(model: model.searchModel)
           .toolbar(.hidden, for: .tabBar)
           .toolbar(.visible, for: .navigationBar)
       }

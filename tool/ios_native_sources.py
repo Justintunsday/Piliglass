@@ -15,17 +15,16 @@ RUNNER = Path(__file__).resolve().parents[1] / "ios/Runner"
 MARKER = re.compile(r"^// @native-source (Native/[\w/+]+\.swift)$", re.MULTILINE)
 
 
+def read_native_source(relative):
+    content = (RUNNER / relative).read_text(encoding="utf-8")
+    content = re.sub(r"^import [^\n]+\n", "", content, flags=re.MULTILINE).strip()
+    content = re.sub(
+        r"^(let|enum|struct|extension|func|protocol|final class) ", r"private \1 ", content,
+        flags=re.MULTILINE,
+    )
+    return content + "\n"
+
+
 def read_native_root():
     source = (RUNNER / "PiliNativeRootViewController.swift").read_text(encoding="utf-8")
-
-    def fragment(match):
-        path = RUNNER / match.group(1)
-        content = path.read_text(encoding="utf-8")
-        content = re.sub(r"^import [^\n]+\n", "", content, flags=re.MULTILINE).strip()
-        content = re.sub(
-            r"^(let|enum|struct|extension|func|protocol|final class) ", r"private \1 ", content,
-            flags=re.MULTILINE,
-        )
-        return content + "\n"
-
-    return MARKER.sub(fragment, source)
+    return MARKER.sub(lambda match: read_native_source(match.group(1)), source)

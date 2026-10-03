@@ -1795,7 +1795,11 @@ final class IOSNativeUIBridge {
     }
 
     final page = _asInt(arguments['page']) ?? 1;
-    if (page == 1 && Pref.recordSearchHistory) {
+    // Native repositories order history separately; legacy callers retain the
+    // default page-one write before HTTP.
+    if (page == 1 &&
+        arguments['recordHistory'] != false &&
+        Pref.recordSearchHistory) {
       await _saveNativeSearchKeyword(keyword);
     }
     final result = await SearchHttp.searchByType<SearchVideoData>(

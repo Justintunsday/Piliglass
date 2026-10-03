@@ -57,6 +57,7 @@ MODEL = r'''
   func removeSearchHistory(_ keyword: String) {}
   func clearSearchHistory() {}
   func loadMoreSearchResults() {}
+  func cancelSearchRequests() {}
   func openSearchVideo(_ video: PiliNativeVideo, sourceID: String) {
     openVideo(video, sourceID: sourceID)
   }
