@@ -65,4 +65,3 @@ final class PiliNativeDiagnosticLog: @unchecked Sendable {
     append("Diagnostic log cleared")
   }
 }
-
