@@ -56,7 +56,7 @@ def main():
     endpoints = {}
     for name in ("lib/http/api.dart", "lib/grpc/url.dart"):
         endpoints[name] = matches((ROOT / name).read_text(encoding="utf-8"),
-                                 r"^\s+static const\s+\w+\s*=[^;]+;")
+                                 r"^\s+static const\s+(?:String\s+)?\w+\s*=[^;]+;")
     pubspec = (ROOT / "pubspec.yaml").read_text(encoding="utf-8")
     dependencies = pubspec.split("\ndependencies:\n", 1)[1].split("\ndev_dependencies:", 1)[0]
     dependencies = re.findall(r"^  ([a-zA-Z_][\w]*):", dependencies, re.MULTILINE)

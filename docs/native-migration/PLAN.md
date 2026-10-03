@@ -19,7 +19,7 @@ Windows 无 Xcode；本地检查仅作为提交前检查。阶段完成必须有
 - `lib/http/init.dart`：Dio singleton、HTTP/2 与 HTTP/1.1 fallback、gzip/Brotli、连接变化、代理与重试。`http/api.dart` 是 REST endpoint 注册表。
 - `utils/accounts.dart` / `accounts/account_manager`：main/video 等用途账户、CookieJar、Cookie path 排序、CSRF、AppSign、gRPC metadata 与 buvid 激活。不能简化为一份全局 Cookie。
 - `lib/grpc/grpc_req.dart`：Dio HTTP/2 上的 5-byte gRPC framing、gzip、protobuf response 与 grpc-status-details-bin；`grpc/bilibili/**` 是生成的 schema 数据。需要保留 wire format，而非用 REST 替换全部 RPC。
-- `lib/tcp/live.dart`：直播包头、认证、心跳、压缩消息与断线生命周期；私信另有 HTTP/gRPC 会话及未读状态。
+- `lib/tcp/live.dart`：目录名为 tcp，现有传输实际使用 WebSocketChannel；包含直播包头、认证、30 秒心跳、zlib/Brotli 多消息解包与关闭生命周期；私信另有 HTTP/gRPC 会话及未读状态。迁移需要按实际协议而不是目录名选 transport。
 - `lib/models`、`models_new`：手写/生成 JSON、protobuf 与 Hive adapters；`lib/pages/**` GetX controllers 持有分页、筛选、风控校验和操作语义，不能只迁移 HTTP endpoint。
 - `utils/storage.dart` 的 Hive boxes 包含 userInfo/localCache/setting/historyWord/video/watchProgress/reply，账户 adapters 及下载 entry/index JSON 有独立兼容要求。
 - `services/download`：队列、HTTP range 恢复、视频/音频、弹幕、entry/index 文件与进度节流；`audio_handler` / `audio_session` / `shutdown_timer_service` 承载后台播放、媒体控制和定时行为。
