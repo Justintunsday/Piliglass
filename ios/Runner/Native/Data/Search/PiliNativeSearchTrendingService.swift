@@ -34,7 +34,7 @@ struct PiliNativeSearchTrendingService: Sendable {
     var names = Set<String>()
     for (name, value) in headers {
       guard !name.isEmpty, name.unicodeScalars.allSatisfy(tokenCharacters.contains),
-            !value.contains("\r"), !value.contains("\n"),
+            value.unicodeScalars.allSatisfy({ $0.value != 13 && $0.value != 10 }),
             names.insert(name.lowercased()).inserted,
             !["host", "content-length"].contains(name.lowercased()) else {
         throw PiliHTTPClientError.invalidRequest

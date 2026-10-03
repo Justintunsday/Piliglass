@@ -111,13 +111,14 @@ private struct NativeHTTPChecks {
       catch PiliHTTPClientError.invalidRequest { checks += 1; continue }
       throw CheckFailure(message: "Invalid limit accepted")
     }
-    for headers in [
-      ["Cookie": "value\r\nInjected: true"], ["Bad Header": "value"], ["": "value"],
+    for (index, headers) in [
+      ["Cookie": "value\r\nInjected: true"], ["Cookie": "value\rInjected: true"],
+      ["Cookie": "value\nInjected: true"], ["Bad Header": "value"], ["": "value"],
       ["Cookie": "one", "cookie": "two"], ["Host": "other.example"], ["Content-Length": "1"]
-    ] {
+    ].enumerated() {
       do { _ = try PiliNativeSearchTrendingService.makeRequest(headers: headers) }
       catch PiliHTTPClientError.invalidRequest { checks += 1; continue }
-      throw CheckFailure(message: "Invalid header accepted")
+      throw CheckFailure(message: "Invalid header case \(index) accepted")
     }
   }
 
