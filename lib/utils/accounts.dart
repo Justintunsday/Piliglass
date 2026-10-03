@@ -74,8 +74,9 @@ abstract final class Accounts {
   static Object beginAnonymousReset(AnonymousAccount value) {
     final reset = Object();
     _anonymousReset = reset;
-    _requestState.revoke(value);
-    _requestState.changed();
+    _requestState
+      ..revoke(value)
+      ..changed();
     return reset;
   }
 
@@ -88,8 +89,9 @@ abstract final class Accounts {
   ) {
     if (!isCurrentAnonymousReset(reset)) return;
     _anonymousReset = null;
-    _requestState.changed();
-    _requestState.activate(value);
+    _requestState
+      ..changed()
+      ..activate(value);
   }
 
   static Future<void> init() async {

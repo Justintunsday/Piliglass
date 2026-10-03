@@ -3,6 +3,7 @@ import 'dart:collection';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:PiliPlus/http/retry_interceptor.dart';
 import 'package:PiliPlus/models/common/account_type.dart';
 import 'package:PiliPlus/utils/accounts.dart';
 import 'package:PiliPlus/utils/accounts/account.dart';
@@ -162,6 +163,92 @@ void main() {
     expect(await _cookie(a, 'second_response'), 'two');
     expect(Accounts.isCurrentRequest(stamp), isTrue);
     expect(Accounts.account.get('101'), same(a));
+  });
+
+  test('RetryInterceptor redirect keeps A binding after selecting B', () async {
+    dio.interceptors.insert(0, RetryInterceptor(dio, 1, 0));
+    dio.options.followRedirects = true;
+    final a = _account(101, session: 'account-a');
+    final b = _account(202, session: 'account-b');
+    await Accounts.installCredentials(a);
+    await Accounts.installCredentials(b);
+    await Accounts.set(AccountType.recommend, a);
+    final response = send(a);
+    final first = await adapter.nextRequest();
+    await Accounts.set(AccountType.recommend, b);
+    // RetryInterceptor consumes this 302 before AccountManager sees it.
+    // Assert ownership of the final response only.
+    first.complete(
+      status: 302,
+      cookies: ['intermediate=unasserted; Domain=.bilibili.com; Path=/'],
+      location: _redirect,
+    );
+    final redirected = await adapter.nextRequest();
+    expect(redirected.options, same(first.options));
+    expect(redirected.options.uri, _redirect);
+    expect(redirected.options.extra['account'], same(a));
+    await finish(
+      response,
+      redirected,
+      cookies: ['redirect_final=from-a; Domain=.bilibili.com; Path=/'],
+    );
+    expect(adapter.fetchCount, 2);
+    expect(await _cookie(a, 'redirect_final'), 'from-a');
+    expect(await _cookie(b, 'redirect_final'), isNull);
+    expect(Accounts.get(AccountType.recommend), same(b));
+  });
+
+  test('overlapping Hive installs only activate the latest same-MID owner', () async {
+    final old = _account(101, session: 'old');
+    await Accounts.installCredentials(old);
+    await Accounts.set(AccountType.recommend, old);
+    final oldStamp = Accounts.captureRequest(old)!;
+    final first = _account(101, session: 'first');
+    final second = _account(101, session: 'second');
+    final firstInstall = Accounts.installCredentials(first);
+    final firstFailure = expectLater(firstInstall, throwsStateError);
+    expect(Accounts.isCurrentRequest(oldStamp), isFalse);
+    expect(Accounts.captureRequest(first), isNull);
+    final secondInstall = Accounts.installCredentials(second);
+    expect(Accounts.captureRequest(first), isNull);
+    expect(Accounts.captureRequest(second), isNull);
+    await Future.wait([firstFailure, secondInstall]);
+
+    final newStamp = Accounts.captureRequest(second)!;
+    expect(Accounts.isCurrentRequest(newStamp), isTrue);
+    expect(Accounts.ownsCredentials(first), isFalse);
+    expect(Accounts.account.get('101'), same(second));
+    expect(Accounts.get(AccountType.recommend), same(second));
+    await old.onChange();
+    await first.onChange();
+    await old.delete();
+    await first.delete();
+    expect(Accounts.account.get('101'), same(second));
+    expect(Accounts.isCurrentRequest(newStamp), isTrue);
+    expect(Accounts.isCurrentRequest(oldStamp), isFalse);
+  });
+
+  test('overlapping anonymous resets leave only the latest generation active', () async {
+    final anonymous = AnonymousAccount();
+    final oldStamp = Accounts.captureRequest(anonymous)!;
+    final response = send(anonymous);
+    final request = await adapter.nextRequest();
+    final first = anonymous.delete();
+    expect(Accounts.captureRequest(anonymous), isNull);
+    final second = anonymous.delete();
+    expect(Accounts.captureRequest(anonymous), isNull);
+    await Future.wait([first, second]);
+    final newStamp = Accounts.captureRequest(anonymous)!;
+    expect(Accounts.isCurrentRequest(newStamp), isTrue);
+    expect(Accounts.isCurrentRequest(oldStamp), isFalse);
+    expect(anonymous.activated, isFalse);
+    await finish(
+      response,
+      request,
+      cookies: ['before_double_reset=stale; Domain=.bilibili.com; Path=/'],
+    );
+    expect(await _cookie(anonymous, 'before_double_reset'), isNull);
+    expect(Accounts.isCurrentRequest(newStamp), isTrue);
   });
 
   test('same MID replacement rejects old response, onChange and delete', () async {
