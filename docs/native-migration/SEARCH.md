@@ -47,6 +47,22 @@ Swift Task 取消只丢弃 adapter 结果，现有 Dart transport 和已执行�
 验证涵盖参数/错误/缺失 state、codec 混合数字与 null、乱序/取消、联想提交时序、
 分页去重、历史设置与清除后的迟到结果，再通过 release 和全部 preview CI。
 
+Bridge async 调用采用独立的不可变 `BridgeValue: Sendable` tree 与 MainActor invoker。
+Flutter wrapper 在回调当前线程同步复制 codec 值、规范化 Flutter errors，再把 typed
+result 传给 invoker；不跨 actor 传 `Any`，不使用 `@unchecked Sendable Any` 或回调线程
+断言。Data adapter 转换为 Domain 值，Feature 不引用 bridge 类型。
+
+每次请求有独立 MainActor completion box。调用前检查取消，安装 continuation 后
+发送；完成/取消/重复/迟到 callback 通过同一个 terminal 门禁，清空 continuation
+后恰好恢复一次；记录先于安装的取消。await 后再次检查取消。Swift 等待结束不能
+撤销已经发出的 Dart 请求。Foundation fake 覆盖同步/后台/重复/迟到回调、取消竞态
+和释放；生产核心以 Swift 6 complete concurrency checking 编译。
+
+codec snapshot 先通过 CFBoolean 类型区分 NSNumber Boolean，再区分整数与浮点，
+保留大于 `2^53` 的整数、空字符串和 null。Data coercion 再复现原有 `piliString/
+piliInt/piliBool` 语义；测试 snapshot 后修改原始 NSMutable 容器不影响已捕获结果。
+完整 Runner CI 负责实际 Flutter wrapper 的 SDK 类型、导入与注册验证。
+
 ## HTTP 切换的前置条件（P04/P05）
 
 `lib/utils/accounts/api_type.dart` 将所有搜索 endpoint（包括 trending）映射到

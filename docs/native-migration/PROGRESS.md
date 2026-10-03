@@ -8,6 +8,7 @@
 | P00 | 603d3c6 -> ad0e8b5 | [成功](https://github.com/Justintunsday/Piliglass/actions/runs/37132297374) | [全部成功](https://github.com/Justintunsday/Piliglass/actions/runs/37132297176) | 基线与迁移计划完成 |
 | P01a | b906383 -> c783318 | [成功](https://github.com/Justintunsday/Piliglass/actions/runs/37133641553) | [全部成功](https://github.com/Justintunsday/Piliglass/actions/runs/37133641528) | 首批组件边界完成 |
 | P01b | 9d9fb2f | [成功](https://github.com/Justintunsday/Piliglass/actions/runs/37135310166) | [全部成功](https://github.com/Justintunsday/Piliglass/actions/runs/37135310327) | DesignSystem/codec 边界完成 |
+| P02a | 662f739 | [成功](https://github.com/Justintunsday/Piliglass/actions/runs/37136856478) | [全部成功](https://github.com/Justintunsday/Piliglass/actions/runs/37136856328) | Search Feature/UI 状态契约完成 |
 
 P00 证据：inventory 包含 59 个 bridge commands、62 个注册 Flutter routes、311 个 REST 常量、45 个 gRPC 常量、95 个依赖。压力检查 `failures=[]`，1,000 条评论保持懒加载、未在离屏处触发分页、实际末条出现后分页成功；100,000 条弹幕保留，活跃渲染上限 60。仅测试 harness 调整了懒加载自适应行定位等待；没有修改生产 UI 或业务。
 
@@ -28,8 +29,20 @@ P01b 验证：`9d9fb2fd704af2458d51cee9307b5a6146406f7a` 的 release 与 preview
 下载实际视频压力报告：`failures=[]`、评论 1,000/懒加载/无离屏分页/末条分页通过，
 100,000 条弹幕完整保留、活跃上限 60，末条定位用了 2 次真实滚动。
 
-下一步：P02a 通过 Search 专属状态协议拆 UI，保留 Root 私有 ViewModel；随后 P03
-typed SearchRepository 与 Flutter adapter。并行审查结果已写入 [SEARCH.md](SEARCH.md)：
+P02a 范围：Search View 以 MainActor/ObservableObject 的窄协议读取 12 个属性、调用
+7 个操作，Root ViewModel 继续私有；新增播放导航转发保留原有默认参数。拆出 video
+bridge DTO、loading/error、transition source 和 remote image。Root 减少约 420 行。
+图片 loader 保留动态/评论图片所需的内部访问权限，缓存/取消和业务正文未变。
+预览 fixture 使用实际生产协议与泛型 View，保持 actor/namespace/Reduce Motion guards。
+
+P02a 验证：`662f7399d9633853e8b4167e50fd18c305487778` 的完整 release 与四组 preview
+同 SHA 全成功，实际日志确认完整 Runner 编译及 FFmpeg load order。本地正文对照与
+独立子智能审查无剩余问题；没有删除功能/资源/依赖。实际视频报告 `failures=[]`，
+1,000 评论的懒加载/离屏分页/末条分页检查通过，100,000 弹幕完整保留、活跃上限 60。
+本阶段只完成 UI/状态依赖边界，搜索业务仍由 Dart 提供；不能视作 Repository 迁移完成。
+
+下一步：P03 typed SearchRepository、Sendable domain values、cancellable bridge invoker
+和 Flutter adapter，并替换 Root 搜索 channel 调用。并行审查已写入 [SEARCH.md](SEARCH.md)：
 修复请求代次/迟到联想/历史时序；Native HTTP runtime 切换必须保留 recommend 账户
 与 Cookie 语义，P04a fixture -> P05a context lease -> P04b hybrid cutover。
 Dart 业务仍完整保留，整体原生化目标仍在进行中。
