@@ -22,6 +22,9 @@
 		97C147011CF9000F007C117D /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 97C146FF1CF9000F007C117D /* LaunchScreen.storyboard */; };
 		C0D400000000000000000003 /* Localizable.strings in Resources */ = {isa = PBXBuildFile; fileRef = C0D400000000000000000004 /* Localizable.strings */; };
 		C0D400000000000000000005 /* InfoPlist.strings in Resources */ = {isa = PBXBuildFile; fileRef = C0D400000000000000000006 /* InfoPlist.strings */; };
+		C71E4B775053220BBFDC52B9 /* PiliNativeDiagnosticLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 70B84B3B9B7F9B80083DDFFA /* PiliNativeDiagnosticLog.swift */; };
+		E5E77A67F6531859AFAD1896 /* PiliNativeHTTPRangeReader.swift in Sources */ = {isa = PBXBuildFile; fileRef = D3FDE854C5B88092AC53795E /* PiliNativeHTTPRangeReader.swift */; };
+		458A455BEC2F39EA1EFC4F38 /* PiliNativeFlutterPlayerSurface.swift in Sources */ = {isa = PBXBuildFile; fileRef = E8FF79C4D06885FE940EB1C7 /* PiliNativeFlutterPlayerSurface.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -65,6 +68,9 @@
 		97C146FD1CF9000F007C117D /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		97C147001CF9000F007C117D /* Base */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; name = Base; path = Base.lproj/LaunchScreen.storyboard; sourceTree = "<group>"; };
 		97C147021CF9000F007C117D /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		70B84B3B9B7F9B80083DDFFA /* PiliNativeDiagnosticLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PiliNativeDiagnosticLog.swift; sourceTree = "<group>"; };
+		D3FDE854C5B88092AC53795E /* PiliNativeHTTPRangeReader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PiliNativeHTTPRangeReader.swift; sourceTree = "<group>"; };
+		E8FF79C4D06885FE940EB1C7 /* PiliNativeFlutterPlayerSurface.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PiliNativeFlutterPlayerSurface.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -132,6 +138,7 @@
 				74858FAE1ED2DC5600515810 /* AppDelegate.swift */,
 				A6C2F8E82FCB1A0000C0D3E1 /* SceneDelegate.swift */,
 				C0D400000000000000000001 /* PiliNativeLocalization.swift */,
+				8CE5C8FE3101320DFB8A03DC /* Native */,
 				C0D200000000000000000001 /* PiliNativeRootViewController.swift */,
 				C0D300000000000000000001 /* PiliNativePlayer.swift */,
 				C0D100000000000000000001 /* PiliNativeContainerViewController.h */,
@@ -149,6 +156,48 @@
 				32E2926120A1A8DC0E629BC6 /* Pods-Runner.profile.xcconfig */,
 			);
 			path = Pods;
+			sourceTree = "<group>";
+		};
+		8CE5C8FE3101320DFB8A03DC /* Native */ = {
+			isa = PBXGroup;
+			children = (
+				C8D81EE0F70D1FD606EAD9D8 /* Bridge */,
+				8F96307A54FD7DB8EFC7E9FB /* Player */,
+			);
+			path = Native;
+			sourceTree = "<group>";
+		};
+		C8D81EE0F70D1FD606EAD9D8 /* Bridge */ = {
+			isa = PBXGroup;
+			children = (
+				E8FF79C4D06885FE940EB1C7 /* PiliNativeFlutterPlayerSurface.swift */,
+			);
+			path = Bridge;
+			sourceTree = "<group>";
+		};
+		8F96307A54FD7DB8EFC7E9FB /* Player */ = {
+			isa = PBXGroup;
+			children = (
+				F129352F7DBBF706B58B8D61 /* Diagnostics */,
+				0C43596B7827FBE711C2BD86 /* IO */,
+			);
+			path = Player;
+			sourceTree = "<group>";
+		};
+		F129352F7DBBF706B58B8D61 /* Diagnostics */ = {
+			isa = PBXGroup;
+			children = (
+				70B84B3B9B7F9B80083DDFFA /* PiliNativeDiagnosticLog.swift */,
+			);
+			path = Diagnostics;
+			sourceTree = "<group>";
+		};
+		0C43596B7827FBE711C2BD86 /* IO */ = {
+			isa = PBXGroup;
+			children = (
+				D3FDE854C5B88092AC53795E /* PiliNativeHTTPRangeReader.swift */,
+			);
+			path = IO;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -331,6 +380,9 @@
 				74858FAF1ED2DC5600515810 /* AppDelegate.swift in Sources */,
 				A6C2F8E92FCB1A0000C0D3E1 /* SceneDelegate.swift in Sources */,
 				C0D400000000000000000002 /* PiliNativeLocalization.swift in Sources */,
+				C71E4B775053220BBFDC52B9 /* PiliNativeDiagnosticLog.swift in Sources */,
+				E5E77A67F6531859AFAD1896 /* PiliNativeHTTPRangeReader.swift in Sources */,
+				458A455BEC2F39EA1EFC4F38 /* PiliNativeFlutterPlayerSurface.swift in Sources */,
 				C0D200000000000000000002 /* PiliNativeRootViewController.swift in Sources */,
 				C0D300000000000000000002 /* PiliNativePlayer.swift in Sources */,
 				C0D100000000000000000003 /* PiliNativeContainerViewController.m in Sources */,

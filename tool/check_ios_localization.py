@@ -40,7 +40,7 @@ def check_sources(english):
         r'TextField|ProgressView|navigationTitle|navigationBarTitle|'
         r'accessibilityLabel|alert|confirmationDialog)\(\s*"((?:\\.|[^"\\])*)"'
     )
-    sources = list(RUNNER.glob('*.swift')) + [ROOT / 'ios/SwiftgramUI/Sources/SwiftgramMessagingUI.swift']
+    sources = list(RUNNER.rglob('*.swift')) + [ROOT / 'ios/SwiftgramUI/Sources/SwiftgramMessagingUI.swift']
     for path in sources:
         for raw in calls.findall(path.read_text(encoding='utf-8')):
             if not re.search('[\u4e00-\u9fff]', raw) or '\\(' in raw:
