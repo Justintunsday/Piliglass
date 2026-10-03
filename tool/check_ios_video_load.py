@@ -104,8 +104,17 @@ private func check(model: PiliNativeViewModel, scrollToEnd: () -> Void) async {
   report["initialCommentLabels"] = visibleLabels
   expect(visibleLabels > 0 && visibleLabels < 100, "commentsAreLazy")
   expect(model.loadMoreCalls == 0, "noOffscreenPagination")
-  scrollToEnd()
-  try? await Task.sleep(nanoseconds: 1_000_000_000)
+  // Lazy, self-sizing rows refine the estimated content height after a jump.
+  // The first jump can stop a few rows short; keep targeting the real last row
+  // until it appears, with a bounded wait. Never invoke pagination in fixtures.
+  var scrollAttempts = 0
+  for _ in 0..<20 {
+    scrollAttempts += 1
+    scrollToEnd()
+    try? await Task.sleep(nanoseconds: 100_000_000)
+    if model.loadMoreCalls > 0 { break }
+  }
+  report["scrollAttemptsToEnd"] = scrollAttempts
   expect(model.loadMoreCalls > 0, "paginationStillWorksAtEnd")
 
   let label = CountingTextView()

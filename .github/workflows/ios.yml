@@ -8,20 +8,26 @@ on:
       - "ios/**"
       - "lib/**"
       - "assets/**"
+      - "Packages/AetherEngine/**"
       - "pubspec.yaml"
       - "pubspec.lock"
       - "tool/check_native_danmaku.py"
       - "tool/check_native_settings.py"
+      - "tool/native_migration_inventory.py"
+      - "tool/check_ios_localization.py"
       - ".github/workflows/ios.yml"
   pull_request:
     paths:
       - "ios/**"
       - "lib/**"
       - "assets/**"
+      - "Packages/AetherEngine/**"
       - "pubspec.yaml"
       - "pubspec.lock"
       - "tool/check_native_danmaku.py"
       - "tool/check_native_settings.py"
+      - "tool/native_migration_inventory.py"
+      - "tool/check_ios_localization.py"
       - ".github/workflows/ios.yml"
   workflow_call:
     inputs:
@@ -56,6 +62,13 @@ jobs:
           flutter-version-file: pubspec.yaml
           cache: true
           pub-cache: true
+
+      - name: Record native toolchain and migration inventory
+        run: |
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+          swift --version
+          python3 tool/native_migration_inventory.py
 
       - name: Cache CocoaPods downloads
         uses: actions/cache@v5
@@ -161,3 +174,11 @@ jobs:
           archive: false
           name: iOS-release
           path: PiliPlus_ios_*.ipa
+
+      - name: Upload migration source inventory
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: native-migration-inventory
+          path: build/native-migration/*.json
+          if-no-files-found: warn

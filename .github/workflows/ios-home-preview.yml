@@ -3,6 +3,9 @@ name: Preview iOS home layout
 on:
   push:
     paths:
+      - "ios/Runner/Native/**"
+      - "ios/Runner/PiliNativeLocalization.swift"
+      - "ios/Runner/*.lproj/**"
       - "ios/Runner/PiliNativeRootViewController.swift"
       - "ios/Runner/PiliNativePlayer.swift"
       - "tool/preview_ios_home.py"
@@ -11,6 +14,8 @@ on:
       - "tool/check_ios_player_controls.py"
       - "tool/check_ios_image_preview.py"
       - "tool/check_ios_account_pages.py"
+      - "tool/native_migration_inventory.py"
+      - "tool/ios_native_sources.py"
       - ".github/workflows/ios-home-preview.yml"
   workflow_dispatch:
 
