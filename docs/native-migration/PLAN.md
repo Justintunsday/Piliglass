@@ -77,7 +77,7 @@ Player orchestration -> Playback / Subtitle / Danmaku repositories
 |---|---|---|---|
 | P00 | 本计划+可重现 inventory；修复现有 preview 分页失败；扩充迁移目录 workflow path | 同一 SHA release+preview 成功 | 已验证 ad0e8b5 |
 | P01a | 提取 Flutter player surface、诊断日志/HTTP range reader | 类型正文一致、iOS release+全 preview | 已验证 c783318 |
-| P01b | 提取 DesignSystem、Bridge codec；同步 preview 源读取 | 字节级行为对照、iOS release+全 preview | 待开始 |
+| P01b | 提取 DesignSystem、Bridge codec；同步 preview 源读取 | 行为正文对照、iOS release+全 preview | 实施中，待 CI |
 | P02 | 拆出 Home/Search/Account 等 UI、DTO 与播放器控制/弹幕组件 | 导航/生命周期/布局回归和 iOS release | 待开始 |
 | P03 | 第一个 SearchRepository protocol+typed result+Flutter adapter，调用方注入依赖 | adapter 参数/返回/失败契约、现有搜索路径与 CI | 待开始 |
 | P04 | URLSession client+只读 discovery/suggestion native slice，失败时保留 adapter | URLProtocol HTTP/API error/取消 fixture；真实 API 对照；CI | 待开始 |

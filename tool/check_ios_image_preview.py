@@ -1,6 +1,7 @@
 """Exercise production comment/dynamic image galleries with offline HTTP fixtures."""
 import json
 from pathlib import Path
+from ios_native_sources import read_native_root
 import platform
 import preview_ios_navigation as navigation
 
@@ -162,7 +163,7 @@ final class ImagePreviewTests: XCTestCase {
 
 
 def production_swift():
-    source = (ROOT / 'ios/Runner/PiliNativeRootViewController.swift').read_text(encoding='utf-8')
+    source = read_native_root()
     def section(start, end):
         return source[source.index(start):source.index(end, source.index(start))]
     return navigation.home.LOCALIZATION + '\n' + FIXTURES + section('private enum PiliNativeDesign', 'private extension Notification.Name') + section('private struct PiliNativeDynamic:', 'private struct PiliNativeMessage:') + section(

@@ -8,78 +8,15 @@ import SwiftUI
 import UIKit
 
 private let piliNativeChannelName = "piliglass/native_ui"
-// Bilibili pink (#FB7299), shared by native navigation and account controls.
-private let piliAccent = Color(red: 251.0 / 255, green: 114.0 / 255, blue: 153.0 / 255)
-private let piliProfileAccent = piliAccent
+// @native-source Native/DesignSystem/PiliNativeDesign.swift
 
-// System surfaces and text styles keep every native destination consistent
-// with iOS while the accent preserves PiliGlass's identity.
-private enum PiliNativeDesign {
-  static let spaceXS: CGFloat = 4
-  static let spaceS: CGFloat = 8
-  static let spaceM: CGFloat = 16
-  static let spaceL: CGFloat = 24
-  static let spaceXL: CGFloat = 32
+// @native-source Native/DesignSystem/PiliNativePageChrome.swift
 
-  static let radiusS: CGFloat = 8
-  static let radiusM: CGFloat = 14
-  static let radiusL: CGFloat = 18
-  static let touchTarget: CGFloat = 44
-  static let readableWidth: CGFloat = 960
-  static let focusedWidth: CGFloat = 720
+// @native-source Native/DesignSystem/PiliNativeFormChrome.swift
 
-  static let background = Color(uiColor: .systemGroupedBackground)
-  static let surface = Color(uiColor: .secondarySystemFill)
-  static let elevatedSurface = Color(uiColor: .secondarySystemGroupedBackground)
-  static let subtleFill = Color(uiColor: .tertiarySystemFill)
-  static let divider = Color(uiColor: .separator).opacity(0.5)
-  static let accentText = Color(uiColor: UIColor { traits in
-    traits.userInterfaceStyle == .dark
-      ? UIColor(red: 255 / 255, green: 151 / 255, blue: 178 / 255, alpha: 1)
-      : UIColor(red: 165 / 255, green: 43 / 255, blue: 81 / 255, alpha: 1)
-  })
+// @native-source Native/DesignSystem/PiliNativePanelChrome.swift
 
-  static let display = Font.system(.largeTitle, design: .default).weight(.bold)
-  static let heading = Font.system(.title2, design: .default).weight(.semibold)
-  static let subheading = Font.system(.headline, design: .default)
-  static let body = Font.system(.body, design: .default)
-  static let caption = Font.system(.caption, design: .default)
-}
-
-private struct PiliNativePageChrome: ViewModifier {
-  func body(content: Content) -> some View {
-    content
-      .tint(piliAccent)
-      .background(PiliNativeDesign.background.ignoresSafeArea())
-  }
-}
-
-private struct PiliNativeFormChrome: ViewModifier {
-  func body(content: Content) -> some View {
-    content
-      .scrollContentBackground(.hidden)
-      .background(PiliNativeDesign.background)
-      .tint(piliAccent)
-  }
-}
-
-private struct PiliNativePanelChrome: ViewModifier {
-  var radius: CGFloat = PiliNativeDesign.radiusM
-
-  func body(content: Content) -> some View {
-    content
-      .background(PiliNativeDesign.elevatedSurface)
-      .clipShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
-  }
-}
-
-private extension View {
-  func piliPageChrome() -> some View { modifier(PiliNativePageChrome()) }
-  func piliFormChrome() -> some View { modifier(PiliNativeFormChrome()) }
-  func piliPanel(radius: CGFloat = PiliNativeDesign.radiusM) -> some View {
-    modifier(PiliNativePanelChrome(radius: radius))
-  }
-}
+// @native-source Native/DesignSystem/View+PiliChrome.swift
 
 private extension Notification.Name {
   static let piliPresentNativeProfile = Notification.Name("piliglass.presentNativeProfile")
@@ -9963,52 +9900,7 @@ private struct PiliRemoteImage: View {
 
 // MARK: - Flutter codec helpers
 
-private func piliDictionary(_ value: Any?) -> [String: Any] {
-  if let dictionary = value as? [String: Any] { return dictionary }
-  guard let dictionary = value as? NSDictionary else { return [:] }
-  var result: [String: Any] = [:]
-  dictionary.forEach { key, value in
-    if let key = key as? String { result[key] = value }
-  }
-  return result
-}
-
-private func piliString(_ value: Any?) -> String? {
-  if value is NSNull || value == nil { return nil }
-  if let value = value as? String, !value.isEmpty { return value }
-  return nil
-}
-
-private func piliOptionalInt(_ value: Any?) -> Int? {
-  if value is NSNull || value == nil { return nil }
-  if let value = value as? NSNumber { return value.intValue }
-  if let value = value as? String { return Int(value) }
-  return nil
-}
-
-private func piliInt(_ value: Any?) -> Int {
-  piliOptionalInt(value) ?? 0
-}
-
-private func piliDouble(_ value: Any?) -> Double {
-  if let value = value as? NSNumber { return value.doubleValue }
-  if let value = value as? String { return Double(value) ?? 0 }
-  return 0
-}
-
-private func piliOptionalDouble(_ value: Any?) -> Double? {
-  if value is NSNull || value == nil { return nil }
-  if let value = value as? NSNumber { return value.doubleValue }
-  if let value = value as? String { return Double(value) }
-  return nil
-}
-
-private func piliBool(_ value: Any?) -> Bool {
-  if let value = value as? Bool { return value }
-  if let value = value as? NSNumber { return value.boolValue }
-  if let value = value as? String { return value == "true" || value == "1" }
-  return false
-}
+// @native-source Native/Bridge/PiliBridgeValues.swift
 
 private func piliCompactNumber(_ value: Int) -> String {
   if piliNativeIsEnglish() {

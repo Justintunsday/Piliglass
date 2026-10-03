@@ -6,6 +6,7 @@ extracted unchanged from the production Swift file.
 """
 import json
 from pathlib import Path
+from ios_native_sources import read_native_root
 import platform
 import subprocess
 
@@ -365,7 +366,7 @@ final class MenuNavigationTests: XCTestCase {
 
 
 def production_swift():
-    source = (ROOT / "ios/Runner/PiliNativeRootViewController.swift").read_text(encoding='utf-8')
+    source = read_native_root()
     player = (ROOT / "ios/Runner/PiliNativePlayer.swift").read_text(encoding='utf-8')
     preferences = player[player.index('enum PiliNativePlaybackEndMode:'):
                          player.index('@MainActor\nfinal class PiliNativePlayerSession')]

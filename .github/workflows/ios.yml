@@ -15,6 +15,7 @@ on:
       - "tool/check_native_settings.py"
       - "tool/native_migration_inventory.py"
       - "tool/check_ios_localization.py"
+      - "tool/ios_native_sources.py"
       - ".github/workflows/ios.yml"
   pull_request:
     paths:
@@ -28,6 +29,7 @@ on:
       - "tool/check_native_settings.py"
       - "tool/native_migration_inventory.py"
       - "tool/check_ios_localization.py"
+      - "tool/ios_native_sources.py"
       - ".github/workflows/ios.yml"
   workflow_call:
     inputs:

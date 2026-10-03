@@ -6,6 +6,7 @@ section, rows and rich text are extracted verbatim and tested in UIKit/SwiftUI.
 """
 import json
 from pathlib import Path
+from ios_native_sources import read_native_root
 import platform
 import plistlib
 import shutil
@@ -235,7 +236,7 @@ private func check(model: PiliNativeViewModel, scrollToEnd: () -> Void) async {
 
 
 def production_swift():
-    root = (ROOT / "ios/Runner/PiliNativeRootViewController.swift").read_text(encoding="utf-8")
+    root = read_native_root()
     player = (ROOT / "ios/Runner/PiliNativePlayer.swift").read_text(encoding="utf-8")
 
     def section(source, start, end):

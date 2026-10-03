@@ -6,6 +6,7 @@ This checks layout only; the regular iOS workflow builds the complete app.
 
 import json
 from pathlib import Path
+from ios_native_sources import read_native_root
 import platform
 import plistlib
 import shutil
@@ -214,7 +215,7 @@ def main():
     if platform.system() != "Darwin":
         raise SystemExit("The home preview requires macOS and Xcode.")
     OUTPUT.mkdir(parents=True, exist_ok=True)
-    source = (ROOT / "ios/Runner/PiliNativeRootViewController.swift").read_text()
+    source = read_native_root()
     design_start = source.index("private enum PiliNativeDesign")
     design_end = source.index("private extension Notification.Name", design_start)
     start = source.index("private struct PiliNativeHomeView:")

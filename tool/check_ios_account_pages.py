@@ -2,6 +2,7 @@
 import json
 import platform
 from pathlib import Path
+from ios_native_sources import read_native_root
 import preview_ios_navigation as navigation
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -217,7 +218,7 @@ final class AccountPageTests: XCTestCase {
 
 
 def production_swift():
-    source = (ROOT / 'ios/Runner/PiliNativeRootViewController.swift').read_text(encoding='utf-8')
+    source = read_native_root()
     def section(start, end):
         return source[source.index(start):source.index(end, source.index(start))]
     fixtures = FIXTURES.replace('// PRODUCTION_ACCENT', section('private let piliAccent =', 'private extension Notification.Name'))
