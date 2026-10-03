@@ -9,6 +9,7 @@
 | P01a | b906383 -> c783318 | [成功](https://github.com/Justintunsday/Piliglass/actions/runs/37133641553) | [全部成功](https://github.com/Justintunsday/Piliglass/actions/runs/37133641528) | 首批组件边界完成 |
 | P01b | 9d9fb2f | [成功](https://github.com/Justintunsday/Piliglass/actions/runs/37135310166) | [全部成功](https://github.com/Justintunsday/Piliglass/actions/runs/37135310327) | DesignSystem/codec 边界完成 |
 | P02a | 662f739 | [成功](https://github.com/Justintunsday/Piliglass/actions/runs/37136856478) | [全部成功](https://github.com/Justintunsday/Piliglass/actions/runs/37136856328) | Search Feature/UI 状态契约完成 |
+| P03 | 7ff23b9 | [成功，含 Swift 6 core](https://github.com/Justintunsday/Piliglass/actions/runs/37140033171) | [全部成功](https://github.com/Justintunsday/Piliglass/actions/runs/37139965902) | Native Search state、typed Repository 与临时 Dart adapter 完成 |
 
 P00 证据：inventory 包含 59 个 bridge commands、62 个注册 Flutter routes、311 个 REST 常量、45 个 gRPC 常量、95 个依赖。压力检查 `failures=[]`，1,000 条评论保持懒加载、未在离屏处触发分页、实际末条出现后分页成功；100,000 条弹幕保留，活跃渲染上限 60。仅测试 harness 调整了懒加载自适应行定位等待；没有修改生产 UI 或业务。
 
@@ -41,8 +42,23 @@ P02a 验证：`662f7399d9633853e8b4167e50fd18c305487778` 的完整 release 与�
 1,000 评论的懒加载/离屏分页/末条分页检查通过，100,000 弹幕完整保留、活跃上限 60。
 本阶段只完成 UI/状态依赖边界，搜索业务仍由 Dart 提供；不能视作 Repository 迁移完成。
 
-下一步：P03 typed SearchRepository、Sendable domain values、cancellable bridge invoker
-和 Flutter adapter，并替换 Root 搜索 channel 调用。并行审查已写入 [SEARCH.md](SEARCH.md)：
-修复请求代次/迟到联想/历史时序；Native HTTP runtime 切换必须保留 recommend 账户
-与 Cookie 语义，P04a fixture -> P05a context lease -> P04b hybrid cutover。
+P03 范围：Root 不再持有搜索状态或发起搜索 channel 调用。独立 MainActor Search model
+注入 Sendable Domain Repository；Data adapter 暂时转发现有 Dart 请求和 Hive 操作。
+不可变 codec snapshot 在 Flutter 回调线程捕获后跨 actor 传递，invoker 统一完成/取消
+门禁，忽略重复与迟到回调。请求代次覆盖重复词/A→B→A，提交失效联想，关闭取消读取。
+record/remove/clear 统一排序；第一页先等待历史写入，保存失败阻止 HTTP，clear 不等待
+视频 HTTP。已请求的写操作保留，迟到快照不能回写新状态。旧 Dart callers 默认继续
+自动记历史；Native adapter 显式记录后传 `recordHistory: false` 避免重复写入。
+
+P03 验证：`7ff23b9c52909c07dcf5ad9ff0b5d3db4d6f70e8` 两个 workflow 同 SHA 成功。
+真实 macOS Swift 6 `-strict-concurrency=complete` 编译生产核心，63 项 codec/transport/
+Repository/state/history/cancellation 检查通过；完整 Runner release 编译及 Aether FFmpeg
+load order 通过，实际 Flutter SDK wrapper 由完整 Runner 验证。四组 preview 全成功。
+下载的视频压力报告 `failures=[]`，1,000 评论懒加载、离屏不分页、末条分页通过，
+100,000 弹幕完整保留、活跃上限 60。提交前 diff 检查通过，无业务/资源/依赖删除。
+本阶段只完成 Native state 和业务边界，不能据此宣称搜索网络或存储已原生化。
+
+下一步：P04a URLSession/decoder fixture。并行审查已写入 [SEARCH.md](SEARCH.md)：
+Native HTTP runtime 切换必须保留 recommend 账户与 Cookie 语义，
+P04a fixture -> P05a context lease -> P04b hybrid cutover。
 Dart 业务仍完整保留，整体原生化目标仍在进行中。

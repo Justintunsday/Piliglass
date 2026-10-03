@@ -1,6 +1,8 @@
 # Search：下一批迁移边界
 
-2026-10-04：基于 `9d9fb2f` 的代码审查，尚未实施或验证 Repository 切换。
+2026-10-04：P02a UI 边界及 P03 Native state/Repository 边界已实施，
+`7ff23b9` 的 Swift 6 严格检查、完整 Runner release 和全部 preview CI 通过。
+Repository 当前仍使用 Dart adapter；HTTP 与 Hive 尚未切换。
 
 ## Feature 拆分（P02a）
 
