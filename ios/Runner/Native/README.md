@@ -15,7 +15,11 @@ See `docs/native-migration/PLAN.md` for cutover and removal gates.
   transport directly.
 - `Domain/Search`: immutable Sendable search values and repository contracts.
 - `Data/Search`: temporary Dart-backed repository; codec and API validation stay
-  here until a verified native network implementation replaces it.
+  here until a verified native network implementation replaces it. The native
+  trending service/decoder is fixture-verified before account-context cutover.
+- `Networking/HTTP`: Sendable HTTP client contract and isolated URLSession client.
+  Keep raw status/body/header metadata for account Cookie writeback before API
+  validation. No implicit shared Cookie jar, credential storage or redirect.
 - `Bridge/Models`: temporary presentation DTOs decoded from the legacy channel.
   Keep dictionary/codec details here until typed domain values replace them.
 - `Player/Diagnostics`: Runner's Aether log capture and diagnostic export.
@@ -23,8 +27,8 @@ See `docs/native-migration/PLAN.md` for cutover and removal gates.
   execute synchronously on its demux thread; do not call them from UI or an async
   cooperative executor. Preserve seek, cancellation and close semantics.
 
-Add Networking and Persistence components
-as their responsibilities are extracted. Do not create an all-purpose manager
+Add Persistence components as their responsibilities are extracted.
+Do not create an all-purpose manager
 or move Bilibili APIs into `Packages/AetherEngine`.
 
 `// @native-source Native/...` markers in the original root preserve extraction

@@ -44,6 +44,10 @@
 		F6B8A25D5C0F042031679891 /* PiliSearchRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = 08B00D2CCFD7D4B9CAF83389 /* PiliSearchRepository.swift */; };
 		27F43E30F31E07BC9E6F2AB2 /* PiliFlutterSearchRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8D9659B48F0D517D83780632 /* PiliFlutterSearchRepository.swift */; };
 		7AC69F7CAF683449ED96B8A2 /* PiliNativeSearchModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 05E5DBF530AE7419F92A8238 /* PiliNativeSearchModel.swift */; };
+		2A16612D7576B9BE2ADFEBBB /* PiliHTTPClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1791ADF9F76E559ADD884435 /* PiliHTTPClient.swift */; };
+		7F2E70768E0EE8D586C63F3F /* PiliURLSessionHTTPClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 22DD596E1422DD5985F6975F /* PiliURLSessionHTTPClient.swift */; };
+		CCDF6F72B527EE3B6E579D1B /* PiliNativeSearchTrendingService.swift in Sources */ = {isa = PBXBuildFile; fileRef = CD2DA01E8CC2C8958820AE5D /* PiliNativeSearchTrendingService.swift */; };
+		B32946FCFD92179A98FF98F8 /* PiliSearchTrendingDecoder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3CEC6567653BB052E3B5EB4D /* PiliSearchTrendingDecoder.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -109,6 +113,10 @@
 		08B00D2CCFD7D4B9CAF83389 /* PiliSearchRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PiliSearchRepository.swift; sourceTree = "<group>"; };
 		8D9659B48F0D517D83780632 /* PiliFlutterSearchRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PiliFlutterSearchRepository.swift; sourceTree = "<group>"; };
 		05E5DBF530AE7419F92A8238 /* PiliNativeSearchModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PiliNativeSearchModel.swift; sourceTree = "<group>"; };
+		1791ADF9F76E559ADD884435 /* PiliHTTPClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PiliHTTPClient.swift; sourceTree = "<group>"; };
+		22DD596E1422DD5985F6975F /* PiliURLSessionHTTPClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PiliURLSessionHTTPClient.swift; sourceTree = "<group>"; };
+		CD2DA01E8CC2C8958820AE5D /* PiliNativeSearchTrendingService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PiliNativeSearchTrendingService.swift; sourceTree = "<group>"; };
+		3CEC6567653BB052E3B5EB4D /* PiliSearchTrendingDecoder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PiliSearchTrendingDecoder.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -200,6 +208,7 @@
 			isa = PBXGroup;
 			children = (
 				1C4369FEE8B6786EF94AE699 /* Domain */,
+				BBFAA65DC4BAE11B5A2171D0 /* Networking */,
 				8B27EB6D10F8ABF893C8A9EA /* Data */,
 				463022D16AAF0A411A6FD10B /* Features */,
 				C8D81EE0F70D1FD606EAD9D8 /* Bridge */,
@@ -340,9 +349,28 @@
 		39B21B59271CD3B79CF16A05 /* Search */ = {
 			isa = PBXGroup;
 			children = (
+				CD2DA01E8CC2C8958820AE5D /* PiliNativeSearchTrendingService.swift */,
+				3CEC6567653BB052E3B5EB4D /* PiliSearchTrendingDecoder.swift */,
 				8D9659B48F0D517D83780632 /* PiliFlutterSearchRepository.swift */,
 			);
 			path = Search;
+			sourceTree = "<group>";
+		};
+		BBFAA65DC4BAE11B5A2171D0 /* Networking */ = {
+			isa = PBXGroup;
+			children = (
+				EE4C9E898589491CAA59202C /* HTTP */,
+			);
+			path = Networking;
+			sourceTree = "<group>";
+		};
+		EE4C9E898589491CAA59202C /* HTTP */ = {
+			isa = PBXGroup;
+			children = (
+				1791ADF9F76E559ADD884435 /* PiliHTTPClient.swift */,
+				22DD596E1422DD5985F6975F /* PiliURLSessionHTTPClient.swift */,
+			);
+			path = HTTP;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -547,6 +575,10 @@
 				F6B8A25D5C0F042031679891 /* PiliSearchRepository.swift in Sources */,
 				27F43E30F31E07BC9E6F2AB2 /* PiliFlutterSearchRepository.swift in Sources */,
 				7AC69F7CAF683449ED96B8A2 /* PiliNativeSearchModel.swift in Sources */,
+				2A16612D7576B9BE2ADFEBBB /* PiliHTTPClient.swift in Sources */,
+				7F2E70768E0EE8D586C63F3F /* PiliURLSessionHTTPClient.swift in Sources */,
+				CCDF6F72B527EE3B6E579D1B /* PiliNativeSearchTrendingService.swift in Sources */,
+				B32946FCFD92179A98FF98F8 /* PiliSearchTrendingDecoder.swift in Sources */,
 				C0D200000000000000000002 /* PiliNativeRootViewController.swift in Sources */,
 				C0D300000000000000000002 /* PiliNativePlayer.swift in Sources */,
 				C0D100000000000000000003 /* PiliNativeContainerViewController.m in Sources */,

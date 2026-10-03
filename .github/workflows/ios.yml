@@ -18,6 +18,8 @@ on:
       - "tool/ios_native_sources.py"
       - "tool/check_native_search.py"
       - "tool/check_native_search.swift"
+      - "tool/check_native_http.py"
+      - "tool/check_native_http.swift"
       - ".github/workflows/ios.yml"
   pull_request:
     paths:
@@ -34,6 +36,8 @@ on:
       - "tool/ios_native_sources.py"
       - "tool/check_native_search.py"
       - "tool/check_native_search.swift"
+      - "tool/check_native_http.py"
+      - "tool/check_native_http.swift"
       - ".github/workflows/ios.yml"
   workflow_call:
     inputs:
@@ -49,6 +53,21 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  native-http-core:
+    name: Verify native HTTP contracts with Swift 6
+    runs-on: macos-26
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - name: Compile and verify production HTTP and trending service
+        run: python3 tool/check_native_http.py
+      - name: Upload native HTTP contract evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: native-http-contracts
+          path: build/native-http-check/
+          if-no-files-found: warn
   native-search-core:
     name: Verify native search contracts with Swift 6
     runs-on: macos-26
