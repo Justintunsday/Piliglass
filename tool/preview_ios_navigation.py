@@ -57,6 +57,9 @@ MODEL = r'''
   func removeSearchHistory(_ keyword: String) {}
   func clearSearchHistory() {}
   func loadMoreSearchResults() {}
+  func openSearchVideo(_ video: PiliNativeVideo, sourceID: String) {
+    openVideo(video, sourceID: sourceID)
+  }
   @Published var libraryTitle = "我的收藏"
   @Published var libraryKind = "favorites"
   @Published var libraryItems = [PiliNativeLibraryItem()]
@@ -378,7 +381,7 @@ def production_swift():
 
     fixtures = home.FIXTURES.replace(
         'private final class PiliNativeViewModel: ObservableObject {',
-        'private final class PiliNativeViewModel: ObservableObject {\n' + MODEL,
+        'private final class PiliNativeViewModel: ObservableObject, PiliNativeSearchViewState {\n' + MODEL,
     ).replace(
         'func openVideo(_ video: PiliNativeVideo, sourceID: String? = nil) {}',
         '''func openVideo(_ video: PiliNativeVideo, sourceID: String? = nil) {
@@ -407,7 +410,7 @@ def production_swift():
         'private struct PiliNativePlaybackSourceSettingsView:', 'private struct PiliNativeDiagnosticLogSettingsView:') + section(
         'private struct PiliNativeAboutSettingsView:', '// MARK: - Native search') + section(
         'private struct PiliNativePlaybackSourceOption:', 'private struct PiliNativeSetting:') + section(
-        'private struct PiliNativeSearchView:', '// MARK: - Shared native views') + stubs
+        '// MARK: - Native search', '// MARK: - Shared native views') + stubs
 
 
 def write_project():

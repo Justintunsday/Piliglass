@@ -23,7 +23,7 @@ def read_native_root():
         content = path.read_text(encoding="utf-8")
         content = re.sub(r"^import [^\n]+\n", "", content, flags=re.MULTILINE).strip()
         content = re.sub(
-            r"^(let|enum|struct|extension|func) ", r"private \1 ", content,
+            r"^(let|enum|struct|extension|func|protocol|final class) ", r"private \1 ", content,
             flags=re.MULTILINE,
         )
         return content + "\n"

@@ -9,12 +9,17 @@ See `docs/native-migration/PLAN.md` for cutover and removal gates.
   import Flutter. Player surface containment remains owned by the root host.
 - `DesignSystem`: shared semantic colors, typography, spacing and view chrome.
   Components must not own account, network or playback state.
+- `Features/Search`: the search view consumes its main-actor state contract.
+  The legacy root supplies that contract during repository migration; feature UI
+  must not import Flutter or invoke transport directly.
+- `Bridge/Models`: temporary presentation DTOs decoded from the legacy channel.
+  Keep dictionary/codec details here until typed domain values replace them.
 - `Player/Diagnostics`: Runner's Aether log capture and diagnostic export.
 - `Player/IO`: Runner's configured CDN byte readers. Aether's `IOReader` callbacks
   execute synchronously on its demux thread; do not call them from UI or an async
   cooperative executor. Preserve seek, cancellation and close semantics.
 
-Add Features, Domain, Data, Networking and Persistence components
+Add Domain, Data, Networking and Persistence components
 as their responsibilities are extracted. Do not create an all-purpose manager
 or move Bilibili APIs into `Packages/AetherEngine`.
 

@@ -31,6 +31,13 @@
 		3D82EC9ADE5F7972C6940DBD /* PiliNativePanelChrome.swift in Sources */ = {isa = PBXBuildFile; fileRef = 73B6172CF703A43DF3EFEF26 /* PiliNativePanelChrome.swift */; };
 		4D20EF43DAF254A6A822EB2F /* View+PiliChrome.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7D3880DE7B414E1421131AD2 /* View+PiliChrome.swift */; };
 		040A84D7CB4BCB3ABDA15A7F /* PiliBridgeValues.swift in Sources */ = {isa = PBXBuildFile; fileRef = 14351E5D231457A4EE82BFAB /* PiliBridgeValues.swift */; };
+		3F5B65E4CA87B8090F2D9DF6 /* PiliNativeVideo.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9153B970C760447D21F4654A /* PiliNativeVideo.swift */; };
+		9499F3ABF6F0F7A69B525186 /* PiliVideoTransitionSource.swift in Sources */ = {isa = PBXBuildFile; fileRef = 50D2EED0FFA88671B4AA4D40 /* PiliVideoTransitionSource.swift */; };
+		57A17206762F5C64EB4E5666 /* PiliNativeSearchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 58252B1EBC4CE9DBE2C8233A /* PiliNativeSearchView.swift */; };
+		620298626231A8895C9B8B8E /* PiliNativeLoadingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1154943959A0AA138C613FA9 /* PiliNativeLoadingView.swift */; };
+		AE06323AF14C207EAE90D276 /* PiliNativeErrorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 439934FE0D77583DFBD517D1 /* PiliNativeErrorView.swift */; };
+		A766855DD076D65FB77CA9AD /* PiliRemoteImage.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7EB61B9041D1CD63EE17B789 /* PiliRemoteImage.swift */; };
+		02AD4F49447B46B46B3114FC /* PiliNativeSearchViewState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9FD52C9D64C19486FBCC1699 /* PiliNativeSearchViewState.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -83,6 +90,13 @@
 		73B6172CF703A43DF3EFEF26 /* PiliNativePanelChrome.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "PiliNativePanelChrome.swift"; sourceTree = "<group>"; };
 		7D3880DE7B414E1421131AD2 /* View+PiliChrome.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "View+PiliChrome.swift"; sourceTree = "<group>"; };
 		14351E5D231457A4EE82BFAB /* PiliBridgeValues.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "PiliBridgeValues.swift"; sourceTree = "<group>"; };
+		9153B970C760447D21F4654A /* PiliNativeVideo.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PiliNativeVideo.swift; sourceTree = "<group>"; };
+		50D2EED0FFA88671B4AA4D40 /* PiliVideoTransitionSource.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PiliVideoTransitionSource.swift; sourceTree = "<group>"; };
+		58252B1EBC4CE9DBE2C8233A /* PiliNativeSearchView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PiliNativeSearchView.swift; sourceTree = "<group>"; };
+		1154943959A0AA138C613FA9 /* PiliNativeLoadingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PiliNativeLoadingView.swift; sourceTree = "<group>"; };
+		439934FE0D77583DFBD517D1 /* PiliNativeErrorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PiliNativeErrorView.swift; sourceTree = "<group>"; };
+		7EB61B9041D1CD63EE17B789 /* PiliRemoteImage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PiliRemoteImage.swift; sourceTree = "<group>"; };
+		9FD52C9D64C19486FBCC1699 /* PiliNativeSearchViewState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PiliNativeSearchViewState.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -173,6 +187,7 @@
 		8CE5C8FE3101320DFB8A03DC /* Native */ = {
 			isa = PBXGroup;
 			children = (
+				463022D16AAF0A411A6FD10B /* Features */,
 				C8D81EE0F70D1FD606EAD9D8 /* Bridge */,
 				B4699A207DA919C4F5129082 /* DesignSystem */,
 				8F96307A54FD7DB8EFC7E9FB /* Player */,
@@ -183,6 +198,7 @@
 		C8D81EE0F70D1FD606EAD9D8 /* Bridge */ = {
 			isa = PBXGroup;
 			children = (
+				0592CB5E6B585A3BE490437D /* Models */,
 				14351E5D231457A4EE82BFAB /* PiliBridgeValues.swift */,
 				E8FF79C4D06885FE940EB1C7 /* PiliNativeFlutterPlayerSurface.swift */,
 			);
@@ -217,6 +233,9 @@
 		B4699A207DA919C4F5129082 /* DesignSystem */ = {
 			isa = PBXGroup;
 			children = (
+				90CD1BC21452C7958FFA94F6 /* Feedback */,
+				FC61E9F609D6ED302A4BED22 /* Images */,
+				D42F2B3119BCEA9FD49A0F64 /* Navigation */,
 				F7EB05D54946059F35F0ACD2 /* PiliNativeDesign.swift */,
 				B9569F96A0866C5E8A2BB116 /* PiliNativePageChrome.swift */,
 				EB392DE19B7F2AF26F5EF80E /* PiliNativeFormChrome.swift */,
@@ -224,6 +243,56 @@
 				7D3880DE7B414E1421131AD2 /* View+PiliChrome.swift */,
 			);
 			path = DesignSystem;
+			sourceTree = "<group>";
+		};
+		463022D16AAF0A411A6FD10B /* Features */ = {
+			isa = PBXGroup;
+			children = (
+				2A6FB215DF27CE869417DA28 /* Search */,
+			);
+			path = Features;
+			sourceTree = "<group>";
+		};
+		2A6FB215DF27CE869417DA28 /* Search */ = {
+			isa = PBXGroup;
+			children = (
+				58252B1EBC4CE9DBE2C8233A /* PiliNativeSearchView.swift */,
+				9FD52C9D64C19486FBCC1699 /* PiliNativeSearchViewState.swift */,
+			);
+			path = Search;
+			sourceTree = "<group>";
+		};
+		0592CB5E6B585A3BE490437D /* Models */ = {
+			isa = PBXGroup;
+			children = (
+				9153B970C760447D21F4654A /* PiliNativeVideo.swift */,
+			);
+			path = Models;
+			sourceTree = "<group>";
+		};
+		90CD1BC21452C7958FFA94F6 /* Feedback */ = {
+			isa = PBXGroup;
+			children = (
+				1154943959A0AA138C613FA9 /* PiliNativeLoadingView.swift */,
+				439934FE0D77583DFBD517D1 /* PiliNativeErrorView.swift */,
+			);
+			path = Feedback;
+			sourceTree = "<group>";
+		};
+		FC61E9F609D6ED302A4BED22 /* Images */ = {
+			isa = PBXGroup;
+			children = (
+				7EB61B9041D1CD63EE17B789 /* PiliRemoteImage.swift */,
+			);
+			path = Images;
+			sourceTree = "<group>";
+		};
+		D42F2B3119BCEA9FD49A0F64 /* Navigation */ = {
+			isa = PBXGroup;
+			children = (
+				50D2EED0FFA88671B4AA4D40 /* PiliVideoTransitionSource.swift */,
+			);
+			path = Navigation;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -415,6 +484,13 @@
 				3D82EC9ADE5F7972C6940DBD /* PiliNativePanelChrome.swift in Sources */,
 				4D20EF43DAF254A6A822EB2F /* View+PiliChrome.swift in Sources */,
 				040A84D7CB4BCB3ABDA15A7F /* PiliBridgeValues.swift in Sources */,
+				3F5B65E4CA87B8090F2D9DF6 /* PiliNativeVideo.swift in Sources */,
+				9499F3ABF6F0F7A69B525186 /* PiliVideoTransitionSource.swift in Sources */,
+				57A17206762F5C64EB4E5666 /* PiliNativeSearchView.swift in Sources */,
+				620298626231A8895C9B8B8E /* PiliNativeLoadingView.swift in Sources */,
+				AE06323AF14C207EAE90D276 /* PiliNativeErrorView.swift in Sources */,
+				A766855DD076D65FB77CA9AD /* PiliRemoteImage.swift in Sources */,
+				02AD4F49447B46B46B3114FC /* PiliNativeSearchViewState.swift in Sources */,
 				C0D200000000000000000002 /* PiliNativeRootViewController.swift in Sources */,
 				C0D300000000000000000002 /* PiliNativePlayer.swift in Sources */,
 				C0D100000000000000000003 /* PiliNativeContainerViewController.m in Sources */,
