@@ -64,6 +64,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         name = self.path.lstrip('/')
+        client = 'dart' if name.startswith('dart/') else 'native'
+        if client == 'dart': name = name.removeprefix('dart/')
         item = self.server.fixtures.get(name)
         if item is None:
             with self.server.lock:
@@ -71,10 +73,10 @@ class Handler(BaseHTTPRequestHandler):
             self.send_error(404)
             return
         mode, body = item['mode'], item['body']
-        record = dict(id=name, connectionID=self.server.connection_ids[self.connection],
+        record = dict(id=name, client=client, connectionID=self.server.connection_ids[self.connection],
                       received=time.monotonic(), cookieFields=item['wireValues'], chunks=[])
         with self.server.lock: self.server.records.append(record)
-        (OUTPUT / ('seen-' + name)).write_text('received', encoding='ascii')
+        (OUTPUT / ('seen-' + ('dart-' if client == 'dart' else '') + name)).write_text('received', encoding='ascii')
         self.close_connection = mode != 'keepalive'
         self.connection.settimeout(15)
         try:
@@ -107,8 +109,8 @@ class Handler(BaseHTTPRequestHandler):
             record['closedDuringTransfer'] = True
 
 
-def run(command, log, timeout=1200, env=None):
-    result = subprocess.run(command, cwd=PACKAGE, capture_output=True, text=True, timeout=timeout, env=env)
+def run(command, log, timeout=1200, env=None, cwd=PACKAGE):
+    result = subprocess.run(command, cwd=cwd, capture_output=True, text=True, timeout=timeout, env=env)
     (OUTPUT/log).write_text(' '.join(command)+'\n'+result.stdout+result.stderr, encoding='utf-8')
     if result.returncode:
         print((result.stdout+result.stderr)[-16000:])
@@ -125,6 +127,7 @@ def main():
         (OUTPUT/'fixtures.json').write_text(json.dumps([{k:v for k,v in item.items() if k!='body'} for item in fixtures],indent=2)+'\n',encoding='utf-8')
         for item in fixtures:
             (OUTPUT/('seen-'+item['id'])).unlink(missing_ok=True)
+            (OUTPUT/('seen-dart-'+item['id'])).unlink(missing_ok=True)
         run(['swift','package','resolve'], 'resolve.log')
         resolved = PACKAGE/'Package.resolved'
         if resolved.exists(): shutil.copy2(resolved, OUTPUT/'Package.resolved')
@@ -132,14 +135,23 @@ def main():
         thread = threading.Thread(target=server.serve_forever, daemon=True); thread.start()
         try:
             env = {**os.environ, 'PILI_RAW_WIRE_BASE': f'http://127.0.0.1:{server.server_port}', 'PILI_RAW_WIRE_OUTPUT':str(OUTPUT)}
-            run(['swift','test'], 'wire.log', env=env)
+            run(['flutter','test','--no-pub','--reporter','expanded','test/http/native_transport_wire_test.dart'],
+                'dart-wire.log',timeout=300,env=env,cwd=ROOT)
+            run(['swift','test','--filter','rawHeaderAndIdleWire|rawConfigurationRejectsUnknownSemantics'], 'wire.log', env=env)
         finally:
             server.shutdown(); server.server_close(); thread.join(timeout=2)
             (OUTPUT/'server-events.json').write_text(json.dumps(server.records,indent=2)+'\n',encoding='utf-8')
         observations = json.loads((OUTPUT/'observations.json').read_text(encoding='utf-8'))
         if len(observations) != len(fixtures): raise RuntimeError('Missing raw wire observations')
         if any(record.get('unexpectedRequest') for record in server.records): raise RuntimeError('Client followed redirect')
-        records = {record['id']:record for record in server.records}
+        dart_observations = json.loads((OUTPUT/'dart-observations.json').read_text(encoding='utf-8'))
+        if len(dart_observations) != len(fixtures): raise RuntimeError('Missing actual Dart wire observations')
+        # Failed-body Dart responses may lack a head while Native retains it;
+        # record that difference rather than inventing old behavior equivalence.
+        (OUTPUT/'comparison.json').write_text(json.dumps([
+            dict(id=n['id'], native=n, dart=d) for n,d in zip(observations,dart_observations)
+        ],indent=2)+'\n',encoding='utf-8')
+        records = {record['id']:record for record in server.records if record.get('client')=='native'}
         if records['keepalive-one']['connectionID'] != records['keepalive-two']['connectionID']:
             raise RuntimeError('Default pool did not reuse actual keepalive socket')
         if records['long-stream']['chunks'][-1] - records['long-stream']['chunks'][0] <= 10:
@@ -150,8 +162,9 @@ def main():
             run(['xcodebuild','-scheme','PiliHTTPTransport','-destination',destination,
                  '-derivedDataPath',str(OUTPUT/'DerivedData'), 'IPHONEOS_DEPLOYMENT_TARGET=16.0',
                  'CODE_SIGNING_ALLOWED=NO','build'],f'{label}-build.log',timeout=1800)
-        summary.update(status='passed', wireCases=len(observations), ios16Device=True, ios16Simulator=True,
-                       knownPending=['Dio wire comparison','br decoder','H2/TLS/proxy/pool expiry','retry','actual API/account acceptance'])
+        summary.update(status='passed', wireCases=len(observations), actualDartWireCases=len(dart_observations),
+                       ios16Device=True, ios16Simulator=True,
+                       knownPending=['br decoder','H2/TLS/proxy/pool expiry','retry','actual API/account acceptance'])
     except (OSError,RuntimeError,subprocess.TimeoutExpired) as error:
         summary['reason']=str(error); print(f'FAIL raw HTTP: {error}')
     (OUTPUT/'summary.json').write_text(json.dumps(summary,indent=2)+'\n',encoding='utf-8')

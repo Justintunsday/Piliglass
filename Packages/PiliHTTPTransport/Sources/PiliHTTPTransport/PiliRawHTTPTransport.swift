@@ -54,13 +54,18 @@ public final class PiliRawHTTPTransport: Sendable {
   private let client: HTTPClient
   private let maxBodyBytes: Int
   private let allowsLoopbackHTTP: Bool
+  private let restrictsFixtureHost: Bool
 
   public convenience init(configuration: Configuration = .init()) throws {
     try self.init(configuration: configuration, loopbackFixture: false)
   }
 
   // Only @testable package fixtures can use plain HTTP, strictly IPv4 loopback.
-  internal init(configuration: Configuration, loopbackFixture: Bool) throws {
+  internal init(configuration: Configuration, loopbackFixture: Bool,
+                fixtureTrustRootsFile: String? = nil) throws {
+    guard fixtureTrustRootsFile == nil || loopbackFixture else {
+      throw PiliRawHTTPFailure.invalidConfiguration
+    }
     guard configuration.connectMicroseconds > 0, configuration.poolIdleMicroseconds >= 0,
           configuration.maxBodyBytes > 0 else { throw PiliRawHTTPFailure.invalidConfiguration }
     func duration(_ value: Int64) throws -> TimeAmount {
@@ -83,10 +88,16 @@ public final class PiliRawHTTPTransport: Sendable {
                                          connectionPool: pool, decompression: .disabled)
     native.httpVersion = configuration.protocolMode == .http11 ? .http1Only : .automatic
     native.networkFrameworkWaitForConnectivity = false
+    if let fixtureTrustRootsFile {
+      var tls = native.tlsConfiguration ?? .makeClientConfiguration()
+      tls.trustRoots = .file(fixtureTrustRootsFile)
+      native.tlsConfiguration = tls
+    }
     // Disable injected global tracing; requests can carry credential fields.
     native.tracing.tracer = nil
     client = HTTPClient(eventLoopGroupProvider: .singleton, configuration: native)
     maxBodyBytes = configuration.maxBodyBytes; allowsLoopbackHTTP = loopbackFixture
+    restrictsFixtureHost = fixtureTrustRootsFile != nil
   }
 
   /// Composition owns shutdown after its outstanding transfers finish. The
@@ -102,6 +113,7 @@ public final class PiliRawHTTPTransport: Sendable {
     do {
       try Task.checkCancellation()
       guard url.user == nil, url.password == nil, url.fragment == nil, url.host != nil,
+            !restrictsFixtureHost || url.host == "127.0.0.1",
             url.scheme?.lowercased() == "https" ||
               (allowsLoopbackHTTP && url.scheme == "http" && url.host == "127.0.0.1") else {
         throw PiliRawHTTPFailure.invalidRequest
