@@ -174,7 +174,9 @@ final class PiliURLSessionHTTPTransfer: NSObject, URLSessionDataDelegate, @unche
     callback?(head)
   }
 
-  private static func head(_ response: HTTPURLResponse, url: URL) -> PiliHTTPResponseHead {
+  // Internal pure factory also permits explicit raw-value representation tests.
+  // URLSession may copy/normalize synthetic HTTPURLResponse subclasses first.
+  static func head(_ response: HTTPURLResponse, url: URL) -> PiliHTTPResponseHead {
     var headers: [String: String] = [:]
     var cookies: [String] = []
     var cookieFields = 0

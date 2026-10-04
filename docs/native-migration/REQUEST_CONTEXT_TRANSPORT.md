@@ -40,6 +40,10 @@ transfer→task/continuation/buffer 持有关系；Client 销毁时 invalidate s
 head 保留实际 URL/status/headers，以及 Set-Cookie 的原值和来源，始终标记
 foundationCombined；数组不能升级为 separatedFields。未知 Set-Cookie 类型明确失败。
 本阶段不声称恢复 Foundation 已丢失的字段边界。
+实际 CI 发现 URLSession 会复制/正规化测试用 HTTPURLResponse subclass；未知类型、
+数组和大小写重复键改为直接验证同一生产 head factory，报告明确标记该 synthetic
+来源。12 个 loopback 场景和正常 HTTPS URLProtocol 仍使用真实 transfer/delegate，
+不能把 factory probe 当成这些类型真实经过 URLSession 的证据。
 
 API 已锁定为 response head、Cookie representation、typed body result；transfer 返回
 Outcome，即使取消也不抛掉已捕获 head。transportErrorCode 仅从实际 completion 的

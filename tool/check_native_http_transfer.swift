@@ -11,6 +11,7 @@ private struct Observation: Encodable, Sendable {
 }
 private struct Report: Encodable {
   var status = "failed", checks = 0, observations: [Observation] = [], shapes: [String: String] = [:]
+  var shapeSources: [String: String] = [:]
   var reason: String?
 }
 
@@ -33,8 +34,9 @@ private final class WeakTransferReference {
   init(_ transfer: PiliURLSessionHTTPTransfer?) { value = transfer }
 }
 
-// Only this URLProtocol probe synthesizes raw Foundation value shapes. The
-// loopback observations below come from actual HTTP fields and production code.
+// Direct production-factory probes synthesize raw Foundation value shapes.
+// URLSession copies/normalizes subclasses, so these are not wire observations.
+// Loopback observations below come from actual HTTP fields and production code.
 private final class ShapeResponse: HTTPURLResponse, @unchecked Sendable {
   override var allHeaderFields: [AnyHashable: Any] {
     switch url?.query {
@@ -49,8 +51,8 @@ private final class ShapeProtocol: URLProtocol, @unchecked Sendable {
   override class func canInit(with request: URLRequest) -> Bool { request.url?.host == "api.bilibili.com" }
   override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
   override func startLoading() {
-    let response = ShapeResponse(url: request.url!, statusCode: request.url?.query == "limit=11" ? 403 : 200,
-                                httpVersion: "HTTP/1.1", headerFields: nil)!
+    let response = HTTPURLResponse(url: request.url!, statusCode: request.url?.query == "limit=11" ? 403 : 200,
+                                  httpVersion: "HTTP/1.1", headerFields: ["Set-Cookie": "protocol=retained; Path=/"])!
     client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
     client?.urlProtocol(self, didLoad: Data(repeating: 120, count: 1024))
     if request.url?.query != "limit=12" { client?.urlProtocolDidFinishLoading(self) }
@@ -208,11 +210,22 @@ private struct NativeHTTPTransferChecks {
     let session = URLSession(configuration: config, delegate: PiliHTTPRedirectDelegate(), delegateQueue: nil)
     defer { session.invalidateAndCancel() }
     for limit in [10, 11, 12, 14, 15, 16] {
-      let outcome = try await protocolOutcome(limit, session: session)
+      let outcome: PiliHTTPTransferOutcome
+      if [14, 15, 16].contains(limit) {
+        let url = URL(string: "https://api.bilibili.com/x/v2/search/trending/ranking?limit=\(limit)")!
+        let response = ShapeResponse(url: url, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: nil)!
+        outcome = PiliHTTPTransferOutcome(head: PiliURLSessionHTTPTransfer.head(response, url: url), body: .success(Data()))
+        report.shapeSources[String(limit)] = "directProductionHeadFactory"
+      } else {
+        outcome = try await protocolOutcome(limit, session: session)
+        report.shapeSources[String(limit)] = "actualURLProtocolTransfer"
+      }
       let shape = cookies(outcome.head)
       report.shapes[String(limit)] = shape.0
       try expect(shape.0 == ([14, 16].contains(limit) ? "unsupported" : "foundationCombined"),
                  "Unknown/duplicate raw values are unsupported; arrays never upgrade wire provenance")
+      if [10, 11, 12].contains(limit) { try expect(shape.1 == ["protocol=retained; Path=/"], "Actual URLProtocol transfer retains supplied Cookie field") }
+      if limit == 15 { try expect(shape.1 == ["array=one", "array=two"], "Factory preserves array values and order with combined provenance") }
       if limit == 12 { try expect(outcome.body == .failure(.cancelled) && outcome.head != nil, "Actual HTTPS protocol transfer retains head after cancel") }
       let transport = ContextTransport()
       let provider = PiliFlutterHTTPRequestContextProvider(transport: transport, terminalTimeoutNanoseconds: 50_000_000)
