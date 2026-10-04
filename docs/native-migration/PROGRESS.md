@@ -10,6 +10,7 @@
 | P01b | 9d9fb2f | [成功](https://github.com/Justintunsday/Piliglass/actions/runs/37135310166) | [全部成功](https://github.com/Justintunsday/Piliglass/actions/runs/37135310327) | DesignSystem/codec 边界完成 |
 | P02a | 662f739 | [成功](https://github.com/Justintunsday/Piliglass/actions/runs/37136856478) | [全部成功](https://github.com/Justintunsday/Piliglass/actions/runs/37136856328) | Search Feature/UI 状态契约完成 |
 | P03 | 7ff23b9 | [成功，含 Swift 6 core](https://github.com/Justintunsday/Piliglass/actions/runs/37140033171) | [全部成功](https://github.com/Justintunsday/Piliglass/actions/runs/37139965902) | Native Search state、typed Repository 与临时 Dart adapter 完成 |
+| P04a | aa8e3c4 -> b0c098a | [成功，含 HTTP/Search Swift 6 core](https://github.com/Justintunsday/Piliglass/actions/runs/37163367936) | [全部成功](https://github.com/Justintunsday/Piliglass/actions/runs/37163367691) | Native HTTP Client/热榜 Service fixture 完成；runtime 未切换 |
 
 P00 证据：inventory 包含 59 个 bridge commands、62 个注册 Flutter routes、311 个 REST 常量、45 个 gRPC 常量、95 个依赖。压力检查 `failures=[]`，1,000 条评论保持懒加载、未在离屏处触发分页、实际末条出现后分页成功；100,000 条弹幕保留，活跃渲染上限 60。仅测试 harness 调整了懒加载自适应行定位等待；没有修改生产 UI 或业务。
 
@@ -58,7 +59,28 @@ load order 通过，实际 Flutter SDK wrapper 由完整 Runner 验证。四组 
 100,000 弹幕完整保留、活跃上限 60。提交前 diff 检查通过，无业务/资源/依赖删除。
 本阶段只完成 Native state 和业务边界，不能据此宣称搜索网络或存储已原生化。
 
-下一步：P04a URLSession/decoder fixture。并行审查已写入 [SEARCH.md](SEARCH.md)：
-Native HTTP runtime 切换必须保留 recommend 账户与 Cookie 语义，
-P04a fixture -> P05a context lease -> P04b hybrid cutover。
+P04a 范围：独立 Sendable HTTP contract、隔离 URLSession Client、固定 trending request
+builder、API decoder 与 Domain mapping。拒绝自动重定向/共享 Cookie，保留原始 HTTP
+status/body/Foundation headers（包括错误响应），不启用运行时调用、不替换账户或 Hive。
+四个生产文件注册到 Runner；Swift 6 fixture 直接编译和调用生产实现。
+
+P04a 修复闭环：首次 [CI](https://github.com/Justintunsday/Piliglass/actions/runs/37162957810)
+的 HTTP job 编译成功，但实际 fixture 失败于 `Invalid header accepted`。读取下载的
+compile/result 日志后，将 CR/LF 检查改为 Unicode scalar 检查，覆盖 CRLF 的组合字符，
+补充独立 CR/LF 与用例编号；commit+push `b0c098a` 后重跑两条 workflow。旧 run 被新
+SHA 替代并取消，不能当作完成证据。
+
+P04a 验证：两条 workflow 的 headSha 均为 `b0c098abb4ec5d20dcd2edb2a65fee11506f7bbf`。
+真实 macOS Swift 6 complete concurrency 检查通过，HTTP 74 + Search 63 共 137 项
+runtime fixtures 通过。完整 Runner release 日志确认 `BUILD SUCCEEDED`、677 项双语检查
+和 FFmpeg load order；preview 四组 job 全通过。实际压力报告 `failures=[]`，评论 1,000
+懒加载/离屏不分页/末条分页成功；弹幕 100,000 完整保留，活跃上限 60。检查 staged diff
+无功能/资源/依赖删除。Windows 本地 skip 没有作为编译证据。
+
+下一步：P05a 共享 Cookie parser 与账户 revision/generation，然后 context lease；
+计划已保存为 [REQUEST_CONTEXT.md](REQUEST_CONTEXT.md)。并行审查确认 Expires 合并
+分割、同 MID 旧对象持久化、匿名 reset 与“收到响应头后取消”必须单独验证；保护也要
+覆盖现有 Dart writeback。P04a 的 transport/body cancellation fixture 不代表这些门禁
+已通过。Native HTTP runtime 切换仍必须保留 recommend 账户与 Cookie 语义，
+P05a context lease -> P04b hybrid cutover。实现/限制见 [HTTP.md](HTTP.md)。
 Dart 业务仍完整保留，整体原生化目标仍在进行中。

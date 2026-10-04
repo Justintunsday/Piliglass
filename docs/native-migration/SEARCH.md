@@ -81,6 +81,10 @@ headers、Cookie 域/路径、返回 Set-Cookie 所属账户。P04 可先验证 
 trending fixture，不启用匿名运行时替换。先完成 P05 的最小 credential/context 边界，
 再切换此 endpoint；测试过的解码器保持 N，不能据此宣称真实账户语义已验证。
 
+P04a 已通过 `b0c098a` 的 Swift 6/74 项 HTTP fixtures、完整 release 和全部 preview。
+运行时尚未切换；实现/证据见 [HTTP.md](HTTP.md)，下一阶段具体 lease 与 Cookie
+generation/取消/响应头门禁见 [REQUEST_CONTEXT.md](REQUEST_CONTEXT.md)。
+
 建议细分为 P04a（URLSession/decoder fixtures）、P05a（request-context lease）、
 P04b（hybrid discovery 切换）。lease 绑定请求准备时的实际 recommend Account，
 带不透明 ID 和单调 revision；响应 Cookie 写回原始绑定账户，包括非 2xx 响应。

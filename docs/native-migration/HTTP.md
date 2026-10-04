@@ -2,6 +2,11 @@
 
 2026-10-04；运行时仍使用 P03 Dart-backed SearchRepository。此阶段不移除 fallback。
 
+P04a 已验证代码 `b0c098abb4ec5d20dcd2edb2a65fee11506f7bbf`：
+[完整 release 与 Swift 6 核心检查成功](https://github.com/Justintunsday/Piliglass/actions/runs/37163367936)、
+[全部 preview 成功](https://github.com/Justintunsday/Piliglass/actions/runs/37163367691)。
+74 项 HTTP fixture 与原有 63 项搜索 fixture 通过。此结论不包括账户/API 实测切换。
+
 ## 实施与边界
 
 1. `Networking/HTTP/PiliHTTPClient` 接收 URLRequest，返回不可变 Sendable URL/status/
@@ -37,4 +42,4 @@ Dio 独立 connect/read timeout 的完全替代。代理、HTTP/2 与其他用�
 P05a 完成 recommend-account lease、revision、原账户响应 Cookie 写回/释放，并验证
 取消、换号、重复/path Cookie、错误响应与 unsupported-mode fallback 后，才允许 P04b
 接入 hybrid discovery。Native trending 成功时不能同时发送 Dart trending。
-详见 [SEARCH.md](SEARCH.md)。
+详见 [SEARCH.md](SEARCH.md) 和审查后的 [REQUEST_CONTEXT.md](REQUEST_CONTEXT.md)。

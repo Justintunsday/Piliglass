@@ -47,7 +47,7 @@ Player orchestration -> Playback / Subtitle / Danmaku repositories
 
 | 领域 / Dart 来源 | Native 替代组件 | Feature / 状态 | 必须验证 |
 |---|---|---|---|
-| `http/init,retry_interceptor,constants,api` | URLSession client、Endpoint、ResponseEnvelope、RequestPolicy | Networking / D | HTTP 状态/API code、gzip、超时、取消、幂等重试、HTTP2 |
+| `http/init,retry_interceptor,constants,api` | URLSession client、Endpoint、ResponseEnvelope、RequestPolicy | Client / N（fixture）；runtime / D | HTTP 状态/API code、gzip、超时、取消、幂等重试、HTTP2 |
 | `utils/wbi_sign,app_sign,accounts/grpc_headers` | WBI/App signer、RPC metadata builder | Networking/Auth / D | 固定输入签名一致、时间/key 更新、头和二进制 metadata |
 | `http/login,user`、`utils/accounts,login_utils`、account_service | AccountRepository、AuthService、AccountSession actor、KeychainCredentialStore | Login/Account / D | QR+密码/SMS/网页校验已有路径、刷新/注销、多用途账户隔离 |
 | `http/video`、`pages/rcmd,home,hot,rank,popular*` | HomeRepository、FeedService、VideoSummary | Home / D | 原推荐来源、分页/筛选、访客/账户、去重/预加载 |
@@ -56,7 +56,7 @@ Player orchestration -> Playback / Subtitle / Danmaku repositories
 | `http/dynamics`、`grpc/dyn,space`、`pages/dynamics*` | DynamicRepository、DynamicService、Dynamic/PostDraft | Dynamics / D | feed/detail、转发、图文/文章、投票/预约、草稿/发布 |
 | `http/member,follow,black`、`pages/member*,follow*,fan,blacklist` | ProfileRepository、RelationshipRepository、Member/Relationship | Profile / D | 多内容 section、关注/黑名单、签名、用户分页、隐私/风控 |
 | `http/fav,user`、`pages/fav*,history*,later*,subscription*` | LibraryRepository、Favorite/History/WatchLater repositories | Library / D | 文件夹/排序/批量操作、历史续播、订阅、账号切换 |
-| `http/search`、`pages/search*`、Hive historyWord | SearchRepository、SearchService、SearchHistoryStore | Search State / V；Repository / B；HTTP/Hive / D | discovery/suggest、全部搜索类型、分页、筛选、风控、历史 |
+| `http/search`、`pages/search*`、Hive historyWord | SearchRepository、SearchService、SearchHistoryStore | Search State / V；Repository / B；trending Service / N（未接入）；HTTP/Hive runtime / D | discovery/suggest、全部搜索类型、分页、筛选、风控、历史 |
 | `http/msg`、`grpc/im`、`pages/contact,group_panel` | MessageRepository、IMService、MessageSync actor | Messages / D | 会话/未读、通知、图片/发送/撤回、置顶/删除/屏蔽、重连 |
 | `http/live`、`tcp/live`、`pages/live*` | LiveRepository、LiveService、LiveSocketClient、PacketCodec | Live / D | 房间/分区/关注/搜索、鉴权/心跳/压缩/重连、直播播放/弹幕 |
 | `http/danmaku,danmaku_block`、`grpc/dm`、`utils/danmaku_utils` | DanmakuRepository、RPC codec、RuleStore | Danmaku / D（绘制 Native） | 所有 mode、分段/预取、合并、规则隔离、发送/举报/撤回 |
@@ -81,8 +81,8 @@ Player orchestration -> Playback / Subtitle / Danmaku repositories
 | P02a | 以专属状态协议拆出 Search（见 SEARCH.md）与跨文件共享支持组件 | 行为正文/fixture contract 对照、完整 iOS release+preview | 已验证 662f739 |
 | P02b | 分批拆 Home/Account、DTO 与播放器控制/弹幕组件 | 导航/生命周期/布局回归和 iOS release | 待开始；按领域接口切片穿插推进 |
 | P03 | SearchRepository、typed result、可取消 bridge、独立 Search model；显式排序历史副作用 | Swift 6 strict core fixtures、现有搜索路径、完整 release+preview CI | 已验证 7ff23b9；请求与存储仍用 Dart adapter |
-| P04 | URLSession client+只读 discovery native slice；运行时切换前先满足 P05 最小账户 context 边界 | URLProtocol HTTP/API error/取消 fixture；真实 API/账户对照；CI | P04a Client/热榜 Service 已实施，待 CI；runtime 未切换，详见 HTTP.md |
-| P05 | 认证/Cookie/签名/用途账户 snapshot 边界，逐项 native cutover | 固定签名、登录/退出/换号/重启实际验收、CI | 待开始 |
+| P04 | URLSession client+只读 discovery native slice；运行时切换前先满足 P05 最小账户 context 边界 | URLProtocol HTTP/API error/取消 fixture；真实 API/账户对照；CI | P04a 已验证 b0c098a；runtime 未切换，P04b 待 P05，详见 HTTP.md |
+| P05 | 认证/Cookie/签名/用途账户 snapshot 边界，逐项 native cutover | 固定签名、登录/退出/换号/重启实际验收、CI | P05a 计划与关键风险已审查；未实施，详见 REQUEST_CONTEXT.md |
 | P06 | Home/Video/Profile/Library/Comments/Dynamics REST 逐领域迁移 | 每个领域独立 commit+fixture+原路径对照+CI；不跨领域大提交 | 待开始 |
 | P07 | Codable/domain、versioned local persistence 与 Hive 导入 | 设置/历史/账户/下载不丢失，导入重复执行/回滚，CI | 待开始 |
 | P08 | protobuf schema 来源固定、gRPC metadata/framing/unary 按服务迁移 | 二进制 fixtures、status/trailers/compression、真实请求与 CI | 待开始 |
