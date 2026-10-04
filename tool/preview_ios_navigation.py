@@ -198,10 +198,11 @@ final class MenuNavigationTests: XCTestCase {
   func edgeBack() {
     let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.005, dy: 0.45))
     let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.45))
-    // Exercise a committed interactive pop. Hold the final position before
-    // lifting so the last move and touch-up do not share one event timestamp.
+    // Exercise one committed interactive pop. Give UIKit time to track the
+    // movement on loaded simulator runners, then hold before lifting. Keep the
+    // real destination and persistence assertions; do not retry the gesture.
     start.press(forDuration: 0.05, thenDragTo: end,
-                withVelocity: .fast, thenHoldForDuration: 0.2)
+                withVelocity: .slow, thenHoldForDuration: 0.2)
   }
 
   func assertPage(_ title: String) {
