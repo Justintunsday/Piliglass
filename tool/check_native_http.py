@@ -12,6 +12,7 @@ SOURCES = [
     "ios/Runner/Native/Domain/Search/PiliSearchRepository.swift",
     "ios/Runner/Native/Networking/HTTP/PiliHTTPClient.swift",
     "ios/Runner/Native/Networking/HTTP/PiliURLSessionHTTPClient.swift",
+    "ios/Runner/Native/Networking/HTTP/PiliURLSessionHTTPTransfer.swift",
     "ios/Runner/Native/Data/Search/PiliNativeSearchTrendingService.swift",
     "ios/Runner/Native/Data/Search/PiliSearchTrendingDecoder.swift",
     "tool/check_native_http.swift",

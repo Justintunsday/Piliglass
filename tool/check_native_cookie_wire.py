@@ -16,6 +16,7 @@ OUTPUT = ROOT / "build/native-cookie-wire"
 SOURCES = [
     "ios/Runner/Native/Networking/HTTP/PiliHTTPClient.swift",
     "ios/Runner/Native/Networking/HTTP/PiliURLSessionHTTPClient.swift",
+    "ios/Runner/Native/Networking/HTTP/PiliURLSessionHTTPTransfer.swift",
     "tool/check_native_cookie_wire.swift",
 ]
 SCOPE = "Darwin HTTP/1.1 representation observation; not production native Cookie compatibility"

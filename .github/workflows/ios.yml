@@ -22,6 +22,8 @@ on:
       - "tool/check_native_http.swift"
       - "tool/check_native_request_context.py"
       - "tool/check_native_request_context.swift"
+      - "tool/check_native_http_transfer.py"
+      - "tool/check_native_http_transfer.swift"
       - "tool/check_native_cookie_wire.py"
       - "tool/check_native_cookie_wire.swift"
       - "tool/check_response_cookie_headers.dart"
@@ -47,6 +49,8 @@ on:
       - "tool/check_native_http.swift"
       - "tool/check_native_request_context.py"
       - "tool/check_native_request_context.swift"
+      - "tool/check_native_http_transfer.py"
+      - "tool/check_native_http_transfer.swift"
       - "tool/check_native_cookie_wire.py"
       - "tool/check_native_cookie_wire.swift"
       - "tool/check_response_cookie_headers.dart"
@@ -179,6 +183,17 @@ jobs:
         run: |
           dart tool/check_native_playback_source.dart
           dart tool/check_native_cdn_latency.dart
+
+      - name: Verify production HTTP transfer lifecycle and header finalization
+        run: python3 tool/check_native_http_transfer.py
+
+      - name: Upload native HTTP transfer and wire evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: native-http-transfer-contracts
+          path: build/native-http-transfer-check/
+          if-no-files-found: warn
 
       - name: Verify account generations and response ownership
         shell: bash

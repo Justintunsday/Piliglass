@@ -52,6 +52,8 @@
 		6140EA516800620689E5582D /* PiliFlutterHTTPRequestContextProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9FA15AA400AA5722B1D203E /* PiliFlutterHTTPRequestContextProvider.swift */; };
 		1049E40EB60E9CF6E011597B /* PiliHTTPRequestContextBridgeCodec.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6FED43C9A9D81C1F710CE3BF /* PiliHTTPRequestContextBridgeCodec.swift */; };
 		FAA9C9A1E69D5D3ED7DD0164 /* PiliBridgeLeaseFinalizer.swift in Sources */ = {isa = PBXBuildFile; fileRef = E76A0A81333EAAE84F5AE950 /* PiliBridgeLeaseFinalizer.swift */; };
+		B540614F81281E429449648A /* PiliURLSessionHTTPTransfer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61B14D89A016F450D5FF2B22 /* PiliURLSessionHTTPTransfer.swift */; };
+		2F018D6E62AF809D1FC05FF4 /* PiliHTTPRequestHeaderFinalizer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 56403E1F9C7AC1660FC87B1F /* PiliHTTPRequestHeaderFinalizer.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -125,6 +127,8 @@
 		C9FA15AA400AA5722B1D203E /* PiliFlutterHTTPRequestContextProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PiliFlutterHTTPRequestContextProvider.swift; sourceTree = "<group>"; };
 		6FED43C9A9D81C1F710CE3BF /* PiliHTTPRequestContextBridgeCodec.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PiliHTTPRequestContextBridgeCodec.swift; sourceTree = "<group>"; };
 		E76A0A81333EAAE84F5AE950 /* PiliBridgeLeaseFinalizer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PiliBridgeLeaseFinalizer.swift; sourceTree = "<group>"; };
+		61B14D89A016F450D5FF2B22 /* PiliURLSessionHTTPTransfer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PiliURLSessionHTTPTransfer.swift; sourceTree = "<group>"; };
+		56403E1F9C7AC1660FC87B1F /* PiliHTTPRequestHeaderFinalizer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PiliHTTPRequestHeaderFinalizer.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -378,6 +382,7 @@
 		EE4C9E898589491CAA59202C /* HTTP */ = {
 			isa = PBXGroup;
 			children = (
+				61B14D89A016F450D5FF2B22 /* PiliURLSessionHTTPTransfer.swift */,
 				1791ADF9F76E559ADD884435 /* PiliHTTPClient.swift */,
 				22DD596E1422DD5985F6975F /* PiliURLSessionHTTPClient.swift */,
 			);
@@ -395,6 +400,7 @@
 		78B63C7D8759D502A411914B /* Accounts */ = {
 			isa = PBXGroup;
 			children = (
+				56403E1F9C7AC1660FC87B1F /* PiliHTTPRequestHeaderFinalizer.swift */,
 				C9FA15AA400AA5722B1D203E /* PiliFlutterHTTPRequestContextProvider.swift */,
 				6FED43C9A9D81C1F710CE3BF /* PiliHTTPRequestContextBridgeCodec.swift */,
 			);
@@ -578,6 +584,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				2F018D6E62AF809D1FC05FF4 /* PiliHTTPRequestHeaderFinalizer.swift in Sources */,
+				B540614F81281E429449648A /* PiliURLSessionHTTPTransfer.swift in Sources */,
 				1523A39A01ADA1F6FD86A926 /* PiliHTTPRequestContext.swift in Sources */,
 				6140EA516800620689E5582D /* PiliFlutterHTTPRequestContextProvider.swift in Sources */,
 				1049E40EB60E9CF6E011597B /* PiliHTTPRequestContextBridgeCodec.swift in Sources */,
