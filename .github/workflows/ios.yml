@@ -165,7 +165,7 @@ jobs:
         shell: bash
         run: |
           mkdir -p build/account-request-state
-          dart analyze lib/utils/accounts/account_request_state.dart lib/utils/accounts.dart lib/utils/accounts/account.dart lib/utils/accounts/account_manager/account_mgr.dart tool/check_account_request_state.dart test/utils/accounts/ | tee build/account-request-state/analyze.log
+          dart analyze lib/utils/accounts/account_request_state.dart lib/utils/accounts.dart lib/utils/accounts/account.dart lib/utils/accounts/account_manager/account_mgr.dart lib/services/native_http/ tool/check_account_request_state.dart test/utils/accounts/ | tee build/account-request-state/analyze.log
           dart tool/check_account_request_state.dart | tee build/account-request-state/runtime.log
           flutter test --no-pub --reporter expanded test/utils/accounts/ | tee build/account-request-state/flutter-test.log
 

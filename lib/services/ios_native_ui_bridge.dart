@@ -48,6 +48,7 @@ import 'package:PiliPlus/pages/mine/controller.dart';
 import 'package:PiliPlus/pages/rcmd/controller.dart';
 import 'package:PiliPlus/pages/video/introduction/ugc/controller.dart';
 import 'package:PiliPlus/services/native_danmaku_settings.dart';
+import 'package:PiliPlus/services/native_http/native_http_request_lease_bridge.dart';
 import 'package:PiliPlus/services/download/download_service.dart';
 import 'package:PiliPlus/utils/app_scheme.dart';
 import 'package:PiliPlus/utils/accounts.dart';
@@ -80,6 +81,7 @@ final class IOSNativeUIBridge {
 
   final MainController mainController;
   final _danmakuSettings = NativeDanmakuSettings();
+  final _nativeHTTPRequests = NativeHTTPRequestLeaseBridge();
   final List<Worker> _workers = <Worker>[];
   final _cdnLatency = NativeCDNLatency(
     probe: measureCdnDownloadSpeed,
@@ -155,6 +157,10 @@ final class IOSNativeUIBridge {
 
   Future<dynamic> _handleNativeCall(MethodCall call) async {
     switch (call.method) {
+      case 'prepareNativeHTTPRequest':
+      case 'finishNativeHTTPRequest':
+      case 'abandonNativeHTTPRequest':
+        return _nativeHTTPRequests.handle(call.method, call.arguments);
       case 'selectTab':
         final index = _asInt(call.arguments);
         if (index != null &&
@@ -3842,6 +3848,7 @@ final class IOSNativeUIBridge {
 
   void dispose() {
     _disposed = true;
+    _nativeHTTPRequests.dispose();
     _nativePlayerShellActive = false;
     _snapshotTimer?.cancel();
     for (final worker in _workers) {

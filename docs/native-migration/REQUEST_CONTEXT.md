@@ -1,6 +1,6 @@
 # P05a：请求上下文与 Cookie 切换前置计划
 
-2026-10-04，P05a1a parser/wire 与 P05a1b 账户 generation 已通过真实 CI；lease 尚未实施。
+2026-10-04，P05a1a parser/wire 与 P05a1b 账户 generation 已通过真实 CI；P05a2a Dart lease 实施中，等待 CI。
 本文件记录下一阶段的可执行边界，不代表 Native HTTP 已接入运行时。
 
 ## 分阶段实施
@@ -13,6 +13,7 @@
 2. P05a2：独立 Dart lease service、Swift Domain context protocol 与 Bridge adapter。
    验证 prepare/finish/abandon、原账户写回、刷新/删除/重置、取消/重复完成与释放。
    每个代码阶段分别 commit/push，完整 release+preview CI 成功后才能继续。
+   P05a2a 的实现与保留限制见 [REQUEST_LEASE.md](REQUEST_LEASE.md)，尚未通过 CI。
 3. P04b：完成有效 transport policy 与响应头/取消语义验证后接入 hybrid discovery。
    移除重复 Dart trending 调用；其余网络与 Hive 仍走 Dart。未支持的模式先判断再使用
    Dart，不将取消当作需要 fallback 的错误。
