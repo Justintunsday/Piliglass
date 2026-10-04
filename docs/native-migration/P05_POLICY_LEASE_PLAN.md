@@ -1,6 +1,6 @@
 # Policy-2：将有效配置绑定到一次性请求上下文
 
-2026-10-05，Policy-1 CI 等待期间保存准备；现已实施，完整 Actions 尚待验证。
+2026-10-05，Policy-1 CI 等待期间保存准备；现已在 7192a0c 完整 release + 全 preview 同 SHA 验证。
 最新阶段状态以 PROGRESS.md 为准。继续 PLAN.md，UI 重写最后。
 
 ## 源码约束
@@ -84,8 +84,11 @@ Native 支持。当前 schema 不描述任意自定义 interceptor、transformer
 两种冷启动的真实 Hive/Request/IO/H2 fixtures 包括 await 中成功/部分失败的 pool 变化、
 timeout/encoding/headers/decoder/retry/validator 修改、Pref-only、403 head 后改 pool/换
 用途且实际关闭重开 Hive 验证原 owner 回写；根 domain Cookie 的持久化与 host-only
-Cookie 的旧 adapter 丢失分别断言，不声称
-恢复所有 domain/path 属性。实际 Dart bridge 导出 16 组只含合成
-账户/代理数据的 golden；`check_prepared_http_policy.py` 编译 Swift 6 complete 的
+Cookie 的旧 adapter 丢失分别断言，不声称恢复所有 domain/path 属性。实际 Dart bridge
+导出 16 组只含合成账户/代理数据的 golden；`check_prepared_http_policy.py` 编译 Swift 6 complete 的
 生产 codec/provider 消费它们，另验证 malformed policy 的单次 abandon。旧 context/
 transfer 合同继续执行；本地 Windows 检查不作为编译完成依据。
+
+最终实际证据：35 policy tests、analyze 无问题，477 Dart→Swift checks、Swift 6 complete
+编译无警告；完整 Runner 和全部 preview 共 8 jobs 成功。失败迭代与原始日志索引见
+[PROGRESS.md](PROGRESS.md)。Native capability/API/transport parity 与完整账户迁移仍待验收。

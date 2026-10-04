@@ -2,7 +2,8 @@
 
 2026-10-04 编写于 c1 验证期间；2026-10-05 保存，c1 已通过完整 CI，证据见 PROGRESS.md。
 Policy-1 已在 62eab04 的完整 release + 全 preview 同 SHA 验证，21 tests/analyze 通过。
-实际证据见 PROGRESS.md；后续切片待实施，运行时 Native HTTP 未开启。
+Policy-2 lease/Swift strict codec 也已在 7192a0c 完整同 SHA 验证，477 跨语言检查成功。
+实际证据见 PROGRESS.md；Policy-3/4 等切片待实施，运行时 Native HTTP 未开启。
 沿 PLAN.md 推进，UI 重写最后。此计划不把读取最新 Pref 当成有效 transport 状态。
 
 ## 已确认的实际语义

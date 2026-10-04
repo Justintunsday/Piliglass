@@ -79,8 +79,8 @@ UI。继续 P05→P12 原生化主线和 Flutter 删除门禁；当前必要的 
 执行方案，不提前实施。P05a2a 已在 c0fbdbf 同 SHA release + 全 preview 成功闭环；
 P05a2b Swift adapter 已在 4148caf 同 SHA 全部验证，见 [REQUEST_CONTEXT_SWIFT.md](REQUEST_CONTEXT_SWIFT.md)。
 响应头生命周期已在 d80c92b 同 SHA 完整验证，见 [REQUEST_CONTEXT_TRANSPORT.md](REQUEST_CONTEXT_TRANSPORT.md)。
-有效 HTTP policy 的 Dart 描述已在 62eab04 完整验证；下一步是
-[Policy lease/Swift codec](P05_POLICY_LEASE_PLAN.md)，后续阶段的源码对照与
+有效 HTTP policy 的 Dart 描述已在 62eab04 完整验证；Policy-2 lease/Swift codec 已在
+7192a0c 完整验证；下一步是 [Native 能力判定](P05_POLICY_CAPABILITY_PLAN.md)，后续阶段的源码对照与
 执行切片已并行准备并保存到 [PREPARATION.md](PREPARATION.md)，不代表运行时已经迁移。
 
 | 阶段 | 可回滚交付 | 进入下一阶段的门禁 | 状态 |
@@ -92,7 +92,7 @@ P05a2b Swift adapter 已在 4148caf 同 SHA 全部验证，见 [REQUEST_CONTEXT_
 | P02b | 分批拆 Home/Account、DTO 与播放器控制/弹幕组件 | 导航/生命周期/布局回归和 iOS release | 待开始；按领域接口切片穿插推进 |
 | P03 | SearchRepository、typed result、可取消 bridge、独立 Search model；显式排序历史副作用 | Swift 6 strict core fixtures、现有搜索路径、完整 release+preview CI | 已验证 7ff23b9；请求与存储仍用 Dart adapter |
 | P04 | URLSession client+只读 discovery native slice；运行时切换前先满足 P05 最小账户 context 边界 | URLProtocol HTTP/API error/取消 fixture；真实 API/账户对照；CI | P04a 已验证 b0c098a；runtime 未切换，P04b 待 P05，详见 HTTP.md |
-| P05 | 认证/Cookie/签名/用途账户 snapshot 边界，逐项 native cutover | 固定签名、登录/退出/换号/重启实际验收、CI | P05a1a 已验证 834c3b9；P05a1b generation 已验证 15a7f9d；P05a2a Dart lease 已验证 c0fbdbf；P05a2b Swift adapter 已验证 4148caf；P05a2c1 head/取消已验证 d80c92b；Policy-1 实际描述已验证 62eab04，继续 lease/Swift policy codec；字段保存 transport/账户/runtime 未切换，详见 REQUEST_CONTEXT.md |
+| P05 | 认证/Cookie/签名/用途账户 snapshot 边界，逐项 native cutover | 固定签名、登录/退出/换号/重启实际验收、CI | P05a1a 已验证 834c3b9；P05a1b generation 已验证 15a7f9d；P05a2a Dart lease 已验证 c0fbdbf；P05a2b Swift adapter 已验证 4148caf；P05a2c1 head/取消已验证 d80c92b；Policy-1 实际描述已验证 62eab04；Policy-2 lease/strict codec 已验证 7192a0c，继续 Native 能力判定与实际 transport 对照；字段保存 transport/账户/runtime 未切换，详见 REQUEST_CONTEXT.md |
 | P06 | Home/Video/Profile/Library/Comments/Dynamics REST 逐领域迁移 | 每个领域独立 commit+fixture+原路径对照+CI；不跨领域大提交 | 待开始 |
 | P07 | Codable/domain、versioned local persistence 与 Hive 导入 | 设置/历史/账户/下载不丢失，导入重复执行/回滚，CI | 待开始 |
 | P08 | protobuf schema 来源固定、gRPC metadata/framing/unary 按服务迁移 | 二进制 fixtures、status/trailers/compression、真实请求与 CI | 待开始 |

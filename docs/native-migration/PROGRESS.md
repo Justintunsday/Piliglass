@@ -271,7 +271,7 @@ transport 仍待实施，nativeAccountCompatibilityVerified=false、executionAll
 P05 整体继续进行。下一切片 [Policy lease/Swift codec](P05_POLICY_LEASE_PLAN.md) 已在
 实施前保存；P10 下载/播放器与 P11/P12 runtime 退出准备也已补充到 PREPARATION.md。
 
-## P05 Policy-2：绑定有效 policy 到 lease（CI 待验证）
+## P05 Policy-2：绑定有效 policy 到 lease（已验证）
 
 版本化不可变 prepared policy 已同步加入 Dart bridge 和 Swift strict codec/context。
 合并 endpoint Options 后保留实际微秒精度、redirect=false、pool generation/模式、
@@ -281,7 +281,7 @@ owner/generation 与 Hive 写回不受新 policy/用途选择变化影响。运�
 
 新增真实 Dart/Hive/Request 冷启动 fixture 及 Dart bridge → Swift 6 production codec/
 provider 的跨语言验证步骤；旧 context/transfer fixture 同步协议字段。完整 ios.yml
-与全 ios-home-preview 尚待实际运行，本阶段未闭环。没有删功能、资源、依赖或更改
+与全 ios-home-preview 在首轮提交时尚待实际运行；最终闭环证据见下文。没有删功能、资源、依赖或更改
 Root/Player/Aether，也没有开始视觉 UI 重写。
 
 首轮 6a7bd54 的 release 37237477468：analyze 无问题，Swift 6 context 119、HTTP 和
@@ -297,3 +297,26 @@ adapter 的 bilibili.com 根 domainCookies 导出范围，此旧数据限制已�
 修 fixture 同时保存 parent-domain 根 Cookie 与 host-only Cookie：重启验证原 owner
 保留前者、后者按旧 adapter 丢失且不进入其他账号。不修改生产 Cookie authority，
 不宣称恢复旧 adapter 丢失的属性；再次提交推送完整 release/preview 验证。
+
+最终代码 7192a0cfa54109c8746656f9052d1a28c9982e26 的
+[release 37238360972](https://github.com/Justintunsday/Piliglass/actions/runs/37238360972) 与
+[preview 37238363602](https://github.com/Justintunsday/Piliglass/actions/runs/37238363602)
+headSha 相同，两条完整 workflow 的全部 8 jobs 成功；已下载并读取实际报告/日志。
+35 policy tests（原 21 + 新 14）全部成功，analyze 无问题；16 个真实 Dart bridge/Hive/
+Request cold-boot golden 经 Swift 6 production codec/provider 的 477 checks 成功，
+编译无警告。旧 context 119、HTTP 74、Search 63、transfer 91/12 wire scenes、tracker
+72、68 account tests、Cookie wire 70/parser 122 继续通过，账户 analyze 无问题。
+
+Runner BUILD SUCCEEDED、677 bilingual keys 与实际 Aether FFmpeg load order 通过。
+导航 9、账户 6、播放器 2、图片 3 tests 均零失败；原设置返回/持久化检查保留。
+压力报告 failures=[]，1,000 评论懒加载/无离屏分页/末条分页，100,000 弹幕全保留/
+活跃上限 60 成功。当前字段 DTO 与 callback 稳定性并不证明所有任意 interceptor/
+transformer/status validator 的 Native 语义；后续 capability 必须限制或继续描述它们。
+
+已检查 diff 无功能、资源、依赖删除，Root/Player/Aether 未改；inventory 保持 62 bridge
+commands、62 registered routes、95 dependencies，Aether 227 files/69,886 lines。
+旧 Hive host-only/path 属性丢失与 Foundation 字段边界问题仍未消除；两项 runtime/
+account 门禁继续 false，P05 整体未完成。下一项
+[Native policy 能力判定](P05_POLICY_CAPABILITY_PLAN.md) 和
+[实际 transport 对照/有序字段验证](P05_TRANSPORT_PARITY_PLAN.md) 已在本轮 CI 期间保存，
+其中长请求 lease ttl/head 时点风险有独立门禁；不提前移除 Flutter 或开始视觉 UI 重写。

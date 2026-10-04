@@ -4,6 +4,9 @@
 [完整 ios.yml](https://github.com/Justintunsday/Piliglass/actions/runs/37195363892) 与
 [全部 ios-home-preview.yml](https://github.com/Justintunsday/Piliglass/actions/runs/37195365890) 同 SHA 成功。
 本阶段继续 PLAN.md；视觉 UI 重写留到原生化主线完成后。
+后续 Policy-2 已在 7192a0c 完整验证：context 增加 Networking 的不可变 policy，
+严格 codec 要求嵌套版本/类型/一致性，真实 Dart bridge goldens 经生产 provider 验证。
+当前协议见 P05_POLICY_LEASE_PLAN.md；以下生命周期合同继续保留，runtime 仍关闭。
 
 ## 可回滚范围
 

@@ -1,7 +1,8 @@
 # P05a2a：Dart 请求上下文 lease
 
 2026-10-04，已通过 c0fbdbf 同 SHA 两条真实 CI。修改前计划见 REQUEST_CONTEXT.md。
-Native HTTP runtime 关闭；Swift adapter、响应头生命周期与 transport policy 尚未实施。
+Native HTTP runtime 关闭；本阶段交付时 Swift adapter/响应头/policy 尚未实施，后续
+已分别完成 adapter、head 生命周期与 Policy-1/2 描述。实际状态见 PROGRESS.md。
 
 ## 边界与协议
 
@@ -17,6 +18,7 @@ Native HTTP runtime 关闭；Swift adapter、响应头生命周期与 transport 
 
 requestID 由 Swift 在发送前生成，单次使用；leaseID 由 Dart 生成，均为 UUID。
 prepare 成功响应包括 state/requestID/leaseID/url/method/headers/revision/generation/limit；
+Policy-2 现同步增加唯一嵌套 policy，版本 1 的完整字段见 P05_POLICY_LEASE_PLAN.md。
 所有回复均 `executionAllowed=false`。本阶段不实现“已有效配置 Native transport”的推断。
 finish response 包含 url/statusCode/cookieSource/setCookieValues，不接受任意账户、MID、
 请求 URL 或隐藏的重定向目标。Cookie source 是 provenance，不从数组形状推断分离字段。
@@ -25,7 +27,8 @@ prepare 首次 await 前登记 pending；capture stamp 后才读 revision，避�
 改变 revision。使用实际 Dio options compose 的 URI，与固定 endpoint/limit 对照；复制
 base/account headers，合入 referer 和真实 URI 的 CookieJar.loadForRequest 结果。保持现有
 Cookie path 排序与重复名称语义。异步返回后检查记录 identity、推荐选择、revision、
-generation 与实际 Hive owner；变化时丢弃快照，不默默准备另一账户。
+generation 与实际 Hive owner；变化时丢弃快照，不默默准备另一账户。Policy-2 还复查
+有效 pool/retry/合并请求配置、headers 和回调 identity；不把 Pref 当作实际池状态。
 
 finish/abandon 在首次 await 前决定唯一赢家。finish 匹配原 URL，不按当前选择/MID 回查；
 普通换号与其他有效 Cookie 更新不撤销原账户在途响应。同 MID 替换/delete/clear/匿名 reset

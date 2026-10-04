@@ -27,7 +27,10 @@ dependency condition；这不构成本仓 iOS16 编译/链接或行为支持证�
    response head 逐项遍历字段，复制顺序和值；禁用自动解压、redirect 和 Cookie
    authority。不要调用逗号拼接/规范化接口。覆盖单字段、Path/Expires 歧义对、空值、
    同名 Cookie 不同 path、403、302、head 后 cancel/EOF、head 前 cancel、并发和释放。
-   与当前 Foundation 对同一 wire 的信息丢失报告并列保存，不能据 parser 猜回原字段。
+  与当前 Foundation 对同一 wire 的信息丢失报告并列保存，不能据 parser 猜回原字段。
+   当前 PiliHTTPResponseCookieFields 只有 foundationCombined/unsupported，候选有序
+   字段需与 HeaderFinalizer 同阶段增添明确 provenance；不能把旧 combined 改名
+   separatedFields。旧 factory probes 与真实 wire 的来源区分继续保留。
 3. **原 owner 终结。** 候选 transfer 遵循现有 Outcome/HeaderFinalizer 契约；head
    到达后 body 的错误/取消不丢头。将有序值交给实际 Dart lease/Hive，关闭重开 Box
    验证原 owner 与单次消费。回环地址不获得 Bilibili API 权限，测试映射明确标记。
@@ -76,3 +79,10 @@ AsyncHTTPClient API 返回 response 后仍需逐步读取 body，不能 collect 
 request deadline 不得偷偷成为 Dart idle timeout。压缩禁用是候选配置，Brotli 实现/
 损坏字节行为仍需独立 C/Objective-C/Swift 桥接与实际测试；不把协议放进 SwiftUI。
 具体库能否完全匹配将在 probe 中决定，未验证前 runtime/account 门禁保持关闭。
+
+另有已核对的长请求门禁：Dart lease 默认 ttl=1 分钟，当前 HeaderFinalizer 接收的是
+transfer 完成 Outcome，finishing marker 则在 finish 命令才建立。若 head 早到而 body
+持续超过 ttl，当前 prepare lease 可能先到期。trending 的短 wire 检查没有覆盖这点。
+在允许无限/长时间 idle 或下载执行前，必须实际验证并明确 head 时点终结/续期或
+其他生命周期方案；不能靠资源总时限截断来掩盖，也不能未经合同增加 terminal 重放。
+任何 ttl/stream 改动另成可回滚阶段，测试 timer、cancel、expire、owner revoke 竞争。
