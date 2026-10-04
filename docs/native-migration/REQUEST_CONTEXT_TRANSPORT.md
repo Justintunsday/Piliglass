@@ -1,7 +1,7 @@
 # P05a2c：响应头生命周期与后续运行时门禁
 
-2026-10-04；实施前计划已随 6cf96e9 保存。P05a2b 最终代码 4148caf 已完整 CI 验证；
-c1 已开始实施，尚待提交与真实 CI，不能当作已验证阶段。
+2026-10-05；实施前计划已随 6cf96e9 保存。P05a2b 最终代码 4148caf 已完整 CI 验证；
+c1 最终代码 d80c92b 已在 release 与全部 preview 同 SHA 验证，实际证据见 PROGRESS.md。
 继续 PLAN.md 原生化主线，UI 重写最后执行；不提前移除 Flutter fallback。
 
 ## c1：传输生命周期和薄终结协调器
@@ -74,6 +74,9 @@ artifact；Hive test 直接消费同 job 的真实 wire report，缺报告须失
 权限，也不声称旧 Hive adapter 丢失的 domain/path 属性已经具备重启持久化能力。
 
 ## 后续：有效 policy 与字段保存 transport
+
+有效 policy 的具体执行与对照矩阵已保存为
+[P05_EFFECTIVE_HTTP_POLICY_PLAN.md](P05_EFFECTIVE_HTTP_POLICY_PLAN.md)。
 
 有效 policy 单独迁移。`init.dart` 的 HTTP2 值在启动时固定，proxy/证书在 pool 建立时
 确定且可能随 connectivity 重建，retry 在 interceptor 创建时固定；只读当前 Pref 不够。

@@ -1,6 +1,6 @@
 # 迁移进度与编译证据
 
-最后更新：2026-10-04（Asia/Hong_Kong）。目标仍在进行，Flutter runtime 保留。
+最后更新：2026-10-05（Asia/Hong_Kong）。目标仍在进行，Flutter runtime 保留。
 
 | 阶段 | 阶段代码 Commit | iOS release | Preview | 状态 |
 |---|---|---|---|---|
@@ -15,7 +15,7 @@
 | P05a1b | a19fe5a -> 15a7f9d | [成功，含账户生命周期测试](https://github.com/Justintunsday/Piliglass/actions/runs/37177848831) | [全部成功](https://github.com/Justintunsday/Piliglass/actions/runs/37177850629) | 账户 generation/存储所有权与 Dio 写回边界完成；Native lease/runtime 未切换 |
 | P05a2a | 78a0948 -> 338bc39 -> 53705e9 -> c0fbdbf | [成功](https://github.com/Justintunsday/Piliglass/actions/runs/37193624110) | [全部成功](https://github.com/Justintunsday/Piliglass/actions/runs/37193623955) | Dart lease 与薄命令完成；Swift adapter/runtime 未接入 |
 | P05a2b | 63dac5f -> 4148caf | [成功，含 119 项 Swift 6 context 检查](https://github.com/Justintunsday/Piliglass/actions/runs/37195363892) | [全部成功](https://github.com/Justintunsday/Piliglass/actions/runs/37195365890) | Swift context/adapter/terminal cleanup 完成；runtime 保持关闭 |
-| P05a2c1 | 待提交 | 待验证 | 待验证 | 响应头/取消传输与薄 lease 终结实施中；runtime 保持关闭 |
+| P05a2c1 | eddc20a -> d80c92b | [成功，含 91 项实际 transfer 检查](https://github.com/Justintunsday/Piliglass/actions/runs/37215530254) | [全部成功](https://github.com/Justintunsday/Piliglass/actions/runs/37215523453) | 响应头/取消/一次性 lease 终结完成；有效 policy、字段保存 transport 与 runtime 尚未切换 |
 
 P00 证据：inventory 包含 59 个 bridge commands、62 个注册 Flutter routes、311 个 REST 常量、45 个 gRPC 常量、95 个依赖。压力检查 `failures=[]`，1,000 条评论保持懒加载、未在离屏处触发分页、实际末条出现后分页成功；100,000 条弹幕保留，活跃渲染上限 60。仅测试 harness 调整了懒加载自适应行定位等待；没有修改生产 UI 或业务。
 
@@ -204,3 +204,35 @@ actual wire report 的 nativeAccountCompatibilityVerified 仍 false；没有接�
 新 source 为 480 行，444 行 fixture（后修为 450）与专属 CI 构成同一生命周期切片，
 没有往 Root/Player 追加业务。P05 整体仍需传输/有效 policy、Native 账户与存储、现有
 登录/用途/签名和实际兼容验收。下一步已保存 REQUEST_CONTEXT_TRANSPORT.md 的 c1 计划。
+
+## P05a2c1：实际传输与响应头终结
+
+Networking 独立 transfer primitive 在共享 Session 上使用每 task delegate，锁保护
+head/body/取消/完成顺序；任务、continuation 和 callback 在终结后释放。原 Client
+薄封装保留 HTTPS、隔离 Cookie/凭据/cache 和拒绝 redirect。Data 的 HeaderFinalizer
+只在无 head 或 unsupported 字段时 abandon，有效 head 即 finish 原 lease，包含
+403、原 302、正文取消和断连；未知 ack 不重发或二次 abandon。没有接入生产请求。
+
+首次 eddc20a 的实际 Swift 编译发现 fixture trailing closure 参数匹配及 async semaphore
+问题，97b9aad 修复后发现 URLSession 会正规化测试 response subclass。c9f4144 将特殊
+字段类型明确改为同一生产 factory probe，真实 loopback/普通 URLProtocol 仍走 delegate；
+随后按 analyze 日志清除未使用 import。e440786 加强 redirect callback 内同步取消后，
+release 全通过，但 preview 的设置 edge pop 启动再取消；实际 hierarchy/录屏确认
+仍停在播放器设置，唯一原因未证明。d80c92b 仅将同一个完整边缘手势改为 slow，保留
+单次触摸、真实返回和重进持久化断言；无重试、按钮 fallback 或生产 UI 改动。
+
+最终两条 workflow headSha 均为 d80c92b6d5a4437e2a34186750373c4dc2c1738b，所有 8 个
+jobs 成功。已下载实际报告与日志：91 transfer 检查（87 Swift + 4 wire 组），12 个
+loopback 场景，实际头后/redirect 取消 -999、断连 -1005、安装前取消零请求、单次 head、
+task/delegate 释放和共享连接 [9,9]；compile 无本阶段警告。context 119、HTTP 74、
+Search 63、tracker 72、68 Flutter/Hive/Dio tests（新增真实字段写回 8）、wire 70/parser
+122 通过，analyze 无问题。Runner BUILD SUCCEEDED、677 bilingual keys 与 Aether FFmpeg
+load order 通过；导航 9 tests、设置手势与持久化通过，其他 preview 全成功。压力报告
+failures=[]，1,000 评论懒加载/无离屏分页/末条分页、100,000 弹幕保留/活跃上限 60 通过。
+当前手势测试成功不证明此前系统交互失败的唯一根因。
+
+diff 无功能、资源、依赖或引擎删除，Root/Player/Aether 未改。特殊 raw 类型 probe 不当
+作真实 wire 证据；Hive fixture 的 loopback 字段映射到已授权 API URL，仅证明 parser/
+原 owner 写回，不证明旧 Cookie adapter 的重启属性持久化。Foundation 字段边界丢失
+依然存在，nativeAccountCompatibilityVerified=false、executionAllowed=false，P05 整体
+尚未完成。下一步执行有效 policy 描述计划；后续六组准备见 [PREPARATION.md](PREPARATION.md)。
