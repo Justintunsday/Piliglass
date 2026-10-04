@@ -79,6 +79,7 @@
 		46EC3D089DAE46AA88E9335D /* PiliGeetestWebSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B11764BAE1A6570ED07DEF6 /* PiliGeetestWebSession.swift */; };
 		05630C88A9EDC7B57A1F66C4 /* PiliNativeCookieParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = C59833C892D1075470BFEB17 /* PiliNativeCookieParser.swift */; };
 		A2634BDD46C966733309DD1B /* PiliNativeCookieSelector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 59FAAAC820CF047C217ACB81 /* PiliNativeCookieSelector.swift */; };
+		CF13040C2E800FEAA90FAA0C /* PiliHTTPBodyCodec in Frameworks */ = {isa = PBXBuildFile; productRef = E30400436C99C3E1602FC0F1 /* PiliHTTPBodyCodec */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -186,6 +187,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				AE7E00000000000000000001 /* AetherEngine in Frameworks */,
+				CF13040C2E800FEAA90FAA0C /* PiliHTTPBodyCodec in Frameworks */,
 				CF02D4512CE5EF6B8C04712D /* PiliHTTPTransport in Frameworks */,
 				2431C9E3151C7449D0D1C0F4 /* Pods_Runner.framework in Frameworks */,
 			);
@@ -569,6 +571,7 @@
 			name = Runner;
 			packageProductDependencies = (
 				AE7E00000000000000000003 /* AetherEngine */,
+				E30400436C99C3E1602FC0F1 /* PiliHTTPBodyCodec */,
 				57DAA2A048946F1A27BFB802 /* PiliHTTPTransport */,
 			);
 			productName = Runner;
@@ -602,6 +605,7 @@
 			mainGroup = 97C146E51CF9000F007C117D;
 			packageReferences = (
 				AE7E00000000000000000002 /* XCLocalSwiftPackageReference "AetherEngine" */,
+				0774172D09DE5EEAC15D5C0F /* XCLocalSwiftPackageReference "PiliHTTPBodyCodec" */,
 				63F09D320BCAEB1DA0CF1B22 /* XCLocalSwiftPackageReference "PiliHTTPTransport" */,
 			);
 			productRefGroup = 97C146EF1CF9000F007C117D /* Products */;
@@ -1151,6 +1155,10 @@
 			isa = XCLocalSwiftPackageReference;
 			relativePath = "../Packages/PiliHTTPTransport";
 		};
+		0774172D09DE5EEAC15D5C0F /* XCLocalSwiftPackageReference "PiliHTTPBodyCodec" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = "../Packages/PiliHTTPBodyCodec";
+		};
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -1163,6 +1171,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 63F09D320BCAEB1DA0CF1B22 /* XCLocalSwiftPackageReference "PiliHTTPTransport" */;
 			productName = PiliHTTPTransport;
+		};
+		E30400436C99C3E1602FC0F1 /* PiliHTTPBodyCodec */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 0774172D09DE5EEAC15D5C0F /* XCLocalSwiftPackageReference "PiliHTTPBodyCodec" */;
+			productName = PiliHTTPBodyCodec;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};
