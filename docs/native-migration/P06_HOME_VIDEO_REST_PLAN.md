@@ -1,5 +1,7 @@
 # P06：首页与视频详情 REST 迁移准备
 
+> 2026-10-05 执行节奏更新：按用户最新要求，同组并行实施、各切片独立检查/提交/推送，整组汇合后统一运行 release 与全部 preview，并读取实际日志修复至成功。本文件旧有逐切片完整 CI 门禁由此替代；功能/数据验收、fallback 删除和权威切换门禁保留。见 [P05_GROUP_ACCEPTANCE.md](P05_GROUP_ACCEPTANCE.md)。
+
 2026-10-04；本文件是 PLAN.md 的 P06 准备切片，独立于正在实施的 P05a2c1，不切换运行时、不修改 UI、不移除 Dart。
 
 Version Baseline：Runner iOS 16.0 / SWIFT_VERSION=5.0；AetherEngine swift-tools-version 6.0。新 Domain/Data 用 immutable Sendable；独立 fixture 以 Swift 6 strict-concurrency 编译，保留 iOS16 兼容，不引入 beta API。

@@ -1,5 +1,7 @@
 # Policy-3：发送前的原生能力判定
 
+> 2026-10-05 执行节奏更新：按用户最新要求，同组并行实施、各切片独立检查/提交/推送，整组汇合后统一运行 release 与全部 preview，并读取实际日志修复至成功。本文件旧有逐切片完整 CI 门禁由此替代；功能/数据验收、fallback 删除和权威切换门禁保留。见 [P05_GROUP_ACCEPTANCE.md](P05_GROUP_ACCEPTANCE.md)。
+
 2026-10-05，Policy-2 Actions 期间基于实际生产源码准备。
 实施前必须先让 Policy-2 完整 release 与全 preview 同一代码 SHA 成功。
 仍按 PLAN.md 推进，视觉 UI 重写最后。此文件不是运行时切换或 transport 验收。

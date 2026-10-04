@@ -1,5 +1,7 @@
 # P11/P12：剩余页面覆盖与 Flutter runtime 退出准备
 
+> 2026-10-05 执行节奏更新：按用户最新要求，同组并行实施、各切片独立检查/提交/推送，整组汇合后统一运行 release 与全部 preview，并读取实际日志修复至成功。本文件旧有逐切片完整 CI 门禁由此替代；功能/数据验收、fallback 删除和权威切换门禁保留。见 [P05_GROUP_ACCEPTANCE.md](P05_GROUP_ACCEPTANCE.md)。
+
 2026-10-05，P05 Policy-1 CI 期间准备；没有移除页面、Dart 或 Flutter 依赖。
 目标仍按 PLAN.md 为 iOS 完整业务原生化，UI 视觉重写在主线完成后执行。
 

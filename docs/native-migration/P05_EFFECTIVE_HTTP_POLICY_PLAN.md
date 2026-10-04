@@ -1,5 +1,7 @@
 # P05：有效 HTTP policy 的下一切片计划
 
+> 2026-10-05 执行节奏更新：按用户最新要求，同组并行实施、各切片独立检查/提交/推送，整组汇合后统一运行 release 与全部 preview，并读取实际日志修复至成功。本文件旧有逐切片完整 CI 门禁由此替代；功能/数据验收、fallback 删除和权威切换门禁保留。见 [P05_GROUP_ACCEPTANCE.md](P05_GROUP_ACCEPTANCE.md)。
+
 2026-10-04 编写于 c1 验证期间；2026-10-05 保存，c1 已通过完整 CI，证据见 PROGRESS.md。
 Policy-1 已在 62eab04 的完整 release + 全 preview 同 SHA 验证，21 tests/analyze 通过。
 Policy-2 lease/Swift strict codec 也已在 7192a0c 完整同 SHA 验证，477 跨语言检查成功。

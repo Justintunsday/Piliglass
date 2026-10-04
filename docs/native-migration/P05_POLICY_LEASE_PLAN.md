@@ -1,5 +1,7 @@
 # Policy-2：将有效配置绑定到一次性请求上下文
 
+> 2026-10-05 执行节奏更新：按用户最新要求，同组并行实施、各切片独立检查/提交/推送，整组汇合后统一运行 release 与全部 preview，并读取实际日志修复至成功。本文件旧有逐切片完整 CI 门禁由此替代；功能/数据验收、fallback 删除和权威切换门禁保留。见 [P05_GROUP_ACCEPTANCE.md](P05_GROUP_ACCEPTANCE.md)。
+
 2026-10-05，Policy-1 CI 等待期间保存准备；现已在 7192a0c 完整 release + 全 preview 同 SHA 验证。
 最新阶段状态以 PROGRESS.md 为准。继续 PLAN.md，UI 重写最后。
 

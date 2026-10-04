@@ -103,14 +103,21 @@ P05a2b Swift adapter 已在 4148caf 同 SHA 全部验证，见 [REQUEST_CONTEXT_
 
 ## 每阶段执行与回滚
 
+2026-10-05 最新执行要求：用户要求同组工作并行完成后，再统一编译验收，后续各组
+同样执行。以下流程替代旧计划中“每个切片完整 CI 成功后才能写下一切片”的节奏。
+独立、可回滚的提交仍保留；未验收实现的状态是 N，整组验收失败时不得宣称完成、
+切换生产权威或删除 fallback。UI 视觉重写仍在业务迁移之后。
+
 1. 阅读该领域所有 Dart 业务/参数/模型，记录变更与保留路径；用最小协议封装，不复制 channel 字典到 View。
 2. 修改后 `git diff --check`、逐文件 diff 和资源/依赖删除检查；仅 stage 本阶段路径，不 stage 用户原有 `youtube/`。
-3. commit -> push 到 `codex/native-migration`；`gh workflow run ios.yml --ref codex/native-migration`，preview 按 paths 自动触发或显式 dispatch。核对 run.headSha 等于提交 SHA。
-4. 保存 run URL、SHA、结论和实际日志。失败则读取 failing job logs，修复、再次 commit+push+build；两条门禁通过后才更新状态和进入下一阶段。
+3. 同组按责任边界并行实施；根智能统一集成共享文件。每个切片检查 diff、独立 commit -> push 到 `codex/native-migration`，不因每次推送自动启动完整 preview。签名、账户、登录和网络组的接口与数据语义必须相互对照。
+4. 整组汇合后显式 dispatch `ios.yml` 与 `ios-home-preview.yml`，两者核对同一个集成 SHA；保存 run URL、SHA、结论和实际日志。失败读取 failing job logs、修复、再次 commit+push+build，直到整组全部门禁通过后才更新已验证状态。后续组可并行准备，但不能借准备工作绕过最终验收。
 5. 任何 Native slice 均先保持已存在的 Dart 实现；只有状态 V、没有旧 caller/route、数据导入已验收才到 R。账户/写请求失败不得盲目双发；取消不得被 fallback 转成第二次请求。
 6. 回滚：单个阶段可 `git revert <stage-commit>`；必要的依赖提交一并回滚。切换开关在 composition/repository 中，不暴露迁移实现细节给用户；fallback 继续有明确删除门禁。
 
 CI 证据持续写入 `PROGRESS.md`。未通过 CI 的阶段保持进行中；等待真实 API/账户/真机验证的领域标记 N，不夸大成 V。
+
+当前并行工作和共同验收清单见 [P05_GROUP_ACCEPTANCE.md](P05_GROUP_ACCEPTANCE.md)。
 
 ## Skills 适用决策
 

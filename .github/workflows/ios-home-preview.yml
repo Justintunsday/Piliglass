@@ -2,6 +2,10 @@ name: Preview iOS home layout
 
 on:
   push:
+    # Migration branches are validated by explicit dispatch after a work group
+    # converges. Keep automatic checks for published main changes.
+    branches:
+      - main
     paths:
       - "ios/Runner/Native/**"
       - "ios/Runner/PiliNativeLocalization.swift"

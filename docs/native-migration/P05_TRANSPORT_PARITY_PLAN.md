@@ -1,5 +1,7 @@
 # Policy-4 与字段保留 transport：可执行对照顺序
 
+> 2026-10-05 执行节奏更新：按用户最新要求，同组并行实施、各切片独立检查/提交/推送，整组汇合后统一运行 release 与全部 preview，并读取实际日志修复至成功。本文件旧有逐切片完整 CI 门禁由此替代；功能/数据验收、fallback 删除和权威切换门禁保留。见 [P05_GROUP_ACCEPTANCE.md](P05_GROUP_ACCEPTANCE.md)。
+
 2026-10-05，在 Policy-2 完整 Actions 期间准备，不增加生产依赖或切换运行时。
 按 P05_POLICY_CAPABILITY_PLAN.md 的发送前边界推进；UI 重写最后。
 
