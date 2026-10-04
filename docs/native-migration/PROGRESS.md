@@ -11,6 +11,7 @@
 | P02a | 662f739 | [成功](https://github.com/Justintunsday/Piliglass/actions/runs/37136856478) | [全部成功](https://github.com/Justintunsday/Piliglass/actions/runs/37136856328) | Search Feature/UI 状态契约完成 |
 | P03 | 7ff23b9 | [成功，含 Swift 6 core](https://github.com/Justintunsday/Piliglass/actions/runs/37140033171) | [全部成功](https://github.com/Justintunsday/Piliglass/actions/runs/37139965902) | Native Search state、typed Repository 与临时 Dart adapter 完成 |
 | P04a | aa8e3c4 -> b0c098a | [成功，含 HTTP/Search Swift 6 core](https://github.com/Justintunsday/Piliglass/actions/runs/37163367936) | [全部成功](https://github.com/Justintunsday/Piliglass/actions/runs/37163367691) | Native HTTP Client/热榜 Service fixture 完成；runtime 未切换 |
+| P05a1a | dc8bbbb -> 834c3b9 | [成功，含 Cookie wire/parser](https://github.com/Justintunsday/Piliglass/actions/runs/37165907525) | [全部成功](https://github.com/Justintunsday/Piliglass/actions/runs/37165910178) | 共享响应 Cookie parser 与表示门禁完成；账户/context/runtime 未切换 |
 
 P00 证据：inventory 包含 59 个 bridge commands、62 个注册 Flutter routes、311 个 REST 常量、45 个 gRPC 常量、95 个依赖。压力检查 `failures=[]`，1,000 条评论保持懒加载、未在离屏处触发分页、实际末条出现后分页成功；100,000 条弹幕保留，活跃渲染上限 60。仅测试 harness 调整了懒加载自适应行定位等待；没有修改生产 UI 或业务。
 
@@ -84,3 +85,28 @@ runtime fixtures 通过。完整 Runner release 日志确认 `BUILD SUCCEEDED`�
 已通过。Native HTTP runtime 切换仍必须保留 recommend 账户与 Cookie 语义，
 P05a context lease -> P04b hybrid cutover。实现/限制见 [HTTP.md](HTTP.md)。
 Dart 业务仍完整保留，整体原生化目标仍在进行中。
+
+P05a1a 范围：抽出纯 Dart response Cookie helper 并接入现有 AccountManager，修正
+Expires 日期逗号误拆；保留原账户绑定/错误/redirect/Hive 流程。显式区分真正分离字段、
+Dio legacy recovery 与 Foundation combined provenance；原文、offset、顺序、诊断保留，
+不按 name 去重或跳过坏记录。attribute span 里的猜测边界关闭 Native 持久化门禁，
+不对 speculative segments 解码或展示半份 Cookie。没有删除功能、资源或依赖。
+
+P05a1a 修复闭环：首次 [release run](https://github.com/Justintunsday/Piliglass/actions/runs/37165529466)
+Swift 6 编译成功，但只发送头/零 body 的 pending fixture 未收到 response callback。
+下载实际 report/server-wire/compile 日志后，改为同时发送头和 1024/4096 字节 prefix，
+body 仍未完成；捕获头后 cancel 并拒绝 body delivery。补充真实 pair-only 顺序/替换
+以及 gate-open 语义/实际 CookieJar last-write 检查。commit+push 后重新运行两条 workflow。
+旧 SHA 的 preview 因被替代取消，不作为完成证据。
+
+P05a1a 验证：两条 workflow headSha 均为 `834c3b9e57c6acdc4619f1863c33fa3114ab34d7`。
+实际产物 Swift 6.3.3 的 13 个 wire case/70 项检查通过，Dart 3.13.4 的 122 项检查与
+analyze 无问题；HTTP 74/Search 63 通过。完整 Runner `BUILD SUCCEEDED`、677 项双语
+检查及 FFmpeg load order 通过，四组 preview 全成功。视频压力报告 failures=[]，
+1,000 评论懒加载/离屏不分页/末条分页通过，100,000 弹幕完整保留、活跃上限 60。
+同值的两种 wire 输入实际证明 Foundation 丢失字段边界；Native gate 继续保守关闭。
+生产 Client 尚未实现 head-before-body cancellation 写回，账户保护也尚未实施，
+不能据此宣称登录或 Native HTTP 已迁移。详情见 [COOKIE_HEADERS.md](COOKIE_HEADERS.md)。
+
+下一阶段 P05a1b 的 identity generation、存储所有权、匿名 reset、普通/临时选择及
+真实 Hive/Dio 测试计划已保存到 REQUEST_CONTEXT.md；不改 Hive schema，不切换 HTTP。

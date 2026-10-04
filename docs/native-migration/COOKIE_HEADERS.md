@@ -1,6 +1,6 @@
 # P05a1a：Cookie 响应表示与共享解析
 
-2026-10-04，实施中，等待真实 CI。HTTP runtime 仍由 Dart 供应。
+2026-10-04，阶段代码 `834c3b9` 已通过完整 release 与全部 preview。HTTP runtime 仍由 Dart 供应。
 本阶段先完成 P05a1 的 parser/wire 切片，账户 revision/generation 单独进入 P05a1b。
 
 ## 可回滚范围
@@ -31,9 +31,28 @@
 继续运行 P03/P04a 核心检查、完整 release、FFmpeg load order 和全部 preview。
 本地 Windows 无 Dart/Swift/Xcode，不能作为通过依据。
 
+完成证据：[iOS release](https://github.com/Justintunsday/Piliglass/actions/runs/37165907525)
+和 [全部 preview](https://github.com/Justintunsday/Piliglass/actions/runs/37165910178)
+均对应 `834c3b9e57c6acdc4619f1863c33fa3114ab34d7`。下载的真实产物确认：
+Swift 6.3.3 complete checking 编译通过，13 个 Darwin wire case 共 70 项检查通过
+（Swift 67 + Python wire 3），Dart 3.13.4 的 122 项检查与定向 analyze 通过。
+HTTP 74/Search 63 既有检查通过；完整 Runner `BUILD SUCCEEDED`、677 项双语检查、
+FFmpeg load order 和四组 preview 全部通过。实际压力报告 failures 为空，1,000 评论
+懒加载/离屏不分页/末条分页通过，100,000 弹幕完整保留、活跃上限 60。
+
+Foundation 把重复字段合并为字符串，观察到 `[a=1; Path=/x, b=2]` 的单 wire field
+与 `[a=1; Path=/x]`、`[b=2]` 两个 wire fields 得到相同表示，无法从此值恢复来源。
+pair-only 两例及单 Cookie redirect 通过有序语义门禁；其余 10 例保守拒绝 Native 写回。
+SDK 对 folded Expires/literal Path 的宽松解码与 Dio recovery 不完全等价，报告保留差异。
+pending body 服务端仅发 1024/4096 字节，delegate 收到 0 body bytes，事件顺序是
+started → headersReceived → headersCaptured → cancelIssued → completed，错误码 -999。
+实际生产 redirect delegate 收到一次回调并拒绝转发，服务器没有收到 redirect-target。
+这些是表示与 fixture 生命周期证据，报告明确 nativeAccountCompatibilityVerified=false。
+
 首轮 `dc8bbbb` 的 Swift 6 编译通过，但 wire observer 在零 body 的 pending case 中
-没有收到 response 回调，尚未通过。读取实际产物后将回环服务器改为头与 1024 字节
-prefix 同时发送，继续保持 4096 字节 body 未完成；回调捕获头后取消并拒绝 body delivery。此次调整
+没有收到 response 回调，该 run 失败。读取实际产物后将回环服务器改为头与 1024 字节
+prefix 同时发送，继续保持 4096 字节 body 未完成；回调捕获头后取消并拒绝 body delivery。
+commit+push `834c3b9` 后两条 workflow 均成功，首次 run 不作为完成证据。此次调整
 只修正 fixture 的触发条件；不放宽生产取消要求，也不改变生产 Client。
 
 ## 运行时切换限制
