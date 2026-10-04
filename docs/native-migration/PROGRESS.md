@@ -14,7 +14,7 @@
 | P05a1a | dc8bbbb -> 834c3b9 | [成功，含 Cookie wire/parser](https://github.com/Justintunsday/Piliglass/actions/runs/37165907525) | [全部成功](https://github.com/Justintunsday/Piliglass/actions/runs/37165910178) | 共享响应 Cookie parser 与表示门禁完成；账户/context/runtime 未切换 |
 | P05a1b | a19fe5a -> 15a7f9d | [成功，含账户生命周期测试](https://github.com/Justintunsday/Piliglass/actions/runs/37177848831) | [全部成功](https://github.com/Justintunsday/Piliglass/actions/runs/37177850629) | 账户 generation/存储所有权与 Dio 写回边界完成；Native lease/runtime 未切换 |
 | P05a2a | 78a0948 -> 338bc39 -> 53705e9 -> c0fbdbf | [成功](https://github.com/Justintunsday/Piliglass/actions/runs/37193624110) | [全部成功](https://github.com/Justintunsday/Piliglass/actions/runs/37193623955) | Dart lease 与薄命令完成；Swift adapter/runtime 未接入 |
-| P05a2b | 待提交 | 待验证 | 待验证 | Swift context/adapter/terminal cleanup 已实现；runtime 保持关闭 |
+| P05a2b | 63dac5f -> 4148caf | [成功，含 119 项 Swift 6 context 检查](https://github.com/Justintunsday/Piliglass/actions/runs/37195363892) | [全部成功](https://github.com/Justintunsday/Piliglass/actions/runs/37195365890) | Swift context/adapter/terminal cleanup 完成；runtime 保持关闭 |
 
 P00 证据：inventory 包含 59 个 bridge commands、62 个注册 Flutter routes、311 个 REST 常量、45 个 gRPC 常量、95 个依赖。压力检查 `failures=[]`，1,000 条评论保持懒加载、未在离屏处触发分页、实际末条出现后分页成功；100,000 条弹幕保留，活跃渲染上限 60。仅测试 harness 调整了懒加载自适应行定位等待；没有修改生产 UI 或业务。
 
@@ -178,3 +178,28 @@ parser 122、HTTP 74/Search 63。pressure failures=[]，1,000 评论懒加载/�
 
 用户已确认先继续本迁移计划，最后再重做 UI；原生玻璃风格与方案保存在 UI_REDESIGN.md
 和 brand-spec.md，尚未实施 UI 重设计。P05a2a 全绿后继续 P05a2b。
+
+## P05a2b：Swift 请求上下文与一次性终结
+
+四个生产文件分别位于 Domain/Accounts、Data/Accounts 和 Bridge；新增不可变 Sendable
+context、strict codec、临时 Dart provider 与独立终结任务。prepare 取消/坏回包按本地
+UUID abandon；finish/abandon 在 await 前 claim，已取消 caller 仍实际发送终结。
+未知/损坏/error ack 或 timeout 不重发，晚/重复 callback 不恢复 gate；最多 32 个
+token-only records，显式 dispose 区分 pending/prepared/ending。详见 REQUEST_CONTEXT_SWIFT.md。
+
+63dac5f 的 macOS Swift 6 complete fixtures 119 项全部通过，但 fixture 弱引用变量与
+可变 provider 捕获有警告。4148caf 仅改 test 弱引用 holder/不可变 capture，保留实际
+release 断言；再次 commit+push，两条 workflow 最终 headSha 均为
+4148caf52de9cfefb4af56ed298c21cecb94717f，所有 8 个 jobs 成功。旧 run 不当完成证据。
+
+已读取/下载当前 SHA 实际产物：context 119、HTTP 74、Search 63 检查通过；context
+compile.log 无本阶段警告。完整 release BUILD SUCCEEDED，account 定向 analyze 无问题，
+72 tracker 检查、60 Flutter/Hive/Dio tests、Cookie wire 70/parser 122、677 bilingual keys
+及 Aether FFmpeg load order 通过。全部 preview 成功，压力 failures=[]，1,000 评论
+懒加载/无离屏分页/末条分页通过，100,000 弹幕完整保留、活跃上限 60。
+
+提交前 staged diff 检查通过，无业务/资源/依赖/引擎删除。runtime executionAllowed=false，
+actual wire report 的 nativeAccountCompatibilityVerified 仍 false；没有接入生产 Native HTTP。
+新 source 为 480 行，444 行 fixture（后修为 450）与专属 CI 构成同一生命周期切片，
+没有往 Root/Player 追加业务。P05 整体仍需传输/有效 policy、Native 账户与存储、现有
+登录/用途/签名和实际兼容验收。下一步已保存 REQUEST_CONTEXT_TRANSPORT.md 的 c1 计划。

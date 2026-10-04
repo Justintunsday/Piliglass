@@ -139,8 +139,9 @@ prepare 复用现有 cancellable invoker，以本地 requestID 处理错误、�
 和 false gate，不使用 UI/Search 的宽松 coercion。fixture 覆盖取消竞争/late callback/
 重复终结/timeout；仍不创建 URLRequest、不接 production runtime，Aether/UI 不依赖此协议。
 
-P05a2b 的持有范围与错误语义：registry/终结器只保留 token、operation 与 transport，不重复保留
-Cookie/headers 快照；Domain context 为值类型，调用方持有的副本不等于账户对象。
+P05a2b 的持有范围与错误语义：registry 保存 token、operation 与 finalizer，不重复保留
+请求 Cookie/headers 快照；终结任务按需持有响应元数据直到 ack/timeout。Domain context
+为值类型，调用方持有的副本不等于账户对象。
 严格 codec 不接受 double/bool/string 代替整数，也不把非 bool 的 gate 强制转换；固定
 endpoint/query/GET、UUID、header token/CRLF 及完整字段 shape 必须验证。错误响应与
 正常 receipt 分开，persistenceFailed 不提供「未写入」保证。prepare 的全部失败路径
@@ -167,7 +168,32 @@ preclaim 拒绝的 Dart lease 可能依靠有限 TTL 释放，这与正常立即
 
 2026-10-04 用户确认先继续 PLAN.md 原生化主线，UI 重写最后实施。上述 P05a2b 计划
 保持下一阶段；UI 的原生玻璃风格与独立方案保存但暂不编码。四个 Swift 文件与专属
-Swift 6 fixture 已实现、尚待真实 CI，范围与限制见 [REQUEST_CONTEXT_SWIFT.md](REQUEST_CONTEXT_SWIFT.md)。
+Swift 6 fixture 已在 4148caf 完整 CI 验证，范围与限制见 [REQUEST_CONTEXT_SWIFT.md](REQUEST_CONTEXT_SWIFT.md)。
+下一阶段实施前计划见 [REQUEST_CONTEXT_TRANSPORT.md](REQUEST_CONTEXT_TRANSPORT.md)。
+
+## P05 剩余账户迁移范围
+
+传输门禁后仍需逐项迁移账户 authority 与登录业务。可独立推进的切片是四用途只读
+AccountRepository/SelectionSnapshot、纯 WBI/App signer 和存储旁路验证；这些阶段
+不提前写 Native/Hive 两个 authority，也不把接口完成视为登录已迁移。
+
+现有登录必须保留 QR、密码、SMS、Cookie 四条路径，以及 Geetest 的 success/error/close、
+密码 status=2 手机验证和 -105 challenge、密码找回网页。Native Root 当前只有 QR
+sheet，不能用该页面成功代替 Dart 四种方式验收。每种实际请求需单独授权的 endpoint/
+用途策略，现有 trending GET lease 不能直接用于登录 POST。
+
+`refresh_token` 在现有源码只保存，未找到续期请求；`Accounts.refresh()` 是账户
+owner/用途对账与 buvid 激活，应按此语义迁移，不把账户重载当 token 续期。
+登录安装策略分开保留：Dart 默认继承同 MID 的用途并可能弹用途选择，Native QR
+当前把四用途全切到新账户。main/heartbeat/recommend/video 的持久选择、临时无痕、
+history 的 heartbeat→main 回退都要单独对照。
+
+注销区分本地删除与远端 logout；批量远端失败保留失败账户。main 的 WK Cookie、
+userInfoCache/historyPause 同步和匿名 reset 仍是实际验收项。旧 Hive account adapter
+持久化根域 `/` Cookie，不能宣称其保留完整 domain/path/expiry；新原生格式须保留
+完整属性，导入时明确旧数据限制。依据 `lib/pages/login/{controller,view}.dart`、
+`lib/http/login.dart`、`lib/utils/accounts.dart`、`lib/utils/accounts/account.dart`、
+`lib/pages/setting/view.dart` 和 `lib/utils/{wbi_sign,app_sign}.dart` 的只读审查。
 
 ## Set-Cookie 实测门禁
 

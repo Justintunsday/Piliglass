@@ -1,6 +1,8 @@
 # P05a2b：Swift 请求上下文边界
 
-状态：已实现，等待同 SHA 的完整 ios.yml 与 ios-home-preview.yml 成功。
+状态：已验证。最终代码 `4148caf52de9cfefb4af56ed298c21cecb94717f` 的
+[完整 ios.yml](https://github.com/Justintunsday/Piliglass/actions/runs/37195363892) 与
+[全部 ios-home-preview.yml](https://github.com/Justintunsday/Piliglass/actions/runs/37195365890) 同 SHA 成功。
 本阶段继续 PLAN.md；视觉 UI 重写留到原生化主线完成后。
 
 ## 可回滚范围
@@ -61,7 +63,9 @@ finish/abandon 竞争、坏 preflight、未知/错误回包、真实超时、容
 新增 ios.yml `native-request-context-core` job 上传 compile.log/result.log/summary.json。
 Windows skip 与静态审查仅为提交前检查，不是完成证据。
 
-阶段完成须完整 Runner release、已有 HTTP/Search/Cookie/account 检查、新 context core，
-以及全部 preview jobs 在同一代码 SHA 成功。读实际日志和 artifact 后记录到 PROGRESS.md。
+实际 artifact 确认 119 项 context 检查通过，Swift 6 complete 编译无本阶段警告。
+初始 63dac5f 的 fixture 捕获警告以 4148caf 修正，旧 workflow 已被最终 SHA 替代，
+不作为阶段完成证据。最终 Runner release、已有 HTTP/Search/Cookie/account、新 context
+core 和全部 preview jobs 同 SHA 成功，完整证据记录到 PROGRESS.md。
 下一阶段 P05a2c 单独处理响应头时序、取消写回与有效 transport policy，继续保留
 COOKIE_HEADERS.md 的 Foundation 字段歧义门禁；不会因 context 验证成功提前切换请求。
