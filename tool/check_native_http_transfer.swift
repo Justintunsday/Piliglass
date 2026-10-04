@@ -121,6 +121,7 @@ private struct NativeHTTPTransferChecks {
   static func cookies(_ head: PiliHTTPResponseHead?) -> (String, [String]) {
     guard let head else { return ("none", []) }
     switch head.cookieFields {
+    case .separatedFields(let values): return ("separatedFields", values)
     case .foundationCombined(let values): return ("foundationCombined", values)
     case .unsupported: return ("unsupported", [])
     }

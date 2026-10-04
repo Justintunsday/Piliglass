@@ -21,10 +21,14 @@ enum PiliHTTPClientError: Error, Sendable, Equatable {
   case invalidRequest
   case invalidResponse
   case transport(code: Int)
+  // A raw transport failure is not an NSError/NSURLErrorDomain numeric code.
+  case nativeTransport(kind: String)
 }
 
 // A Foundation String array does not establish separated wire fields.
 enum PiliHTTPResponseCookieFields: Sendable, Equatable {
+  // Only transports that retain raw header tuples may use this provenance.
+  case separatedFields([String])
   case foundationCombined([String])
   case unsupported
 }

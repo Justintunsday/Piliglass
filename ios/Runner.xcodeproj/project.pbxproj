@@ -56,6 +56,8 @@
 		2F018D6E62AF809D1FC05FF4 /* PiliHTTPRequestHeaderFinalizer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 56403E1F9C7AC1660FC87B1F /* PiliHTTPRequestHeaderFinalizer.swift */; };
 		1CCAF0391ADB607CFD70E814 /* PiliPreparedHTTPPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4F4369F6CD10DD5576171FD3 /* PiliPreparedHTTPPolicy.swift */; };
 		8A6F6F41731FB1CF1EC22947 /* PiliPreparedHTTPPolicyCodec.swift in Sources */ = {isa = PBXBuildFile; fileRef = 24C25F9BA2B791DB32F26C0C /* PiliPreparedHTTPPolicyCodec.swift */; };
+		ED998B24B0EB7594B34C28EC /* PiliHTTPPolicyCapability.swift in Sources */ = {isa = PBXBuildFile; fileRef = 12C66906E5A2FD55A74B2A46 /* PiliHTTPPolicyCapability.swift */; };
+		0F9D5D62ADEC8C333152CEE3 /* PiliPreparedHTTPRequestExecutor.swift in Sources */ = {isa = PBXBuildFile; fileRef = F08C2CCC3104A978C5D076FF /* PiliPreparedHTTPRequestExecutor.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -133,6 +135,8 @@
 		56403E1F9C7AC1660FC87B1F /* PiliHTTPRequestHeaderFinalizer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PiliHTTPRequestHeaderFinalizer.swift; sourceTree = "<group>"; };
 		4F4369F6CD10DD5576171FD3 /* PiliPreparedHTTPPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PiliPreparedHTTPPolicy.swift; sourceTree = "<group>"; };
 		24C25F9BA2B791DB32F26C0C /* PiliPreparedHTTPPolicyCodec.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PiliPreparedHTTPPolicyCodec.swift; sourceTree = "<group>"; };
+		12C66906E5A2FD55A74B2A46 /* PiliHTTPPolicyCapability.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PiliHTTPPolicyCapability.swift; sourceTree = "<group>"; };
+		F08C2CCC3104A978C5D076FF /* PiliPreparedHTTPRequestExecutor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PiliPreparedHTTPRequestExecutor.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -359,6 +363,7 @@
 		8B27EB6D10F8ABF893C8A9EA /* Data */ = {
 			isa = PBXGroup;
 			children = (
+				1EABD6DB9DB9DF6EE109FB34 /* HTTP */,
 				78B63C7D8759D502A411914B /* Accounts */,
 				39B21B59271CD3B79CF16A05 /* Search */,
 			);
@@ -386,6 +391,7 @@
 		EE4C9E898589491CAA59202C /* HTTP */ = {
 			isa = PBXGroup;
 			children = (
+				12C66906E5A2FD55A74B2A46 /* PiliHTTPPolicyCapability.swift */,
 				61B14D89A016F450D5FF2B22 /* PiliURLSessionHTTPTransfer.swift */,
 				4F4369F6CD10DD5576171FD3 /* PiliPreparedHTTPPolicy.swift */,
 				24C25F9BA2B791DB32F26C0C /* PiliPreparedHTTPPolicyCodec.swift */,
@@ -411,6 +417,14 @@
 				6FED43C9A9D81C1F710CE3BF /* PiliHTTPRequestContextBridgeCodec.swift */,
 			);
 			path = Accounts;
+			sourceTree = "<group>";
+		};
+		1EABD6DB9DB9DF6EE109FB34 /* HTTP */ = {
+			isa = PBXGroup;
+			children = (
+				F08C2CCC3104A978C5D076FF /* PiliPreparedHTTPRequestExecutor.swift */,
+			);
+			path = HTTP;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -590,6 +604,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				0F9D5D62ADEC8C333152CEE3 /* PiliPreparedHTTPRequestExecutor.swift in Sources */,
+				ED998B24B0EB7594B34C28EC /* PiliHTTPPolicyCapability.swift in Sources */,
 				2F018D6E62AF809D1FC05FF4 /* PiliHTTPRequestHeaderFinalizer.swift in Sources */,
 				B540614F81281E429449648A /* PiliURLSessionHTTPTransfer.swift in Sources */,
 				1CCAF0391ADB607CFD70E814 /* PiliPreparedHTTPPolicy.swift in Sources */,

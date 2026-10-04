@@ -16,7 +16,19 @@ struct PiliHTTPRequestHeaderFinalizer: Sendable {
     guard let head = outcome.head else {
       return try await provider.abandon(context)
     }
-    guard case .foundationCombined(let values) = head.cookieFields else {
+    return try await finalize(context, head: head)
+  }
+
+  func finalize(
+    _ context: PiliHTTPRequestContext,
+    head: PiliHTTPResponseHead
+  ) async throws -> PiliHTTPRequestContextReceipt {
+    let values: [String]
+    let source: PiliHTTPRequestCookieSource
+    switch head.cookieFields {
+    case .separatedFields(let fields): values = fields; source = .separatedFields
+    case .foundationCombined(let fields): values = fields; source = .foundationCombined
+    case .unsupported:
       _ = try await provider.abandon(context)
       throw PiliHTTPRequestContextError.invalidResponse
     }
@@ -24,7 +36,7 @@ struct PiliHTTPRequestHeaderFinalizer: Sendable {
     // Once finish has been sent, an unknown/error ack never chooses abandon.
     return try await provider.finish(context, response: PiliHTTPRequestResponseCookies(
       url: head.url, statusCode: head.statusCode,
-      cookieSource: .foundationCombined, setCookieValues: values
+      cookieSource: source, setCookieValues: values
     ))
   }
 }
