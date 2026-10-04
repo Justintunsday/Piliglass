@@ -49,6 +49,9 @@ import 'package:PiliPlus/pages/rcmd/controller.dart';
 import 'package:PiliPlus/pages/video/introduction/ugc/controller.dart';
 import 'package:PiliPlus/services/native_danmaku_settings.dart';
 import 'package:PiliPlus/services/native_http/native_http_request_lease_bridge.dart';
+import 'package:PiliPlus/services/native_accounts/native_account_snapshot_service.dart';
+import 'package:PiliPlus/services/native_accounts/native_account_snapshot_bridge.dart';
+import 'package:PiliPlus/services/native_login/native_login_authority.dart';
 import 'package:PiliPlus/services/download/download_service.dart';
 import 'package:PiliPlus/utils/app_scheme.dart';
 import 'package:PiliPlus/utils/accounts.dart';
@@ -82,6 +85,16 @@ final class IOSNativeUIBridge {
   final MainController mainController;
   final _danmakuSettings = NativeDanmakuSettings();
   final _nativeHTTPRequests = NativeHTTPRequestLeaseBridge();
+  final _nativeAccountService = NativeAccountSnapshotService();
+  late final _nativeAccountBridge = NativeAccountSnapshotBridge(_nativeAccountService);
+  late final _nativeLoginAuthority = NativeLoginAuthority(
+    _nativeAccountService,
+    onChanged: () async {
+      if (_disposed) return;
+      await _mineController.onRefresh();
+      if (!_disposed) _scheduleSnapshot();
+    },
+  );
   final List<Worker> _workers = <Worker>[];
   final _cdnLatency = NativeCDNLatency(
     probe: measureCdnDownloadSpeed,
@@ -157,6 +170,12 @@ final class IOSNativeUIBridge {
 
   Future<dynamic> _handleNativeCall(MethodCall call) async {
     switch (call.method) {
+      case 'loadNativeAccountSelection':
+      case 'exportNativeAccountStaging':
+        return _nativeAccountBridge.handle(call.method, call.arguments);
+      case 'installNativeLoginCredentials':
+      case 'deleteNativeLoginAccounts':
+        return _nativeLoginAuthority.handle(call.method, call.arguments);
       case 'prepareNativeHTTPRequest':
       case 'finishNativeHTTPRequest':
       case 'abandonNativeHTTPRequest':

@@ -74,6 +74,9 @@
 		A0BDE5A2FC437531B21203D1 /* PiliNativeLoginRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = 47AAC82C9E88441D4256975B /* PiliNativeLoginRepository.swift */; };
 		DF8FE916C94415EEBAB987F5 /* PiliLoginRSAEncryptor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 45149A0B16EBDB1AA9C6800A /* PiliLoginRSAEncryptor.swift */; };
 		485A3A0A3644CCB4CB6655D8 /* PiliLoginLogoutService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A79082ECD7D2FE776CAFFC5 /* PiliLoginLogoutService.swift */; };
+		558186E34EE0F7CBE93DBFBF /* PiliFlutterLoginAccountAuthority.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7FB8A184F6F5D8ADB3B38C02 /* PiliFlutterLoginAccountAuthority.swift */; };
+		33982DD3F5CBECA4B989D39D /* PiliLoginSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = 674D9B339C34E7BD2914A243 /* PiliLoginSession.swift */; };
+		46EC3D089DAE46AA88E9335D /* PiliGeetestWebSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B11764BAE1A6570ED07DEF6 /* PiliGeetestWebSession.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -168,6 +171,9 @@
 		47AAC82C9E88441D4256975B /* PiliNativeLoginRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PiliNativeLoginRepository.swift; sourceTree = "<group>"; };
 		45149A0B16EBDB1AA9C6800A /* PiliLoginRSAEncryptor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PiliLoginRSAEncryptor.swift; sourceTree = "<group>"; };
 		1A79082ECD7D2FE776CAFFC5 /* PiliLoginLogoutService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PiliLoginLogoutService.swift; sourceTree = "<group>"; };
+		7FB8A184F6F5D8ADB3B38C02 /* PiliFlutterLoginAccountAuthority.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PiliFlutterLoginAccountAuthority.swift; sourceTree = "<group>"; };
+		674D9B339C34E7BD2914A243 /* PiliLoginSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PiliLoginSession.swift; sourceTree = "<group>"; };
+		1B11764BAE1A6570ED07DEF6 /* PiliGeetestWebSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PiliGeetestWebSession.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -328,6 +334,7 @@
 		463022D16AAF0A411A6FD10B /* Features */ = {
 			isa = PBXGroup;
 			children = (
+				249F067C4BE62C26AC859AB2 /* Account */,
 				2A6FB215DF27CE869417DA28 /* Search */,
 			);
 			path = Features;
@@ -505,11 +512,29 @@
 		AEF3C1C25E6A86AE09BDC49A /* Login */ = {
 			isa = PBXGroup;
 			children = (
+				7FB8A184F6F5D8ADB3B38C02 /* PiliFlutterLoginAccountAuthority.swift */,
 				1A79082ECD7D2FE776CAFFC5 /* PiliLoginLogoutService.swift */,
 				45149A0B16EBDB1AA9C6800A /* PiliLoginRSAEncryptor.swift */,
 				47AAC82C9E88441D4256975B /* PiliNativeLoginRepository.swift */,
 				1B9A2B33A48BB2F1E8D813F2 /* PiliLoginResponseDecoder.swift */,
 				F5848E5964580028F4135A3C /* PiliLoginRequestBuilder.swift */,
+			);
+			path = Login;
+			sourceTree = "<group>";
+		};
+		249F067C4BE62C26AC859AB2 /* Account */ = {
+			isa = PBXGroup;
+			children = (
+				36F2E508F5504DA93AD450B2 /* Login */,
+			);
+			path = Account;
+			sourceTree = "<group>";
+		};
+		36F2E508F5504DA93AD450B2 /* Login */ = {
+			isa = PBXGroup;
+			children = (
+				1B11764BAE1A6570ED07DEF6 /* PiliGeetestWebSession.swift */,
+				674D9B339C34E7BD2914A243 /* PiliLoginSession.swift */,
 			);
 			path = Login;
 			sourceTree = "<group>";
@@ -693,6 +718,9 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				46EC3D089DAE46AA88E9335D /* PiliGeetestWebSession.swift in Sources */,
+				33982DD3F5CBECA4B989D39D /* PiliLoginSession.swift in Sources */,
+				558186E34EE0F7CBE93DBFBF /* PiliFlutterLoginAccountAuthority.swift in Sources */,
 				485A3A0A3644CCB4CB6655D8 /* PiliLoginLogoutService.swift in Sources */,
 				DF8FE916C94415EEBAB987F5 /* PiliLoginRSAEncryptor.swift in Sources */,
 				A0BDE5A2FC437531B21203D1 /* PiliNativeLoginRepository.swift in Sources */,
