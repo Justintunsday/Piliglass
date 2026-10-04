@@ -171,7 +171,7 @@ void runEffectiveHTTPPolicyFixtures({required bool http2, required int retry}) {
     final h11 = (http2 ? (original as Http2Adapter).fallbackAdapter : original)
         as IOHttpClientAdapter;
     final factory = h11.createHttpClient;
-    h11.createHttpClient = () => HttpClient();
+    h11.createHttpClient = HttpClient.new;
     expect(Request.effectiveHTTPPolicy.pool, isNull);
     h11.createHttpClient = factory;
     final decoder = Request.dio.options.responseDecoder;
@@ -188,26 +188,31 @@ void runEffectiveHTTPPolicyFixtures({required bool http2, required int retry}) {
     expect(Request.effectiveHTTPPolicy.isDescribed, isTrue);
   });
 
-  test('main and forced HTTP11 snapshots read their own actual BaseOptions', () {
+  test('main and forced HTTP11 retain actual shared BaseOptions', () {
     final h11 = Request.http11Dio;
     final before = Request.effectiveHTTP11Policy;
-    h11.options.receiveTimeout = const Duration(seconds: 7);
-    h11.options.headers['accept-encoding'] = 'gzip';
-    h11.options.followRedirects = false;
-    final changed = Request.effectiveHTTP11Policy;
-    expect(changed.receiveIdleTimeout, const Duration(seconds: 7));
-    expect(changed.acceptEncoding, 'gzip');
-    expect(changed.followRedirects, isFalse);
-    expect(before.receiveIdleTimeout, const Duration(seconds: 10));
-    if (http2) {
+    final mainBefore = Request.effectiveHTTPPolicy;
+    expect(identical(h11.options, Request.dio.options), isTrue);
+    try {
+      h11.options
+        ..receiveTimeout = const Duration(seconds: 7)
+        ..headers['accept-encoding'] = 'gzip'
+        ..followRedirects = false;
+      final changed = Request.effectiveHTTP11Policy;
+      expect(changed.receiveIdleTimeout, const Duration(seconds: 7));
+      expect(changed.acceptEncoding, 'gzip');
+      expect(changed.followRedirects, isFalse);
+      expect(before.receiveIdleTimeout, const Duration(seconds: 10));
+      expect(mainBefore.receiveIdleTimeout, const Duration(seconds: 10));
       expect(Request.effectiveHTTPPolicy.receiveIdleTimeout,
-          const Duration(seconds: 10));
-      expect(Request.effectiveHTTPPolicy.acceptEncoding, 'br,gzip');
+          const Duration(seconds: 7));
+      expect(Request.effectiveHTTPPolicy.acceptEncoding, 'gzip');
+    } finally {
+      h11.options
+        ..receiveTimeout = before.receiveIdleTimeout
+        ..headers['accept-encoding'] = before.acceptEncoding
+        ..followRedirects = before.followRedirects;
     }
-    h11.options
-      ..receiveTimeout = before.receiveIdleTimeout
-      ..headers['accept-encoding'] = before.acceptEncoding
-      ..followRedirects = before.followRedirects;
   });
 
   test('real existing Dio HTTP11 wire keeps encoding and manual gzip decoding', () async {

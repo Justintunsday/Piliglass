@@ -191,7 +191,7 @@ jobs:
         run: |
           set -o pipefail
           mkdir -p build/effective-http-policy
-          dart analyze lib/http/init.dart lib/http/effective_http_policy.dart lib/http/retry_interceptor.dart test/http/ | tee build/effective-http-policy/analyze.log
+          dart analyze --fatal-infos lib/http/init.dart lib/http/effective_http_policy.dart lib/http/retry_interceptor.dart test/http/ | tee build/effective-http-policy/analyze.log
           flutter test --no-pub --reporter expanded test/http/ | tee build/effective-http-policy/flutter-test.log
 
       - name: Upload effective HTTP policy evidence

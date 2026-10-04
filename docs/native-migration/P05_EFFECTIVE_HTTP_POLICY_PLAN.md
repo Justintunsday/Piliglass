@@ -83,7 +83,8 @@ HTTP2 的 pinned ConnectionManager 默认 ALPN 是 `['h2']`；fallback 仍存在
 把它描述成已验证 `['h2','http/1.1']` 的协商行为。
 
 主客户端和原有懒创建 HTTP11 clone 分别读取其实际 BaseOptions/RetryInterceptor；
-clone 复用原 pool，复制的 retry 必须绑定 clone。adapter/fallback/manager/factory 被
+clone 复用原 pool，复制的 retry 必须绑定 clone。实际 pinned Dio.clone 还共享 BaseOptions，
+因此修改 timeout/header 会同时影响两者，不能假设选项对象相互独立。adapter/fallback/manager/factory 被
 替换、decoder 不认识或多个/错误 client 的 retry 返回明确 issue，不把旧配置当作有效。
 DTO 不含 Dio、CookieJar、账户或回调；proxy host/port 仅在内存中保留，不写诊断日志。
 本切片不加入 lease 字段、不增加 bridge command、不改 Swift/Root/Player/Aether。
@@ -91,7 +92,7 @@ DTO 不含 Dio、CookieJar、账户或回调；proxy host/port 仅在内存中�
 
 三个 Flutter test 入口提供真实独立冷启动：HTTP11 retry2、HTTP2 retry2、HTTP2 retry0。
 每组用真实 Hive/Request/IO/H2 adapter 验证启动设置变化、成功 pool 替换、失效端口、
-H1/H2 不同证书策略、clone 的实际 retry/池所有权和独立 options；故意抛 close 错误
+H1/H2 不同证书策略、clone 的实际 retry/池所有权和共享 BaseOptions；故意抛 close 错误
 只用于部分替换失败路径。每组另用实际旧 Dio HTTP11 回环请求验证 br,gzip 头和
 手动 gzip→UTF8→JSON 输出，未声明实际 HTTP2/TLS/代理证书或 Native parity 验收。
 合计 21 个测试，ios.yml 专属 analyze/runtime 步骤与 artifact 上传；完整 release 和
