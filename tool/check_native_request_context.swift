@@ -30,6 +30,12 @@ private final class FakeTransport: PiliBridgeMethodTransport {
 @MainActor
 private final class Outcome<Value: Sendable> { var result: Result<Value, Error>? }
 
+@MainActor
+private final class WeakProviderReference {
+  weak var value: PiliFlutterHTTPRequestContextProvider?
+  init(_ provider: PiliFlutterHTTPRequestContextProvider?) { value = provider }
+}
+
 @main @MainActor
 private struct NativeRequestContextChecks {
   static var checks = 0
@@ -426,19 +432,19 @@ private struct NativeRequestContextChecks {
 
     let held = automatic()
     var ending: PiliFlutterHTTPRequestContextProvider? = provider(held, capacity: 1)
-    weak var weakProvider = ending
-    let snapshot = try await value { try await ending!.prepare(.searchTrending(limit: 10)) }
+    let weakProvider = WeakProviderReference(ending)
+    let snapshot = try await value { [subject = ending!] in try await subject.prepare(.searchTrending(limit: 10)) }
     held.immediate = nil
     let finisher = Task { [subject = ending!] in try await subject.finish(snapshot, response: response(snapshot)) }
     try await until("ending capacity") { held.terminalCalls.count == 1 }
-    try await error({ _ = try await ending!.prepare(.searchTrending(limit: 10)) },
+    try await error({ [subject = ending!] in _ = try await subject.prepare(.searchTrending(limit: 10)) },
       { ($0 as? PiliHTTPRequestContextError) == .capacity }, "Ending contexts count toward capacity")
     ending!.dispose()
     try expect(ending!.activeContextCount == 0 && held.terminalCalls.count == 1, "Dispose never replaces an already dispatched finish")
     held.complete(1, .success(receipt()))
     _ = try await value { try await finisher.value }
     ending = nil; held.dropReplies()
-    try await until("released provider") { weakProvider == nil }
-    try expect(weakProvider == nil && held.terminalCalls.count == 1, "Independent terminal task releases provider after ack and callbacks drop")
+    try await until("released provider") { weakProvider.value == nil }
+    try expect(weakProvider.value == nil && held.terminalCalls.count == 1, "Independent terminal task releases provider after ack and callbacks drop")
   }
 }
