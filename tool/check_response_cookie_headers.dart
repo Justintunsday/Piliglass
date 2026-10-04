@@ -122,7 +122,7 @@ Future<void> fixtureChecks() async {
   expect(loaded.singleWhere((c) => c.path == '/x').value == 'path', 'Actual CookieJar preserves path-specific value');
 }
 
-List<Map<String, Object?>> wireChecks(String path) {
+Future<List<Map<String, Object?>>> wireChecks(String path) async {
   final report = jsonDecode(File(path).readAsStringSync()) as Map<String, dynamic>;
   expect(report['status'] == 'passed', 'Darwin wire observation succeeded');
   final results = <Map<String, Object?>>[];
@@ -137,8 +137,19 @@ List<Map<String, Object?>> wireChecks(String path) {
     expect(native.rawValues.join('|') == foundation.join('|'), 'Foundation snapshot retains observed values');
     final semanticParity = native.cookiesDecoded &&
         jsonEncode(native.cookies.map(cookieSemantics).toList()) == jsonEncode(wireParsed.cookies.map(cookieSemantics).toList());
+    if (row['id'] == 'pair-only-ordered' || row['id'] == 'pair-only-same-identity') {
+      expect(native.nativePersistenceSupported && semanticParity, 'Pair-only wire cookies support native ordered semantics');
+    }
     if (native.nativePersistenceSupported) {
       expect(semanticParity, 'Supported native representation retains ordered wire semantics');
+    }
+    if (row['id'] == 'pair-only-same-identity') {
+      final jar = DefaultCookieJar();
+      final uri = Uri.parse('https://fixture.test/pair-only-same-identity');
+      await jar.saveFromResponse(uri, native.cookiesForNativePersistence);
+      final loaded = await jar.loadForRequest(uri);
+      expect(loaded.length == 1 && loaded.single.name == 'same' && loaded.single.value == 'new',
+          'Observed native cookies retain actual CookieJar last-write behavior');
     }
     if (!native.nativePersistenceSupported) expectNativeRejected(native);
     results.add({'id': row['id'], 'wireCookieCount': wireParsed.cookies.length,
@@ -161,7 +172,7 @@ Map<String, Object?> cookieSemantics(Cookie cookie) => {
 
 Future<void> main(List<String> arguments) async {
   await fixtureChecks();
-  final wire = arguments.isEmpty ? <Map<String, Object?>>[] : wireChecks(arguments.single);
+  final wire = arguments.isEmpty ? <Map<String, Object?>>[] : await wireChecks(arguments.single);
   final output = Directory('build/response-cookie-check')..createSync(recursive: true);
   File('${output.path}/summary.json').writeAsStringSync('${jsonEncode({
     'status': 'passed', 'checks': checks, 'dartVersion': Platform.version,

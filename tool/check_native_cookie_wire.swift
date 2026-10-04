@@ -95,10 +95,12 @@ private final class WireDelegate: NSObject, URLSessionDataDelegate, @unchecked S
     if !types.isEmpty { state.foundationValueType = types.joined(separator: ", ") }
     state.events.append("headersCaptured")
     lock.unlock()
-    completionHandler(.allow)
     if cancelAfterHeaders {
       lock.lock(); state.events.append("cancelIssued"); lock.unlock()
       dataTask.cancel()
+      completionHandler(.cancel)
+    } else {
+      completionHandler(.allow)
     }
   }
 
@@ -213,7 +215,15 @@ private struct NativeCookieWireChecks {
         }
         guard loopback(url, port: port) else { throw WireFailure(message: "Fixture escaped loopback endpoint") }
         let snapshot = try transfer(url, fixture: fixture)
-        guard let response = snapshot.response else { throw WireFailure(message: "Missing HTTP response: " + fixture.id) }
+        if fixture.cancelAfterHeaders {
+          report.cancellation = CancellationObservation(events: snapshot.events, errorCode: snapshot.error?.code ?? 0,
+                                                         receivedBodyBytes: snapshot.bodyBytes)
+        }
+        guard let response = snapshot.response else {
+          throw WireFailure(message: "Missing HTTP response: " + fixture.id +
+                            "; error: " + String(describing: snapshot.error) +
+                            "; events: " + snapshot.events.joined(separator: ","))
+        }
         report.observations.append(WireObservation(
           id: fixture.id, wireValues: fixture.wireValues, foundationValues: snapshot.foundationValues,
           foundationValueType: snapshot.foundationValueType,
@@ -228,8 +238,6 @@ private struct NativeCookieWireChecks {
         try expect(snapshot.completionCount == 1, "Multiple task completions: " + fixture.id, report: &report)
         try expect(snapshot.bodyBytes == fixture.expectedBodyBytes, "Unexpected body byte count: " + fixture.id, report: &report)
         if fixture.cancelAfterHeaders {
-          report.cancellation = CancellationObservation(events: snapshot.events, errorCode: snapshot.error?.code ?? 0,
-                                                         receivedBodyBytes: snapshot.bodyBytes)
           try expect(snapshot.events == ["started", "headersReceived", "headersCaptured", "cancelIssued", "completed"],
                      "Headers were not retained before incomplete-body cancellation", report: &report)
           try expect(snapshot.error?.domain == NSURLErrorDomain && snapshot.error?.code == URLError.cancelled.rawValue,
@@ -244,13 +252,13 @@ private struct NativeCookieWireChecks {
                      "Production redirect delegate did not retain the original 302", report: &report)
         }
       }
-      if let separated = report.observations.first(where: { $0.id == "ambiguous-separated" }),
-         let literal = report.observations.first(where: { $0.id == "ambiguous-literal" }) {
-        report.ambiguousRepresentationsEqual = separated.foundationValues == literal.foundationValues
-      }
       report.status = "passed"
     } catch {
       report.reason = (error as? WireFailure)?.message ?? String(describing: error)
+    }
+    if let separated = report.observations.first(where: { $0.id == "ambiguous-separated" }),
+       let literal = report.observations.first(where: { $0.id == "ambiguous-literal" }) {
+      report.ambiguousRepresentationsEqual = separated.foundationValues == literal.foundationValues
     }
     do {
       let encoder = JSONEncoder()

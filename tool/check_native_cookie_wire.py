@@ -19,10 +19,13 @@ SOURCES = [
     "tool/check_native_cookie_wire.swift",
 ]
 SCOPE = "Darwin HTTP/1.1 representation observation; not production native Cookie compatibility"
+PENDING_PREFIX = b"x" * 1024
 
 
 def fixtures():
     cases = [
+        ("pair-only-ordered", ["first=one", "second=two", "third=three"]),
+        ("pair-only-same-identity", ["same=old", "same=new"]),
         ("ordered", ["first=one; Path=/", "second=two; Path=/", "third=three; Path=/"]),
         ("same-path-forward", ["same=path; Path=/x", "same=root; Path=/"]),
         ("same-path-reverse", ["same=root; Path=/", "same=path; Path=/x"]),
@@ -89,7 +92,7 @@ class WireHandler(BaseHTTPRequestHandler):
         fields = [("Set-Cookie", value) for value in values]
         if name == "redirect":
             fields.append(("Location", f"http://127.0.0.1:{self.server.server_port}/redirect-target"))
-        fields.extend([("Content-Type", "text/plain"),
+        fields.extend([("Content-Type", "application/octet-stream" if pending else "text/plain"),
                        ("Content-Length", str(4096 if pending else len(body))),
                        ("Connection", "close")])
         reason = {200: "OK", 302: "Found", 403: "Forbidden", 404: "Not Found"}[status]
@@ -103,13 +106,17 @@ class WireHandler(BaseHTTPRequestHandler):
         self.close_connection = True
         self.connection.settimeout(10)
         try:
-            self.connection.sendall(record["headerBytesASCII"].encode("ascii"))
+            header_bytes = record["headerBytesASCII"].encode("ascii")
             if pending:
-                # Hold the incomplete body until URLSession closes it on cancel.
+                # Darwin may defer delivering the response until body progress.
+                # Send a prefix with the headers, leaving the 4096-byte body incomplete.
+                self.connection.sendall(header_bytes + PENDING_PREFIX)
+                with self.server.record_lock:
+                    record["bodyBytesSent"] = len(PENDING_PREFIX)
                 # Swift's response callback, not a sleep, triggers cancellation.
                 self.connection.recv(1)
             else:
-                self.connection.sendall(body)
+                self.connection.sendall(header_bytes + body)
                 with self.server.record_lock:
                     record["bodyBytesSent"] = len(body)
         except (ConnectionError, socket.timeout):
@@ -185,8 +192,8 @@ def main():
                 problems.append(f"Wire values differ from server evidence: {observation['id']}")
         if followed:
             problems.append("Production redirect delegate forwarded the request")
-        if by_id.get("pending-body", {}).get("bodyBytesSent") != 0:
-            problems.append("Cancellation fixture unexpectedly sent body bytes")
+        if by_id.get("pending-body", {}).get("bodyBytesSent") != len(PENDING_PREFIX):
+            problems.append("Cancellation fixture did not retain an incomplete body")
         report["checks"] += 3
         if problems:
             report.update(status="failed", failures=problems)

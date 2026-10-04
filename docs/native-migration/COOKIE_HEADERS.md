@@ -19,6 +19,7 @@
   该门禁仅判断表示，不证明登录、账户所有权或实际 transport 的完整兼容。
 - fixture-only Darwin HTTP/1.1 回环观察重复 Set-Cookie、作用域/替换顺序、Expires、
   403、歧义碰撞、实际重定向拒绝，以及收到响应头后 body 未完成时的取消。
+  pair-only 多字段明确要求 Native gate 开放，并验证真实 CookieJar 的 last-write。
   生产 HTTPS/TLS、Runner Info.plist 与播放器均不改。
 
 ## 阶段验证
@@ -29,6 +30,11 @@
 共享 helper 和 fixture 通过 Dart analyze；Swift observer 采用 Swift 6 complete checking。
 继续运行 P03/P04a 核心检查、完整 release、FFmpeg load order 和全部 preview。
 本地 Windows 无 Dart/Swift/Xcode，不能作为通过依据。
+
+首轮 `dc8bbbb` 的 Swift 6 编译通过，但 wire observer 在零 body 的 pending case 中
+没有收到 response 回调，尚未通过。读取实际产物后将回环服务器改为头与 1024 字节
+prefix 同时发送，继续保持 4096 字节 body 未完成；回调捕获头后取消并拒绝 body delivery。此次调整
+只修正 fixture 的触发条件；不放宽生产取消要求，也不改变生产 Client。
 
 ## 运行时切换限制
 
