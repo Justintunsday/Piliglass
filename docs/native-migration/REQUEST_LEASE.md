@@ -1,6 +1,6 @@
 # P05a2a：Dart 请求上下文 lease
 
-2026-10-04，实施中，等待真实 CI。修改前计划见 REQUEST_CONTEXT.md。
+2026-10-04，已通过 c0fbdbf 同 SHA 两条真实 CI。修改前计划见 REQUEST_CONTEXT.md。
 Native HTTP runtime 关闭；Swift adapter、响应头生命周期与 transport policy 尚未实施。
 
 ## 边界与协议
@@ -56,6 +56,12 @@ mutation 后的 save completion 分别验证异步窗口，不能用虚构 jar �
 338bc39 实际 release 已验证 38 个新增 lease + 22 个已有 Flutter/Hive/Dio 测试，72 项
 tracker 检查与定向 analyze 无问题。preview 导航手势失败，不能标记阶段完成。
 53705e9 已修 harness 并重跑同 SHA 两条 Actions；最终证据统一写入 PROGRESS.md。
+
+最终 c0fbdbf8377cccfedc74020fe80e85d4a737828a 的 release 与四组 preview 全部成功。
+实际 60 个 Flutter tests、72 tracker、wire 70/parser 122、HTTP 74/Search 63 通过，
+analyze 无问题；Runner BUILD SUCCEEDED、677 bilingual keys 与 FFmpeg order 通过。
+导航日志确认开关改变、真实边缘返回及重开后持久化 testcase 通过；压力报告 failures=[]。
+完整修复历史和 run URLs 见 PROGRESS.md。只验证本切片，不代表原生登录/HTTP runtime。
 
 P05a2b 将添加 Swift Sendable context protocol 与 Bridge adapter。现有 invoker 取消会
 丢弃 late callback；cleanup 必须使用预生成 requestID 和独立未取消任务，不能依赖收到

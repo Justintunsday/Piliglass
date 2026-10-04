@@ -1,6 +1,6 @@
 # P05a：请求上下文与 Cookie 切换前置计划
 
-2026-10-04，P05a1a parser/wire 与 P05a1b 账户 generation 已通过真实 CI；P05a2a Dart lease 实施中，等待 CI。
+2026-10-04，P05a1a parser/wire、P05a1b 账户 generation 与 P05a2a Dart lease 已通过真实 CI（最终 c0fbdbf）。
 本文件记录下一阶段的可执行边界，不代表 Native HTTP 已接入运行时。
 
 ## 分阶段实施
@@ -13,7 +13,7 @@
 2. P05a2：独立 Dart lease service、Swift Domain context protocol 与 Bridge adapter。
    验证 prepare/finish/abandon、原账户写回、刷新/删除/重置、取消/重复完成与释放。
    每个代码阶段分别 commit/push，完整 release+preview CI 成功后才能继续。
-   P05a2a 的实现与保留限制见 [REQUEST_LEASE.md](REQUEST_LEASE.md)，尚未通过 CI。
+   P05a2a 的实现与保留限制见 [REQUEST_LEASE.md](REQUEST_LEASE.md)，已通过 c0fbdbf 同 SHA CI。
 3. P04b：完成有效 transport policy 与响应头/取消语义验证后接入 hybrid discovery。
    移除重复 Dart trending 调用；其余网络与 Hive 仍走 Dart。未支持的模式先判断再使用
    Dart，不将取消当作需要 fallback 的错误。
@@ -186,6 +186,13 @@ Dart 回归 fixture 修复，但不能简单把 Foundation 合并值包成 List<
 在解决之前，现有 Dart HTTP 保持运行时数据供应。
 
 ## 有效 transport policy
+
+响应头生命周期的后续实施仍须单独通过门禁。Apple 的
+[URLSessionDataDelegate 响应回调](https://developer.apple.com/documentation/foundation/urlsessiondatadelegate/urlsession(_:datatask:didreceive:completionhandler:))
+提供响应头到达时的处理点；当前生产 Client 使用 data(for:) 只交付最终 body/response，
+不能用最终返回的 response 替代这个时序验证。响应头可提前捕获也不恢复已被 Foundation
+丢失的 Set-Cookie 字段边界；两项限制分别验证。实际 wire evidence 仍以 COOKIE_HEADERS.md
+为准，类型容器的 ordered list 能力不等于 transport 已保留 wire 顺序。
 
 从 Request 暴露有效配置，而不是只读当前 Pref：`_enableHttp2` 在 `init.dart:31` 固定，
 代理/证书策略在 `:136` 建立，重试 interceptor 在 `:229` 配置。还需处理 URLSession 的

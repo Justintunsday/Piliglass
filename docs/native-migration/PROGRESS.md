@@ -13,7 +13,7 @@
 | P04a | aa8e3c4 -> b0c098a | [成功，含 HTTP/Search Swift 6 core](https://github.com/Justintunsday/Piliglass/actions/runs/37163367936) | [全部成功](https://github.com/Justintunsday/Piliglass/actions/runs/37163367691) | Native HTTP Client/热榜 Service fixture 完成；runtime 未切换 |
 | P05a1a | dc8bbbb -> 834c3b9 | [成功，含 Cookie wire/parser](https://github.com/Justintunsday/Piliglass/actions/runs/37165907525) | [全部成功](https://github.com/Justintunsday/Piliglass/actions/runs/37165910178) | 共享响应 Cookie parser 与表示门禁完成；账户/context/runtime 未切换 |
 | P05a1b | a19fe5a -> 15a7f9d | [成功，含账户生命周期测试](https://github.com/Justintunsday/Piliglass/actions/runs/37177848831) | [全部成功](https://github.com/Justintunsday/Piliglass/actions/runs/37177850629) | 账户 generation/存储所有权与 Dio 写回边界完成；Native lease/runtime 未切换 |
-| P05a2a | 78a0948 -> 338bc39 -> 53705e9 | [成功](https://github.com/Justintunsday/Piliglass/actions/runs/37181129430) | [导航失败](https://github.com/Justintunsday/Piliglass/actions/runs/37181129317) | Dart lease 与薄命令已实现，仍需修复 preview；Swift adapter/runtime 未接入 |
+| P05a2a | 78a0948 -> 338bc39 -> 53705e9 -> c0fbdbf | [成功](https://github.com/Justintunsday/Piliglass/actions/runs/37193624110) | [全部成功](https://github.com/Justintunsday/Piliglass/actions/runs/37193623955) | Dart lease 与薄命令完成；Swift adapter/runtime 未接入 |
 
 P00 证据：inventory 包含 59 个 bridge commands、62 个注册 Flutter routes、311 个 REST 常量、45 个 gRPC 常量、95 个依赖。压力检查 `failures=[]`，1,000 条评论保持懒加载、未在离屏处触发分页、实际末条出现后分页成功；100,000 条弹幕保留，活跃渲染上限 60。仅测试 harness 调整了懒加载自适应行定位等待；没有修改生产 UI 或业务。
 
@@ -164,6 +164,16 @@ value != 1 的等待（NavigationTests.swift:108），尚未执行 edgeBack，�
 触点叠层，不能证明 UIKit 收到事件或 VM/短触摸是唯一原因。仅将相同坐标的单次触摸
 改为 press 0.15 秒，保留值变化、pop、重新进入后的持久化全部断言；无触摸重试、偏好
 写入或生产改动。再次 commit+push+全量 CI，最终结论待实际结果。
+
+最终两条 workflow headSha 均为 c0fbdbf8377cccfedc74020fe80e85d4a737828a 且全部成功。
+实际导航日志确认 testCurrentSettingsAndPersistentGestures 通过，值变化、edge pop、重进
+后持久化断言完整保留；这说明当前 fixture 通过，未证明两次系统交互失败的唯一根因。
+release 日志 BUILD SUCCEEDED、677 bilingual keys 和 Aether FFmpeg load order 通过；
+下载当前 SHA 产物 analyze 无问题、60 Flutter tests（新增 lease 38）、72 tracker、wire 70 /
+parser 122、HTTP 74/Search 63。pressure failures=[]，1,000 评论懒加载/离屏不分页/末条
+分页通过，100,000 弹幕完整保留、活跃上限 60。diff 无页面/资源/依赖/引擎删除。
+本阶段 inventory 为 62 commands、62 Flutter routes、95 dependencies；Native HTTP gate
+依然关闭，不宣称登录、Hive 或热榜网络已原生化。现在继续已保存的 P05a2b 计划。
 
 用户已确认先继续本迁移计划，最后再重做 UI；原生玻璃风格与方案保存在 UI_REDESIGN.md
 和 brand-spec.md，尚未实施 UI 重设计。P05a2a 全绿后继续 P05a2b。
