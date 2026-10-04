@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:collection';
 import 'dart:io';
 
 import 'package:PiliPlus/http/api.dart';
@@ -99,14 +98,13 @@ final class NativeHTTPRequestLeaseService {
     this.ttl = const Duration(minutes: 1),
     this.maxLiveLeases = 32,
     this.maxTombstones = 128,
-    bool autoExpire = true,
+    this.autoExpire = true,
   }) : _options = options ?? (() => Request.dio.options),
        _recommendAccount = recommendAccount ?? (() => Accounts.get(AccountType.recommend)),
        _loadCookies = loadCookies ?? ((account, uri) => account.cookieJar.loadForRequest(uri)),
        _awaitCookieSave = awaitCookieSave ?? ((account, uri, saving) => saving),
        _awaitAccountPersistence = awaitAccountPersistence ?? ((account, saving) async { await saving; }),
-       _injectedNow = now,
-       _autoExpire = autoExpire {
+       _injectedNow = now {
     if (ttl <= Duration.zero || maxLiveLeases < 1 || maxTombstones < 1) {
       throw ArgumentError('Lease lifetime and capacities must be positive');
     }
@@ -121,10 +119,10 @@ final class NativeHTTPRequestLeaseService {
   final Future<void> Function(Account, Uri, Future<void>) _awaitCookieSave;
   final Future<void> Function(Account, Future<void>?) _awaitAccountPersistence;
   final Duration Function()? _injectedNow;
-  final bool _autoExpire;
+  final bool autoExpire;
   final Stopwatch _clock = Stopwatch()..start();
   final _live = <String, _LiveLease>{};
-  final _terminal = LinkedHashMap<String, _TerminalLease>();
+  final _terminal = <String, _TerminalLease>{};
   Timer? _expiryTimer;
   bool _closed = false;
 
@@ -176,8 +174,7 @@ final class NativeHTTPRequestLeaseService {
       if (composed.uri.toString() != url.toString()) {
         throw const NativeHTTPRequestLeaseException('invalidRequest');
       }
-      final headers = _headers(composed.headers);
-      headers
+      final headers = _headers(composed.headers)
         ..addAll(_headers(account.headers))
         ..['referer'] ??= HttpString.baseUrl;
       final cookies = await _loadCookies(account, url);
@@ -347,7 +344,7 @@ final class NativeHTTPRequestLeaseService {
   }
 
   void _startExpiryTimer() {
-    if (!_autoExpire || _closed || _expiryTimer != null) return;
+    if (!autoExpire || _closed || _expiryTimer != null) return;
     final interval = Duration(microseconds: (ttl.inMicroseconds ~/ 2).clamp(1, 10000000).toInt());
     _expiryTimer = Timer.periodic(interval, (_) => pruneExpired());
   }

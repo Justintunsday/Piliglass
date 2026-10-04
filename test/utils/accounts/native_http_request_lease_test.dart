@@ -203,7 +203,7 @@ void main() {
     var loaded = false;
     final service = create(
       recommendAccount: () => const NoAccount(),
-      loadCookies: (account, uri) async {
+      loadCookies: (account, uri) {
         loaded = true;
         return account.cookieJar.loadForRequest(uri);
       },
