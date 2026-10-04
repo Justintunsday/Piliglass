@@ -197,8 +197,11 @@ final class MenuNavigationTests: XCTestCase {
 
   func edgeBack() {
     let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.005, dy: 0.45))
-    let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.45))
-    start.press(forDuration: 0.05, thenDragTo: end)
+    let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.45))
+    // Exercise a committed interactive pop. Hold the final position before
+    // lifting so the last move and touch-up do not share one event timestamp.
+    start.press(forDuration: 0.05, thenDragTo: end,
+                withVelocity: .fast, thenHoldForDuration: 0.2)
   }
 
   func assertPage(_ title: String) {
@@ -273,6 +276,8 @@ final class MenuNavigationTests: XCTestCase {
     XCTAssertFalse(app.switches["双击快退/快进"].exists)
     screenshot("native-player-preferences")
     edgeBack()
+    XCTAssertTrue(app.navigationBars["设置"].waitForExistence(timeout: 8),
+                  "The edge swipe must return to settings before reopening player preferences")
     app.buttons.containing(.staticText, identifier: "播放器设置").firstMatch.tap()
     XCTAssertTrue(gesture.waitForExistence(timeout: 8))
     XCTAssertEqual(gesture.value as? String, updated)
