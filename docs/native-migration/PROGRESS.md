@@ -13,6 +13,7 @@
 | P04a | aa8e3c4 -> b0c098a | [成功，含 HTTP/Search Swift 6 core](https://github.com/Justintunsday/Piliglass/actions/runs/37163367936) | [全部成功](https://github.com/Justintunsday/Piliglass/actions/runs/37163367691) | Native HTTP Client/热榜 Service fixture 完成；runtime 未切换 |
 | P05a1a | dc8bbbb -> 834c3b9 | [成功，含 Cookie wire/parser](https://github.com/Justintunsday/Piliglass/actions/runs/37165907525) | [全部成功](https://github.com/Justintunsday/Piliglass/actions/runs/37165910178) | 共享响应 Cookie parser 与表示门禁完成；账户/context/runtime 未切换 |
 | P05a1b | a19fe5a -> 15a7f9d | [成功，含账户生命周期测试](https://github.com/Justintunsday/Piliglass/actions/runs/37177848831) | [全部成功](https://github.com/Justintunsday/Piliglass/actions/runs/37177850629) | 账户 generation/存储所有权与 Dio 写回边界完成；Native lease/runtime 未切换 |
+| P05a2a | 78a0948 -> 338bc39 -> 53705e9 | [成功](https://github.com/Justintunsday/Piliglass/actions/runs/37181129430) | [导航失败](https://github.com/Justintunsday/Piliglass/actions/runs/37181129317) | Dart lease 与薄命令已实现，仍需修复 preview；Swift adapter/runtime 未接入 |
 
 P00 证据：inventory 包含 59 个 bridge commands、62 个注册 Flutter routes、311 个 REST 常量、45 个 gRPC 常量、95 个依赖。压力检查 `failures=[]`，1,000 条评论保持懒加载、未在离屏处触发分页、实际末条出现后分页成功；100,000 条弹幕保留，活跃渲染上限 60。仅测试 harness 调整了懒加载自适应行定位等待；没有修改生产 UI 或业务。
 
@@ -133,3 +134,36 @@ Cookie wire 70/parser 122、HTTP 74/Search 63 继续通过。Runner `BUILD SUCCE
 未扩展，Native 取消/歧义 transport 未解决。详情见 ACCOUNT_REQUEST_STATE.md。
 下一阶段 P05a2a 的 lease/薄命令及后续 Swift adapter/transport 切片已保存到
 REQUEST_CONTEXT.md；保持 executionAllowed=false 后推进，尚不切换热榜请求。
+
+P05a2a 范围：独立 Dart native_http service/严格 codec 与 bridge 三条薄命令；准备 actual
+recommend/Dio/CookieJar 不可变快照、一次性 finish/abandon、generation owner 写回门禁、
+pending 取消/TTL/数量限制/dispose。所有结果 executionAllowed=false，没有接入 Native HTTP。
+
+338bc39 的 [release](https://github.com/Justintunsday/Piliglass/actions/runs/37179763783)
+成功：actual accounts analyze 无问题，72 项 tracker 检查、60 个 Flutter/Hive/Dio 测试
+（已有 22 + 新 lease 38），Cookie wire 70/parser 122、HTTP 74/Search 63；Runner
+BUILD SUCCEEDED、677 bilingual keys 与 Aether FFmpeg order 通过。但同 SHA 的
+[preview](https://github.com/Justintunsday/Piliglass/actions/runs/37179765343) 导航失败，
+其他三组成功，因此阶段尚未完成。
+
+实际 navigation.log、hierarchy 和录屏确认 testCurrentSettingsAndPersistentGestures
+保存 toggle 后，边缘 pop 启动再取消，仍停留播放器设置；后续查设置入口派生失败。
+末次合成 move/up 同时间戳、无停留，系统取消的唯一原因未证明。53705e9 仅将 harness
+返回手势明确为快速拖到 95%/停留 0.2 秒，并在重开前断言设置页面出现；保留全部
+持久化/真实手势断言，未改生产 UI、无重试或按钮 fallback。重新 push/dispatch 两条
+workflow，等待真实结果。
+
+53705e9 release 全部成功，实际产物再次确认 60 个 Flutter tests、72 tracker、wire 70 /
+parser 122、HTTP 74/Search 63、Runner BUILD SUCCEEDED、677 bilingual keys 与 FFmpeg
+order。preview 的 player/account/image 成功，但 navigation 又失败。这次失败在开关
+value != 1 的等待（NavigationTests.swift:108），尚未执行 edgeBack，不能说 pop 修复已
+验证或再次失败。actual AX frame 为 {{16,606},{370,52.3}}，合成 tap 为 (356.4,632.17)、
+按下到抬手 0.05 秒；继续核对录屏和触控响应，阶段仍未完成。
+
+录屏确认 tap 坐标位于实际开关白色滑块内，之后画面与 AX value 都保持开启；没有
+触点叠层，不能证明 UIKit 收到事件或 VM/短触摸是唯一原因。仅将相同坐标的单次触摸
+改为 press 0.15 秒，保留值变化、pop、重新进入后的持久化全部断言；无触摸重试、偏好
+写入或生产改动。再次 commit+push+全量 CI，最终结论待实际结果。
+
+用户已确认先继续本迁移计划，最后再重做 UI；原生玻璃风格与方案保存在 UI_REDESIGN.md
+和 brand-spec.md，尚未实施 UI 重设计。P05a2a 全绿后继续 P05a2b。

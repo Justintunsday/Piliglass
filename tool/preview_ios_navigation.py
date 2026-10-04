@@ -267,7 +267,10 @@ final class MenuNavigationTests: XCTestCase {
     if !gesture.isHittable { app.swipeUp() }
     XCTAssertTrue(gesture.isHittable)
     let initial = gesture.value as? String
-    gesture.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5)).tap()
+    // Keep one touch inside the actual switch thumb. A 150ms touch gives
+    // the simulator more time to deliver down/up than the default 50ms tap.
+    gesture.coordinate(withNormalizedOffset: CGVector(dx: 0.92, dy: 0.5))
+      .press(forDuration: 0.15)
     let changed = NSPredicate(format: "value != %@", initial ?? "1")
     expectation(for: changed, evaluatedWith: gesture)
     waitForExpectations(timeout: 5)

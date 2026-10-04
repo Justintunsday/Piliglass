@@ -128,6 +128,46 @@ finish 的 gate；dispose 同步关闭并释放。有限 tombstone 不提供无�
 避免现有 invoker 丢弃 late prepare 回调导致 lease 泄漏。P05a2c 单独处理实际响应头生命周期
 和有效 transport policy；Foundation 字段边界与取消写回仍是 P04b runtime 切换门禁。
 
+P05a2b 只读设计已收敛，须等待 P05a2a 最终 SHA 全绿后实施：
+Domain/Accounts 的 Sendable context/provenance/receipt/protocol；Data/Accounts 的
+MainActor Flutter adapter 与 strict BridgeValue codec；Bridge 的独立 terminal finalizer。
+四个文件注册 Runner，单独 Swift 6 complete concurrency fixture job 验证生产类型。
+prepare 复用现有 cancellable invoker，以本地 requestID 处理错误、缺损/迟到 callback，
+不改 Search invoker 语义。cleanup 使用独立未取消 Task；finish/abandon 在 await 前 claim，
+即使调用方已取消也须实际发送终结。ack timeout 只结束 Swift 等待，不撤销 Dart mutation；
+未知 ack 不重发 HTTP、不再次 finish。codec 严格校验整数/布尔、UUID、固定 URL/headers
+和 false gate，不使用 UI/Search 的宽松 coercion。fixture 覆盖取消竞争/late callback/
+重复终结/timeout；仍不创建 URLRequest、不接 production runtime，Aether/UI 不依赖此协议。
+
+P05a2b 的持有范围与错误语义：终结器只保留 requestID/leaseID 和 invoker，不重复保留
+Cookie/headers 快照；Domain context 为值类型，调用方持有的副本不等于账户对象。
+严格 codec 不接受 double/bool/string 代替整数，也不把非 bool 的 gate 强制转换；固定
+endpoint/query/GET、UUID、header token/CRLF 及完整字段 shape 必须验证。错误响应与
+正常 receipt 分开，persistenceFailed 不提供「未写入」保证。prepare 的全部失败路径
+以本地 requestID 发独立 abandon；单次 finish 已发出后未知 ack 不能触发第二次 finish、
+HTTP 重发或自动 fallback。terminal 先同步 claim 再启动未取消任务，ack timeout 只
+结束等待并释放 Swift continuation，不声明 Dart 已停止。Swift fixture 实际证明这些
+竞争与发送次数；Windows skip 不能当完成证据。
+
+已有 `PiliBridgeValue(codecValue:)` 对原始 NSDictionary 的非 String key 采用兼容忽略，
+P05a2b 不改变 Search 的 copier。新 strict codec 验证的是复制后的 String-key snapshot，
+不能把这一层的严格字段验证描述为原始 wire 全 key 验证。若需要改变原始捕获策略，
+须另有 opt-in 边界与独立兼容测试。
+
+实施 API 收敛：Data provider 注入现有 `PiliBridgeMethodTransport`，prepare 内部使用原
+Invoker 和可取消的独立 operation；terminal finalizer 直接使用同一 transport 的 callback，
+用 MainActor one-shot acknowledgement box + 独立 timeout task，不用 TaskGroup 等待一个
+可能不合作的 injected invoker。Bridge 层只收发 method/BridgeValue，不依赖 Data codec。
+provider 最多 32 个 pending/prepared/ending records，只保留 token/operation/finalizer，
+不保存 headers 副本；显式 dispose 取消 prepare 并释放未终结 context。调用方从不终结
+会占用有界容量，Dart TTL 不会自动清 Swift registry；运行时接入前须满足生命周期门禁。
+本地 preflight 失败只 abandon。有效 finish 一旦发送，即使服务器回 invalidArguments /
+leaseMismatch / notPrepared，也保持本地门禁关闭，不自动发送第二次终结；该已知
+preclaim 拒绝的 Dart lease 可能依靠有限 TTL 释放，这与正常立即释放明确区分。
+
+2026-10-04 用户确认先继续 PLAN.md 原生化主线，UI 重写最后实施。上述 P05a2b 计划
+保持下一阶段；UI 的原生玻璃风格与独立方案保存但暂不编码。
+
 ## Set-Cookie 实测门禁
 
 P05a1a 之前 `account_mgr.dart:20` 的 `(?<=)(,)(?=[^;]+?=)` 会将下面的日期逗号也当作边界：

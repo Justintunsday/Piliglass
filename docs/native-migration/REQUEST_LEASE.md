@@ -53,6 +53,10 @@ mutation 后的 save completion 分别验证异步窗口，不能用虚构 jar �
 整批 Cookie 门禁纳入现有 accounts fixtures；定向 analyze 和 logs 进入真实 iOS Actions。
 同 SHA 完整 Runner release、FFmpeg 顺序及四组 preview 成功后才标记本切片完成。
 
+338bc39 实际 release 已验证 38 个新增 lease + 22 个已有 Flutter/Hive/Dio 测试，72 项
+tracker 检查与定向 analyze 无问题。preview 导航手势失败，不能标记阶段完成。
+53705e9 已修 harness 并重跑同 SHA 两条 Actions；最终证据统一写入 PROGRESS.md。
+
 P05a2b 将添加 Swift Sendable context protocol 与 Bridge adapter。现有 invoker 取消会
 丢弃 late callback；cleanup 必须使用预生成 requestID 和独立未取消任务，不能依赖收到
 leaseID 后才释放。P05a2c 再扩展生产响应头生命周期与有效 transport policy。
