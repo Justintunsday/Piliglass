@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:PiliPlus/http/api.dart';
 import 'package:PiliPlus/http/constants.dart';
+import 'package:PiliPlus/http/effective_http_policy.dart';
 import 'package:PiliPlus/http/loading_state.dart';
 import 'package:PiliPlus/http/retry_interceptor.dart';
 import 'package:PiliPlus/http/user.dart';
@@ -20,7 +21,8 @@ import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:dio/dio.dart';
 import 'package:dio/io.dart';
 import 'package:dio_http2_adapter/dio_http2_adapter.dart';
-import 'package:flutter/foundation.dart' show kDebugMode, listEquals;
+import 'package:flutter/foundation.dart'
+    show kDebugMode, listEquals, visibleForTesting;
 
 class Request {
   static const _gzipDecoder = GZipDecoder();
@@ -31,6 +33,23 @@ class Request {
   static final _enableHttp2 = Pref.enableHttp2;
   static late final Dio dio;
   static Dio? _http11Dio;
+  static final _policyTracker = EffectiveHTTPPolicyTracker();
+  static const _poolIdleTimeout = Duration(seconds: 15);
+  static EffectiveHTTPPolicySnapshot get effectiveHTTPPolicy =>
+      _policyTracker.capture(
+        client: dio,
+        http11Client: _http11Dio,
+        expectedDecoder: _responseDecoder,
+      );
+  static EffectiveHTTPPolicySnapshot get effectiveHTTP11Policy {
+    final h11 = http11Dio; // Uses the existing lazy clone, never another pool.
+    return _policyTracker.capture(
+      client: dio,
+      http11Client: h11,
+      expectedDecoder: _responseDecoder,
+      http11Only: true,
+    );
+  }
   static Dio get http11Dio =>
       _http11Dio ??= _enableHttp2 ? _cloneHttp11Dio() : dio;
   factory Request() => _instance;
@@ -125,7 +144,7 @@ class Request {
     _networkChangeDebounce?.cancel();
     _networkChangeDebounce = Timer(
       const Duration(milliseconds: 500),
-      _resetAdaptersForNetworkChange,
+      resetAdaptersForNetworkChange,
     );
   }
 
@@ -133,7 +152,8 @@ class Request {
     Connectivity().onConnectivityChanged.skip(1).listen(_onConnectivityChanged);
   }
 
-  static (IOHttpClientAdapter, ConnectionManager?) _createPool() {
+  static (IOHttpClientAdapter, ConnectionManager?, EffectiveHTTPPoolConfiguration)
+      _createPool() {
     final bool enableSystemProxy;
     late final String systemProxyHost;
     late final int? systemProxyPort;
@@ -144,22 +164,33 @@ class Request {
     } else {
       enableSystemProxy = false;
     }
+    final acceptsBadHttp2Certificate = _enableHttp2 &&
+        (enableSystemProxy || Pref.badCertificateCallback);
+    final configuration = EffectiveHTTPPoolConfiguration(
+      http2Enabled: _enableHttp2,
+      idleTimeout: _poolIdleTimeout,
+      http11AcceptsBadCertificate: enableSystemProxy,
+      http2AcceptsBadCertificate:
+          _enableHttp2 ? acceptsBadHttp2Certificate : null,
+      proxyHost: enableSystemProxy ? systemProxyHost : null,
+      proxyPort: enableSystemProxy ? systemProxyPort : null,
+    );
 
     final http11Adapter = IOHttpClientAdapter(
       createHttpClient: enableSystemProxy
           ? () => HttpClient()
-              ..idleTimeout = const Duration(seconds: 15)
+              ..idleTimeout = _poolIdleTimeout
               ..autoUncompress = false
               ..findProxy = ((_) => 'PROXY $systemProxyHost:$systemProxyPort')
               ..badCertificateCallback = (cert, host, port) => true
           : () => HttpClient()
-              ..idleTimeout = const Duration(seconds: 15)
+              ..idleTimeout = _poolIdleTimeout
               ..autoUncompress = false, // Http2Adapter没有自动解压, 统一行为
     );
 
     final connectionManager = _enableHttp2
         ? ConnectionManager(
-            idleTimeout: const Duration(seconds: 15),
+            idleTimeout: _poolIdleTimeout,
             onClientCreate: enableSystemProxy
                 ? (_, config) => config
                     ..proxy = Uri(
@@ -168,18 +199,19 @@ class Request {
                       port: systemProxyPort,
                     )
                     ..onBadCertificate = (_) => true
-                : Pref.badCertificateCallback
+                : acceptsBadHttp2Certificate
                 ? (_, config) => config.onBadCertificate = (_) => true
                 : null,
           )
         : null;
-    return (http11Adapter, connectionManager);
+    return (http11Adapter, connectionManager, configuration);
   }
 
   @pragma('vm:notify-debugger-on-exception')
-  static void _resetAdaptersForNetworkChange() {
+  @visibleForTesting
+  static void resetAdaptersForNetworkChange() {
     try {
-      final (h11, connectionManager) = _createPool();
+      final (h11, connectionManager, configuration) = _createPool();
       if (connectionManager != null) {
         (dio.httpClientAdapter as Http2Adapter)
           ..connectionManager.close(force: true)
@@ -192,7 +224,15 @@ class Request {
           ..httpClientAdapter.close(force: true)
           ..httpClientAdapter = h11;
       }
-    } catch (_) {}
+      _policyTracker.installed(
+        client: dio,
+        http11: h11,
+        manager: connectionManager,
+        configuration: configuration,
+      );
+    } catch (_) {
+      _policyTracker.installationFailed();
+    }
   }
 
   /*
@@ -217,7 +257,7 @@ class Request {
       persistentConnection: true,
     );
 
-    final (h11, connectionManager) = _createPool();
+    final (h11, connectionManager, configuration) = _createPool();
 
     dio = Dio(options)
       ..httpClientAdapter = _enableHttp2
@@ -247,6 +287,13 @@ class Request {
       ..options.validateStatus = (int? status) {
         return status != null && status >= 200 && status < 300;
       };
+
+    _policyTracker.installed(
+      client: dio,
+      http11: h11,
+      manager: connectionManager,
+      configuration: configuration,
+    );
 
     if (Platform.isIOS) _watchConnectivity();
   }

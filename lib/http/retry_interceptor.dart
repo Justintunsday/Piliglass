@@ -10,6 +10,10 @@ class RetryInterceptor extends Interceptor {
 
   RetryInterceptor(this._client, this._count, this._delay);
 
+  int get count => _count;
+  int get delayMilliseconds => _delay;
+  bool isBoundTo(Dio client) => identical(_client, client);
+
   @override
   void onError(DioException err, ErrorInterceptorHandler handler) {
     if (err.requestOptions.responseType == ResponseType.stream) {

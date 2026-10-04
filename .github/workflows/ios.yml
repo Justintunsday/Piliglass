@@ -29,6 +29,7 @@ on:
       - "tool/check_response_cookie_headers.dart"
       - "tool/check_account_request_state.dart"
       - "test/utils/accounts/**"
+      - "test/http/**"
       - ".github/workflows/ios.yml"
   pull_request:
     paths:
@@ -56,6 +57,7 @@ on:
       - "tool/check_response_cookie_headers.dart"
       - "tool/check_account_request_state.dart"
       - "test/utils/accounts/**"
+      - "test/http/**"
       - ".github/workflows/ios.yml"
   workflow_call:
     inputs:
@@ -183,6 +185,22 @@ jobs:
         run: |
           dart tool/check_native_playback_source.dart
           dart tool/check_native_cdn_latency.dart
+
+      - name: Verify actual Dart HTTP policy and pool installation
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p build/effective-http-policy
+          dart analyze lib/http/init.dart lib/http/effective_http_policy.dart lib/http/retry_interceptor.dart test/http/ | tee build/effective-http-policy/analyze.log
+          flutter test --no-pub --reporter expanded test/http/ | tee build/effective-http-policy/flutter-test.log
+
+      - name: Upload effective HTTP policy evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: effective-http-policy-contracts
+          path: build/effective-http-policy/
+          if-no-files-found: warn
 
       - name: Verify production HTTP transfer lifecycle and header finalization
         run: python3 tool/check_native_http_transfer.py
