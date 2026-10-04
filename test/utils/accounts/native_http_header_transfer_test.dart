@@ -128,7 +128,7 @@ void main() {
       expect(Accounts.get(AccountType.recommend), same(b));
       // Owner identity and actual Hive completion are verified here. Legacy
       // adapter domain/path loss means this is not a restart durability claim.
-      if (name == 'cancel-after-head') {
+      if (name == 'cancel-after-head' || name == 'redirect') {
         expect(observed['cancelled'], isTrue);
         expect(observed['transportErrorCode'], -999);
       } else if (name == 'early-eof') {

@@ -34,6 +34,20 @@ private final class WeakTransferReference {
   init(_ transfer: PiliURLSessionHTTPTransfer?) { value = transfer }
 }
 
+// A callback-thread probe only: the weak reference is always accessed under
+// lock, and cancel runs outside it. It owns neither transfer nor its session.
+private final class CallbackCancellation: @unchecked Sendable {
+  private let lock = NSLock()
+  private weak var transfer: PiliURLSessionHTTPTransfer?
+  func bind(_ value: PiliURLSessionHTTPTransfer) {
+    lock.lock(); transfer = value; lock.unlock()
+  }
+  func cancel() {
+    lock.lock(); let active = transfer; lock.unlock()
+    active?.cancel()
+  }
+}
+
 // Direct production-factory probes synthesize raw Foundation value shapes.
 // URLSession copies/normalizes subclasses, so these are not wire observations.
 // Loopback observations below come from actual HTTP fields and production code.
@@ -115,11 +129,16 @@ private struct NativeHTTPTransferChecks {
     _ fixture: Fixture, base: URL, session: URLSession, directory: URL
   ) async throws -> (Observation, PiliHTTPTransferOutcome) {
     let observer = HeadObserver(cancelAfterHead: fixture.mode == "pending")
+    let redirectCancellation = CallbackCancellation()
     var request = URLRequest(url: base.appendingPathComponent(fixture.id))
     request.httpShouldHandleCookies = false
     var primitive: PiliURLSessionHTTPTransfer? = PiliURLSessionHTTPTransfer(session: session, request: request, onHead: { head in
+      // Synchronous cancellation occurs inside the actual redirect callback,
+      // before its completionHandler(nil), rather than after an actor hop.
+      if fixture.id == "redirect" { redirectCancellation.cancel() }
       Task { await observer.received(head) }
     })
+    redirectCancellation.bind(primitive!)
     let weakTransfer = WeakTransferReference(primitive)
     await observer.bind(primitive!)
     let result: PiliHTTPTransferOutcome
@@ -135,7 +154,7 @@ private struct NativeHTTPTransferChecks {
     if result.head != nil { try await until("head callback \(fixture.id)") { await observer.count == 1 } }
     let headCount = await observer.count
     try expect(headCount == (fixture.mode == "no-head" ? 0 : 1), "Exactly one original response head: \(fixture.id)")
-    if fixture.mode == "pending" || fixture.mode == "no-head" {
+    if fixture.mode == "pending" || fixture.mode == "no-head" || fixture.id == "redirect" {
       try expect(result.body == .failure(.cancelled) && result.transportErrorCode == URLError.cancelled.rawValue,
                  "Actual -999 completion retains cancellation: \(fixture.id)")
     } else if fixture.mode == "eof" {
