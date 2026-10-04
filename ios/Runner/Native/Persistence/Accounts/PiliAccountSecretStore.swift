@@ -113,7 +113,11 @@ struct PiliAccountCookieArchive: Sendable, Equatable, Codable {
               !$0.contains("\r") && !$0.contains("\n") && !$0.contains("\u{0}")
             })
           }) else { throw PiliAccountStorageError.invalidArchive }
-    let keys = cookies.map { "\($0.hostOnly)\u{0}\($0.domain)\u{0}\($0.path)\u{0}\($0.name)" }
+    // Dart map keys distinguish canonically equivalent Unicode code units.
+    // Swift String hashing does not, so compare owned UTF-16 sequences here.
+    let keys: [[[UInt16]]] = cookies.map {
+      [[$0.hostOnly ? 1 : 0], Array($0.domain.utf16), Array($0.path.utf16), Array($0.name.utf16)]
+    }
     guard Set(keys).count == keys.count else { throw PiliAccountStorageError.invalidArchive }
     return self
   }

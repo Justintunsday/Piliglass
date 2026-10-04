@@ -77,6 +77,8 @@
 		558186E34EE0F7CBE93DBFBF /* PiliFlutterLoginAccountAuthority.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7FB8A184F6F5D8ADB3B38C02 /* PiliFlutterLoginAccountAuthority.swift */; };
 		33982DD3F5CBECA4B989D39D /* PiliLoginSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = 674D9B339C34E7BD2914A243 /* PiliLoginSession.swift */; };
 		46EC3D089DAE46AA88E9335D /* PiliGeetestWebSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B11764BAE1A6570ED07DEF6 /* PiliGeetestWebSession.swift */; };
+		05630C88A9EDC7B57A1F66C4 /* PiliNativeCookieParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = C59833C892D1075470BFEB17 /* PiliNativeCookieParser.swift */; };
+		A2634BDD46C966733309DD1B /* PiliNativeCookieSelector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 59FAAAC820CF047C217ACB81 /* PiliNativeCookieSelector.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -174,6 +176,8 @@
 		7FB8A184F6F5D8ADB3B38C02 /* PiliFlutterLoginAccountAuthority.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PiliFlutterLoginAccountAuthority.swift; sourceTree = "<group>"; };
 		674D9B339C34E7BD2914A243 /* PiliLoginSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PiliLoginSession.swift; sourceTree = "<group>"; };
 		1B11764BAE1A6570ED07DEF6 /* PiliGeetestWebSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PiliGeetestWebSession.swift; sourceTree = "<group>"; };
+		C59833C892D1075470BFEB17 /* PiliNativeCookieParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PiliNativeCookieParser.swift; sourceTree = "<group>"; };
+		59FAAAC820CF047C217ACB81 /* PiliNativeCookieSelector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PiliNativeCookieSelector.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -495,6 +499,8 @@
 		AE571D00BC1FD9BF9ED08947 /* Accounts */ = {
 			isa = PBXGroup;
 			children = (
+				59FAAAC820CF047C217ACB81 /* PiliNativeCookieSelector.swift */,
+				C59833C892D1075470BFEB17 /* PiliNativeCookieParser.swift */,
 				12F1F2B18C2AA05D548C69AF /* PiliAccountStagingStore.swift */,
 				D42F8AA867A46A8C1630B757 /* PiliAccountSecretStore.swift */,
 			);
@@ -718,6 +724,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A2634BDD46C966733309DD1B /* PiliNativeCookieSelector.swift in Sources */,
+				05630C88A9EDC7B57A1F66C4 /* PiliNativeCookieParser.swift in Sources */,
 				46EC3D089DAE46AA88E9335D /* PiliGeetestWebSession.swift in Sources */,
 				33982DD3F5CBECA4B989D39D /* PiliLoginSession.swift in Sources */,
 				558186E34EE0F7CBE93DBFBF /* PiliFlutterLoginAccountAuthority.swift in Sources */,
