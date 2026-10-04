@@ -83,7 +83,9 @@ Native 支持。当前 schema 不描述任意自定义 interceptor、transformer
 
 两种冷启动的真实 Hive/Request/IO/H2 fixtures 包括 await 中成功/部分失败的 pool 变化、
 timeout/encoding/headers/decoder/retry/validator 修改、Pref-only、403 head 后改 pool/换
-用途且实际关闭重开 Hive 验证原 owner 回写。实际 Dart bridge 导出 16 组只含合成
+用途且实际关闭重开 Hive 验证原 owner 回写；根 domain Cookie 的持久化与 host-only
+Cookie 的旧 adapter 丢失分别断言，不声称
+恢复所有 domain/path 属性。实际 Dart bridge 导出 16 组只含合成
 账户/代理数据的 golden；`check_prepared_http_policy.py` 编译 Swift 6 complete 的
 生产 codec/provider 消费它们，另验证 malformed policy 的单次 abandon。旧 context/
 transfer 合同继续执行；本地 Windows 检查不作为编译完成依据。

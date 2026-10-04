@@ -224,9 +224,14 @@ void runPreparedHTTPPolicyFixtures({required bool http2}) {
     Request.dio.options.receiveTimeout = const Duration(microseconds: 3333333);
     final receipt = await service.finish(requestID: snapshot.requestID, leaseID: snapshot.leaseID,
       response: NativeHTTPRequestLeaseResponse(url: snapshot.url, statusCode: 403,
-        cookieSource: SetCookieSource.separatedFields, setCookieValues: ['lease_cookie=original; Path=/']));
+        cookieSource: SetCookieSource.separatedFields, setCookieValues: [
+          'lease_cookie=original; Domain=.bilibili.com; Path=/', 'host_only=volatile; Path=/',
+        ]));
     expect(receipt.outcome, NativeHTTPRequestLeaseOutcome.finished);
     expect(receipt.cookiesSaved, isTrue);
+    expect(receipt.cookieCount, 2);
+    expect((await original.cookieJar.loadForRequest(snapshot.url)).any((cookie) =>
+        cookie.name == 'host_only' && cookie.value == 'volatile'), isTrue);
     await Accounts.account.flush();
     await Accounts.account.close();
     // Accounts.account is late final: reload the persisted Box independently
@@ -235,8 +240,12 @@ void runPreparedHTTPPolicyFixtures({required bool http2}) {
     final stored = reopened.get(original.storageKey)!;
     expect((await stored.cookieJar.loadForRequest(snapshot.url)).any((cookie) =>
         cookie.name == 'lease_cookie' && cookie.value == 'original'), isTrue);
+    // The old Hive adapter only exports bilibili.com root domainCookies.
+    // Retain its known loss as a negative assertion, not a parity claim.
+    expect((await stored.cookieJar.loadForRequest(snapshot.url))
+        .any((cookie) => cookie.name == 'host_only'), isFalse);
     expect((await reopened.get(other.storageKey)!.cookieJar.loadForRequest(snapshot.url))
-        .any((cookie) => cookie.name == 'lease_cookie'), isFalse);
+        .any((cookie) => cookie.name == 'lease_cookie' || cookie.name == 'host_only'), isFalse);
     expect((await service.finish(requestID: snapshot.requestID, leaseID: snapshot.leaseID,
       response: NativeHTTPRequestLeaseResponse(url: snapshot.url, statusCode: 200,
         cookieSource: SetCookieSource.separatedFields))).outcome, NativeHTTPRequestLeaseOutcome.consumed);

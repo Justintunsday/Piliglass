@@ -290,3 +290,10 @@ Accounts.init 重新赋值 late final account；Box 已关闭又使后续 golden
 修正为在独立冷启动进程的最后一项测试关闭/重开真实 Hive Box，直接检查磁盘反序列化
 结果，不重新初始化 Accounts singleton、不改变生产账户生命周期。旧 preview 将由
 同 SHA 全量重跑替代，不作为阶段闭环证据。继续保留实际重启原 owner 验证。
+
+4e3ca53 的 release 37237971494：analyze 无问题，33 policy tests 通过/2 失败，16 个
+真实 Dart bridge golden 已生成。重开 Hive 的断言发现 host-only Cookie 不在旧
+adapter 的 bilibili.com 根 domainCookies 导出范围，此旧数据限制已在计划记录。
+修 fixture 同时保存 parent-domain 根 Cookie 与 host-only Cookie：重启验证原 owner
+保留前者、后者按旧 adapter 丢失且不进入其他账号。不修改生产 Cookie authority，
+不宣称恢复旧 adapter 丢失的属性；再次提交推送完整 release/preview 验证。
