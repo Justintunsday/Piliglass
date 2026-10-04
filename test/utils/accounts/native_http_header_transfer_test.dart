@@ -6,7 +6,6 @@ import 'package:PiliPlus/models/common/account_type.dart';
 import 'package:PiliPlus/services/native_http/native_http_request_lease_service.dart';
 import 'package:PiliPlus/utils/accounts.dart';
 import 'package:PiliPlus/utils/accounts/account.dart';
-import 'package:PiliPlus/utils/accounts/account_manager/account_mgr.dart';
 import 'package:PiliPlus/utils/accounts/account_manager/response_cookie_headers.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
