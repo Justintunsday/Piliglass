@@ -12,9 +12,12 @@ SOURCES = [
     "ios/Runner/Native/Bridge/PiliBridgeValue.swift",
     "ios/Runner/Native/Bridge/PiliBridgeMethodInvoker.swift",
     "ios/Runner/Native/Bridge/PiliBridgeLeaseFinalizer.swift",
+    "ios/Runner/Native/Networking/HTTP/PiliPreparedHTTPPolicy.swift",
+    "ios/Runner/Native/Networking/HTTP/PiliPreparedHTTPPolicyCodec.swift",
     "ios/Runner/Native/Domain/Accounts/PiliHTTPRequestContext.swift",
     "ios/Runner/Native/Data/Accounts/PiliHTTPRequestContextBridgeCodec.swift",
     "ios/Runner/Native/Data/Accounts/PiliFlutterHTTPRequestContextProvider.swift",
+    "tool/prepared_http_policy_fixture.swift",
     "tool/check_native_request_context.swift",
 ]
 

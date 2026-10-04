@@ -87,7 +87,7 @@ private final class ContextTransport: PiliBridgeMethodTransport {
         "state": .string("prepared"), "requestID": .string(requestID), "leaseID": .string(UUID().uuidString.lowercased()),
         "url": .string("https://api.bilibili.com/x/v2/search/trending/ranking?limit=\(limit)"),
         "method": .string("GET"), "headers": .dictionary([:]), "revision": .integer(1), "generation": .integer(1),
-        "limit": .integer(limit), "executionAllowed": .bool(false),
+        "limit": .integer(limit), "policy": PreparedHTTPPolicyFixture.unknown, "executionAllowed": .bool(false),
       ])))
     } else if !holdTerminal {
       completion(.success(Self.receipt(method == "abandonNativeHTTPRequest" ? "abandoned" : terminalState)))

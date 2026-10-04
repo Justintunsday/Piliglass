@@ -22,6 +22,9 @@ on:
       - "tool/check_native_http.swift"
       - "tool/check_native_request_context.py"
       - "tool/check_native_request_context.swift"
+      - "tool/check_prepared_http_policy.py"
+      - "tool/check_prepared_http_policy.swift"
+      - "tool/prepared_http_policy_fixture.swift"
       - "tool/check_native_http_transfer.py"
       - "tool/check_native_http_transfer.swift"
       - "tool/check_native_cookie_wire.py"
@@ -50,6 +53,9 @@ on:
       - "tool/check_native_http.swift"
       - "tool/check_native_request_context.py"
       - "tool/check_native_request_context.swift"
+      - "tool/check_prepared_http_policy.py"
+      - "tool/check_prepared_http_policy.swift"
+      - "tool/prepared_http_policy_fixture.swift"
       - "tool/check_native_http_transfer.py"
       - "tool/check_native_http_transfer.swift"
       - "tool/check_native_cookie_wire.py"
@@ -191,8 +197,19 @@ jobs:
         run: |
           set -o pipefail
           mkdir -p build/effective-http-policy
-          dart analyze --fatal-infos lib/http/init.dart lib/http/effective_http_policy.dart lib/http/retry_interceptor.dart test/http/ | tee build/effective-http-policy/analyze.log
+          dart analyze --fatal-infos lib/http/init.dart lib/http/effective_http_policy.dart lib/http/retry_interceptor.dart lib/services/native_http/ test/http/ test/utils/accounts/account_test_storage.dart | tee build/effective-http-policy/analyze.log
           flutter test --no-pub --reporter expanded test/http/ | tee build/effective-http-policy/flutter-test.log
+
+      - name: Verify actual Dart policy leases with production Swift codec and provider
+        run: python3 tool/check_prepared_http_policy.py
+
+      - name: Upload prepared policy and cross-language evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: prepared-http-policy-contracts
+          path: build/prepared-http-policy/
+          if-no-files-found: warn
 
       - name: Upload effective HTTP policy evidence
         if: always()

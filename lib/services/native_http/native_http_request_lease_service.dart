@@ -3,8 +3,10 @@ import 'dart:io';
 
 import 'package:PiliPlus/http/api.dart';
 import 'package:PiliPlus/http/constants.dart';
+import 'package:PiliPlus/http/effective_http_policy.dart';
 import 'package:PiliPlus/http/init.dart';
 import 'package:PiliPlus/models/common/account_type.dart';
+import 'package:PiliPlus/services/native_http/prepared_http_policy.dart';
 import 'package:PiliPlus/utils/accounts.dart';
 import 'package:PiliPlus/utils/accounts/account.dart';
 import 'package:PiliPlus/utils/accounts/account_manager/account_mgr.dart';
@@ -42,6 +44,7 @@ final class NativeHTTPRequestLeaseSnapshot {
     required this.revision,
     required this.generation,
     required this.limit,
+    required this.policy,
   }) : headers = Map.unmodifiable(headers);
 
   final String requestID;
@@ -51,9 +54,10 @@ final class NativeHTTPRequestLeaseSnapshot {
   final int revision;
   final int generation;
   final int limit;
+  final PreparedHTTPPolicy policy;
   String get method => 'GET';
 
-  // Neither effective transport policy nor headers-on-cancel is verified yet.
+  // Description alone does not establish Native transport compatibility.
   bool get executionAllowed => false;
 }
 
@@ -90,6 +94,7 @@ final class NativeHTTPRequestLeaseReceipt {
 final class NativeHTTPRequestLeaseService {
   NativeHTTPRequestLeaseService({
     BaseOptions Function()? options,
+    EffectiveHTTPPolicySnapshot Function()? policy,
     Account Function()? recommendAccount,
     Future<List<Cookie>> Function(Account, Uri)? loadCookies,
     Future<void> Function(Account, Uri, Future<void>)? awaitCookieSave,
@@ -100,6 +105,9 @@ final class NativeHTTPRequestLeaseService {
     this.maxTombstones = 128,
     this.autoExpire = true,
   }) : _options = options ?? (() => Request.dio.options),
+       // Custom options without a paired describer must never borrow the
+       // production pool's known policy (existing fixture/compatibility seam).
+       _policy = policy ?? (options == null ? (() => Request.effectiveHTTPPolicy) : (() => null)),
        _recommendAccount = recommendAccount ?? (() => Accounts.get(AccountType.recommend)),
        _loadCookies = loadCookies ?? ((account, uri) => account.cookieJar.loadForRequest(uri)),
        _awaitCookieSave = awaitCookieSave ?? ((account, uri, saving) => saving),
@@ -114,6 +122,7 @@ final class NativeHTTPRequestLeaseService {
   final int maxLiveLeases;
   final int maxTombstones;
   final BaseOptions Function() _options;
+  final EffectiveHTTPPolicySnapshot? Function() _policy;
   final Account Function() _recommendAccount;
   final Future<List<Cookie>> Function(Account, Uri) _loadCookies;
   final Future<void> Function(Account, Uri, Future<void>) _awaitCookieSave;
@@ -167,21 +176,29 @@ final class NativeHTTPRequestLeaseService {
         throw const NativeHTTPRequestLeaseException('revoked');
       }
       final revision = Accounts.requestRevision;
-      final composed = Options(method: 'GET', followRedirects: false).compose(
-        _options(), Api.searchTrending, queryParameters: {'limit': limit},
-      );
-      final url = Uri.https('api.bilibili.com', Api.searchTrending, {'limit': '$limit'});
-      if (composed.uri.toString() != url.toString()) {
-        throw const NativeHTTPRequestLeaseException('invalidRequest');
-      }
-      final headers = _headers(composed.headers)
-        ..addAll(_headers(account.headers))
-        ..['referer'] ??= HttpString.baseUrl;
+      final input = _captureInput(account, limit);
+      final url = input.url;
+      final headers = input.headers;
       final cookies = await _loadCookies(account, url);
       _ensurePreparing(key, entry);
       if (!identical(_recommendAccount(), account) ||
           Accounts.requestRevision != revision ||
           !Accounts.isCurrentRequest(stamp)) {
+        throw const NativeHTTPRequestLeaseException('snapshotChanged');
+      }
+      // Pool generations cannot detect direct BaseOptions/retry/header edits.
+      // Recompose all effective inputs before adding the awaited Cookie values.
+      try {
+        final current = _captureInput(account, limit);
+        if (!input.policy.sameAs(current.policy) || current.url != url ||
+            !identical(input.decoder, current.decoder) ||
+            !identical(input.encoder, current.encoder) ||
+            !identical(input.validateStatus, current.validateStatus) ||
+            headers.length != current.headers.length ||
+            !headers.entries.every((entry) => current.headers[entry.key] == entry.value)) {
+          throw const NativeHTTPRequestLeaseException('snapshotChanged');
+        }
+      } catch (_) {
         throw const NativeHTTPRequestLeaseException('snapshotChanged');
       }
       final previousCookies = headers[HttpHeaders.cookieHeader];
@@ -192,6 +209,7 @@ final class NativeHTTPRequestLeaseService {
       final snapshot = NativeHTTPRequestLeaseSnapshot._(
         requestID: key, leaseID: entry.leaseID, url: url, headers: headers,
         revision: revision, generation: stamp.generation, limit: limit,
+        policy: input.policy,
       );
       entry.context = _PreparedLease(snapshot, stamp);
       return snapshot;
@@ -203,6 +221,26 @@ final class NativeHTTPRequestLeaseService {
       if (error is NativeHTTPRequestLeaseException) rethrow;
       throw const NativeHTTPRequestLeaseException('invalidRequest');
     }
+  }
+
+  ({Uri url, Map<String, String> headers, PreparedHTTPPolicy policy,
+    Object? decoder, Object? encoder, Object validateStatus}) _captureInput(
+    Account account, int limit,
+  ) {
+    final effective = _policy();
+    final composed = Options(method: 'GET', followRedirects: false).compose(
+      _options(), Api.searchTrending, queryParameters: {'limit': limit},
+    );
+    final url = Uri.https('api.bilibili.com', Api.searchTrending, {'limit': '$limit'});
+    if (composed.uri.toString() != url.toString()) {
+      throw const NativeHTTPRequestLeaseException('invalidRequest');
+    }
+    final headers = _headers(composed.headers)
+      ..addAll(_headers(account.headers))
+      ..['referer'] ??= HttpString.baseUrl;
+    return (url: url, headers: headers, decoder: composed.responseDecoder,
+      encoder: composed.requestEncoder, validateStatus: composed.validateStatus,
+      policy: PreparedHTTPPolicy.capture(effective: effective, request: composed, headers: headers));
   }
 
   Future<NativeHTTPRequestLeaseReceipt> finish({

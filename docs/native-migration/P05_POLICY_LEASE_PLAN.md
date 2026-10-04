@@ -1,6 +1,6 @@
 # Policy-2：将有效配置绑定到一次性请求上下文
 
-2026-10-05，Policy-1 CI 等待期间的执行准备；没有修改此切片的生产代码。
+2026-10-05，Policy-1 CI 等待期间保存准备；现已实施，完整 Actions 尚待验证。
 最新阶段状态以 PROGRESS.md 为准。继续 PLAN.md，UI 重写最后。
 
 ## 源码约束
@@ -64,3 +64,26 @@ Retry 非零的支持仍等待多 attempt 与首次 owner 的明确合同，不�
 
 回滚同阶段 Dart/Swift 协议及 fixtures，保持旧 runtime 继续供数；不删 bridge command、
 旧登录、CookieJar/Hive、页面、资源或依赖。实施前再次核对 Policy-1 的最终已验证代码。
+
+## 当前实现及验证入口
+
+`prepared_http_policy.dart` 复制版本 1 的嵌套 policy；connect/receiveIdle/send/transform
+timeout 使用整数微秒，保留 receiveDataWhenStatusError、有效 pool/proxy/trust、实际
+retry presence/count/delay 和 decoder 描述。未知 pool/retry/decoder 明确标注 issues；
+注入自定义 BaseOptions 而未配对描述器时保持 unknown，不能借用 Request 的已知池。
+prepare 在 Cookie await 后重新 compose，比较 policy、headers、URL 和仅内部保留的
+decoder/encoder/validateStatus identity；这些回调不进入 snapshot 或 bridge。
+基础 followRedirects 被 endpoint false 覆盖，配置变化不改变已经 prepared 的 owner。
+
+Swift Networking DTO/strict codec 验证字段集合、Bool/Int/Double、版本、池/issue 和
+retry presence 的一致性；Data context codec 继续固定 URL/GET/limit/false gate，另验
+encoding 与已验证 headers 一致。负 retry/port 等实际配置保留为描述，不能据此宣称
+Native 支持。当前 schema 不描述任意自定义 interceptor、transformer/status validator
+的运行行为，Native capability/transport 对照仍是后续独立门禁。
+
+两种冷启动的真实 Hive/Request/IO/H2 fixtures 包括 await 中成功/部分失败的 pool 变化、
+timeout/encoding/headers/decoder/retry/validator 修改、Pref-only、403 head 后改 pool/换
+用途且实际关闭重开 Hive 验证原 owner 回写。实际 Dart bridge 导出 16 组只含合成
+账户/代理数据的 golden；`check_prepared_http_policy.py` 编译 Swift 6 complete 的
+生产 codec/provider 消费它们，另验证 malformed policy 的单次 abandon。旧 context/
+transfer 合同继续执行；本地 Windows 检查不作为编译完成依据。

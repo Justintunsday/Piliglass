@@ -24,6 +24,7 @@ final class NativeHTTPRequestLeaseBridge {
             'state': 'prepared', 'requestID': snapshot.requestID, 'leaseID': snapshot.leaseID,
             'url': snapshot.url.toString(), 'method': snapshot.method,
             'headers': snapshot.headers, 'revision': snapshot.revision,
+            'policy': snapshot.policy.values,
             'generation': snapshot.generation, 'limit': snapshot.limit, 'executionAllowed': false,
           });
         case 'finishNativeHTTPRequest':

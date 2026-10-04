@@ -24,6 +24,7 @@ struct PiliHTTPRequestContext: Sendable, Equatable {
   let revision: Int64
   let generation: Int64
   let limit: Int
+  let policy: PiliPreparedHTTPPolicy
 
   // Context compatibility does not establish a verified Native transport.
   var executionAllowed: Bool { false }

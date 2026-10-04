@@ -82,7 +82,7 @@ private struct NativeRequestContextChecks {
      "url": .string("https://api.bilibili.com/x/v2/search/trending/ranking?limit=\(limit)"),
      "method": .string("GET"), "headers": .dictionary(["cookie": .string("same=path; same=root"), "env": .string("prod")]),
      "revision": .integer(9_007_199_254_740_993), "generation": .integer(7), "limit": .integer(Int64(limit)),
-     "executionAllowed": .bool(false)]
+     "policy": PreparedHTTPPolicyFixture.unknown, "executionAllowed": .bool(false)]
   }
   static func receipt(_ state: String = "finished", saved: Bool = false, count: Int = 0) -> PiliBridgeValue {
     .dictionary(["state": .string(state), "cookiesSaved": .bool(saved), "cookieCount": .integer(Int64(count)),
@@ -216,7 +216,7 @@ private struct NativeRequestContextChecks {
     try expect(replay.outcome == .consumed && transport.terminalCalls.count == 1, "Finished context cannot be abandoned again")
     let valid = try await value { try await active.prepare(.searchTrending(limit: 10)) }
     let forged = PiliHTTPRequestContext(requestID: valid.requestID, leaseID: UUID().uuidString.lowercased(),
-      request: valid.request, revision: valid.revision, generation: valid.generation, limit: valid.limit)
+      request: valid.request, revision: valid.revision, generation: valid.generation, limit: valid.limit, policy: valid.policy)
     try await error({ _ = try await active.abandon(forged) },
       { ($0 as? PiliHTTPRequestContextError) == .invalidRequest }, "Wrong token cannot consume original context")
     try expect(active.activeContextCount == 1 && transport.terminalCalls.count == 1, "Rejected token leaves valid registry entry")

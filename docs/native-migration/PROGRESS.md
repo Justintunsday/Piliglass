@@ -270,3 +270,16 @@ RequestOptions 或 Native transport parity：HTTP2/TLS/proxy/timeout/Brotli 实�
 transport 仍待实施，nativeAccountCompatibilityVerified=false、executionAllowed=false。
 P05 整体继续进行。下一切片 [Policy lease/Swift codec](P05_POLICY_LEASE_PLAN.md) 已在
 实施前保存；P10 下载/播放器与 P11/P12 runtime 退出准备也已补充到 PREPARATION.md。
+
+## P05 Policy-2：绑定有效 policy 到 lease（CI 待验证）
+
+版本化不可变 prepared policy 已同步加入 Dart bridge 和 Swift strict codec/context。
+合并 endpoint Options 后保留实际微秒精度、redirect=false、pool generation/模式、
+retry presence、pool/trust/proxy、encoding/decoder。Cookie await 后复查有效输入与
+内部回调 identity，变化则 snapshotChanged 消耗 pending，不自动重试；finish 原有
+owner/generation 与 Hive 写回不受新 policy/用途选择变化影响。运行时两项门禁仍关闭。
+
+新增真实 Dart/Hive/Request 冷启动 fixture 及 Dart bridge → Swift 6 production codec/
+provider 的跨语言验证步骤；旧 context/transfer fixture 同步协议字段。完整 ios.yml
+与全 ios-home-preview 尚待实际运行，本阶段未闭环。没有删功能、资源、依赖或更改
+Root/Player/Aether，也没有开始视觉 UI 重写。

@@ -18,6 +18,9 @@ class AccountTestStorage {
 
   static Future<AccountTestStorage> open({
     Iterable<LoginAccount> initialAccounts = const [],
+    bool http2 = false,
+    int retry = 0,
+    bool replaceHTTPAdapter = true,
   }) async {
     TestWidgetsFlutterBinding.ensureInitialized();
     final directory = await Directory.systemTemp.createTemp(
@@ -28,8 +31,8 @@ class AccountTestStorage {
     GStorage.setting = await Hive.openBox<dynamic>('setting');
     GStorage.localCache = await Hive.openBox<dynamic>('localCache');
     await GStorage.setting.putAll({
-      SettingBoxKey.retryCount: 0,
-      SettingBoxKey.enableHttp2: false,
+      SettingBoxKey.retryCount: retry,
+      SettingBoxKey.enableHttp2: http2,
       SettingBoxKey.enableSystemProxy: false,
     });
     await GStorage.localCache.put(LocalCacheKey.buvid, 'account-test-buvid');
@@ -45,10 +48,12 @@ class AccountTestStorage {
     // clear/reset can activate buvid. Initialize Request before replacing its
     // late-final Dio's adapter, and keep these side effects off the network.
     Request();
-    Request.dio.httpClientAdapter.close(force: true);
-    Request.dio
-      ..httpClientAdapter = _ActivationAdapter()
-      ..interceptors.clear();
+    if (replaceHTTPAdapter) {
+      Request.dio.httpClientAdapter.close(force: true);
+      Request.dio
+        ..httpClientAdapter = _ActivationAdapter()
+        ..interceptors.clear();
+    }
     return AccountTestStorage._(directory);
   }
 
