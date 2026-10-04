@@ -1,7 +1,8 @@
 # P05：有效 HTTP policy 的下一切片计划
 
 2026-10-04 编写于 c1 验证期间；2026-10-05 保存，c1 已通过完整 CI，证据见 PROGRESS.md。
-Policy-1 现已开始实施，尚待实际 CI；后续切片待实施，运行时 Native HTTP 未开启。
+Policy-1 已在 62eab04 的完整 release + 全 preview 同 SHA 验证，21 tests/analyze 通过。
+实际证据见 PROGRESS.md；后续切片待实施，运行时 Native HTTP 未开启。
 沿 PLAN.md 推进，UI 重写最后。此计划不把读取最新 Pref 当成有效 transport 状态。
 
 ## 已确认的实际语义
@@ -96,7 +97,8 @@ H1/H2 不同证书策略、clone 的实际 retry/池所有权和共享 BaseOptio
 只用于部分替换失败路径。每组另用实际旧 Dio HTTP11 回环请求验证 br,gzip 头和
 手动 gzip→UTF8→JSON 输出，未声明实际 HTTP2/TLS/代理证书或 Native parity 验收。
 合计 21 个测试，ios.yml 专属 analyze/runtime 步骤与 artifact 上传；完整 release 和
-全部 preview 同 SHA 全绿才闭环。Policy-2 再接入 lease/Swift strict codec 与混合快照拒绝。
+全部 preview 同 SHA 全绿已闭环。Policy-2 再接入 lease/Swift strict codec 与混合快照拒绝，
+具体准备见 [P05_POLICY_LEASE_PLAN.md](P05_POLICY_LEASE_PLAN.md)。
 
 ## 回滚与开放门禁
 

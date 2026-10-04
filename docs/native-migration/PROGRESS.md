@@ -16,7 +16,7 @@
 | P05a2a | 78a0948 -> 338bc39 -> 53705e9 -> c0fbdbf | [成功](https://github.com/Justintunsday/Piliglass/actions/runs/37193624110) | [全部成功](https://github.com/Justintunsday/Piliglass/actions/runs/37193623955) | Dart lease 与薄命令完成；Swift adapter/runtime 未接入 |
 | P05a2b | 63dac5f -> 4148caf | [成功，含 119 项 Swift 6 context 检查](https://github.com/Justintunsday/Piliglass/actions/runs/37195363892) | [全部成功](https://github.com/Justintunsday/Piliglass/actions/runs/37195365890) | Swift context/adapter/terminal cleanup 完成；runtime 保持关闭 |
 | P05a2c1 | eddc20a -> d80c92b | [成功，含 91 项实际 transfer 检查](https://github.com/Justintunsday/Piliglass/actions/runs/37215530254) | [全部成功](https://github.com/Justintunsday/Piliglass/actions/runs/37215523453) | 响应头/取消/一次性 lease 终结完成；有效 policy、字段保存 transport 与 runtime 尚未切换 |
-| P05 Policy-1 | 60817d7，修正中 | [首轮失败](https://github.com/Justintunsday/Piliglass/actions/runs/37217729454) | 待最终 SHA 完整验证 | 实际 Dio.clone 共享 BaseOptions，fixture 原独立假设错误；按实际源码修正，未开放 Native runtime |
+| P05 Policy-1 | 60817d7 -> 62eab04 | [成功，含 21 个实际 policy tests](https://github.com/Justintunsday/Piliglass/actions/runs/37218110078) | [全部成功](https://github.com/Justintunsday/Piliglass/actions/runs/37218112840) | Dart 实际 pool/retry/BaseOptions 描述已验证；lease/Swift policy codec 与 Native runtime 待接入 |
 
 P00 证据：inventory 包含 59 个 bridge commands、62 个注册 Flutter routes、311 个 REST 常量、45 个 gRPC 常量、95 个依赖。压力检查 `failures=[]`，1,000 条评论保持懒加载、未在离屏处触发分页、实际末条出现后分页成功；100,000 条弹幕保留，活跃渲染上限 60。仅测试 harness 调整了懒加载自适应行定位等待；没有修改生产 UI 或业务。
 
@@ -237,3 +237,36 @@ diff 无功能、资源、依赖或引擎删除，Root/Player/Aether 未改。�
 原 owner 写回，不证明旧 Cookie adapter 的重启属性持久化。Foundation 字段边界丢失
 依然存在，nativeAccountCompatibilityVerified=false、executionAllowed=false，P05 整体
 尚未完成。下一步执行有效 policy 描述计划；后续六组准备见 [PREPARATION.md](PREPARATION.md)。
+
+## P05 Policy-1：实际 HTTP 配置描述
+
+新增独立 effective_http_policy.dart 的 immutable DTO/identity tracker，Request 在
+原有 pool factory 捕获启动协议、proxy 和 H1/H2 分别的 trust；所有替换 assignments
+成功后发布 generation。失败/部分替换清空描述，保留上次成功代次；后续完整安装
+才能恢复。实际 main/HTTP11 clone 的 BaseOptions 与已安装 RetryInterceptor 分别
+读取，未改原 settings 默认值、连接池替换/吞错、重试或业务行为。adapter/factory/
+manager/fallback 变化、未知 decoder 或多个/错误 client 的 retry 明确返回 issue。
+DTO 不持有 Dio/账户/CookieJar；无 proxy 数据日志，不开放 Native 请求。
+
+60817d7 首轮 [release](https://github.com/Justintunsday/Piliglass/actions/runs/37217729454)
+的 17 个 policy tests 通过，4 个失败；actual pinned Dio.clone 源码和日志证明 clone
+共享 BaseOptions，fixture 原独立假设错误。错误断言后未恢复 encoding，派生回环
+失败/timeout；并有一个 unnecessary_lambdas info。62eab04 仅修 fixture 的共享语义、
+finally 清理和 tearoff，把 policy analyze 增强为 fatal-infos 后重新 commit+push，
+生产描述实现未为通过测试而改变。旧 preview 被替代取消，不作为阶段完成证据。
+
+最终两条 workflow headSha 均为 62eab0494ddac4c4e1857dd9f9e77d3cce22cace，全部 8 jobs
+成功。已读取实际产物：21 policy tests / analyze 无问题，三种独立冷启动、Pref 与
+实际设置分离、pool/trust/失败/clone/共享 options 和实际 HTTP11 gzip 回环通过。
+context 119、HTTP 74、Search 63、transfer 91、tracker 72、68 Flutter/Hive/Dio tests、
+wire 70/parser 122 继续成功。Runner BUILD SUCCEEDED、677 bilingual keys 与 Aether
+FFmpeg order 成功。preview 的账户 6/播放器 2/图片 3/导航 9 tests 均通过，设置边缘
+返回及重进持久化断言保留；压力 failures=[]，1,000 评论懒加载/无离屏分页/末条分页、
+100,000 弹幕完整保留/活跃上限 60 成功。
+
+已检查 diff，无功能/资源/依赖删除，Root/Player/Aether 未改；inventory 继续 62 commands、
+62 routes、95 dependencies，Aether 227 files/69,886 lines。该描述并非完整 endpoint
+RequestOptions 或 Native transport parity：HTTP2/TLS/proxy/timeout/Brotli 实测与字段保存
+transport 仍待实施，nativeAccountCompatibilityVerified=false、executionAllowed=false。
+P05 整体继续进行。下一切片 [Policy lease/Swift codec](P05_POLICY_LEASE_PLAN.md) 已在
+实施前保存；P10 下载/播放器与 P11/P12 runtime 退出准备也已补充到 PREPARATION.md。

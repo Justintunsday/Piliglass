@@ -1,17 +1,21 @@
 # 后续阶段并行准备索引
 
-2026-10-04；按用户要求，在当前 P05 实施/CI 期间准备后续阶段。
+2026-10-04 开始；2026-10-05 补充，按用户要求在 P05 实施/CI 期间准备后续阶段。
 这些文件是基于实际源码的执行计划，均未切换运行时，不表示对应阶段已经完成。
 主顺序仍是 PLAN.md 的 P05→P12；视觉 UI 重写最后，已选原生玻璃风格保留。
+其中 Policy-1 的实际 Dart 描述现已完整 CI 验证；其他准备项的阶段状态见 PROGRESS.md。
 
 | 准备方案 | 可先做的独立工作 | 生产切换前置 |
 |---|---|---|
 | [有效 HTTP policy](P05_EFFECTIVE_HTTP_POLICY_PLAN.md) | 实际Dart配置来源/代次描述、合同与wire矩阵 | 请求头生命周期、有效timeout/proxy/trust/retry/compression、字段保存transport |
+| [Policy lease/Swift codec](P05_POLICY_LEASE_PLAN.md) | await前后完整有效输入复查、versioned DTO与actualDart golden | Policy-1完整CI、原owner单次终结、能力判定和transport parity |
 | [账户与签名](P05_ACCOUNT_SIGNING_PLAN.md) | 固定实际Dart输出的纯signer、四用途readonly协议/快照 | 原owner/generation与单authority、完整现有登录/退出/存储验收 |
 | [首页/视频 REST](P06_HOME_VIDEO_REST_PLAN.md) | 窄Repository+Dart adapter、Root DTO/Feature拆分、纯参数/过滤/decoder | 各endpoint用途/签名/policy/lease，单路实际API对照 |
 | [模型与持久化](P07_MODELS_PERSISTENCE_PLAN.md) | 各领域DTO边界、真实Hive exporter、staging/restart/idempotence | 全caller单写authority、旧数据完整导入、切回兼容reverse-export |
 | [protobuf/gRPC](P08_GRPC_PLAN.md) | schema来源/生成hash、actualDart frame/message/metadata golden | iOS16实际依赖链接、HTTP2/status/trailers、各服务账户与业务验收 |
 | [直播/私信/弹幕](P09_LIVE_MESSAGE_PLAN.md) | 真实Dart packet golden、typed事件/状态边界、生命周期矩阵 | P05/P08门禁、真实Socket/消息同步/账号隔离、真机后台行为 |
+| [下载/后台/播放器外围](P10_DOWNLOAD_PLAYER_PLAN.md) | typed下载边界、真实旧manifest/file与Range状态、Player外围拆分 | P05/P07/P08门禁、单存储authority、真机后台/音频/PiP验收 |
+| [页面/runtime退出](P11_P12_RUNTIME_PLAN.md) | 完整route/caller覆盖、插件/资源映射、Native-only构建演练 | 所有领域Native供数/authority、核心路径/数据导入/实际CI，无旧caller |
 
 准备时发现并已写入方案的兼容约束：
 
@@ -29,4 +33,4 @@
 实施每一个切片时重新核对相关源码与方案中的原始假设；计划不是冻结API，也不是
 跳过行为对照的理由。继续按diff→commit→push→完整release+全部preview同SHA→实际
 日志修复循环；当前代码未全绿时只准备后续，不混入其他领域生产实现。
-P10下载/后台与P11/P12页面/runtime删除仍按PLAN执行，未通过覆盖门禁前不删旧依赖。
+P10下载/后台与P11/P12页面/runtime删除的准备也已补充，仍按PLAN执行，未通过覆盖门禁前不删旧依赖。
