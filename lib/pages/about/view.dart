@@ -247,8 +247,7 @@ Commit Hash: ${BuildConfig.commitHash}''',
                 final res = json.map(
                   (key, value) => MapEntry(key, LoginAccount.fromJson(value)),
                 );
-                await Accounts.account.putAll(res);
-                await Accounts.refresh();
+                await Accounts.importCredentials(res);
                 MineController.anonymity.value = !Accounts.heartbeat.isLogin;
                 if (Accounts.main.isLogin) {
                   await LoginUtils.onLoginMain();

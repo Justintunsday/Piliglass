@@ -2251,6 +2251,7 @@ final class IOSNativeUIBridge {
           data['access_token']?.toString(),
           data['refresh_token']?.toString(),
         );
+        await Accounts.installCredentials(account);
         for (final type in AccountType.values) {
           await Accounts.set(type, account);
         }

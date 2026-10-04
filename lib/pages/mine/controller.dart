@@ -226,8 +226,10 @@ class MineController extends CommonDataController<FavFolderData, FavFolderData>
         }
         res == true
             ? Accounts.set(AccountType.heartbeat, AnonymousAccount())
-            : Accounts.accountMode[AccountType.heartbeat.index] =
-                  AnonymousAccount();
+            : Accounts.selectTemporarily(
+                AccountType.heartbeat,
+                AnonymousAccount(),
+              );
       });
     } else {
       Accounts.set(AccountType.heartbeat, Accounts.main);

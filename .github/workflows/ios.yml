@@ -23,6 +23,8 @@ on:
       - "tool/check_native_cookie_wire.py"
       - "tool/check_native_cookie_wire.swift"
       - "tool/check_response_cookie_headers.dart"
+      - "tool/check_account_request_state.dart"
+      - "test/utils/accounts/**"
       - ".github/workflows/ios.yml"
   pull_request:
     paths:
@@ -44,6 +46,8 @@ on:
       - "tool/check_native_cookie_wire.py"
       - "tool/check_native_cookie_wire.swift"
       - "tool/check_response_cookie_headers.dart"
+      - "tool/check_account_request_state.dart"
+      - "test/utils/accounts/**"
       - ".github/workflows/ios.yml"
   workflow_call:
     inputs:
@@ -157,10 +161,27 @@ jobs:
           dart tool/check_native_playback_source.dart
           dart tool/check_native_cdn_latency.dart
 
+      - name: Verify account generations and response ownership
+        shell: bash
+        run: |
+          mkdir -p build/account-request-state
+          dart analyze lib/utils/accounts/account_request_state.dart lib/utils/accounts.dart lib/utils/accounts/account.dart lib/utils/accounts/account_manager/account_mgr.dart tool/check_account_request_state.dart test/utils/accounts/ | tee build/account-request-state/analyze.log
+          dart tool/check_account_request_state.dart | tee build/account-request-state/runtime.log
+          flutter test --no-pub --reporter expanded test/utils/accounts/ | tee build/account-request-state/flutter-test.log
+
+      - name: Upload account lifecycle evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: account-request-state-contracts
+          path: build/account-request-state/
+          if-no-files-found: warn
+
       - name: Observe Darwin Cookie headers and cancellation lifecycle
         run: python3 tool/check_native_cookie_wire.py
 
       - name: Verify shared response Cookie parser against wire evidence
+        shell: bash
         run: |
           mkdir -p build/response-cookie-check
           dart analyze lib/utils/accounts/account_manager/response_cookie_headers.dart tool/check_response_cookie_headers.dart | tee build/response-cookie-check/analyze.log

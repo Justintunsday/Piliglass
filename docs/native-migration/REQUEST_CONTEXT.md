@@ -1,6 +1,6 @@
 # P05a：请求上下文与 Cookie 切换前置计划
 
-2026-10-04，P05a1a parser/wire 已通过真实 CI；账户 generation/lease 尚未实施、尚未验证。
+2026-10-04，P05a1a parser/wire 已通过真实 CI；账户 generation 实施中、等待 CI，lease 尚未实施。
 本文件记录下一阶段的可执行边界，不代表 Native HTTP 已接入运行时。
 
 ## 分阶段实施
@@ -9,7 +9,7 @@
    同名/domain/path 与歧义输入；建立账户选择 revision 和凭据 generation 的窄接口。
    不切换 HTTP，不扁平化 CookieJar；需要真实 Dart fixture、Darwin wire fixture 和 CI。
    拆为 P05a1a parser/wire（已验证 834c3b9，详见 COOKIE_HEADERS.md）与 P05a1b revision/generation
-   （未实施）；前者 CI 成功后再修改账户生命周期。
+   （实施中、待 CI，详见 ACCOUNT_REQUEST_STATE.md）；前者 CI 成功后再修改账户生命周期。
 2. P05a2：独立 Dart lease service、Swift Domain context protocol 与 Bridge adapter。
    验证 prepare/finish/abandon、原账户写回、刷新/删除/重置、取消/重复完成与释放。
    每个代码阶段分别 commit/push，完整 release+preview CI 成功后才能继续。
@@ -55,7 +55,7 @@ identity 也不够。凭据替换必须显式撤销 generation 并检查存储�
 这些保护必须同时覆盖现有 Dart `_saveCookies`/`LoginAccount.onChange`，不能只用于
 Native finish，否则旧的在途 Dio 响应仍能绕过 lease 恢复过期凭据。
 
-## P05a1b 已审查的实施边界（未实施）
+## P05a1b 已审查的实施边界（实施中，待 CI）
 
 建立不导入 Flutter/Account 的泛型 identity tracker，再由账户层提供显式安装凭据、
 导入、持久选择、临时选择、capture/isCurrent/revoke 的窄接口。generation 和 revision
@@ -97,7 +97,7 @@ DefaultCookieJar save/delete 的 async body 内无 await；Hive put 先同步更
 CI 在 Flutter setup 与 iOS patch 完成后运行纯 Dart fixture，以及
 `flutter test --no-pub --reporter expanded test/utils/accounts/` 和定向 analyze；增加测试
 触发路径。继续以完整 release、FFmpeg load order 与全部 preview 同 SHA 成功作为阶段门禁。
-本节是可执行计划，不是已完成或已验证的账户保护实现。
+本节是可执行计划；实现与限制见 ACCOUNT_REQUEST_STATE.md，尚未完成真实 CI 验证。
 
 ## Set-Cookie 实测门禁
 

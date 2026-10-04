@@ -79,15 +79,22 @@ class LoginAccount extends Account {
 
   bool _hasDelete = false;
 
+  String get storageKey => _midStr;
+
   @override
   Future<void> delete() {
     _hasDelete = true;
-    return Future.wait([cookieJar.deleteAll(), _box.delete(_midStr)]);
+    Accounts.revokeCredentials(this);
+    return Future.wait([
+      cookieJar.deleteAll(),
+      if (_box.isOpen && identical(_box.get(_midStr), this))
+        _box.delete(_midStr),
+    ]);
   }
 
   @override
   Future<void>? onChange() {
-    if (_hasDelete) return null;
+    if (_hasDelete || !Accounts.ownsCredentials(this)) return null;
     return _box.put(_midStr, this);
   }
 
@@ -155,9 +162,14 @@ class AnonymousAccount extends Account {
   bool activated = false;
 
   @override
-  Future<void> delete() {
+  Future<void> delete() async {
+    final reset = Accounts.beginAnonymousReset(this);
+    activated = false;
     grpcHeaders['x-bili-fawkes-req-bin'] = GrpcHeaders.fawkes;
-    return cookieJar.deleteAll().whenComplete(cookieJar.setBuvid3);
+    await cookieJar.deleteAll();
+    if (!Accounts.isCurrentAnonymousReset(reset)) return;
+    cookieJar.setBuvid3();
+    Accounts.completeAnonymousReset(this, reset);
   }
 
   static final _instance = AnonymousAccount._();

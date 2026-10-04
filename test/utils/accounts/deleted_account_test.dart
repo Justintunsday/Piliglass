@@ -3,9 +3,9 @@ import 'dart:io';
 
 import 'package:PiliPlus/utils/accounts.dart';
 import 'package:PiliPlus/utils/accounts/account.dart';
-import 'package:PiliPlus/utils/storage.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:hive_ce/hive.dart';
+
+import 'account_test_storage.dart';
 
 LoginAccount _account() => LoginAccount(
   BiliCookieJar.fromJson({
@@ -17,34 +17,30 @@ LoginAccount _account() => LoginAccount(
 );
 
 void main() {
-  late Directory tempDir;
+  late AccountTestStorage storage;
 
   setUpAll(() async {
-    tempDir = await Directory.systemTemp.createTemp('piliplus-account-test-');
-    Hive.init(tempDir.path);
-    GStorage.regAdapter();
-    Accounts.account = await Hive.openBox<LoginAccount>('account');
+    storage = await AccountTestStorage.open();
   });
 
-  setUp(() => Accounts.account.clear());
+  setUp(() => storage.reset());
 
   tearDownAll(() async {
-    await Hive.close();
-    await tempDir.delete(recursive: true);
+    await storage.close();
   });
 
   test('late account changes cannot recreate a deleted account', () async {
     final account = _account();
-    await account.onChange();
+    await Accounts.installCredentials(account);
     expect(Accounts.account.containsKey('123'), isTrue);
 
     final lateResponse = Completer<void>();
-    final persistLateResponse = lateResponse.future.then((_) {
-      account.cookieJar.saveFromResponse(
+    final persistLateResponse = lateResponse.future.then((_) async {
+      await account.cookieJar.saveFromResponse(
         Uri.parse('https://www.bilibili.com'),
         [Cookie('SESSDATA', 'late-cookie')..setBiliDomain()],
       );
-      return account.onChange();
+      await account.onChange();
     });
 
     await account.delete();
@@ -58,7 +54,7 @@ void main() {
     'delete tombstone is active before asynchronous deletion completes',
     () async {
       final account = _account();
-      await account.onChange();
+      await Accounts.installCredentials(account);
 
       final deletion = account.delete();
       await account.onChange();

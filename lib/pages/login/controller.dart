@@ -169,18 +169,20 @@ class LoginPageController extends GetxController
       );
       if (result.data['code'] == 0) {
         try {
-          await LoginAccount(
-            BiliCookieJar.fromJson(
-              Map.fromEntries(
-                cookieTextController.text.split(';').map((item) {
-                  final list = item.split('=');
-                  return MapEntry(list.first, list.skip(1).join());
-                }),
+          await Accounts.installCredentials(
+            LoginAccount(
+              BiliCookieJar.fromJson(
+                Map.fromEntries(
+                  cookieTextController.text.split(';').map((item) {
+                    final list = item.split('=');
+                    return MapEntry(list.first, list.skip(1).join());
+                  }),
+                ),
               ),
+              null,
+              null,
             ),
-            null,
-            null,
-          ).onChange();
+          );
           if (!Accounts.main.isLogin) await switchAccountDialog(Get.context!);
           SmartDialog.showToast('登录成功');
           Get.back();
@@ -624,12 +626,8 @@ class LoginPageController extends GetxController
       tokenInfo['access_token'],
       tokenInfo['refresh_token'],
     );
-    await Future.wait([?account.onChange(), AnonymousAccount().delete()]);
-    for (int i = 0; i < AccountType.values.length; i++) {
-      if (Accounts.accountMode[i].mid == account.mid) {
-        Accounts.accountMode[i] = account;
-      }
-    }
+    await Accounts.installCredentials(account);
+    await AnonymousAccount().delete();
     if (Accounts.main.isLogin) {
       SmartDialog.showToast('登录成功');
     } else {

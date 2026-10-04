@@ -7,6 +7,7 @@ import 'package:PiliPlus/models/common/account_type.dart';
 import 'package:PiliPlus/utils/accounts.dart';
 import 'package:PiliPlus/utils/accounts/account.dart';
 import 'package:PiliPlus/utils/accounts/account_manager/response_cookie_headers.dart';
+import 'package:PiliPlus/utils/accounts/account_request_state.dart';
 import 'package:PiliPlus/utils/accounts/api_type.dart';
 import 'package:PiliPlus/utils/app_sign.dart';
 import 'package:PiliPlus/utils/extension/string_ext.dart';
@@ -21,6 +22,7 @@ import 'package:material_ui/material_ui.dart';
 class AccountManager extends Interceptor {
   AccountManager();
 
+  static const _bindingKey = '_piliglassAccountRequestBinding';
   static String blockServer = Pref.blockServer;
 
   static String getCookies(List<Cookie> cookies) {
@@ -43,9 +45,13 @@ class AccountManager extends Interceptor {
   void onRequest(RequestOptions options, RequestInterceptorHandler handler) {
     final path = options.path;
 
-    final account = _bindRequestAccount(options);
+    final binding = _bindRequestAccount(options);
+    final account = binding.account;
 
     if (account is NoAccount || _skipCookie(path)) return handler.next(options);
+    if (!_isCurrentBinding(binding, options)) {
+      return handler.reject(_revokedRequest(options), false);
+    }
 
     if (!account.isLogin && path == Api.heartBeat) {
       return handler.reject(
@@ -83,6 +89,10 @@ class AccountManager extends Interceptor {
       account.cookieJar
           .loadForRequest(options.uri)
           .then((cookies) {
+            if (!_isCurrentBinding(binding, options)) {
+              handler.reject(_revokedRequest(options), false);
+              return;
+            }
             final previousCookies =
                 options.headers[HttpHeaders.cookieHeader] as String?;
             final newCookies = getCookies([
@@ -110,9 +120,9 @@ class AccountManager extends Interceptor {
 
   @override
   void onResponse(Response response, ResponseInterceptorHandler handler) {
-    if (_boundRequestAccount(response.requestOptions) case final account?) {
+    if (_boundRequestAccount(response.requestOptions) case final binding?) {
       final future = _saveCookies(
-        account,
+        binding,
         response,
       ).whenComplete(() => handler.next(response));
       assert(() {
@@ -142,8 +152,8 @@ class AccountManager extends Interceptor {
     if (options.method != 'POST') toast(err);
 
     if (err.response case final res?) {
-      if (_boundRequestAccount(options) case final account?) {
-        _saveCookies(account, res).then(
+      if (_boundRequestAccount(options) case final binding?) {
+        _saveCookies(binding, res).then(
           (_) => handler.next(err),
           onError: (Object e, StackTrace s) => handler.next(
             DioException(
@@ -181,7 +191,13 @@ class AccountManager extends Interceptor {
     }
   }
 
-  static Future<void> _saveCookies(Account account, Response response) async {
+  static Future<void> _saveCookies(
+    _RequestAccountBinding binding,
+    Response response,
+  ) async {
+    final options = response.requestOptions;
+    if (!_isCurrentBinding(binding, options)) return;
+    final account = binding.account;
     final setCookies = response.headers[HttpHeaders.setCookieHeader];
     if (setCookies == null || setCookies.isEmpty) {
       return;
@@ -195,19 +211,26 @@ class AccountManager extends Interceptor {
     final isRedirectRequest = statusCode >= 300 && statusCode < 400;
     final originalUri = response.requestOptions.uri;
     final realUri = originalUri.resolveUri(response.realUri);
-    await account.cookieJar.saveFromResponse(realUri, cookies);
+    if (!_isCurrentBinding(binding, options)) return;
+    final saving = account.cookieJar.saveFromResponse(realUri, cookies);
+    Accounts.notifyCookieMutation(account);
+    await saving;
+    if (!_isCurrentBinding(binding, options)) return;
     if (isRedirectRequest && locations.isNotEmpty) {
       final originalUri = response.realUri;
-      await Future.wait(
-        locations.map(
-          (location) => account.cookieJar.saveFromResponse(
-            // Resolves the location based on the current Uri.
-            originalUri.resolve(location),
-            cookies,
-          ),
-        ),
-      );
+      for (final location in locations) {
+        if (!_isCurrentBinding(binding, options)) return;
+        final redirectSaving = account.cookieJar.saveFromResponse(
+          // Resolves the location based on the current Uri.
+          originalUri.resolve(location),
+          cookies,
+        );
+        Accounts.notifyCookieMutation(account);
+        await redirectSaving;
+        if (!_isCurrentBinding(binding, options)) return;
+      }
     }
+    if (!_isCurrentBinding(binding, options)) return;
     await account.onChange();
   }
 
@@ -226,21 +249,48 @@ class AccountManager extends Interceptor {
           ),
         );
 
-  static Account _bindRequestAccount(RequestOptions options) {
+  static _RequestAccountBinding _bindRequestAccount(RequestOptions options) {
+    // A retry/redirect keeps the first binding, even if that generation was
+    // revoked. Never recapture an anonymous singleton's new credentials here.
+    if (options.extra[_bindingKey] case final _RequestAccountBinding binding) {
+      return binding;
+    }
     assert(options.extra['account'] is Account?);
-    return options.extra['account'] ??= _findAccount(options.path);
+    final Account account = options.extra['account'] ??= _findAccount(options.path);
+    final binding = _RequestAccountBinding(account, Accounts.captureRequest(account));
+    options.extra[_bindingKey] = binding;
+    return binding;
   }
 
-  static Account? _boundRequestAccount(RequestOptions options) {
+  static _RequestAccountBinding? _boundRequestAccount(RequestOptions options) {
     final path = options.path;
-    final account = options.extra['account'] as Account;
+    final binding = options.extra[_bindingKey];
+    if (binding is! _RequestAccountBinding) return null;
+    final account = binding.account;
     if (account is NoAccount ||
         path.startsWith(HttpString.appBaseUrl) ||
         _skipCookie(path)) {
       return null;
     }
-    return account;
+    return binding;
   }
+
+  static bool _isCurrentBinding(
+    _RequestAccountBinding binding,
+    RequestOptions options,
+  ) {
+    final stamp = binding.stamp;
+    return stamp != null &&
+        identical(options.extra['account'], binding.account) &&
+        identical(stamp.account, binding.account) &&
+        Accounts.isCurrentRequest(stamp);
+  }
+
+  static DioException _revokedRequest(RequestOptions options) =>
+      DioException.requestCancelled(
+        requestOptions: options,
+        reason: 'Account credentials are no longer current',
+      );
 
   static Future<String> dioError(DioException error) async {
     switch (error.type) {
@@ -272,6 +322,13 @@ class AccountManager extends Interceptor {
         return '$desc网络异常 ${error.error}';
     }
   }
+}
+
+final class _RequestAccountBinding {
+  final Account account;
+  final AccountRequestStamp<Account>? stamp;
+
+  const _RequestAccountBinding(this.account, this.stamp);
 }
 
 extension _ConnectivityResultExt on ConnectivityResult {
