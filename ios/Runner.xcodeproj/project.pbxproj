@@ -60,6 +60,8 @@
 		0F9D5D62ADEC8C333152CEE3 /* PiliPreparedHTTPRequestExecutor.swift in Sources */ = {isa = PBXBuildFile; fileRef = F08C2CCC3104A978C5D076FF /* PiliPreparedHTTPRequestExecutor.swift */; };
 		0B215615A50D1A502CEE1D27 /* PiliRawHTTPClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1B1B89395D20BBFE6F2772CC /* PiliRawHTTPClient.swift */; };
 		CF02D4512CE5EF6B8C04712D /* PiliHTTPTransport in Frameworks */ = {isa = PBXBuildFile; productRef = 57DAA2A048946F1A27BFB802 /* PiliHTTPTransport */; };
+		B2007F7337610B1A1A4BC170 /* PiliNativeSigner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3B675A2F6F5456C5D5B0EC55 /* PiliNativeSigner.swift */; };
+		26D0B01CC5781A76CCE83361 /* PiliWBIKeyProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = EA4DB28013F6CEA600E4B528 /* PiliWBIKeyProvider.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -140,6 +142,8 @@
 		12C66906E5A2FD55A74B2A46 /* PiliHTTPPolicyCapability.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PiliHTTPPolicyCapability.swift; sourceTree = "<group>"; };
 		F08C2CCC3104A978C5D076FF /* PiliPreparedHTTPRequestExecutor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PiliPreparedHTTPRequestExecutor.swift; sourceTree = "<group>"; };
 		1B1B89395D20BBFE6F2772CC /* PiliRawHTTPClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PiliRawHTTPClient.swift; sourceTree = "<group>"; };
+		3B675A2F6F5456C5D5B0EC55 /* PiliNativeSigner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PiliNativeSigner.swift; sourceTree = "<group>"; };
+		EA4DB28013F6CEA600E4B528 /* PiliWBIKeyProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PiliWBIKeyProvider.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -387,6 +391,7 @@
 		BBFAA65DC4BAE11B5A2171D0 /* Networking */ = {
 			isa = PBXGroup;
 			children = (
+				FE21F5CEC6BA1C8F2B9F5A0D /* Auth */,
 				EE4C9E898589491CAA59202C /* HTTP */,
 			);
 			path = Networking;
@@ -430,6 +435,15 @@
 				F08C2CCC3104A978C5D076FF /* PiliPreparedHTTPRequestExecutor.swift */,
 			);
 			path = HTTP;
+			sourceTree = "<group>";
+		};
+		FE21F5CEC6BA1C8F2B9F5A0D /* Auth */ = {
+			isa = PBXGroup;
+			children = (
+				EA4DB28013F6CEA600E4B528 /* PiliWBIKeyProvider.swift */,
+				3B675A2F6F5456C5D5B0EC55 /* PiliNativeSigner.swift */,
+			);
+			path = Auth;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -611,6 +625,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				26D0B01CC5781A76CCE83361 /* PiliWBIKeyProvider.swift in Sources */,
+				B2007F7337610B1A1A4BC170 /* PiliNativeSigner.swift in Sources */,
 				0B215615A50D1A502CEE1D27 /* PiliRawHTTPClient.swift in Sources */,
 				0F9D5D62ADEC8C333152CEE3 /* PiliPreparedHTTPRequestExecutor.swift in Sources */,
 				ED998B24B0EB7594B34C28EC /* PiliHTTPPolicyCapability.swift in Sources */,

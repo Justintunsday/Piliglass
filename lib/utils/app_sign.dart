@@ -8,6 +8,7 @@ abstract final class AppSign {
     Map<String, dynamic> params, {
     String appkey = Constants.appKey,
     String appsec = Constants.appSec,
+    int? epochSeconds,
   }) {
     // retry error
     // assert(
@@ -15,12 +16,19 @@ abstract final class AppSign {
     //   'appkey-appsec should be provided in appSign',
     // );
     params['appkey'] = appkey;
-    params['ts'] = (DateTime.now().millisecondsSinceEpoch ~/ 1000).toString();
+    params['ts'] =
+        (epochSeconds ?? DateTime.now().millisecondsSinceEpoch ~/ 1000).toString();
+    params['sign'] = md5
+        .convert(utf8.encode(makeSigningQuery(params) + appsec))
+        .toString(); // 获取MD5哈希值
+  }
+
+  /// Uses the production Uri-compatible encoder, including assert-mode null
+  /// handling. The signer deliberately includes an existing `sign` field.
+  static String makeSigningQuery(Map<String, dynamic> params) {
     final sorted = params.entries.toList()
       ..sort((a, b) => a.key.compareTo(b.key));
-    params['sign'] = md5
-        .convert(utf8.encode(_makeQueryFromParametersDefault(sorted) + appsec))
-        .toString(); // 获取MD5哈希值
+    return _makeQueryFromParametersDefault(sorted);
   }
 
   /// from [Uri]

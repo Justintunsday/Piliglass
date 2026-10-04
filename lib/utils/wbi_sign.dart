@@ -59,19 +59,28 @@ abstract final class WbiSign {
   }
 
   // 为请求参数进行 wbi 签名
-  static void encWbi(Map<String, Object> params, String mixinKey) {
-    params['wts'] = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+  static void encWbi(
+    Map<String, Object> params,
+    String mixinKey, {
+    int? epochSeconds,
+  }) {
+    params['wts'] = epochSeconds ?? DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    params['w_rid'] = md5
+        .convert(utf8.encode(makeSigningQuery(params) + mixinKey))
+        .toString(); // 计算 w_rid
+  }
+
+  /// The production encoder, also consumed by the native migration golden.
+  /// Values in [params] stay unchanged; filtering applies only to signing bytes.
+  static String makeSigningQuery(Map<String, Object> params) {
     // 按照 key 重排参数
     final List<String> keys = params.keys.toList()..sort();
-    final queryStr = keys
+    return keys
         .map(
           (i) =>
               '${Uri.encodeComponent(i)}=${Uri.encodeComponent(params[i].toString().replaceAll(_chrFilter, ''))}',
         )
         .join('&');
-    params['w_rid'] = md5
-        .convert(utf8.encode(queryStr + mixinKey))
-        .toString(); // 计算 w_rid
   }
 
   static Future<String> _getWbiKeys() async {
@@ -92,8 +101,8 @@ abstract final class WbiSign {
     }
   }
 
-  static FutureOr<String> getWbiKeys() {
-    final nowDate = DateTime.now();
+  static FutureOr<String> getWbiKeys({DateTime? at}) {
+    final nowDate = at ?? DateTime.now();
     if (DateTime.fromMillisecondsSinceEpoch(
           _localCache.get(LocalCacheKey.timeStamp, defaultValue: 0) as int,
         ).day ==
