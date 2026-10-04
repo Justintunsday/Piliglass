@@ -73,6 +73,11 @@ Player orchestration -> Playback / Subtitle / Danmaku repositories
 
 ## 阶段与提交边界
 
+2026-10-04 优先级调整：用户要求重新做 UI，并选择原生玻璃风格。先闭环 P05a2a 的
+实际 CI（338bc39 release 成功、导航 preview 失败，尚未完成），然后按
+[UI_REDESIGN.md](UI_REDESIGN.md) 从 UI01 Home 开始。P05a2b 的只读方案保留，暂缓
+实现；完整原生业务和 Flutter 删除门禁不变。UI 重设计按领域实施，继续拆分巨型文件。
+
 | 阶段 | 可回滚交付 | 进入下一阶段的门禁 | 状态 |
 |---|---|---|---|
 | P00 | 本计划+可重现 inventory；修复现有 preview 分页失败；扩充迁移目录 workflow path | 同一 SHA release+preview 成功 | 已验证 ad0e8b5 |
