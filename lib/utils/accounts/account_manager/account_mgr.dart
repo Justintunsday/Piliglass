@@ -6,6 +6,7 @@ import 'package:PiliPlus/http/constants.dart';
 import 'package:PiliPlus/models/common/account_type.dart';
 import 'package:PiliPlus/utils/accounts.dart';
 import 'package:PiliPlus/utils/accounts/account.dart';
+import 'package:PiliPlus/utils/accounts/account_manager/response_cookie_headers.dart';
 import 'package:PiliPlus/utils/accounts/api_type.dart';
 import 'package:PiliPlus/utils/app_sign.dart';
 import 'package:PiliPlus/utils/extension/string_ext.dart';
@@ -16,8 +17,6 @@ import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
 import 'package:material_ui/material_ui.dart';
-
-final _setCookieReg = RegExp('(?<=)(,)(?=[^;]+?=)');
 
 class AccountManager extends Interceptor {
   AccountManager();
@@ -187,12 +186,10 @@ class AccountManager extends Interceptor {
     if (setCookies == null || setCookies.isEmpty) {
       return;
     }
-    final List<Cookie> cookies = setCookies
-        .map((str) => str.split(_setCookieReg))
-        .expand((cookie) => cookie)
-        .where((cookie) => cookie.isNotEmpty)
-        .map(Cookie.fromSetCookieValue)
-        .toList();
+    final cookies = parseResponseCookieHeaders(
+      setCookies,
+      source: SetCookieSource.dioLegacyPossiblyFolded,
+    ).cookies;
     final statusCode = response.statusCode ?? 0;
     final locations = response.headers[HttpHeaders.locationHeader] ?? const [];
     final isRedirectRequest = statusCode >= 300 && statusCode < 400;

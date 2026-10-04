@@ -8,6 +8,8 @@
 1. P05a1：抽出共享 Cookie response parser，验证分离与合并 Set-Cookie、Expires、
    同名/domain/path 与歧义输入；建立账户选择 revision 和凭据 generation 的窄接口。
    不切换 HTTP，不扁平化 CookieJar；需要真实 Dart fixture、Darwin wire fixture 和 CI。
+   拆为 P05a1a parser/wire（实施中，详见 COOKIE_HEADERS.md）与 P05a1b revision/generation
+   （未实施）；前者 CI 成功后再修改账户生命周期。
 2. P05a2：独立 Dart lease service、Swift Domain context protocol 与 Bridge adapter。
    验证 prepare/finish/abandon、原账户写回、刷新/删除/重置、取消/重复完成与释放。
    每个代码阶段分别 commit/push，完整 release+preview CI 成功后才能继续。
