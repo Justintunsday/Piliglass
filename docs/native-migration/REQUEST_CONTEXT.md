@@ -139,7 +139,7 @@ prepare 复用现有 cancellable invoker，以本地 requestID 处理错误、�
 和 false gate，不使用 UI/Search 的宽松 coercion。fixture 覆盖取消竞争/late callback/
 重复终结/timeout；仍不创建 URLRequest、不接 production runtime，Aether/UI 不依赖此协议。
 
-P05a2b 的持有范围与错误语义：终结器只保留 requestID/leaseID 和 invoker，不重复保留
+P05a2b 的持有范围与错误语义：registry/终结器只保留 token、operation 与 transport，不重复保留
 Cookie/headers 快照；Domain context 为值类型，调用方持有的副本不等于账户对象。
 严格 codec 不接受 double/bool/string 代替整数，也不把非 bool 的 gate 强制转换；固定
 endpoint/query/GET、UUID、header token/CRLF 及完整字段 shape 必须验证。错误响应与
@@ -166,7 +166,8 @@ leaseMismatch / notPrepared，也保持本地门禁关闭，不自动发送第�
 preclaim 拒绝的 Dart lease 可能依靠有限 TTL 释放，这与正常立即释放明确区分。
 
 2026-10-04 用户确认先继续 PLAN.md 原生化主线，UI 重写最后实施。上述 P05a2b 计划
-保持下一阶段；UI 的原生玻璃风格与独立方案保存但暂不编码。
+保持下一阶段；UI 的原生玻璃风格与独立方案保存但暂不编码。四个 Swift 文件与专属
+Swift 6 fixture 已实现、尚待真实 CI，范围与限制见 [REQUEST_CONTEXT_SWIFT.md](REQUEST_CONTEXT_SWIFT.md)。
 
 ## Set-Cookie 实测门禁
 

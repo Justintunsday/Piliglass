@@ -77,7 +77,7 @@ Player orchestration -> Playback / Subtitle / Danmaku repositories
 UI。继续 P05→P12 原生化主线和 Flutter 删除门禁；当前必要的 UI 拆分/兼容修复依然
 属于迁移，视觉重设计暂缓。[UI_REDESIGN.md](UI_REDESIGN.md) 和品牌规范保留为后续
 执行方案，不提前实施。P05a2a 已在 c0fbdbf 同 SHA release + 全 preview 成功闭环；
-继续 P05a2b Swift adapter。
+继续 P05a2b Swift adapter；已实现并等待 CI，见 [REQUEST_CONTEXT_SWIFT.md](REQUEST_CONTEXT_SWIFT.md)。
 
 | 阶段 | 可回滚交付 | 进入下一阶段的门禁 | 状态 |
 |---|---|---|---|

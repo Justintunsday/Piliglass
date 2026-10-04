@@ -20,6 +20,8 @@ on:
       - "tool/check_native_search.swift"
       - "tool/check_native_http.py"
       - "tool/check_native_http.swift"
+      - "tool/check_native_request_context.py"
+      - "tool/check_native_request_context.swift"
       - "tool/check_native_cookie_wire.py"
       - "tool/check_native_cookie_wire.swift"
       - "tool/check_response_cookie_headers.dart"
@@ -43,6 +45,8 @@ on:
       - "tool/check_native_search.swift"
       - "tool/check_native_http.py"
       - "tool/check_native_http.swift"
+      - "tool/check_native_request_context.py"
+      - "tool/check_native_request_context.swift"
       - "tool/check_native_cookie_wire.py"
       - "tool/check_native_cookie_wire.swift"
       - "tool/check_response_cookie_headers.dart"
@@ -63,6 +67,21 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  native-request-context-core:
+    name: Verify native request context contracts with Swift 6
+    runs-on: macos-26
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - name: Compile and verify production context, codec and cancellation cleanup
+        run: python3 tool/check_native_request_context.py
+      - name: Upload native request context evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: native-request-context-contracts
+          path: build/native-request-context-check/
+          if-no-files-found: warn
   native-http-core:
     name: Verify native HTTP contracts with Swift 6
     runs-on: macos-26
