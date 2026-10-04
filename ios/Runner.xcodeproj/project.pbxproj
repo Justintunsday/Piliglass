@@ -62,6 +62,12 @@
 		CF02D4512CE5EF6B8C04712D /* PiliHTTPTransport in Frameworks */ = {isa = PBXBuildFile; productRef = 57DAA2A048946F1A27BFB802 /* PiliHTTPTransport */; };
 		B2007F7337610B1A1A4BC170 /* PiliNativeSigner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3B675A2F6F5456C5D5B0EC55 /* PiliNativeSigner.swift */; };
 		26D0B01CC5781A76CCE83361 /* PiliWBIKeyProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = EA4DB28013F6CEA600E4B528 /* PiliWBIKeyProvider.swift */; };
+		70F0FC420834BF5387E5958C /* PiliAccountRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4ECB985E2FA8FD588F4CFF8C /* PiliAccountRepository.swift */; };
+		0A22E1A436618D14ECB7D6E5 /* PiliAccountSnapshotBridgeCodec.swift in Sources */ = {isa = PBXBuildFile; fileRef = 135BB5F4B652128F4D42EB9C /* PiliAccountSnapshotBridgeCodec.swift */; };
+		2A25326AF9CAC9DB0D556161 /* PiliAccountFlutterRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = C36E25B49F6BAE87008C5D72 /* PiliAccountFlutterRepository.swift */; };
+		F1387E7B86E2FCAEBABBB5F0 /* PiliAccountStagingBridgeCodec.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8A8AA1D63495F012D864BEB8 /* PiliAccountStagingBridgeCodec.swift */; };
+		ECEE5CEF1D88BA5AE13322A3 /* PiliAccountSecretStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = D42F8AA867A46A8C1630B757 /* PiliAccountSecretStore.swift */; };
+		6BDC5839037D127C4A41C113 /* PiliAccountStagingStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 12F1F2B18C2AA05D548C69AF /* PiliAccountStagingStore.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -144,6 +150,12 @@
 		1B1B89395D20BBFE6F2772CC /* PiliRawHTTPClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PiliRawHTTPClient.swift; sourceTree = "<group>"; };
 		3B675A2F6F5456C5D5B0EC55 /* PiliNativeSigner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PiliNativeSigner.swift; sourceTree = "<group>"; };
 		EA4DB28013F6CEA600E4B528 /* PiliWBIKeyProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PiliWBIKeyProvider.swift; sourceTree = "<group>"; };
+		4ECB985E2FA8FD588F4CFF8C /* PiliAccountRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PiliAccountRepository.swift; sourceTree = "<group>"; };
+		135BB5F4B652128F4D42EB9C /* PiliAccountSnapshotBridgeCodec.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PiliAccountSnapshotBridgeCodec.swift; sourceTree = "<group>"; };
+		C36E25B49F6BAE87008C5D72 /* PiliAccountFlutterRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PiliAccountFlutterRepository.swift; sourceTree = "<group>"; };
+		8A8AA1D63495F012D864BEB8 /* PiliAccountStagingBridgeCodec.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PiliAccountStagingBridgeCodec.swift; sourceTree = "<group>"; };
+		D42F8AA867A46A8C1630B757 /* PiliAccountSecretStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PiliAccountSecretStore.swift; sourceTree = "<group>"; };
+		12F1F2B18C2AA05D548C69AF /* PiliAccountStagingStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PiliAccountStagingStore.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -235,6 +247,7 @@
 		8CE5C8FE3101320DFB8A03DC /* Native */ = {
 			isa = PBXGroup;
 			children = (
+				67B309F84ECF03BEBD325DB6 /* Persistence */,
 				1C4369FEE8B6786EF94AE699 /* Domain */,
 				BBFAA65DC4BAE11B5A2171D0 /* Networking */,
 				8B27EB6D10F8ABF893C8A9EA /* Data */,
@@ -414,6 +427,7 @@
 		6C5E477A33DF5A252064DAE0 /* Accounts */ = {
 			isa = PBXGroup;
 			children = (
+				4ECB985E2FA8FD588F4CFF8C /* PiliAccountRepository.swift */,
 				1C41030C5583C3179EA46900 /* PiliHTTPRequestContext.swift */,
 			);
 			path = Accounts;
@@ -422,6 +436,9 @@
 		78B63C7D8759D502A411914B /* Accounts */ = {
 			isa = PBXGroup;
 			children = (
+				8A8AA1D63495F012D864BEB8 /* PiliAccountStagingBridgeCodec.swift */,
+				C36E25B49F6BAE87008C5D72 /* PiliAccountFlutterRepository.swift */,
+				135BB5F4B652128F4D42EB9C /* PiliAccountSnapshotBridgeCodec.swift */,
 				56403E1F9C7AC1660FC87B1F /* PiliHTTPRequestHeaderFinalizer.swift */,
 				C9FA15AA400AA5722B1D203E /* PiliFlutterHTTPRequestContextProvider.swift */,
 				6FED43C9A9D81C1F710CE3BF /* PiliHTTPRequestContextBridgeCodec.swift */,
@@ -444,6 +461,23 @@
 				3B675A2F6F5456C5D5B0EC55 /* PiliNativeSigner.swift */,
 			);
 			path = Auth;
+			sourceTree = "<group>";
+		};
+		67B309F84ECF03BEBD325DB6 /* Persistence */ = {
+			isa = PBXGroup;
+			children = (
+				AE571D00BC1FD9BF9ED08947 /* Accounts */,
+			);
+			path = Persistence;
+			sourceTree = "<group>";
+		};
+		AE571D00BC1FD9BF9ED08947 /* Accounts */ = {
+			isa = PBXGroup;
+			children = (
+				12F1F2B18C2AA05D548C69AF /* PiliAccountStagingStore.swift */,
+				D42F8AA867A46A8C1630B757 /* PiliAccountSecretStore.swift */,
+			);
+			path = Accounts;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -625,6 +659,12 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				6BDC5839037D127C4A41C113 /* PiliAccountStagingStore.swift in Sources */,
+				ECEE5CEF1D88BA5AE13322A3 /* PiliAccountSecretStore.swift in Sources */,
+				F1387E7B86E2FCAEBABBB5F0 /* PiliAccountStagingBridgeCodec.swift in Sources */,
+				2A25326AF9CAC9DB0D556161 /* PiliAccountFlutterRepository.swift in Sources */,
+				0A22E1A436618D14ECB7D6E5 /* PiliAccountSnapshotBridgeCodec.swift in Sources */,
+				70F0FC420834BF5387E5958C /* PiliAccountRepository.swift in Sources */,
 				26D0B01CC5781A76CCE83361 /* PiliWBIKeyProvider.swift in Sources */,
 				B2007F7337610B1A1A4BC170 /* PiliNativeSigner.swift in Sources */,
 				0B215615A50D1A502CEE1D27 /* PiliRawHTTPClient.swift in Sources */,
