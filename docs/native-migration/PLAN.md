@@ -82,7 +82,7 @@ Player orchestration -> Playback / Subtitle / Danmaku repositories
 | P02b | 分批拆 Home/Account、DTO 与播放器控制/弹幕组件 | 导航/生命周期/布局回归和 iOS release | 待开始；按领域接口切片穿插推进 |
 | P03 | SearchRepository、typed result、可取消 bridge、独立 Search model；显式排序历史副作用 | Swift 6 strict core fixtures、现有搜索路径、完整 release+preview CI | 已验证 7ff23b9；请求与存储仍用 Dart adapter |
 | P04 | URLSession client+只读 discovery native slice；运行时切换前先满足 P05 最小账户 context 边界 | URLProtocol HTTP/API error/取消 fixture；真实 API/账户对照；CI | P04a 已验证 b0c098a；runtime 未切换，P04b 待 P05，详见 HTTP.md |
-| P05 | 认证/Cookie/签名/用途账户 snapshot 边界，逐项 native cutover | 固定签名、登录/退出/换号/重启实际验收、CI | P05a1a 已验证 834c3b9；P05a1b generation 实施中待 CI，lease 未实施，详见 REQUEST_CONTEXT.md |
+| P05 | 认证/Cookie/签名/用途账户 snapshot 边界，逐项 native cutover | 固定签名、登录/退出/换号/重启实际验收、CI | P05a1a 已验证 834c3b9；P05a1b generation 已验证 15a7f9d；P05a2a lease 下一阶段，详见 REQUEST_CONTEXT.md |
 | P06 | Home/Video/Profile/Library/Comments/Dynamics REST 逐领域迁移 | 每个领域独立 commit+fixture+原路径对照+CI；不跨领域大提交 | 待开始 |
 | P07 | Codable/domain、versioned local persistence 与 Hive 导入 | 设置/历史/账户/下载不丢失，导入重复执行/回滚，CI | 待开始 |
 | P08 | protobuf schema 来源固定、gRPC metadata/framing/unary 按服务迁移 | 二进制 fixtures、status/trailers/compression、真实请求与 CI | 待开始 |

@@ -1,6 +1,6 @@
 # P05a1b：账户凭据代次与响应写回边界
 
-2026-10-04，实施中，等待真实 CI。HTTP 与 Hive runtime 仍由 Dart 供应，
+2026-10-04，已通过同 SHA 的完整 release 与全部 preview（15a7f9d）。HTTP 与 Hive runtime 仍由 Dart 供应，
 尚未建立 Native context lease，也未迁移登录网络或存储。
 
 ## 可回滚切片
@@ -38,6 +38,26 @@ Flutter fixtures 用真实 Hive account/cookie/type adapters、临时 setting/lo
 和整个 `test/utils/accounts/`，上传分析、runtime JSON、Flutter test log。显式 `shell: bash`
 启用 pipefail，确保 `tee` 不掩盖失败；共享 Cookie parser step 同样启用。
 完成依据仍是同 SHA 的完整 Runner release、FFmpeg load order 与全部 preview 成功。
+
+## 实际 CI 证据
+
+最终代码 `15a7f9de53871a39a1bbe3e94d8638a95c94a49b` 的
+[完整 release](https://github.com/Justintunsday/Piliglass/actions/runs/37177848831) 与
+[全部 preview](https://github.com/Justintunsday/Piliglass/actions/runs/37177850629) 均成功。
+定向 analyze 无问题，Dart 3.13.4 实际执行 72 项 tracker 检查与 22 个 Flutter/Hive/Dio
+测试，包含生产 RetryInterceptor 重定向、同 MID 并发安装和重叠匿名 reset。
+Cookie wire 70、parser 122、HTTP 74、Search 63 检查继续通过。Runner 日志确认
+`BUILD SUCCEEDED`、677 双语 keys 和 Aether FFmpeg load order；压力报告 failures=[]，
+1,000 评论懒加载/离屏不分页/末条分页，100,000 弹幕完整保留、活跃上限 60。
+
+首轮 a19fe5a 的 release 成功，但 preview 的竖屏双击暂停断言失败。读取实际日志、
+XCUI 附件和录屏后确认该次未触发暂停；坐标正确、横屏成功，具体根因未证明。
+15a7f9d 保留相同生产播放器和测试断言，两项播放器测试实际通过；没有通过放宽断言
+掩盖旧失败。新增账户测试与两处 lint 修正随最终提交重新验证了全部门禁。
+
+生产 RetryInterceptor 在 AccountManager 之前消费中间 302 的既有行为仍保留；新增
+测试验证最终响应写回首次账户，不宣称中间 302 Cookie 已保存。当前 pinned CookieJar
+mutation 在 async body 首段同步执行；这些检查不证明任意未来异步 jar 的内部写入安全。
 
 ## 保留的限制
 

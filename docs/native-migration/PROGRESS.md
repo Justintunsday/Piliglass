@@ -12,6 +12,7 @@
 | P03 | 7ff23b9 | [成功，含 Swift 6 core](https://github.com/Justintunsday/Piliglass/actions/runs/37140033171) | [全部成功](https://github.com/Justintunsday/Piliglass/actions/runs/37139965902) | Native Search state、typed Repository 与临时 Dart adapter 完成 |
 | P04a | aa8e3c4 -> b0c098a | [成功，含 HTTP/Search Swift 6 core](https://github.com/Justintunsday/Piliglass/actions/runs/37163367936) | [全部成功](https://github.com/Justintunsday/Piliglass/actions/runs/37163367691) | Native HTTP Client/热榜 Service fixture 完成；runtime 未切换 |
 | P05a1a | dc8bbbb -> 834c3b9 | [成功，含 Cookie wire/parser](https://github.com/Justintunsday/Piliglass/actions/runs/37165907525) | [全部成功](https://github.com/Justintunsday/Piliglass/actions/runs/37165910178) | 共享响应 Cookie parser 与表示门禁完成；账户/context/runtime 未切换 |
+| P05a1b | a19fe5a -> 15a7f9d | [成功，含账户生命周期测试](https://github.com/Justintunsday/Piliglass/actions/runs/37177848831) | [全部成功](https://github.com/Justintunsday/Piliglass/actions/runs/37177850629) | 账户 generation/存储所有权与 Dio 写回边界完成；Native lease/runtime 未切换 |
 
 P00 证据：inventory 包含 59 个 bridge commands、62 个注册 Flutter routes、311 个 REST 常量、45 个 gRPC 常量、95 个依赖。压力检查 `failures=[]`，1,000 条评论保持懒加载、未在离屏处触发分页、实际末条出现后分页成功；100,000 条弹幕保留，活跃渲染上限 60。仅测试 harness 调整了懒加载自适应行定位等待；没有修改生产 UI 或业务。
 
@@ -110,3 +111,25 @@ analyze 无问题；HTTP 74/Search 63 通过。完整 Runner `BUILD SUCCEEDED`�
 
 下一阶段 P05a1b 的 identity generation、存储所有权、匿名 reset、普通/临时选择及
 真实 Hive/Dio 测试计划已保存到 REQUEST_CONTEXT.md；不改 Hive schema，不切换 HTTP。
+
+P05a1b 范围：identity request stamp 与 snapshot revision 分开；显式安装/导入、全部持久
+账户注册、当前 Hive owner 校验、同 MID 陈旧对象不能回写/删除、reset 期间禁止 capture。
+Dio 首次绑定沿用到 retry/redirect，撤销后禁止再次发送；有效 A 在普通换号后仍写回 A。
+用途继承和临时无痕语义保留；clear 在首次 await 前撤销全部 generation。无功能/资源删除。
+
+首轮 a19fe5a 的 [release](https://github.com/Justintunsday/Piliglass/actions/runs/37167645743)
+成功，19 个 Flutter 测试通过，但 [preview](https://github.com/Justintunsday/Piliglass/actions/runs/37167647429)
+竖屏双击暂停断言失败。实际日志、附件/录屏确认未触发暂停；坐标正确、横屏通过，根因
+未证明。补充生产 RetryInterceptor 与交错安装/reset 测试并修正两处 lint，commit+push
+15a7f9d 后全量重跑。播放器生产代码和断言未改变，新结果两项测试均通过。
+
+最终两条 workflow headSha 均为 `15a7f9de53871a39a1bbe3e94d8638a95c94a49b` 且全部成功。
+下载实际产物：定向 analyze 无问题，72 项纯 Dart tracker 检查、22 个真实 Hive/Dio 测试；
+Cookie wire 70/parser 122、HTTP 74/Search 63 继续通过。Runner `BUILD SUCCEEDED`、677
+双语 keys 和 FFmpeg order 通过；视频报告 failures=[]，1,000 评论懒加载/离屏不分页/
+末条分页通过，100,000 弹幕完整保留、活跃上限 60。Windows 静态检查未作为编译证据。
+
+当前仍为 Dart 账户/HTTP/Hive runtime；中间 302 Cookie 的既有 RetryInterceptor 行为
+未扩展，Native 取消/歧义 transport 未解决。详情见 ACCOUNT_REQUEST_STATE.md。
+下一阶段 P05a2a 的 lease/薄命令及后续 Swift adapter/transport 切片已保存到
+REQUEST_CONTEXT.md；保持 executionAllowed=false 后推进，尚不切换热榜请求。

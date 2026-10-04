@@ -1,6 +1,6 @@
 # P05a：请求上下文与 Cookie 切换前置计划
 
-2026-10-04，P05a1a parser/wire 已通过真实 CI；账户 generation 实施中、等待 CI，lease 尚未实施。
+2026-10-04，P05a1a parser/wire 与 P05a1b 账户 generation 已通过真实 CI；lease 尚未实施。
 本文件记录下一阶段的可执行边界，不代表 Native HTTP 已接入运行时。
 
 ## 分阶段实施
@@ -9,7 +9,7 @@
    同名/domain/path 与歧义输入；建立账户选择 revision 和凭据 generation 的窄接口。
    不切换 HTTP，不扁平化 CookieJar；需要真实 Dart fixture、Darwin wire fixture 和 CI。
    拆为 P05a1a parser/wire（已验证 834c3b9，详见 COOKIE_HEADERS.md）与 P05a1b revision/generation
-   （实施中、待 CI，详见 ACCOUNT_REQUEST_STATE.md）；前者 CI 成功后再修改账户生命周期。
+   （已验证 15a7f9d，详见 ACCOUNT_REQUEST_STATE.md）；前者 CI 成功后再修改账户生命周期。
 2. P05a2：独立 Dart lease service、Swift Domain context protocol 与 Bridge adapter。
    验证 prepare/finish/abandon、原账户写回、刷新/删除/重置、取消/重复完成与释放。
    每个代码阶段分别 commit/push，完整 release+preview CI 成功后才能继续。
@@ -55,7 +55,7 @@ identity 也不够。凭据替换必须显式撤销 generation 并检查存储�
 这些保护必须同时覆盖现有 Dart `_saveCookies`/`LoginAccount.onChange`，不能只用于
 Native finish，否则旧的在途 Dio 响应仍能绕过 lease 恢复过期凭据。
 
-## P05a1b 已审查的实施边界（实施中，待 CI）
+## P05a1b 已审查的实施边界（已验证 15a7f9d）
 
 建立不导入 Flutter/Account 的泛型 identity tracker，再由账户层提供显式安装凭据、
 导入、持久选择、临时选择、capture/isCurrent/revoke 的窄接口。generation 和 revision
@@ -97,7 +97,35 @@ DefaultCookieJar save/delete 的 async body 内无 await；Hive put 先同步更
 CI 在 Flutter setup 与 iOS patch 完成后运行纯 Dart fixture，以及
 `flutter test --no-pub --reporter expanded test/utils/accounts/` 和定向 analyze；增加测试
 触发路径。继续以完整 release、FFmpeg load order 与全部 preview 同 SHA 成功作为阶段门禁。
-本节是可执行计划；实现与限制见 ACCOUNT_REQUEST_STATE.md，尚未完成真实 CI 验证。
+实现、实际 CI 与限制见 ACCOUNT_REQUEST_STATE.md。
+
+## P05a2 的执行切片（修改前保存）
+
+P05a2a 先实现独立 Dart lease service、严格 command codec，以及 bridge 的三条薄路由：
+prepareNativeHTTPRequest / finishNativeHTTPRequest / abandonNativeHTTPRequest。
+不修改 Search runtime、URLSession、Hive schema 或网络设置，executionAllowed 固定 false。
+新代码落在 `lib/services/native_http/`，不把请求/Cookie 业务继续堆进 UI bridge。
+
+prepare 只允许 searchTrending、整数 limit 1...30；客户端发送前生成单次使用 requestID。
+第一次 await 前同步登记 pending，绑定实际 recommend account；先 capture stamp 再读取
+revision，复制实际 Dio base/account headers 与 referer，按真实 URI loadForRequest。
+await 后同时验证 registry record identity、推荐选择、revision、generation 与 owner；
+使用现有 getCookies 的 path/重复名称语义，返回不可变描述与 opaque leaseID。
+
+finish/abandon 在第一次 await 前共用一次性 terminal claim。响应 URL 的 origin/path/query
+须匹配；有效原账户 A 的响应不受普通 A→B 选择影响，同 MID 替换/delete/clear/reset 则
+拒绝旧 generation。完整解析 Cookie batch，Foundation 歧义零写入；非 2xx 也先处理 Cookie。
+每次实际 jar mutation 前、await 后和 Hive 更新前检查 owner，finally 释放，不恢复 lease。
+abandon 可取消 preparing/prepared，晚 load completion 不得重新安装；unknown ID 留下
+有限、无账户引用的 tombstone。单调 TTL 与数量上限只清理未消费 lease，不能重开已开始
+finish 的 gate；dispose 同步关闭并释放。有限 tombstone 不提供无限期重放防护。
+
+真实 Hive/Dio fixtures 覆盖推荐/主账户隔离、Cookie path/重复名/headers、prepare await 中
+变化、pending 取消、终结竞争/重复、TTL/容量/dispose、原账户写回、撤销与整批坏 Cookie。
+定向 analyze 与整个 accounts test 进入现有 pipefail CI；完整 release+全部 preview 同 SHA
+成功后才能进入 P05a2b。P05a2b 再实现 Swift Sendable context/adapter 与独立取消 cleanup，
+避免现有 invoker 丢弃 late prepare 回调导致 lease 泄漏。P05a2c 单独处理实际响应头生命周期
+和有效 transport policy；Foundation 字段边界与取消写回仍是 P04b runtime 切换门禁。
 
 ## Set-Cookie 实测门禁
 
