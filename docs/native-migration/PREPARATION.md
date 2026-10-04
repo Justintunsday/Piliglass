@@ -9,6 +9,7 @@
 |---|---|---|
 | [有效 HTTP policy](P05_EFFECTIVE_HTTP_POLICY_PLAN.md) | 实际Dart配置来源/代次描述、合同与wire矩阵 | 请求头生命周期、有效timeout/proxy/trust/retry/compression、字段保存transport |
 | [Policy lease/Swift codec](P05_POLICY_LEASE_PLAN.md) | await前后完整有效输入复查、versioned DTO与actualDart golden | Policy-1完整CI、原owner单次终结、能力判定和transport parity |
+| [Native policy 能力判定](P05_POLICY_CAPABILITY_PLAN.md) | 纯 evaluator/reasons、具体transport证据profile、发送前边界 | Policy-2完整CI；零发送fallback与原owner单次finish；Policy-4实际wire |
 | [账户与签名](P05_ACCOUNT_SIGNING_PLAN.md) | 固定实际Dart输出的纯signer、四用途readonly协议/快照 | 原owner/generation与单authority、完整现有登录/退出/存储验收 |
 | [首页/视频 REST](P06_HOME_VIDEO_REST_PLAN.md) | 窄Repository+Dart adapter、Root DTO/Feature拆分、纯参数/过滤/decoder | 各endpoint用途/签名/policy/lease，单路实际API对照 |
 | [模型与持久化](P07_MODELS_PERSISTENCE_PLAN.md) | 各领域DTO边界、真实Hive exporter、staging/restart/idempotence | 全caller单写authority、旧数据完整导入、切回兼容reverse-export |

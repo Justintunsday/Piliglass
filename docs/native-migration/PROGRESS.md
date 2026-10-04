@@ -283,3 +283,10 @@ owner/generation 与 Hive 写回不受新 policy/用途选择变化影响。运�
 provider 的跨语言验证步骤；旧 context/transfer fixture 同步协议字段。完整 ios.yml
 与全 ios-home-preview 尚待实际运行，本阶段未闭环。没有删功能、资源、依赖或更改
 Root/Player/Aether，也没有开始视觉 UI 重写。
+
+首轮 6a7bd54 的 release 37237477468：analyze 无问题，Swift 6 context 119、HTTP 和
+Search 独立 jobs 成功；Dart policy tests 31 通过/4 失败。两个重启 fixture 错误调用
+Accounts.init 重新赋值 late final account；Box 已关闭又使后续 golden setup 失败。
+修正为在独立冷启动进程的最后一项测试关闭/重开真实 Hive Box，直接检查磁盘反序列化
+结果，不重新初始化 Accounts singleton、不改变生产账户生命周期。旧 preview 将由
+同 SHA 全量重跑替代，不作为阶段闭环证据。继续保留实际重启原 owner 验证。

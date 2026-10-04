@@ -16,6 +16,7 @@ import 'package:dio/dio.dart';
 import 'package:dio/io.dart';
 import 'package:dio_http2_adapter/dio_http2_adapter.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:hive_ce/hive.dart';
 
 import '../utils/accounts/account_test_storage.dart';
 
@@ -156,32 +157,6 @@ void runPreparedHTTPPolicyFixtures({required bool http2}) {
     expect(snapshot.executionAllowed, isFalse);
     service.abandon(requestID: snapshot.requestID, leaseID: snapshot.leaseID);
   });
-  test('head completion keeps original Hive owner after policy change and purpose switch', () async {
-    final service = create();
-    final snapshot = await service.prepare(requestID: _requestID());
-    final original = account;
-    final other = LoginAccount(BiliCookieJar.fromJson({'DedeUserID': '999999'}), null, null)..activated = true;
-    await Accounts.installCredentials(other);
-    await Accounts.set(AccountType.recommend, other);
-    Request.resetAdaptersForNetworkChange();
-    Request.dio.options.receiveTimeout = const Duration(microseconds: 3333333);
-    final receipt = await service.finish(requestID: snapshot.requestID, leaseID: snapshot.leaseID,
-      response: NativeHTTPRequestLeaseResponse(url: snapshot.url, statusCode: 403,
-        cookieSource: SetCookieSource.separatedFields, setCookieValues: ['lease_cookie=original; Path=/']));
-    expect(receipt.outcome, NativeHTTPRequestLeaseOutcome.finished);
-    expect(receipt.cookiesSaved, isTrue);
-    await Accounts.account.flush();
-    await Accounts.account.close();
-    await Accounts.init();
-    final stored = Accounts.account.get(original.storageKey)!;
-    expect((await stored.cookieJar.loadForRequest(snapshot.url)).any((cookie) =>
-        cookie.name == 'lease_cookie' && cookie.value == 'original'), isTrue);
-    expect((await Accounts.account.get(other.storageKey)!.cookieJar.loadForRequest(snapshot.url))
-        .any((cookie) => cookie.name == 'lease_cookie'), isFalse);
-    expect((await service.finish(requestID: snapshot.requestID, leaseID: snapshot.leaseID,
-      response: NativeHTTPRequestLeaseResponse(url: snapshot.url, statusCode: 200,
-        cookieSource: SetCookieSource.separatedFields))).outcome, NativeHTTPRequestLeaseOutcome.consumed);
-  });
   test('real production bridge exports composed policies for Swift consumption', () async {
     final cases = <Map<String, Object?>>[];
     Future<void> export(String name, {bool h11 = false}) async {
@@ -238,6 +213,36 @@ void runPreparedHTTPPolicyFixtures({required bool http2}) {
     await output.writeAsString(jsonEncode({'source': 'actual Dart bridge + Hive + installed Request pool',
       'credentials': 'synthetic fixtures only; no external requests', 'http2': http2, 'cases': cases}));
   });
+  test('head completion keeps original Hive owner after policy change and purpose switch', () async {
+    final service = create();
+    final snapshot = await service.prepare(requestID: _requestID());
+    final original = account;
+    final other = LoginAccount(BiliCookieJar.fromJson({'DedeUserID': '999999'}), null, null)..activated = true;
+    await Accounts.installCredentials(other);
+    await Accounts.set(AccountType.recommend, other);
+    Request.resetAdaptersForNetworkChange();
+    Request.dio.options.receiveTimeout = const Duration(microseconds: 3333333);
+    final receipt = await service.finish(requestID: snapshot.requestID, leaseID: snapshot.leaseID,
+      response: NativeHTTPRequestLeaseResponse(url: snapshot.url, statusCode: 403,
+        cookieSource: SetCookieSource.separatedFields, setCookieValues: ['lease_cookie=original; Path=/']));
+    expect(receipt.outcome, NativeHTTPRequestLeaseOutcome.finished);
+    expect(receipt.cookiesSaved, isTrue);
+    await Accounts.account.flush();
+    await Accounts.account.close();
+    // Accounts.account is late final: reload the persisted Box independently
+    // at the end of this process, rather than assigning its singleton again.
+    final reopened = await Hive.openBox<LoginAccount>('account');
+    final stored = reopened.get(original.storageKey)!;
+    expect((await stored.cookieJar.loadForRequest(snapshot.url)).any((cookie) =>
+        cookie.name == 'lease_cookie' && cookie.value == 'original'), isTrue);
+    expect((await reopened.get(other.storageKey)!.cookieJar.loadForRequest(snapshot.url))
+        .any((cookie) => cookie.name == 'lease_cookie'), isFalse);
+    expect((await service.finish(requestID: snapshot.requestID, leaseID: snapshot.leaseID,
+      response: NativeHTTPRequestLeaseResponse(url: snapshot.url, statusCode: 200,
+        cookieSource: SetCookieSource.separatedFields))).outcome, NativeHTTPRequestLeaseOutcome.consumed);
+    await reopened.close();
+  });
+
 }
 
 class _ThrowingCloseAdapter extends IOHttpClientAdapter {
