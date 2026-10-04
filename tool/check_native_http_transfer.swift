@@ -115,9 +115,9 @@ private struct NativeHTTPTransferChecks {
     let observer = HeadObserver(cancelAfterHead: fixture.mode == "pending")
     var request = URLRequest(url: base.appendingPathComponent(fixture.id))
     request.httpShouldHandleCookies = false
-    var primitive: PiliURLSessionHTTPTransfer? = PiliURLSessionHTTPTransfer(session: session, request: request) { head in
+    var primitive: PiliURLSessionHTTPTransfer? = PiliURLSessionHTTPTransfer(session: session, request: request, onHead: { head in
       Task { await observer.received(head) }
-    }
+    })
     let weakTransfer = WeakTransferReference(primitive)
     await observer.bind(primitive!)
     let result: PiliHTTPTransferOutcome
@@ -159,14 +159,17 @@ private struct NativeHTTPTransferChecks {
   static func protocolOutcome(_ limit: Int, session: URLSession) async throws -> PiliHTTPTransferOutcome {
     let url = URL(string: "https://api.bilibili.com/x/v2/search/trending/ranking?limit=\(limit)")!
     let observer = HeadObserver(cancelAfterHead: limit == 12)
-    let primitive = PiliURLSessionHTTPTransfer(session: session, request: URLRequest(url: url)) { head in
+    let primitive = PiliURLSessionHTTPTransfer(session: session, request: URLRequest(url: url), onHead: { head in
       Task { await observer.received(head) }
-    }
+    })
     await observer.bind(primitive)
     let outcome = await primitive.run()
     try await until("URLProtocol head") { await observer.count == 1 }
     await observer.release()
     return outcome
+  }
+  nonisolated static func waitForFactory(_ semaphore: DispatchSemaphore) -> Bool {
+    semaphore.wait(timeout: .now() + 3) == .success
   }
   static func installationRaceChecks(base: URL, session: URLSession) async throws {
     for cancelRunningTask in [false, true] {
@@ -183,7 +186,8 @@ private struct NativeHTTPTransferChecks {
       let weakTransfer = WeakTransferReference(primitive)
       let running = Task.detached { [active = primitive!] in await active.run() }
       defer { release.signal() }
-      try expect(ready.wait(timeout: .now() + 3) == .success, "Real suspended data task reached pre-install factory window")
+      let entered = await Task.detached { waitForFactory(ready) }.value
+      try expect(entered, "Real suspended data task reached pre-install factory window")
       if cancelRunningTask { running.cancel() } else { primitive!.cancel() }
       release.signal()
       let outcome = await running.value
