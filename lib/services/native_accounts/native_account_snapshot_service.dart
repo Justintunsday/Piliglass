@@ -33,7 +33,9 @@ final class NativeAccountSnapshotService {
     for (final account in <Account>[AnonymousAccount(), ...Accounts.account.values]) {
       final stamp = Accounts.captureRequest(account);
       if (stamp != null && stamp.generation == generation && _tokens[stamp] == ownerToken &&
-          Accounts.isCurrentRequest(stamp)) return account;
+          Accounts.isCurrentRequest(stamp)) {
+        return account;
+      }
     }
     return null;
   }
@@ -94,8 +96,8 @@ final class NativeAccountSnapshotService {
       stamps[account] = stamp;
     }
     final revision = Accounts.requestRevision;
-    final descriptors = [for (final account in accounts) _descriptor(account, stamps[account]!)];
-    descriptors.sort((a, b) => (a['mid']! as int).compareTo(b['mid']! as int));
+    final descriptors = [for (final account in accounts) _descriptor(account, stamps[account]!)]
+      ..sort((a, b) => (a['mid']! as int).compareTo(b['mid']! as int));
     final selected = List<Account>.of(Accounts.accountMode);
     final selections = [
       for (final purpose in AccountType.values)
