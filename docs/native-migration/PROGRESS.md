@@ -2,6 +2,13 @@
 
 最后更新：2026-10-05（Asia/Hong_Kong）。目标仍在进行，Flutter runtime 保留。
 
+2026-10-05 执行节奏按用户要求改为组内并行实施、独立提交推送、组末统一编译
+验收。当前 P05 并行组（78ad72b、3f6942b、3262e77、e4431a9、c2d4f2a、3fee950）
+已提交网络能力/响应头执行边界、原始字段候选、签名/cache、账户 shadow store 和
+登录协议/状态机，尚未统一编译，不计入已验证阶段。Cookie/body/H2 对照汇合中。
+详见 [P05_GROUP_ACCEPTANCE.md](P05_GROUP_ACCEPTANCE.md)；最终仍以同 SHA release
+及全部 preview 实际日志为准，Native runtime/账户权威保持关闭。
+
 | 阶段 | 阶段代码 Commit | iOS release | Preview | 状态 |
 |---|---|---|---|---|
 | 起点 | 8044a8d | [成功](https://github.com/Justintunsday/Piliglass/actions/runs/36085475142) | [分页检查失败](https://github.com/Justintunsday/Piliglass/actions/runs/36085470278) | 仅基线 |

@@ -9,6 +9,8 @@ on:
       - "lib/**"
       - "assets/**"
       - "Packages/AetherEngine/**"
+      - "Packages/PiliHTTPTransport/**"
+      - "Packages/PiliHTTPBodyCodec/**"
       - "pubspec.yaml"
       - "pubspec.lock"
       - "tool/check_native_danmaku.py"
@@ -33,6 +35,19 @@ on:
       - "tool/check_account_request_state.dart"
       - "test/utils/accounts/**"
       - "test/http/**"
+      - "test/services/native_login/**"
+      - "test/utils/native_*"
+      - "tool/check_native_http_execution*"
+      - "tool/check_native_raw_http.py"
+      - "tool/check_native_signing*"
+      - "tool/check_native_accounts*"
+      - "tool/check_native_login*"
+      - "tool/check_native_body_codec.py"
+      - "tool/check_native_cookie_store*"
+      - "tool/check_native_cookies*"
+      - "tool/native_raw_http2_probe.py"
+      - "tool/native_login_synthetic_rsa.json"
+      - "tool/native_app_signing_release_golden.dart"
       - ".github/workflows/ios.yml"
   pull_request:
     paths:
@@ -40,6 +55,8 @@ on:
       - "lib/**"
       - "assets/**"
       - "Packages/AetherEngine/**"
+      - "Packages/PiliHTTPTransport/**"
+      - "Packages/PiliHTTPBodyCodec/**"
       - "pubspec.yaml"
       - "pubspec.lock"
       - "tool/check_native_danmaku.py"
@@ -64,6 +81,19 @@ on:
       - "tool/check_account_request_state.dart"
       - "test/utils/accounts/**"
       - "test/http/**"
+      - "test/services/native_login/**"
+      - "test/utils/native_*"
+      - "tool/check_native_http_execution*"
+      - "tool/check_native_raw_http.py"
+      - "tool/check_native_signing*"
+      - "tool/check_native_accounts*"
+      - "tool/check_native_login*"
+      - "tool/check_native_body_codec.py"
+      - "tool/check_native_cookie_store*"
+      - "tool/check_native_cookies*"
+      - "tool/native_raw_http2_probe.py"
+      - "tool/native_login_synthetic_rsa.json"
+      - "tool/native_app_signing_release_golden.dart"
       - ".github/workflows/ios.yml"
   workflow_call:
     inputs:
@@ -102,12 +132,53 @@ jobs:
       - uses: actions/checkout@v7
       - name: Compile and verify production HTTP and trending service
         run: python3 tool/check_native_http.py
+      - name: Verify capability routing and head-time one-shot execution
+        run: python3 tool/check_native_http_execution.py
       - name: Upload native HTTP contract evidence
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: native-http-contracts
-          path: build/native-http-check/
+          path: |
+            build/native-http-check/
+            build/native-http-execution-check/
+          if-no-files-found: warn
+  native-raw-http:
+    name: Compare real Dart and raw Native wire and build iOS16 package
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version-file: pubspec.yaml
+          cache: true
+          pub-cache: true
+      - name: Prepare Flutter fixture dependencies
+        run: flutter pub get
+      - name: Cache candidate Swift package artifacts
+        uses: actions/cache@v5
+        with:
+          path: |
+            Packages/PiliHTTPTransport/.build
+            ~/Library/Caches/org.swift.swiftpm
+          key: native-raw-http-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Packages/PiliHTTPTransport/Package.swift', 'Packages/PiliHTTPTransport/Package.resolved') }}
+      - name: Actual field, cancellation, idle and device/simulator comparison
+        run: python3 tool/check_native_raw_http.py
+      - name: Actual TLS ALPN, HTTP2 field order, trust and HTTP11 fallback
+        run: python3 tool/native_raw_http2_probe.py
+      - name: Upload raw transport acceptance evidence and resolved dependencies
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: native-raw-http-contracts
+          path: |
+            build/native-raw-http-check/*.json
+            build/native-raw-http-check/*.log
+            build/native-raw-http-check/Package.resolved
+            build/native-raw-http2-check/*.json
+            build/native-raw-http2-check/*.log
           if-no-files-found: warn
   native-search-core:
     name: Verify native search contracts with Swift 6
@@ -203,6 +274,31 @@ jobs:
       - name: Verify actual Dart policy leases with production Swift codec and provider
         run: python3 tool/check_prepared_http_policy.py
 
+      - name: Verify native signing and WBI cache against actual Dart implementations
+        run: python3 tool/check_native_signing.py
+
+      - name: Verify raw gzip, Brotli and malformed UTF8 against actual Dart pipeline
+        run: python3 tool/check_native_body_codec.py
+
+      - name: Upload decoder comparison and iOS16 C dependency builds
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: native-body-codec-contracts
+          path: |
+            build/native-body-codec-check/*.json
+            build/native-body-codec-check/*.log
+            build/native-body-codec-check/Package.resolved
+          if-no-files-found: warn
+
+      - name: Upload signer and key-cache comparison
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: native-signing-contracts
+          path: build/native-signing-check/
+          if-no-files-found: warn
+
       - name: Upload prepared policy and cross-language evidence
         if: always()
         uses: actions/upload-artifact@v7
@@ -234,9 +330,42 @@ jobs:
         shell: bash
         run: |
           mkdir -p build/account-request-state
-          dart analyze lib/utils/accounts/account_request_state.dart lib/utils/accounts.dart lib/utils/accounts/account.dart lib/utils/accounts/account_manager/account_mgr.dart lib/services/native_http/ tool/check_account_request_state.dart test/utils/accounts/ | tee build/account-request-state/analyze.log
+          set -o pipefail
+          dart analyze --fatal-infos lib/utils/accounts/account_request_state.dart lib/utils/accounts.dart lib/utils/accounts/account.dart lib/utils/accounts/account_manager/account_mgr.dart lib/services/native_http/ lib/services/native_accounts/ tool/check_account_request_state.dart test/utils/accounts/ | tee build/account-request-state/analyze.log
           dart tool/check_account_request_state.dart | tee build/account-request-state/runtime.log
           flutter test --no-pub --reporter expanded test/utils/accounts/ | tee build/account-request-state/flutter-test.log
+
+      - name: Verify four-purpose account snapshots and Keychain shadow restart
+        run: python3 tool/check_native_accounts.py
+      - name: Verify Cookie parse and selection against actual Dart CookieJar
+        run: python3 tool/check_native_cookies.py
+
+      - name: Upload actual account export and Native staging evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: native-account-contracts
+          path: |
+            build/native-account-contracts/
+            build/native-cookie-contracts/
+          if-no-files-found: warn
+
+      - name: Verify actual login, RSA and single-writer contracts
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p build/native-login-contract
+          dart analyze --fatal-infos lib/services/native_login/ test/services/native_login/ | tee build/native-login-contract/analyze.log
+          flutter test --no-pub --reporter expanded test/services/native_login/native_login_contract_test.dart | tee build/native-login-contract/dart-test.log
+          python3 tool/check_native_login.py
+
+      - name: Upload native login and account authority evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: native-login-contracts
+          path: build/native-login-contract/
+          if-no-files-found: warn
 
       - name: Upload account lifecycle evidence
         if: always()
