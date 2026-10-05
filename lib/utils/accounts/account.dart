@@ -1,5 +1,6 @@
 import 'package:PiliPlus/common/constants.dart';
 import 'package:PiliPlus/models/common/account_type.dart';
+import 'package:PiliPlus/services/native_accounts/account_cookie_mutation_port.dart';
 import 'package:PiliPlus/utils/accounts.dart';
 import 'package:PiliPlus/utils/accounts/grpc_headers.dart';
 import 'package:PiliPlus/utils/id_utils.dart';
@@ -95,7 +96,7 @@ class LoginAccount extends Account {
   @override
   Future<void>? onChange() {
     if (_hasDelete || !Accounts.ownsCredentials(this)) return null;
-    return _box.put(_midStr, this);
+    return accountCookieMutationPort.persistLegacyAccount(this);
   }
 
   @override

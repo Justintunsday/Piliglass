@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:PiliPlus/http/api.dart';
 import 'package:PiliPlus/http/constants.dart';
 import 'package:PiliPlus/models/common/account_type.dart';
+import 'package:PiliPlus/services/native_accounts/account_cookie_mutation_port.dart';
 import 'package:PiliPlus/utils/accounts.dart';
 import 'package:PiliPlus/utils/accounts/account.dart';
 import 'package:PiliPlus/utils/accounts/account_manager/response_cookie_headers.dart';
@@ -212,7 +213,7 @@ class AccountManager extends Interceptor {
     final originalUri = response.requestOptions.uri;
     final realUri = originalUri.resolveUri(response.realUri);
     if (!_isCurrentBinding(binding, options)) return;
-    final saving = account.cookieJar.saveFromResponse(realUri, cookies);
+    final saving = accountCookieMutationPort.saveResponseCookies(account, realUri, cookies);
     Accounts.notifyCookieMutation(account);
     await saving;
     if (!_isCurrentBinding(binding, options)) return;
@@ -220,7 +221,8 @@ class AccountManager extends Interceptor {
       final originalUri = response.realUri;
       for (final location in locations) {
         if (!_isCurrentBinding(binding, options)) return;
-        final redirectSaving = account.cookieJar.saveFromResponse(
+        final redirectSaving = accountCookieMutationPort.saveResponseCookies(
+          account,
           // Resolves the location based on the current Uri.
           originalUri.resolve(location),
           cookies,

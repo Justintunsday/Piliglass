@@ -6,6 +6,7 @@ import 'package:PiliPlus/http/constants.dart';
 import 'package:PiliPlus/http/effective_http_policy.dart';
 import 'package:PiliPlus/http/init.dart';
 import 'package:PiliPlus/models/common/account_type.dart';
+import 'package:PiliPlus/services/native_accounts/account_cookie_mutation_port.dart';
 import 'package:PiliPlus/services/native_http/prepared_http_policy.dart';
 import 'package:PiliPlus/utils/accounts.dart';
 import 'package:PiliPlus/utils/accounts/account.dart';
@@ -292,7 +293,7 @@ final class NativeHTTPRequestLeaseService {
       }
       final account = context.stamp.account;
       // Pinned CookieJar mutates before this Future completes. Do not defer it.
-      final saving = account.cookieJar.saveFromResponse(context.snapshot.url, cookies);
+      final saving = accountCookieMutationPort.saveResponseCookies(account, context.snapshot.url, cookies);
       Accounts.notifyCookieMutation(account);
       await _awaitCookieSave(account, context.snapshot.url, saving);
       if (!_owns(context)) {
