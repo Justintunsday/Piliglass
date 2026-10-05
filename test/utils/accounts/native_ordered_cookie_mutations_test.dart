@@ -268,13 +268,24 @@ void main() {
       'case=domain-uppercase; Domain=.bilibili.com; Path=/X',
     ], requests: requests);
     await trace.save('host-original-nil-path', url, ['same=host-nil-path'], requests: requests);
+    expect(trace.jar.hostCookies['api.bilibili.com']!['/x']!['same']!.cookie.path, null);
+    expect(_header(trace, url),
+      'same=host-nil-path; same=domain-nested; case=domain-uppercase; '
+      'same=api-domain; same=domain-root');
     await trace.save('host-path-length-sort', url, [
       'same=host-root; Path=/',
       'same=host-nested; Path=/x',
       'deeper=host-deep; Path=/x/test',
     ], requests: requests);
-    expect(_header(trace, url), startsWith('same=host-nil-path; deeper=host-deep; '));
-    expect(_header(trace, url).split('same=').length - 1, 6);
+    // The nil original Cookie.path above still chose the /x bucket. Saving the
+    // same name with Path=/x overwrites it, so the final jar/header has no nil
+    // path Cookie; only the preceding actual step proves nil-first ordering.
+    expect(trace.jar.hostCookies['api.bilibili.com']!['/x']!['same']!.cookie.path, '/x');
+    expect(trace.jar.hostCookies['api.bilibili.com']!['/x']!['same']!.cookie.value, 'host-nested');
+    expect(_header(trace, url),
+      'deeper=host-deep; same=host-nested; same=domain-nested; '
+      'case=domain-uppercase; same=api-domain; same=host-root; same=domain-root');
+    expect(_header(trace, url).split('same=').length - 1, 5);
     expect(trace.jar.domainCookies.keys.toList(), ['bilibili.com', 'api.bilibili.com']);
     expect(trace.jar.hostCookies['api.bilibili.com']!.keys.toList(), ['/x', '/', '/x/test']);
     expect(_header(trace, 'https://notbilibili.com/x/test'), isEmpty);
