@@ -233,11 +233,14 @@ jobs:
           pub-cache: true
 
       - name: Record native toolchain and migration inventory
+        id: native-toolchain
         run: |
           xcodebuild -version
           xcrun --sdk iphoneos --show-sdk-version
           swift --version
           python3 tool/native_migration_inventory.py
+          native_toolchain_cache_tag="$(xcodebuild -version | tr '\n' '-' | tr ' ' '_')"
+          echo "cache-tag=${native_toolchain_cache_tag}" >> "$GITHUB_OUTPUT"
 
       - name: Cache CocoaPods downloads
         uses: actions/cache@v5
@@ -250,22 +253,25 @@ jobs:
             cocoapods-${{ runner.os }}-${{ runner.arch }}-
 
       - name: Cache Swift packages
+        id: runner-swift-cache
         uses: actions/cache@v5
         with:
           path: |
+            build/ios/SourcePackages
             ~/Library/Developer/Xcode/DerivedData/**/SourcePackages
             ~/Library/Caches/org.swift.swiftpm
-          key: swiftpm-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('ios/Runner.xcodeproj/project.pbxproj', 'ios/Runner.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
+          key: swiftpm-${{ runner.os }}-${{ runner.arch }}-${{ steps.native-toolchain.outputs.cache-tag }}-${{ hashFiles('ios/Runner.xcodeproj/project.pbxproj', 'ios/Runner.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
           restore-keys: |
-            swiftpm-${{ runner.os }}-${{ runner.arch }}-
+            swiftpm-${{ runner.os }}-${{ runner.arch }}-${{ steps.native-toolchain.outputs.cache-tag }}-
 
       - name: Cache DerivedData (incremental rebuild)
+        id: runner-derived-cache
         uses: actions/cache@v5
         with:
-          path: build/ios/DerivedData
-          key: ios-derived-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('ios/Runner.xcodeproj/project.pbxproj', 'ios/Runner.xcworkspace/xcshareddata/swiftpm/Package.resolved', 'pubspec.lock') }}
+          path: ~/Library/Developer/Xcode/DerivedData/Runner-*
+          key: ios-derived-${{ runner.os }}-${{ runner.arch }}-${{ steps.native-toolchain.outputs.cache-tag }}-${{ hashFiles('ios/Runner.xcodeproj/project.pbxproj', 'ios/Runner.xcworkspace/xcshareddata/swiftpm/Package.resolved', 'pubspec.lock') }}
           restore-keys: |
-            ios-derived-${{ runner.os }}-${{ runner.arch }}-
+            ios-derived-${{ runner.os }}-${{ runner.arch }}-${{ steps.native-toolchain.outputs.cache-tag }}-
 
       - name: Set and Extract version
         shell: pwsh
@@ -452,6 +458,25 @@ jobs:
           # make AltSign happy...
           find Payload/Runner.app/Frameworks -type d -name "*.framework" -exec codesign --force --sign - --preserve-metadata=identifier,entitlements {} \;
           zip -r9 PiliPlus_ios_${{env.version}}.ipa Payload/Runner.app
+
+      # The complete Runner may compile while a group contract fails. Save its
+      # verified build artifacts before the mandatory acceptance gate rejects it.
+      - name: Save actual resolved Runner dependencies after successful build
+        if: steps.runner-swift-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: |
+            build/ios/SourcePackages
+            ~/Library/Developer/Xcode/DerivedData/**/SourcePackages
+            ~/Library/Caches/org.swift.swiftpm
+          key: swiftpm-${{ runner.os }}-${{ runner.arch }}-${{ steps.native-toolchain.outputs.cache-tag }}-${{ hashFiles('ios/Runner.xcodeproj/project.pbxproj', 'ios/Runner.xcworkspace/xcshareddata/swiftpm/Package.resolved') }}
+
+      - name: Save actual Runner DerivedData after successful build
+        if: steps.runner-derived-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: ~/Library/Developer/Xcode/DerivedData/Runner-*
+          key: ios-derived-${{ runner.os }}-${{ runner.arch }}-${{ steps.native-toolchain.outputs.cache-tag }}-${{ hashFiles('ios/Runner.xcodeproj/project.pbxproj', 'ios/Runner.xcworkspace/xcshareddata/swiftpm/Package.resolved', 'pubspec.lock') }}
 
       # Gather independent group diagnostics in one run. A failed contract must
       # still fail the job and prevent release, even if Runner itself compiles.
