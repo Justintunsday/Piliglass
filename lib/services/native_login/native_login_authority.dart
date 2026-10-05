@@ -4,6 +4,7 @@ import 'package:PiliPlus/models/common/account_type.dart';
 import 'package:PiliPlus/services/native_accounts/native_account_snapshot_service.dart';
 import 'package:PiliPlus/utils/accounts.dart';
 import 'package:PiliPlus/utils/accounts/account.dart';
+import 'package:PiliPlus/utils/accounts/account_request_state.dart';
 
 final class NativeLoginAuthorityException implements Exception {
   const NativeLoginAuthorityException(this.code);
@@ -99,17 +100,47 @@ final class NativeLoginAuthority {
     } else { throw const NativeLoginAuthorityException('invalidArguments'); }
     final account = LoginAccount(BiliCookieJar.fromJson(cookies), access, refresh);
     await Accounts.installCredentials(account);
+    final stamp = Accounts.captureRequest(account);
+    final owner = accounts.currentOwnerWire(account);
+    if (stamp == null || owner == null) {
+      throw const NativeLoginAuthorityException('credentialsSuperseded');
+    }
+    _verifyInstallation(account, stamp, owner);
     if (purposes != null) {
-      for (final purpose in purposes) { await Accounts.set(purpose, account); }
+      for (final purpose in purposes) {
+        // Accounts.set can resolve an obsolete object to a newer same-MID
+        // owner. Do not carry this login's remaining selections onto that owner.
+        _verifyInstallation(account, stamp, owner);
+        await Accounts.set(purpose, account);
+        _verifyInstallation(account, stamp, owner);
+      }
     }
     // Existing app login resets anonymous credentials; Cookie login does not.
-    if (method != 'cookie') await AnonymousAccount().delete();
-    if (!Accounts.ownsCredentials(account)) throw const NativeLoginAuthorityException('credentialsSuperseded');
-    final owner = accounts.currentOwnerWire(account);
-    if (owner == null) throw const NativeLoginAuthorityException('credentialsSuperseded');
+    _verifyInstallation(account, stamp, owner);
+    if (method != 'cookie') {
+      await AnonymousAccount().delete();
+      _verifyInstallation(account, stamp, owner);
+    }
     await _onChanged?.call();
+    // Refresh can await network/storage work. Its completion is not proof that
+    // this original owner is still installed; never acknowledge its successor.
+    _verifyInstallation(account, stamp, owner);
     return {'state': 'installed', 'owner': owner, 'needsPurposeSelection': !Accounts.main.isLogin,
             'nativeAuthorityEnabled': false};
+  }
+
+  void _verifyInstallation(LoginAccount account, AccountRequestStamp<Account> stamp,
+      Map<String, Object?> originalOwner) {
+    final currentOwner = accounts.currentOwnerWire(account);
+    if (!identical(stamp.account, account) || !Accounts.ownsCredentials(account) ||
+        !Accounts.isCurrentRequest(stamp) || currentOwner == null ||
+        currentOwner['authorityEpoch'] != originalOwner['authorityEpoch'] ||
+        currentOwner['ownerToken'] != originalOwner['ownerToken'] ||
+        currentOwner['generation'] != originalOwner['generation']) {
+      // Partial selection changes already belong to Accounts. Rolling them
+      // back here could revoke or overwrite a newer credentials installation.
+      throw const NativeLoginAuthorityException('credentialsSuperseded');
+    }
   }
 
   Future<Map<String, Object?>> _delete(Map<String, Object?> values) async {

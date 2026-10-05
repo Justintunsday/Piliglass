@@ -1,8 +1,10 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:PiliPlus/common/constants.dart';
+import 'package:PiliPlus/http/api.dart';
 import 'package:PiliPlus/http/init.dart';
 import 'package:PiliPlus/http/loading_state.dart';
 import 'package:PiliPlus/http/login.dart';
@@ -173,11 +175,104 @@ void main() {
     expect(identical(first, Accounts.video), false); expect(Accounts.video.mid, 940001);
     expect(Accounts.video.type, {AccountType.video}); expect(Accounts.main.isLogin, false);
   });
+
+  test('same-MID replacement during onChanged cannot acknowledge retired login', () async {
+    final snapshots = NativeAccountSnapshotService();
+    final entered = Completer<void>(), release = Completer<void>();
+    final authority = NativeLoginAuthority(snapshots, onChanged: () async {
+      entered.complete(); await release.future;
+    });
+    final input = _installRequest('refresh-replace', 950001);
+    final pending = authority.handle('installNativeLoginCredentials', input);
+    await entered.future;
+    final retired = Accounts.account.get('950001')!;
+    final oldOwner = snapshots.currentOwnerWire(retired)!;
+    final successor = _replacement(950001);
+    await Accounts.installCredentials(successor);
+    final newOwner = snapshots.currentOwnerWire(successor)!;
+    expect(newOwner['ownerToken'], isNot(oldOwner['ownerToken']));
+    expect(newOwner['generation'], isNot(oldOwner['generation']));
+    release.complete();
+    expect((await pending)['code'], 'credentialsSuperseded');
+    expect(identical(Accounts.account.get('950001'), successor), true);
+    expect(Accounts.ownsCredentials(successor), true);
+    expect(successor.cookieJar.toJson()['SESSDATA'], 'synthetic-successor');
+    expect((await authority.handle('installNativeLoginCredentials', input))['code'], 'operationAlreadyConsumed');
+  });
+
+  test('deletion during onChanged cannot acknowledge or resurrect removed login', () async {
+    final entered = Completer<void>(), release = Completer<void>();
+    final authority = NativeLoginAuthority(NativeAccountSnapshotService(), onChanged: () async {
+      entered.complete(); await release.future;
+    });
+    final input = _installRequest('refresh-delete', 960001);
+    final pending = authority.handle('installNativeLoginCredentials', input);
+    await entered.future;
+    final removed = Accounts.account.get('960001')!;
+    await Accounts.deleteAll({removed});
+    release.complete();
+    expect((await pending)['code'], 'credentialsSuperseded');
+    expect(Accounts.account.containsKey('960001'), false);
+    expect(Accounts.ownsCredentials(removed), false);
+    expect((await authority.handle('installNativeLoginCredentials', input))['code'], 'operationAlreadyConsumed');
+    expect(Accounts.account.containsKey('960001'), false);
+  });
+
+  test('real Accounts.set activation await cannot assign remaining purposes to successor', () async {
+    // Pause only the actual buvid HTTP adapter. Accounts.set, Hive persistence,
+    // credential generations and same-MID replacement all run production code.
+    adapter.pauseActivation(970001);
+    final authority = NativeLoginAuthority(NativeAccountSnapshotService());
+    final input = _installRequest('purpose-await-replace', 970001, purposes: ['video', 'recommend']);
+    final pending = authority.handle('installNativeLoginCredentials', input);
+    try {
+      await adapter.activationEntered!.future.timeout(const Duration(seconds: 10));
+      final retired = Accounts.video;
+      expect(retired.mid, 970001);
+      final successor = _replacement(970001);
+      await Accounts.installCredentials(successor);
+      adapter.resumeActivation();
+      expect((await pending)['code'], 'credentialsSuperseded');
+      // Existing selection inheritance remains owned by Accounts; the stale
+      // login must not add its second requested purpose or roll back successor.
+      expect(identical(Accounts.video, successor), true);
+      expect(successor.type, {AccountType.video});
+      expect(Accounts.get(AccountType.recommend).mid, isNot(970001));
+      expect(identical(Accounts.account.get('970001'), successor), true);
+      expect(Accounts.ownsCredentials(successor), true);
+      expect((await authority.handle('installNativeLoginCredentials', input))['code'], 'operationAlreadyConsumed');
+    } finally { adapter.resumeActivation(); await pending; }
+  });
 }
+
+Map<String, Object?> _installRequest(String operationID, int mid, {List<String>? purposes}) => {
+  'operationID': operationID, 'method': 'cookie', 'purposes': purposes,
+  'credentials': {'mid': mid, 'accessToken': null, 'refreshToken': null, 'cookies': [
+    for (final entry in {'DedeUserID': '$mid', 'bili_jct': 'synthetic-csrf', 'SESSDATA': 'synthetic-original'}.entries)
+      {'name': entry.key, 'value': entry.value, 'domain': 'bilibili.com', 'path': '/',
+       'expiresEpochSeconds': null, 'secure': false, 'httpOnly': false},
+  ]},
+};
+
+LoginAccount _replacement(int mid) => LoginAccount(BiliCookieJar.fromJson({
+  'DedeUserID': '$mid', 'bili_jct': 'synthetic-successor-csrf', 'SESSDATA': 'synthetic-successor',
+}), null, null)..activated = true;
 
 class _CaptureAdapter implements HttpClientAdapter {
   Map<String, Object?> response = {'code': 0, 'data': null};
   Map<String, Object?>? last;
+  int? activationMID;
+  Completer<void>? activationEntered;
+  Completer<void>? _activationRelease;
+  void pauseActivation(int mid) {
+    activationMID = mid; activationEntered = Completer<void>(); _activationRelease = Completer<void>();
+  }
+  void resumeActivation() {
+    activationMID = null;
+    final release = _activationRelease;
+    if (release != null && !release.isCompleted) release.complete();
+    _activationRelease = null;
+  }
   @override
   Future<ResponseBody> fetch(RequestOptions options, Stream<Uint8List>? requestStream, Future<void>? cancelFuture) async {
     final data = options.data;
@@ -188,6 +283,12 @@ class _CaptureAdapter implements HttpClientAdapter {
     last = {'method': options.method, 'url': options.uri.toString(), 'fields': fields,
             'headers': {for (final entry in options.headers.entries) entry.key: entry.value.toString()},
             'body': utf8.decode(bytes)};
+    final owner = options.extra['account'];
+    if (options.path == Api.activateBuvidApi && owner is LoginAccount && owner.mid == activationMID) {
+      final release = _activationRelease!.future;
+      activationEntered!.complete();
+      await release;
+    }
     return ResponseBody.fromString(jsonEncode(response), 200, headers: {Headers.contentTypeHeader: [Headers.jsonContentType]});
   }
   @override
