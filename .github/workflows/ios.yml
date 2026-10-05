@@ -157,6 +157,9 @@ jobs:
           pub-cache: true
       - name: Prepare Flutter fixture dependencies
         run: flutter pub get
+      - name: Apply existing iOS Flutter fixture patches
+        shell: pwsh
+        run: lib/scripts/patch.ps1 iOS
       - name: Cache candidate Swift package artifacts
         uses: actions/cache@v5
         with:
@@ -180,6 +183,20 @@ jobs:
             build/native-raw-http2-check/*.json
             build/native-raw-http2-check/*.log
           if-no-files-found: warn
+      - name: Restore cache-safe Flutter fixture dependencies
+        if: always()
+        shell: pwsh
+        run: |
+          git -C $env:FLUTTER_ROOT reset --hard HEAD
+          git -C $env:FLUTTER_ROOT clean -fd
+          if ($env:PUB_CACHE) {
+            $pubHosted = Join-Path $env:PUB_CACHE 'hosted/pub.dev'
+            if (Test-Path -LiteralPath $pubHosted) {
+              Get-ChildItem -LiteralPath $pubHosted -Directory |
+                Where-Object { $_.Name -like 'material_ui-*' -or $_.Name -like 'cupertino_ui-*' } |
+                Remove-Item -Recurse -Force
+            }
+          }
   native-search-core:
     name: Verify native search contracts with Swift 6
     runs-on: macos-26
