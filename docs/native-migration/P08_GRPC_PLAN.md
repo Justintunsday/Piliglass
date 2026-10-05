@@ -71,6 +71,26 @@ OpusSpaceFlow wrapper没有找到活跃caller。保留它们与schemas，区别�
 
 ## 可证伪验证与回滚
 
+### P05 transport 候选的 gRPC 边界
+
+固定的 AsyncHTTPClient 1.36.1 async response 的 Body.trailers 位于
+`#if UnstableHTTPAPIsSupport` 内，当前默认 package 不开放该 API，见
+[固定源码](https://raw.githubusercontent.com/swift-server/async-http-client/1.36.1/Sources/AsyncHTTPClient/AsyncAwait/HTTPClientResponse.swift)。
+PiliRawHTTPTransport 只提供 GET 与初始 head/body，尚无 POST、RPC metadata snapshot
+或 trailers。P05 的 H2/ALPN、重复字段和取消验收不能作为 gRPC transport 证明。
+
+P08 先用实际 Dart GeneratedMessage/GrpcReq/GrpcHeaders 生成 frame、Status/details
+与 metadata golden；网络候选独立评估稳定 gRPC SDK/NIO trailer 管道，或显式启用
+并锁定 AHC 实验 trailer 特性。后一选择必须记录编译开关、版本与回滚方式，并经
+真实 TLS/HTTP2 server 检查 headers-only、trailers-only、trailers-before-error、
+取消、缺失状态与非零 grpc-status/details。未取得完整 RPC 状态时显式失败或在
+发送前选择 Dart；不能把 HTTP 200 当完整 RPC 成功，已发送写请求不得重放。
+
+独立 BilibiliProtocol 模块不依赖 UI、Flutter/Hive 或 AetherEngine；账户用途仍按
+旧默认 main 与 explicit account 优先，不能按业务名称推测为 video。
+
+### 领域验证
+
 - 实际Dart GeneratedMessage生成synthetic request/response，涵盖int64>2^53、
   默认/缺失/presence/unknown enum/oneof/map/repeated与未知field。protobuf map
   serialization次序可不同，要求semantic一致并对确定性字段逐byte验证，不误判。

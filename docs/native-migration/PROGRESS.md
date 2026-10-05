@@ -3,11 +3,24 @@
 最后更新：2026-10-05（Asia/Hong_Kong）。目标仍在进行，Flutter runtime 保留。
 
 2026-10-05 执行节奏按用户要求改为组内并行实施、独立提交推送、组末统一编译
-验收。当前 P05 并行组（78ad72b、3f6942b、3262e77、e4431a9、c2d4f2a、3fee950）
-已提交网络能力/响应头执行边界、原始字段候选、签名/cache、账户 shadow store 和
-登录协议/状态机，尚未统一编译，不计入已验证阶段。Cookie/body/H2 对照汇合中。
+验收。当前 P05 并行组已提交网络能力/响应头执行边界、原始字段候选、签名/cache、
+账户 shadow store、Cookie parser/selector、独立 body codec、登录协议/状态机及
+H1/H2/TLS 对照，整组验收进行中，不计入已验证阶段。
 详见 [P05_GROUP_ACCEPTANCE.md](P05_GROUP_ACCEPTANCE.md)；最终仍以同 SHA release
 及全部 preview 实际日志为准，Native runtime/账户权威保持关闭。
+
+第一轮集成 dfcd9c3 的 [release](https://github.com/Justintunsday/Piliglass/actions/runs/37283325975)
+失败：新 raw job 未应用已有 Flutter SDK patch；账户 analyze 报两个 fatal-info。
+签名/cache 局部检查 102 项、19 个实际 Dart 签名及 5 个实际 Hive cache 场景通过；
+body codec 的 25 个实际正文、67,854 个 UTF8 向量及 iOS16 device/simulator build
+通过。这些局部成功不能替代完整 Runner 或整组完成。
+
+已分别提交 raw 环境修复 818a989、实际依赖锁定 3776573、账户 lint 15b2351、
+独立诊断与强制聚合门禁 d9c0da1、登录 await owner 复查/真实 Hive 竞态 8eb2050。
+第二轮代码 8eb2050 的 [release](https://github.com/Justintunsday/Piliglass/actions/runs/37284584075)
+与 [全部 preview](https://github.com/Justintunsday/Piliglass/actions/runs/37284588783)
+正在运行；必须全部成功才更新此组的编译验证状态。聚合门禁以每组 step.outcome
+检查 success，任一失败/跳过/缺失均 fail，并在发布之前执行。
 
 | 阶段 | 阶段代码 Commit | iOS release | Preview | 状态 |
 |---|---|---|---|---|

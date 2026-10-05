@@ -6,11 +6,11 @@ P05 已完成。后续 P06–P12 同样采用组内并行、独立提交、组�
 
 | 工作组 | 本轮实现边界 | 汇合验收 | 状态 |
 |---|---|---|---|
-| 网络 | capability evaluator、head-aware executor、字段保留 transport、timeout/compression/pool probe | Swift 6 production tests、真实 H1/H2/timeout wire、原 owner 终结、iOS16 链接 | 78ad72b / 3f6942b 已提交，H2/body 对照汇合中，未编译验收 |
-| 签名 | Native WBI/App signer、key provider/cache；旧 Dart synthetic golden | Dart signer 与 Swift 输出逐值一致、UTF16/percent/time/cache | 3262e77 已提交，待整组验收 |
-| 账户/存储 | 四用途 selection/session、Cookie/Keychain staging store、Hive 只读导出 | generation/revision/epoch、同 MID 隔离、重启/导入重复执行、完整 Cookie 属性 | e4431a9 已提交，Cookie parser/selector 汇合中，未验收 |
-| 登录 | QR/password/SMS/Cookie/Geetest/退出、请求与副作用边界、状态机 | 实际 Dart synthetic response、RSA、挑战/手机验证、失败/取消/批量退出 | c2d4f2a / 3fee950 已提交，待整组验收 |
-| 集成 | bridge 薄路由、PBX/工具 source list、workflow 与 fixture 汇合 | 完整 release + 全 preview 同 SHA，无资源/功能删除 | 待各组接口汇合 |
+| 网络 | capability evaluator、head-aware executor、字段保留 transport、timeout/compression/pool probe | Swift 6 production tests、真实 H1/H2/timeout wire、原 owner 终结、iOS16 链接 | 78ad72b / 3f6942b / 40fddac；capability 局部通过，raw fixture 环境修复后重验收 |
+| 签名/正文 | Native WBI/App signer、key provider/cache、独立 gzip/br/UTF8 codec；旧 Dart synthetic golden | 实际 Dart 与 Swift 对照、UTF16/percent/time/cache、C iOS16 编译 | 3262e77 / c8475fc 局部通过，依赖锁定 3776573；整组未完成 |
+| 账户/存储 | 四用途 selection/session、Cookie/Keychain staging store、Hive 只读导出 | generation/revision/epoch、同 MID 隔离、重启/导入重复执行、完整 Cookie 属性 | e4431a9 / 1b8728d；lint 修复 15b2351 后重验收 |
+| 登录 | QR/password/SMS/Cookie/Geetest/退出、请求与副作用边界、状态机 | 实际 Dart synthetic response、RSA、挑战/手机验证、失败/取消/批量退出 | c2d4f2a / 3fee950 / 8eb2050 已提交，await owner 竞态并入第二轮 |
+| 集成 | bridge 薄路由、PBX/工具 source list、workflow 与 fixture 汇合 | 完整 release + 全 preview 同 SHA，无资源/功能删除 | dfcd9c3 首轮失败；8eb2050 第二轮完整验收进行中，见 PROGRESS.md |
 | 生产切换 | transport/account/API 验收后按领域切 Repository | 真实 API、登录/多账户/重启、无重复写请求；原实现仍可回退 | 未授权以未验证实现替换；待验收 |
 
 每个组报告已实现与仍依赖 Dart 的路径，不能把一个协议或 synthetic test 视为真实
@@ -21,6 +21,10 @@ P05 已完成。后续 P06–P12 同样采用组内并行、独立提交、组�
 检查与新增组内生产实现检查；实际 Actions 日志和 artifacts 作为验收证据。
 preview 四组（导航/压力、账户、图片、播放器）及 release 全部成功后，才更新
 该集成 SHA 的已验证状态。失败必须按日志修复并重新完整验收。
+
+CI 收集签名、正文、账户、Cookie、登录组的独立 step outcome；局部失败允许收集
+其他组和 Runner 的诊断，最后的强制门禁在 release 上传/发布之前检查每组 success。
+失败、跳过或缺失都令 job fail，不能以 Runner 编译成功掩盖合同失败。
 
 原生网络和账户权威开关在以上证据及真实账户验收齐备前保持关闭；AetherEngine
 独立，Flutter runtime、旧页面、Dart bridge 和数据 authority 不提前删除。

@@ -2,7 +2,7 @@
 
 > 2026-10-05 执行节奏更新：按用户最新要求，同组并行实施、各切片独立检查/提交/推送，整组汇合后统一运行 release 与全部 preview，并读取实际日志修复至成功。本文件旧有逐切片完整 CI 门禁由此替代；功能/数据验收、fallback 删除和权威切换门禁保留。见 [P05_GROUP_ACCEPTANCE.md](P05_GROUP_ACCEPTANCE.md)。
 
-2026-10-04；本文件是 PLAN.md 的 P06 准备切片，独立于正在实施的 P05a2c1，不切换运行时、不修改 UI、不移除 Dart。
+2026-10-04 编写，2026-10-05 复核；本文件是 PLAN.md 的 P06 准备切片，不切换运行时、不修改 UI、不移除 Dart。
 
 Version Baseline：Runner iOS 16.0 / SWIFT_VERSION=5.0；AetherEngine swift-tools-version 6.0。新 Domain/Data 用 immutable Sendable；独立 fixture 以 Swift 6 strict-concurrency 编译，保留 iOS16 兼容，不引入 beta API。
 
@@ -10,7 +10,7 @@ Version Baseline：Runner iOS 16.0 / SWIFT_VERSION=5.0；AetherEngine swift-tool
 
 - P03 SearchRepository/模型已验证 `7ff23b9`；P04a Client/trending decoder 已验证 `b0c098a`，运行时仍是 Dart Search adapter；不存在已完成的 HomeRepository/VideoRepository。
 - P05 Dart lease `c0fbdbf`、Swift provider `4148caf` 已验证；当前 purpose 只允许固定 trending GET，`executionAllowed=false`，不能拿它发送下表的新 endpoint。
-- P05a2c1 head/outcome/共享 Session/薄 HeaderFinalizer 正在实施，尚未以当前阶段 CI 证明。有效 transport policy 与原始 Set-Cookie 字段边界问题仍未解决，见 [REQUEST_CONTEXT_TRANSPORT.md](REQUEST_CONTEXT_TRANSPORT.md)、[COOKIE_HEADERS.md](COOKIE_HEADERS.md)。
+- P05a2c1 head/outcome/共享 Session/薄 HeaderFinalizer 已在 d80c92b 完整验证，Policy-2 lease/codec 已在 7192a0c 完整验证。新增 raw transport、capability、head-time executor 正在整组验收；不能以旧阶段成功证明新增实现已通过。字段保存与生产 policy/runtime 仍待验收，见 [P05_GROUP_ACCEPTANCE.md](P05_GROUP_ACCEPTANCE.md)。
 - 可先做协议、Dart adapter、纯 DTO/参数/过滤 fixture；实际请求切换必须等 P05 的 policy、字段保留 transport、账户 lease、WBI/App 签名与多用途账户验收。每个新 endpoint 单独扩展白名单，禁止通用任意 URL lease。
 
 ## 当前入口与拟建边界
@@ -56,8 +56,9 @@ WBI 必须保留时间/key cache、参数过滤/排序/编码；先复用 P05 �
 - 原 `Request.get` 仅接受 2xx，DioException 转成 `{message: AccountManager.dioError}`；多数上述方法只检查 `code==0`，失败保留 message，原 code 常未外传。Native 错误分 transport/HTTP/API/decoding，界面 mapper 保留当前提示和可重试语义，不能把非2xx解析成成功或虚构 API code。
 - 先按响应 head 完成原账户 Cookie lease，再判断正文/HTTP/API；收到头后的取消/断连仍需终结；未知 ack、取消或已发送后的表示错误不得再发 Dart 同请求。unsupported 必须发送前选 Dart，发送后失败明确返回。
 - Web 推荐只保留 `goto=av`、有 owner、非 blackMids，再跑 RecommendFilter；App 排除 ad_av/ad_web_s/ad_info、要求 can_play=1/args、分区词过滤，再用 App DTO 与 RecommendFilter。
-- `RecommendFilter` 的时长/播放/赞比/标题词、已关注豁免必须逐值对照；App 的“已关注/新关注”来自推荐原因，不能丢。Hot/rank 只执行源码的 blacklist/标题/赞比/分区过滤，不额外套最低时长；related 仅在 applyFilterToRelatedVideos 时 filterAll，没有已关注豁免。
-- Rcmd 从0分页，仅成功推进；isEnd 始终 false。refresh 默认可追加旧 feed（旧列表>200只保留50），错误可保留旧数据；personalizedRcmd 改变时暂禁保留旧 feed。不要强行用空页永久终止推荐、去重所有重复项或改变保留策略。
+- `RecommendFilter` 的时长/播放/赞比/标题词、已关注豁免必须逐值对照；App 的“已关注/新关注”来自推荐原因，不能丢。Hot/rank 的 filterLikeRatio 同时检查最低播放数，不额外套最低时长；related 仅在 applyFilterToRelatedVideos 时 filterAll，没有已关注豁免。
+- 过滤快照取实际 mutable static 状态：RecommendFilter 的 minDurationForRcmd/minPlayForRcmd/minLikeRatioForRecommend/exemptFilterForFollowed/applyFilterToRelatedVideos/rcmdRegExp/enableFilter，以及 VideoHttp.zoneRegExp/enableFilter；只导出 Pref 不能证明当前有效过滤策略。HV2 必须对照这份实际快照。
+- Rcmd 从0分页，成功非空页才推进；CommonListController 对成功空页提前返回，后续仍请求原 page；isEnd 始终 false。refresh 默认可追加旧 feed（旧列表>200只保留50），错误可保留旧数据；personalizedRcmd 改变时暂禁保留旧 feed。不要强行用空页永久终止推荐、去重所有重复项或改变保留策略。
 - DetailDTO 按 `models_new/video/video_detail/data.dart` 保留 aid/bvid/cid、pages、完整 ugcSeason sections/episodes/arc、staff、rights/desc_v2、dimension、argue_info、season_id/upower/redirect_url，不能只保存当前 Swift 可见标题。
 - fast=true 核心简介不能等待 tags/relation；extras 失败仍可播放，relationLoaded 区别未加载与 false。保留 videoDetailGeneration、videoActionRevision，迟到 extras 不覆盖点赞/投币/收藏。
 - 保留 BV/AV 互转、title/cover fallback、首 cid/page 的选择、反转分P/合集和 PGC redirect 路由；Dart UgcIntroController 的行为仍需覆盖，即使当前 Swift Detail 未显示某字段。
