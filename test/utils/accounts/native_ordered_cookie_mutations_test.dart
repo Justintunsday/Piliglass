@@ -43,6 +43,20 @@ class _Trajectory {
     List<String> requests = const ['https://api.bilibili.com/x/test'],
     bool expectFailure = false,
   }) async {
+    final createsCookies = const {
+      'saveFromSeparatedResponseFields',
+      'seedPublicUTF16Maps',
+      'seedPublicUTF16Overwrite',
+    }.contains(operation['kind']);
+    if (createsCookies) {
+      // The native batch candidate injects one clock. Start this short actual
+      // operation in the first half of a real second, then measure its window.
+      // This is neither a fake DateTime nor a retry of a Cookie mutation.
+      final offset = DateTime.now().microsecondsSinceEpoch % 1000000;
+      if (offset >= 500000) {
+        await Future<void>.delayed(Duration(microseconds: 1050000 - offset));
+      }
+    }
     final before = jsonEncode(export());
     final started = DateTime.now().microsecondsSinceEpoch;
     Object? failure;
@@ -57,6 +71,10 @@ class _Trajectory {
       expect(jsonEncode(export()), before, reason: '$id/$label must not mutate');
     } else {
       expect(failure, isNull, reason: '$id/$label failed: $failure');
+      if (createsCookies) {
+        expect(started ~/ 1000000, finished ~/ 1000000,
+          reason: '$id/$label has an ambiguous actual creation clock window');
+      }
     }
     final captured = export();
     final observations = <Map<String, Object?>>[];
@@ -77,9 +95,15 @@ class _Trajectory {
         expect(uri.host, isNotEmpty);
         expect(uri.host.codeUnits.every((unit) => unit < 128), true);
         expect(uri.path.codeUnits.every((unit) => unit < 128), true);
+        final offset = DateTime.now().microsecondsSinceEpoch % 1000000;
+        if (offset >= 950000) {
+          await Future<void>.delayed(Duration(microseconds: 1050000 - offset));
+        }
         final loadStarted = DateTime.now().microsecondsSinceEpoch;
         final loaded = await jar.loadForRequest(uri);
         final loadFinished = DateTime.now().microsecondsSinceEpoch;
+        expect(loadStarted ~/ 1000000, loadFinished ~/ 1000000,
+          reason: '$id/$label has an ambiguous actual load clock window');
         // Capture CookieJar order before getCookies sorts its input in place.
         final loadedOrder = [for (final cookie in loaded) _cookie(cookie)];
         final header = AccountManager.getCookies(loaded);
