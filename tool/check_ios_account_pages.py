@@ -70,6 +70,7 @@ private final class PiliNativeViewModel: ObservableObject {
   var profileVideosLoading = false, profileVideosLoadingMore = false, profileVideosHasMore = false
   var profileVideosError: String? = nil
   @Published var destination: String? = nil
+  @Published var destinationDismissalCount = 0
   func folders() -> [PiliNativeLibraryItem] {
     (0..<8).map { PiliNativeLibraryItem(map: ["id": "folder-\($0)", "kind": "folder", "title": $0 == 0 ? "默认收藏夹" : "旅行收藏 \($0)", "cover": "cover", "trailingText": "96 个内容", "badge": "私密"], index: $0) }
   }
@@ -107,8 +108,14 @@ private struct AccountPreviewApp: App {
   var body: some Scene {
     WindowGroup {
       PiliNativeMineView(model: model)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("account-preview-root")
+        .accessibilityValue("destination-dismissals:\(model.destinationDismissalCount)")
         .fullScreenCover(isPresented: $model.isProfilePresented) { PiliNativeProfileView(model: model) }
-        .sheet(isPresented: Binding(get: { model.destination != nil }, set: { if !$0 { model.destination = nil } })) {
+        .sheet(
+          isPresented: Binding(get: { model.destination != nil }, set: { if !$0 { model.destination = nil } }),
+          onDismiss: { model.destinationDismissalCount += 1 }
+        ) {
           VStack { Text(model.destination ?? "").accessibilityIdentifier("destination"); Button("关闭") { model.destination = nil } }
         }
         .preferredColorScheme(ProcessInfo.processInfo.arguments.contains("dark") ? .dark : .light)
@@ -133,6 +140,18 @@ final class AccountPageTests: XCTestCase {
     let attachment = XCTAttachment(screenshot: app.screenshot())
     attachment.name = name; attachment.lifetime = .keepAlways; add(attachment)
   }
+  func closeDestination(completedDismissals: Int) {
+    app.buttons["关闭"].tap()
+    // The preview routes use a sheet, unlike production's route dispatcher.
+    // Wait for its real dismissal callback before presenting the next route.
+    let dismissed = XCTNSPredicateExpectation(
+      predicate: NSPredicate(format: "value == %@", "destination-dismissals:\(completedDismissals)"),
+      object: app.otherElements["account-preview-root"]
+    )
+    XCTAssertEqual(XCTWaiter.wait(for: [dismissed], timeout: 5), .completed)
+    XCTAssertFalse(app.staticTexts["destination"].exists)
+    XCTAssertFalse(app.buttons["关闭"].exists)
+  }
   func testMineLayoutAndFavorites() {
     launch()
     XCTAssertTrue(app.navigationBars["我的"].waitForExistence(timeout: 10))
@@ -148,7 +167,7 @@ final class AccountPageTests: XCTestCase {
     folder.tap()
     XCTAssertTrue(app.staticTexts["destination"].waitForExistence(timeout: 5))
     XCTAssertEqual(app.staticTexts["destination"].label, "默认收藏夹")
-    app.buttons["关闭"].tap()
+    closeDestination(completedDismissals: 1)
     app.buttons["设置"].tap()
     XCTAssertTrue(app.navigationBars["设置"].waitForExistence(timeout: 5))
     XCTAssertTrue(app.navigationBars.buttons.firstMatch.exists)
@@ -161,11 +180,11 @@ final class AccountPageTests: XCTestCase {
     app.buttons["离线缓存"].tap()
     XCTAssertTrue(app.staticTexts["destination"].waitForExistence(timeout: 5))
     XCTAssertEqual(app.staticTexts["destination"].label, "/download")
-    app.buttons["关闭"].tap()
+    closeDestination(completedDismissals: 1)
     app.buttons["消息中心"].tap()
     XCTAssertTrue(app.staticTexts["destination"].waitForExistence(timeout: 5))
     XCTAssertEqual(app.staticTexts["destination"].label, "/whisper")
-    app.buttons["关闭"].tap()
+    closeDestination(completedDismissals: 2)
     app.buttons["搜索"].tap()
     XCTAssertTrue(app.navigationBars["搜索"].waitForExistence(timeout: 5))
     app.navigationBars.buttons.firstMatch.tap()
