@@ -118,6 +118,43 @@ writer 接入和开关变更不能塞进一次不可回滚提交。新增 Swift 
 Domain/Accounts、Data/Accounts、Persistence/Accounts、Networking 的边界；
 UI 只调用 Repository/Feature State，AetherEngine 不读取这些 store。
 
+### CA1 第一组实施范围：jar-only shadow 格式
+
+首个有限交付只表达 jar，不把当前公共 snapshot 的 MID 排序当成账户存储顺序，
+不新增账户 envelope、durable record ID、authority handoff 或 bridge 命令。账户级
+一致性、全部用途和 schema2 反向恢复属于后续切片。
+
+`NativeOrderedCookieJarExporter` 同步复制真实 live maps；jar2 的 domainBuckets /
+hostBuckets、paths、cookies 均为有序数组。所有键和 Cookie String 是 raw UTF16
+units，cookie map key 与 Cookie.name 分开；nullable 字段必须存在且为 null 或值。
+provenance 区分 unknown / legacyHiveReopened，始终明确无法证明过去 Hive 属性
+完整，currentBucketOrderComplete 只表示本次捕获的现有 maps。UTF16 格式支持不
+扩大已有网络 selector 的 ASCII / 至多32条范围。
+
+硬上限：16MiB JSON、深度32、3Mi JSON nodes、2Mi UTF16 units、8192个 outer/path
+buckets、16384个 entries；key/domain/path 4096 units、name1024、value65536。
+Swift strict codec 拒绝重复字段/键、缺失 null、类型与数值越界、超出资源限额；
+原始整数 token 保留 Int64，expiry 限于实际 Dart DateTime 范围。空 bucket 与原
+数组顺序全量保存，超过支持范围直接失败，不截断。
+
+新 jar-only staging actor 使用独立 Keychain namespace、不可变记录、内容摘要及
+唯一 manifest。先全量验证、写候选、实际 reread，再发布；write-then-error 通过
+读回指针确认，无法确定时保留旧/新记录并返回 publicationUnknown。actor await
+期间有显式 operation gate。没有 live account identity、Native writer 或请求权限。
+进程中断的未引用候选清理及账户级事务恢复留 CA4，不把 shadow manifest 当
+authority marker；shadow 不能作为旧 Hive 的自动兜底来源。
+
+实际 golden 调用生产 CookieJar / Cookie parser / AccountManager 与 Hive type8；
+保存15个格式 case、9组状态轨迹、真实 reopen 属性损失。creation/expiry 无可注入
+生产 clock，时间窗口实测；Int64/DateTime 极限只作为标记的 synthetic seed。
+Native harness 对照原 Dart JSON 结构和数组顺序，不只检查同 codec 自洽；真实
+Keychain restart 消费 fullattrs 和 UTF16 jars。故障测试用不同第二份 jar 区分旧/新
+指针，覆盖候选失败、写后错误、未知确认、损坏记录、await 重入与重复导入。
+
+本组仍待同 SHA 的专用实际 Dart/Swift6/Security 检查、完整 Runner 与全部 preview。
+没有这些证据时状态为已实现未验收；即使通过也只接受 jar format/shadow 边界，
+不表示 CA1 全部账户 envelope、CA2 mutation engine 或 P05 已完成。
+
 ### CA2 必须对照的 mutation / selection 语义
 
 - 整批 raw fields 先解析成功，再按原顺序 apply；坏第 N 条不得留下前 N-1 条写入。

@@ -15,6 +15,7 @@
 | [Native policy 能力判定](P05_POLICY_CAPABILITY_PLAN.md) | 纯 evaluator/reasons、具体transport证据profile、发送前边界 | Policy-2完整CI；零发送fallback与原owner单次finish；Policy-4实际wire |
 | [transport 实际对照](P05_TRANSPORT_PARITY_PLAN.md) | 固定版本 iOS 编译/字段 probe、真实 idle/raw encoding/H1-H2矩阵 | 每切片完整CI、有序字段/cancel/原owner验收、实际API后才切 composition |
 | [账户与签名](P05_ACCOUNT_SIGNING_PLAN.md) | 固定实际Dart输出的纯signer、四用途readonly协议/快照 | 原owner/generation与单authority、完整现有登录/退出/存储验收 |
+| [完整 Cookie / 账户 authority](P05_COOKIE_AUTHORITY_PLAN.md) | jar2有序导出/严格格式/Keychain shadow、实际mutation轨迹，后续单写adapter与完整reverse restore | 全reader/writer收口、durable交接/回退、真实账户重启；当前jar-only不切authority |
 | [首页/视频 REST](P06_HOME_VIDEO_REST_PLAN.md) | 窄Repository+Dart adapter、Root DTO/Feature拆分、纯参数/过滤/decoder | 各endpoint用途/签名/policy/lease，单路实际API对照 |
 | [模型与持久化](P07_MODELS_PERSISTENCE_PLAN.md) | 各领域DTO边界、真实Hive exporter、staging/restart/idempotence | 全caller单写authority、旧数据完整导入、切回兼容reverse-export |
 | [protobuf/gRPC](P08_GRPC_PLAN.md) | schema来源/生成hash、actualDart frame/message/metadata golden | iOS16实际依赖链接、HTTP2/status/trailers、各服务账户与业务验收 |
