@@ -1,0 +1,15 @@
+{
+  "originHash" : "466fe43823d544b60ca766ecb6607e9daac26b17c8b1fb06e99aad8980292407",
+  "pins" : [
+    {
+      "identity" : "brotli",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/EvgenijLutz/Brotli.git",
+      "state" : {
+        "revision" : "66b204011861bebb3c066b9e892f95aec2b773ce",
+        "version" : "1.2.0"
+      }
+    }
+  ],
+  "version" : 3
+}
