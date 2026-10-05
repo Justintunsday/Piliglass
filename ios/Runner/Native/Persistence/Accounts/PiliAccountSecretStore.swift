@@ -108,7 +108,7 @@ struct PiliAccountCookieArchive: Sendable, Equatable, Codable {
             !cookie.name.isEmpty && cookie.name.utf8.count <= 1024 && cookie.value.utf8.count <= 65536 &&
             !cookie.domain.isEmpty && cookie.domain.utf8.count <= 1024 && cookie.path.utf8.count <= 4096 &&
             cookie.sequence == index && cookie.createdSeconds >= 0 &&
-            (cookie.sameSite == nil || ["strict", "lax", "none"].contains(cookie.sameSite!)) &&
+            (cookie.sameSite == nil || ["Strict", "Lax", "None"].contains(cookie.sameSite!)) &&
             [cookie.name, cookie.value, cookie.domain, cookie.path].allSatisfy({
               !$0.contains("\r") && !$0.contains("\n") && !$0.contains("\u{0}")
             })

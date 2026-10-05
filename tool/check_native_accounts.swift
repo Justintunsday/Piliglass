@@ -66,7 +66,7 @@ private struct NativeAccountsFixture {
     try check(live.filter { $0.name == "duplicate" }.count == 2, "duplicate name/path retained")
     try check(live.contains { $0.name == "host" && $0.hostOnly && $0.cookieDomain == nil && $0.expiresMicroseconds != nil }, "host-only expiry retained")
     try check(live.contains { $0.name == "duplicate" && $0.secure && $0.httpOnly && $0.maxAgeSeconds == 500 }, "secure/httpOnly/maxAge retained")
-    try check(live.contains { $0.name == "duplicate" && $0.sameSite == "lax" }, "SameSite retained")
+    try check(live.contains { $0.name == "duplicate" && $0.sameSite == "Lax" }, "SameSite retained")
     let restored = exports[1].entries.flatMap { $0.cookies.cookies }
     try check(!restored.contains { $0.name == "nested_lost" || $0.name == "host_lost" }, "actual Hive lost non-root cookies")
     try check(restored.contains { $0.name == "root_metadata" && !$0.secure && !$0.httpOnly && $0.maxAgeSeconds == nil }, "actual Hive lost attributes")

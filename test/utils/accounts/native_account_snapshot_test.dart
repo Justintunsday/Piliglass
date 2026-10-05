@@ -129,7 +129,7 @@ void main() {
     final nested = cookies.firstWhere((c) => c['name'] == 'duplicate' && c['path'] == '/x');
     expect(nested['secure'], true);
     expect(nested['httpOnly'], true);
-    expect(nested['sameSite'], 'lax');
+    expect(nested['sameSite'], 'Lax');
     expect(nested['maxAgeSeconds'], 500);
     final host = cookies.firstWhere((c) => c['name'] == 'host');
     expect(host['hostOnly'], true);

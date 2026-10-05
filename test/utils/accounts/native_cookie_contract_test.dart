@@ -41,7 +41,7 @@ void main() {
       'a="quoted"', 'a="has space"', 'a=bad,value', 'a=bad\\value', '=missing', 'bad name=value',
       'a=value; Secure; HttpOnly', 'a=value; Secure=', 'a=value; HttpOnly=true',
       'a=value; SameSite=lax', 'a=value; SameSite=None; Secure', 'a=value; SameSite=None',
-      'a=value; SameSite=bad', 'a=value; SameSite',
+      'a=value; SameSite=bad', 'a=value; SameSite', 'a=value; SameSite=Strict', 'a=value; SameSite=sTrIcT',
       'a=value; Domain=.bilibili.com; Path=/x', 'a=value; Domain=', 'a=value; Domain; Path',
       'a=value; Path=/x,comma', 'a=value; Path=/x; Path=/last',
       'a=value; Max-Age=16', 'a=value; Max-Age=+16', 'a=value; Max-Age=-16',

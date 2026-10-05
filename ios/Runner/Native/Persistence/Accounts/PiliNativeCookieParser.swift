@@ -94,7 +94,9 @@ enum PiliNativeCookieParser {
         guard attributeValue == nil else { throw PiliNativeCookieError.invalidField }; httpOnly = true
       case "samesite":
         guard let value = attributeValue?.lowercased(), ["lax", "strict", "none"].contains(value) else { throw PiliNativeCookieError.invalidField }
-        sameSite = value
+        // Dart SameSite.name is its wire label (Lax/Strict/None), unlike a
+        // normal enum's lowercase declaration name. Preserve that owned value.
+        sameSite = value == "lax" ? "Lax" : value == "strict" ? "Strict" : "None"
       case "expires":
         guard let value = attributeValue else { throw PiliNativeCookieError.invalidField }; expires = try cookieDate(value)
       case "max-age":
@@ -102,7 +104,7 @@ enum PiliNativeCookieParser {
       default: break
       }
     }
-    guard sameSite != "none" || secure, let host = responseURL.host else { throw PiliNativeCookieError.invalidField }
+    guard sameSite != "None" || secure, let host = responseURL.host else { throw PiliNativeCookieError.invalidField }
     let hostOnly = domain == nil
     let bucketDomain = domain.map { $0.hasPrefix(".") ? String($0.dropFirst()) : $0 } ?? host
     let bucketPath: String
