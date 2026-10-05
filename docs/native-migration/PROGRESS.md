@@ -2,9 +2,11 @@
 
 最后更新：2026-10-06（Asia/Hong_Kong）。目标仍在进行，Flutter runtime 保留。
 
-当前阶段为 **P05**。上一并行组在 `bedde36` 的完整 release5 + preview4 jobs
-通过；当前实施 [CA1 jar-only shadow](P05_COOKIE_AUTHORITY_PLAN.md) 第一组，
-不是完整账户 authority 切换。exporter、严格 UTF16/有序格式及 Keychain staging
+当前阶段为 **P05**。`bedde36` 的原并行组与 `0527fb2` 的
+[CA1 jar-only shadow](P05_COOKIE_AUTHORITY_PLAN.md) 均已通过同 SHA release5 +
+preview4 jobs。当前进入下一验证组：CA2 纯 Cookie mutation candidate 与 CA3
+默认 Dart writer port；账户 authority/runtime 尚未切换。CA1 首组的 exporter、
+严格 UTF16/有序格式及 Keychain staging
 已分五个独立提交推送，集成代码 `f11329b` 首次 CI 未通过。
 首次实际 Dart 检查发现一个 fixture 错误：原 nil path Cookie 已被同 bucket/name
 的 `/x` Cookie 覆盖，最终 header 不能继续包含旧值。独立 producer 17pass/1fail、
@@ -20,23 +22,32 @@ codec155及真实 Keychain staging36 checks成功，15 exports/9 trajectories/34
 只有三个 jobs 成功，account-pages 的6 tests中1项失败：下载弹层关闭后，消息弹层
 未出现。AX/事件/录屏证明按钮唯一且点击命中；presentation 生命周期竞争仍为推断。
 修复 `5deed5f` 仅让预览等待真实 onDismiss 计数，保留单次点击、6 tests与全部精确
-路由断言。整组尚未验收，须以修复后同 SHA 的完整 release+全部 preview 重新闭环。
+路由断言。当时整组未验收，后续以 `0527fb2` 的完整 release+preview 闭环。
 P05 仍需完整账户 envelope、mutation engine、统一 reader/writer、durable 交接/
 回退及真实账户/设备验收；Native runtime 关闭，视觉 UI 重写继续排在 P05–P12 后。
 
-修复后的 `0527fb2de6c00baded5a53f7dcbc8ae6661da6ec` 正在进行同 SHA
+修复后的 **`0527fb2de6c00baded5a53f7dcbc8ae6661da6ec` 已验收 jar-only 切片**，同 SHA
 [release](https://github.com/Justintunsday/Piliglass/actions/runs/37374811289) 与
 [preview](https://github.com/Justintunsday/Piliglass/actions/runs/37374822907)：
-账户预览已真实6/6通过，AX dismissal计数1/2及 `/download`→`/whisper` 精确路由
-通过；其余完整 jobs 尚未全部结束，CA1 jar-only 整组继续待验收。
-等待时准备下一组：默认 Dart Cookie/legacy persistence port `4a7171f` 已推送；
-纯 Native ordered reducer 与实际 mutation replay 正在接入独立 Swift6/Runner门禁。
-这些新候选尚无当前 SHA 完整编译证据，不计入完成。
+全部9 jobs成功，实际 Runner BUILD SUCCEEDED、109.1MB、Aether FFmpeg链接顺序
+通过；7个强制合同 outcome 全部success。实际账户101/state72、producer18、
+Swift6 codec155/真实Keychain staging36，以及签名102/19/5、body25/67854/4、
+账户67/Cookie68、登录225/20/7、H1 14/14+iOS16、H2/TLS19均读实际产物。
+preview 实际账户6/导航9/播放器2/图片3全通过，AX dismissal1/1/2与精确路由通过。
+压力功能边界 failures=[]、1000评论懒加载/末页、100000弹幕保留/最多60活跃通过；
+但 burstRender 单样本2082.5ms（此前29.0/26.7ms）明显偏高，源代码未变且缺
+profiling/重复样本，原因未确定；现门禁没有时延阈值，**不宣称时延性能已验收**。
+
+下一组已分提交推送：默认 Dart port `4a7171f`、纯 Native reducer/独立真实重放
+`63ed14a`、Runner/Swift6依赖与第8个强制 COOKIE_MUTATIONS 门禁 `7381df0`。
+新增四项真实账户测试及实测同秒 creation/load clock 门禁；跨秒明确失败，不使用
+expected jar驱动Native mutation、不重试写入。P06首REST领域准备增补 `29824b7`
+也已保存；未新增该领域请求。新候选仍需自身同 SHA 全部 CI，不计入已验收。
 
 2026-10-05 执行节奏按用户要求改为组内并行实施、独立提交推送、组末统一编译
-验收。当前 P05 并行组已提交网络能力/响应头执行边界、原始字段候选、签名/cache、
+验收。当时 P05 并行组已提交网络能力/响应头执行边界、原始字段候选、签名/cache、
 账户 shadow store、Cookie parser/selector、独立 body codec、登录协议/状态机及
-H1/H2/TLS 对照，整组验收进行中，不计入已验证阶段。
+H1/H2/TLS 对照；后续 `bedde36` 的成功闭环见下方历史记录。
 详见 [P05_GROUP_ACCEPTANCE.md](P05_GROUP_ACCEPTANCE.md)；最终仍以同 SHA release
 及全部 preview 实际日志为准，Native runtime/账户权威保持关闭。
 

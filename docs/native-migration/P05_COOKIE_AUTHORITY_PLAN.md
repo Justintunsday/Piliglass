@@ -156,9 +156,12 @@ Native harness 对照原 Dart JSON 结构和数组顺序，不只检查同 codec
 Keychain restart 消费 fullattrs 和 UTF16 jars。故障测试用不同第二份 jar 区分旧/新
 指针，覆盖候选失败、写后错误、未知确认、损坏记录、await 重入与重复导入。
 
-本组仍待同 SHA 的专用实际 Dart/Swift6/Security 检查、完整 Runner 与全部 preview。
-没有这些证据时状态为已实现未验收；即使通过也只接受 jar format/shadow 边界，
-不表示 CA1 全部账户 envelope、CA2 mutation engine 或 P05 已完成。
+本组在 `0527fb2de6c00baded5a53f7dcbc8ae6661da6ec` 同 SHA
+[release5](https://github.com/Justintunsday/Piliglass/actions/runs/37374811289) 与
+[preview4](https://github.com/Justintunsday/Piliglass/actions/runs/37374822907) 全成功。
+实际 producer18、Swift6 codec155、真实Keychain staging36、完整Runner及7合同门禁
+通过；只接受 jar format/shadow 边界，不表示 CA1 全部账户 envelope、CA2 mutation
+engine 或 P05 已完成。压力数量/功能通过，时延单样本异常仍未验收，见 PROGRESS。
 
 ### CA1 下一账户 envelope：只读准备边界
 
