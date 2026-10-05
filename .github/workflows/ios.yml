@@ -517,3 +517,13 @@ jobs:
           name: native-migration-inventory
           path: build/native-migration/*.json
           if-no-files-found: warn
+
+      - name: Record actual Runner Swift dependency resolution
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: native-runner-resolved-dependencies
+          path: |
+            ios/Runner.xcworkspace/xcshareddata/swiftpm/Package.resolved
+            ios/Runner.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved
+          if-no-files-found: warn
