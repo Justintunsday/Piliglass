@@ -36,7 +36,8 @@ def run(command, name, cwd=ROOT, env=None, timeout=1200):
     result = subprocess.run(command, cwd=cwd, env=env, capture_output=True, text=True, timeout=timeout)
     (OUTPUT / name).write_text(' '.join(command) + '\n' + result.stdout + result.stderr, encoding='utf-8')
     if result.returncode:
-        print((result.stdout + result.stderr)[-12000:])
+        print(result.stdout[-6000:])
+        print(result.stderr[-6000:])
         raise RuntimeError(f'{name}: failed ({result.returncode})')
 
 

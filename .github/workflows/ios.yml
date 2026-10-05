@@ -168,8 +168,12 @@ jobs:
             ~/Library/Caches/org.swift.swiftpm
           key: native-raw-http-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Packages/PiliHTTPTransport/Package.swift', 'Packages/PiliHTTPTransport/Package.resolved') }}
       - name: Actual field, cancellation, idle and device/simulator comparison
+        id: raw-h1
+        continue-on-error: true
         run: python3 tool/check_native_raw_http.py
       - name: Actual TLS ALPN, HTTP2 field order, trust and HTTP11 fallback
+        id: raw-h2
+        continue-on-error: true
         run: python3 tool/native_raw_http2_probe.py
       - name: Upload raw transport acceptance evidence and resolved dependencies
         if: always()
@@ -183,6 +187,20 @@ jobs:
             build/native-raw-http2-check/*.json
             build/native-raw-http2-check/*.log
           if-no-files-found: warn
+      - name: Require both raw HTTP comparison groups to pass
+        if: always()
+        env:
+          RAW_H1: ${{ steps.raw-h1.outcome }}
+          RAW_H2: ${{ steps.raw-h2.outcome }}
+        run: |
+          python3 - <<'PY'
+          import os
+          import sys
+          failed = [name for name in ['RAW_H1', 'RAW_H2'] if os.environ.get(name) != 'success']
+          for name in failed:
+              print(f"::error::{name} contract outcome: {os.environ.get(name, 'missing')}")
+          sys.exit(1 if failed else 0)
+          PY
       - name: Restore cache-safe Flutter fixture dependencies
         if: always()
         shell: pwsh
