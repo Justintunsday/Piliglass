@@ -1,16 +1,26 @@
 # 迁移进度与编译证据
 
-最后更新：2026-10-05（Asia/Hong_Kong）。目标仍在进行，Flutter runtime 保留。
+最后更新：2026-10-06（Asia/Hong_Kong）。目标仍在进行，Flutter runtime 保留。
 
 当前阶段为 **P05**。上一并行组在 `bedde36` 的完整 release5 + preview4 jobs
 通过；当前实施 [CA1 jar-only shadow](P05_COOKIE_AUTHORITY_PLAN.md) 第一组，
 不是完整账户 authority 切换。exporter、严格 UTF16/有序格式及 Keychain staging
-已分五个独立提交推送，集成代码 `f11329b` 的 CI 正在验收。
+已分五个独立提交推送，集成代码 `f11329b` 首次 CI 未通过。
 首次实际 Dart 检查发现一个 fixture 错误：原 nil path Cookie 已被同 bucket/name
 的 `/x` Cookie 覆盖，最终 header 不能继续包含旧值。独立 producer 17pass/1fail、
 完整账户 suite 100pass/1fail，strict analyze 均无问题；修复 `4fdb871` 保留操作
-序列并分别验证覆盖前后的完整 jar/header。Swift 独立 codec/staging 尚未执行，
-必须在修复后的同一 SHA 重跑完整 release 和全部 preview 后才接受本组。
+序列并分别验证覆盖前后的完整 jar/header。
+第二轮 `f52b23f227054f1864ab40b55fd2a745402fb070` 的
+[release](https://github.com/Justintunsday/Piliglass/actions/runs/37325198206) 五个 jobs 成功：
+实际账户101 tests、状态72、独立 producer18 tests、strict analyze 无问题；Swift6
+codec155及真实 Keychain staging36 checks成功，15 exports/9 trajectories/34 snapshots
+和真实 Hive reopen 无损/损失标记均已读实际产物。完整 Runner BUILD SUCCEEDED、
+109.1MB、Aether FFmpeg 顺序成功；原签名/body/账户/Cookie/登录及H1/H2也通过。
+但同 SHA [preview](https://github.com/Justintunsday/Piliglass/actions/runs/37325216737)
+只有三个 jobs 成功，account-pages 的6 tests中1项失败：下载弹层关闭后，消息弹层
+未出现。AX/事件/录屏证明按钮唯一且点击命中；presentation 生命周期竞争仍为推断。
+修复 `5deed5f` 仅让预览等待真实 onDismiss 计数，保留单次点击、6 tests与全部精确
+路由断言。整组尚未验收，须以修复后同 SHA 的完整 release+全部 preview 重新闭环。
 P05 仍需完整账户 envelope、mutation engine、统一 reader/writer、durable 交接/
 回退及真实账户/设备验收；Native runtime 关闭，视觉 UI 重写继续排在 P05–P12 后。
 

@@ -75,7 +75,7 @@ request context，验证原 owner 再发送；writer 接入完成但 reader 未�
 | 层 | 必须保留的信息 |
 |---|---|
 | envelope | schemaVersion=2、source app/dependency version、export ID、authority kind/epoch/revision、snapshot 与导出一致性证据 |
-| account record | durable record ID、MID、凭据、持久用途、账户存储迭代顺序；运行时 ownerToken/generation 单独标记，不能由 MID 推导 |
+| account record | active 前需要 durable record ID；只读 shadow 未配置时明确标记 capture/shadow scope；MID、原 storage key、凭据、持久用途及两种实际账户顺序分开保存；ownerToken/generation 不能由 MID 推导 |
 | jar | ignoreExpires；domainBuckets 与 hostBuckets 分开的有序数组；空数组也保留；来源 live / legacyHiveReopened / schema1Derived 及缺失属性/顺序标记 |
 | domain/host bucket | 原 bucket key 的 UTF-16 code units、有序 pathBuckets；**空 domain key 和没有 path 的 bucket 均可表达** |
 | path bucket | 原 path key、有序 cookieEntries；**空 path key 和空 name map 均可表达**，不能过滤“没有 Cookie”的 bucket |
@@ -95,9 +95,14 @@ schema1 可以在旁路中升级为 marked-incomplete schema2：只能保留现�
 不补造 expiry/Secure/host/path。Native restart 保存完整新属性是明确持久化改进，
 和旧 Hive reopen 的丢属性行为分别验收。
 
-账户存储顺序不能用当前按 MID 排序的公共 descriptors 代替：旧 refresh 在多个账户
-均含同一持久用途时以最后迭代者覆盖 slot。导出同时保存持久用途和 effective/temporary
-selection，重启保留旧“临时选择不落库、匿名 session 重建、activated=false”政策。
+账户顺序不能用当前按 MID 数值排序的公共 descriptors 代替。实际锁定的 Hive CE
+2.20.0 使用 defaultKeyComparator；String keys 按 String.compareTo 排序，values/toMap
+沿同一顺序，并非安装插入历史。`Accounts.refresh` 则遍历私有 `_owners.values` 的
+Map 顺序；同 key 替换先删除旧 owner 再追加新 owner，live 顺序可能与 Hive/冷启动
+不同。两种顺序都需从实际来源复制，多个相同持久用途仍由 refresh 最后迭代者覆盖。
+旧 snapshot `_temporary` 又沿 Hive.values 计算，不能用它反推 live owner 顺序。
+导出分别保留持久用途、两种顺序及四个 effective selections/history，不重算旧政策。
+重启保留旧“临时选择不落库、匿名 session 重建、activated=false”政策。
 durable record ID 不是请求授权身份；重启和 authority handoff 生成新 epoch 与运行时
 owner 代次，旧 lease/bridge callback 不得在新 session 中复活。
 
@@ -155,6 +160,31 @@ Keychain restart 消费 fullattrs 和 UTF16 jars。故障测试用不同第二�
 没有这些证据时状态为已实现未验收；即使通过也只接受 jar format/shadow 边界，
 不表示 CA1 全部账户 envelope、CA2 mutation engine 或 P05 已完成。
 
+### CA1 下一账户 envelope：只读准备边界
+
+新增 Accounts 内部同步复制接口，分别捕获 Box.toMap 的当前 key 顺序、私有 owner
+Map 顺序、exact object/stamp、四 selections/history、revision 和 pending/reset 状态。
+不能公开可变 Map、调用 refresh/reconcile 或触发 buvid。原 storage key 不能由数值
+MID 规范化，account equality 也不能用于合并同 MID successor。未知/坏 stored entry
+显式失败，不能过滤后发布不完整列表。旧 schema1 两命令和 DTO 保持原语义。
+
+新 service 在同一个无 await 段复制完整 jar2、credentials/type/activated及两种顺序；
+checkpoint 后全量 re-capture 对照，不只复用旧 public descriptor/revision 检查。
+必须设置整份 envelope 的累计限额，不能累积256份各16MiB后才检查。任一变化或
+越界不发布；一个 manifest 发布账户集合和 selections，不逐账户零散替换。
+
+当前 type9 没有 durable UUID；epoch/ownerToken/generation 都是运行时身份。
+下一 shadow 可用 capture-local candidateRecordID 关联同一候选，但明确 durable
+identity 未配置，不能把 MID、随机 token 或 shadow 重启恢复当成 Dart owner 跨
+冷启动连续。active durable ID registry 留给有 writer lifecycle 屏障的后续切片。
+
+Hive put 的新值在 backend await 完成前即可见；read/recheck 不能证明全部响应、
+Cookie/用途更新及持久化已排空。合法停止边界是 coherent live-memory shadow，
+durabilityVerified/authoritySwitchAllowed 继续 false；flush 不等于冻结或交接。
+矩阵补充：字符串 key 10/2 与数值顺序冲突、同 MID 替换后两种顺序分歧、实际冷
+启动、四用途/history、未 notify 的 raw jar 更新、pending/reset/unknown entry、
+全量 shadow 重启和未知 ack。CA3/CA4 完成前不从此 envelope 安装 active writer。
+
 ### CA2 必须对照的 mutation / selection 语义
 
 - 整批 raw fields 先解析成功，再按原顺序 apply；坏第 N 条不得留下前 N-1 条写入。
@@ -166,6 +196,10 @@ Keychain restart 消费 fullattrs 和 UTF16 jars。故障测试用不同第二�
   会删 name，却保留 domain/path 空 maps。之后重插会追加 name，原 bucket 顺序不变。
 - ignoreExpires=true 不删除/过滤过期 Cookie。否则 maxAge<1、elapsed>=maxAge 或
   expires<=now 任一成立即过期；旧实现同时检查 maxAge 和 expires，不能套标准优先级。
+  实际 SerializableCookie 在每次构造时读取 wall clock、保存秒级 creation，expiry
+  则用 DateTime 的实际精度。Native reducer 注入明确 wall-clock 值；真实 Dart 的
+  started/finished 时间窗口与 unchanged creation 分别验证，不能把格式测试中人工
+  种入的 Int64/DateTime 极限值当成已验证的 clock/溢出语义。
 - load 的 host-only 在前，其 path 按 UTF-16 长度降序；domain 部分按三层插入顺序。
   最后 AccountManager 再按**原 Cookie.path** nil 优先/长度降序，保留重复 name。
   大集合的 Dart sort tie 行为与 Unicode URI/小写转换未对齐前不扩大 selector 门禁。
@@ -177,6 +211,15 @@ Keychain restart 消费 fullattrs 和 UTF16 jars。故障测试用不同第二�
   deleteAll 清两类 maps；匿名补 buvid/reset 是上层操作，不由 reducer 自动重建登录。
 
 ## 单一 writer 屏障与 durable handoff
+
+CA3 第一独立切片先引入同步 forwarding 的 response Cookie mutation / nullable
+legacy persistence port，仅收口 AccountManager、Native HTTP lease 两个响应写者和
+LoginAccount.onChange。默认 Dart 实现不加 async wrapper，不先 await gate 再改变
+jar/Hive 内存；原 parser、redirect 顺序、claim、owner检查、notify与await复核位置保留。
+onChange 的私有删除 guard 留原库，port不反调onChange形成递归。install/delete/
+selection/activation/constructors/maintenance与同步csrf/accessKey读者留后续切片，
+不能把这一小接口叫完整 writer barrier。Hive backend 已写入后 compaction 仍可抛错；
+Future failure不证明durable未写入，不因错误ack自动回滚或重放操作。
 
 统一 coordinator 状态为 DartActive → Transitioning → NativeActive；反向为
 NativeActive → Reverting → DartActive。authority marker 与 phase journal 只保存
