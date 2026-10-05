@@ -19,8 +19,21 @@ body codec 的 25 个实际正文、67,854 个 UTF8 向量及 iOS16 device/simul
 独立诊断与强制聚合门禁 d9c0da1、登录 await owner 复查/真实 Hive 竞态 8eb2050。
 第二轮代码 8eb2050 的 [release](https://github.com/Justintunsday/Piliglass/actions/runs/37284584075)
 与 [全部 preview](https://github.com/Justintunsday/Piliglass/actions/runs/37284588783)
-正在运行；必须全部成功才更新此组的编译验证状态。聚合门禁以每组 step.outcome
-检查 success，任一失败/跳过/缺失均 fail，并在发布之前执行。
+第二轮 release 失败、四个 preview jobs 成功。完整 Runner 已构建（109.1 MB），
+FFmpeg 顺序通过；强制门禁正确阻止失败组发布。实际失败为 TestWidgets 的 400
+网络 override、Dart SameSite 标签大小写、登录四项 fatal-info，已分别修复。
+
+第三轮代码 94b62e5 的 [release](https://github.com/Justintunsday/Piliglass/actions/runs/37286952156)
+及 [preview](https://github.com/Justintunsday/Piliglass/actions/runs/37286957408)
+继续收集完整编译证据。实际账户 shadow 67、Cookie 68、登录 225 项检查通过；
+登录实际 Dart 7 个测试及 20 个 golden 通过。raw H1 的实际 Dart 测试通过，
+Swift 14 个观测符合预期，但 no-head 取消分支错误继续要求成功正文，测试失败；
+已按真实结果修正断言，H2/TLS 尚未执行，不能算通过。整组仍未验收。
+聚合门禁以每组 step.outcome 检查 success，任一失败/跳过/缺失均 fail，发布前执行。
+
+后续 Cookie/账户权威方案保存于 [P05_COOKIE_AUTHORITY_PLAN.md](P05_COOKIE_AUTHORITY_PLAN.md)：
+CA1–CA6 分别收口有序格式、mutation、统一 writer/reader、durable 交接与回退、
+真实账户候选验收及按证据开放。仅并行准备，旧 runtime/authority 保持不变。
 
 | 阶段 | 阶段代码 Commit | iOS release | Preview | 状态 |
 |---|---|---|---|---|

@@ -10,7 +10,7 @@ P05 已完成。后续 P06–P12 同样采用组内并行、独立提交、组�
 | 签名/正文 | Native WBI/App signer、key provider/cache、独立 gzip/br/UTF8 codec；旧 Dart synthetic golden | 实际 Dart 与 Swift 对照、UTF16/percent/time/cache、C iOS16 编译 | 3262e77 / c8475fc 局部通过，依赖锁定 3776573；整组未完成 |
 | 账户/存储 | 四用途 selection/session、Cookie/Keychain staging store、Hive 只读导出 | generation/revision/epoch、同 MID 隔离、重启/导入重复执行、完整 Cookie 属性 | e4431a9 / 1b8728d；lint 修复 15b2351 后重验收 |
 | 登录 | QR/password/SMS/Cookie/Geetest/退出、请求与副作用边界、状态机 | 实际 Dart synthetic response、RSA、挑战/手机验证、失败/取消/批量退出 | c2d4f2a / 3fee950 / 8eb2050 已提交，await owner 竞态并入第二轮 |
-| 集成 | bridge 薄路由、PBX/工具 source list、workflow 与 fixture 汇合 | 完整 release + 全 preview 同 SHA，无资源/功能删除 | dfcd9c3 首轮失败；8eb2050 第二轮完整验收进行中，见 PROGRESS.md |
+| 集成 | bridge 薄路由、PBX/工具 source list、workflow 与 fixture 汇合 | 完整 release + 全 preview 同 SHA，无资源/功能删除 | 前两轮失败；94b62e5 第三轮局部通过、raw 取消断言修复待重跑，见 PROGRESS.md |
 | 生产切换 | transport/account/API 验收后按领域切 Repository | 真实 API、登录/多账户/重启、无重复写请求；原实现仍可回退 | 未授权以未验证实现替换；待验收 |
 
 每个组报告已实现与仍依赖 Dart 的路径，不能把一个协议或 synthetic test 视为真实
