@@ -292,9 +292,13 @@ jobs:
         run: python3 tool/check_prepared_http_policy.py
 
       - name: Verify native signing and WBI cache against actual Dart implementations
+        id: group-signing
+        continue-on-error: true
         run: python3 tool/check_native_signing.py
 
       - name: Verify raw gzip, Brotli and malformed UTF8 against actual Dart pipeline
+        id: group-body-codec
+        continue-on-error: true
         run: python3 tool/check_native_body_codec.py
 
       - name: Upload decoder comparison and iOS16 C dependency builds
@@ -344,6 +348,8 @@ jobs:
           if-no-files-found: warn
 
       - name: Verify account generations and response ownership
+        id: group-account-dart
+        continue-on-error: true
         shell: bash
         run: |
           mkdir -p build/account-request-state
@@ -353,8 +359,12 @@ jobs:
           flutter test --no-pub --reporter expanded test/utils/accounts/ | tee build/account-request-state/flutter-test.log
 
       - name: Verify four-purpose account snapshots and Keychain shadow restart
+        id: group-account-native
+        continue-on-error: true
         run: python3 tool/check_native_accounts.py
       - name: Verify Cookie parse and selection against actual Dart CookieJar
+        id: group-cookies
+        continue-on-error: true
         run: python3 tool/check_native_cookies.py
 
       - name: Upload actual account export and Native staging evidence
@@ -368,6 +378,8 @@ jobs:
           if-no-files-found: warn
 
       - name: Verify actual login, RSA and single-writer contracts
+        id: group-login
+        continue-on-error: true
         shell: bash
         run: |
           set -o pipefail
@@ -440,6 +452,28 @@ jobs:
           # make AltSign happy...
           find Payload/Runner.app/Frameworks -type d -name "*.framework" -exec codesign --force --sign - --preserve-metadata=identifier,entitlements {} \;
           zip -r9 PiliPlus_ios_${{env.version}}.ipa Payload/Runner.app
+
+      # Gather independent group diagnostics in one run. A failed contract must
+      # still fail the job and prevent release, even if Runner itself compiles.
+      - name: Require every parallel migration group contract to pass
+        if: always()
+        env:
+          SIGNING: ${{ steps.group-signing.outcome }}
+          BODY_CODEC: ${{ steps.group-body-codec.outcome }}
+          ACCOUNT_DART: ${{ steps.group-account-dart.outcome }}
+          ACCOUNT_NATIVE: ${{ steps.group-account-native.outcome }}
+          COOKIES: ${{ steps.group-cookies.outcome }}
+          LOGIN: ${{ steps.group-login.outcome }}
+        run: |
+          python3 - <<'PY'
+          import os
+          import sys
+          groups = ['SIGNING', 'BODY_CODEC', 'ACCOUNT_DART', 'ACCOUNT_NATIVE', 'COOKIES', 'LOGIN']
+          failed = [name for name in groups if os.environ.get(name) != 'success']
+          for name in failed:
+              print(f"::error::{name} contract outcome: {os.environ.get(name, 'missing')}")
+          sys.exit(1 if failed else 0)
+          PY
 
       - name: Restore cache-safe Flutter dependencies
         if: always()
