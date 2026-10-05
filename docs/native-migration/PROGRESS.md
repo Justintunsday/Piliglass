@@ -25,10 +25,14 @@ FFmpeg 顺序通过；强制门禁正确阻止失败组发布。实际失败为 
 
 第三轮代码 94b62e5 的 [release](https://github.com/Justintunsday/Piliglass/actions/runs/37286952156)
 及 [preview](https://github.com/Justintunsday/Piliglass/actions/runs/37286957408)
-继续收集完整编译证据。实际账户 shadow 67、Cookie 68、登录 225 项检查通过；
+已完成：完整 Runner、账户 shadow 67、Cookie 68、登录 225 项检查通过；
 登录实际 Dart 7 个测试及 20 个 golden 通过。raw H1 的实际 Dart 测试通过，
 Swift 14 个观测符合预期，但 no-head 取消分支错误继续要求成功正文，测试失败；
-已按真实结果修正断言，H2/TLS 尚未执行，不能算通过。整组仍未验收。
+已按真实结果修正断言，H2/TLS 尚未执行，不能算通过。导航 preview 9 个用例
+中的 settings 单次侧滑没有启动 pop；实际 event/录屏未见生产 UI 回归，已按真实
+窗口坐标及 150ms down 修正 fixture，保留单次返回和持久化断言，尚待重跑。
+完整 Runner 实际 27 项 Swift dependency resolution 已复制锁定，不由本地猜测。
+当前仍未整组验收，将在修复汇合后的同一 SHA 重跑 release 与全部 preview。
 聚合门禁以每组 step.outcome 检查 success，任一失败/跳过/缺失均 fail，发布前执行。
 
 后续 Cookie/账户权威方案保存于 [P05_COOKIE_AUTHORITY_PLAN.md](P05_COOKIE_AUTHORITY_PLAN.md)：

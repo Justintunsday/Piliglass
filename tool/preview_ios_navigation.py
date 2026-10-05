@@ -196,12 +196,17 @@ final class MenuNavigationTests: XCTestCase {
   }
 
   func edgeBack() {
-    let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.005, dy: 0.45))
-    let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.45))
-    // Exercise one committed interactive pop. Give UIKit time to track the
-    // movement on loaded simulator runners, then hold before lifting. Keep the
-    // real destination and persistence assertions; do not retry the gesture.
-    start.press(forDuration: 0.05, thenDragTo: end,
+    let window = app.windows.firstMatch
+    XCTAssertTrue(window.waitForExistence(timeout: 8))
+    let origin = window.coordinate(withNormalizedOffset: .zero)
+    let y = window.frame.height * 0.45
+    let start = origin.withOffset(CGVector(dx: 8, dy: y))
+    let end = origin.withOffset(CGVector(dx: window.frame.width * 0.95, dy: y))
+    // Keep the down event inside the real window's left edge and allow it the
+    // same 150ms delivery window as the settings switch touch. The failure
+    // attachment showed a 50ms down event with no pop animation. Exercise one
+    // committed gesture; keep the destination and persistence assertions.
+    start.press(forDuration: 0.15, thenDragTo: end,
                 withVelocity: .slow, thenHoldForDuration: 0.2)
   }
 
