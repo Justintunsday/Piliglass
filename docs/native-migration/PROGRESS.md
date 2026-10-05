@@ -2,6 +2,18 @@
 
 最后更新：2026-10-05（Asia/Hong_Kong）。目标仍在进行，Flutter runtime 保留。
 
+当前阶段为 **P05**。上一并行组在 `bedde36` 的完整 release5 + preview4 jobs
+通过；当前实施 [CA1 jar-only shadow](P05_COOKIE_AUTHORITY_PLAN.md) 第一组，
+不是完整账户 authority 切换。exporter、严格 UTF16/有序格式及 Keychain staging
+已分五个独立提交推送，集成代码 `f11329b` 的 CI 正在验收。
+首次实际 Dart 检查发现一个 fixture 错误：原 nil path Cookie 已被同 bucket/name
+的 `/x` Cookie 覆盖，最终 header 不能继续包含旧值。独立 producer 17pass/1fail、
+完整账户 suite 100pass/1fail，strict analyze 均无问题；修复 `4fdb871` 保留操作
+序列并分别验证覆盖前后的完整 jar/header。Swift 独立 codec/staging 尚未执行，
+必须在修复后的同一 SHA 重跑完整 release 和全部 preview 后才接受本组。
+P05 仍需完整账户 envelope、mutation engine、统一 reader/writer、durable 交接/
+回退及真实账户/设备验收；Native runtime 关闭，视觉 UI 重写继续排在 P05–P12 后。
+
 2026-10-05 执行节奏按用户要求改为组内并行实施、独立提交推送、组末统一编译
 验收。当前 P05 并行组已提交网络能力/响应头执行边界、原始字段候选、签名/cache、
 账户 shadow store、Cookie parser/selector、独立 body codec、登录协议/状态机及
