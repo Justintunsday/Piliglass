@@ -26,6 +26,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: piliglass-ios-preview-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   account-pages:
     runs-on: macos-26
