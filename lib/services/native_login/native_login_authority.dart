@@ -14,11 +14,10 @@ final class NativeLoginAuthorityException implements Exception {
 /// The only writer is still Accounts/Hive. Native transport and Keychain remain
 /// disabled; this adapter is not permission to run an unverified native login.
 final class NativeLoginAuthority {
-  NativeLoginAuthority(this.accounts, {FutureOr<void> Function()? onChanged})
-    : _onChanged = onChanged;
+  NativeLoginAuthority(this.accounts, {this.onChanged});
 
   final NativeAccountSnapshotService accounts;
-  final FutureOr<void> Function()? _onChanged;
+  final FutureOr<void> Function()? onChanged;
   final Set<String> _operations = {};
 
   Future<Map<String, Object?>> handle(String method, Object? arguments) async {
@@ -82,11 +81,15 @@ final class NativeLoginAuthority {
         throw const NativeLoginAuthorityException('cookieAttributesNotPersistable');
       }
       if (name.isEmpty || RegExp(r'[\r\n;=\s]').hasMatch(name) || RegExp(r'[\r\n]').hasMatch(value) ||
-          cookies.containsKey(name)) throw const NativeLoginAuthorityException('invalidCredentials');
+          cookies.containsKey(name)) {
+        throw const NativeLoginAuthorityException('invalidCredentials');
+      }
       cookies[name] = value;
     }
     if (cookies['DedeUserID'] != mid.toString() || cookies['bili_jct']?.isNotEmpty != true ||
-        cookies['SESSDATA']?.isNotEmpty != true) throw const NativeLoginAuthorityException('invalidCredentials');
+        cookies['SESSDATA']?.isNotEmpty != true) {
+      throw const NativeLoginAuthorityException('invalidCredentials');
+    }
     final rawPurposes = values['purposes'];
     final Set<AccountType>? purposes;
     if (rawPurposes == null) {
@@ -121,7 +124,7 @@ final class NativeLoginAuthority {
       await AnonymousAccount().delete();
       _verifyInstallation(account, stamp, owner);
     }
-    await _onChanged?.call();
+    await onChanged?.call();
     // Refresh can await network/storage work. Its completion is not proof that
     // this original owner is still installed; never acknowledge its successor.
     _verifyInstallation(account, stamp, owner);
@@ -161,7 +164,7 @@ final class NativeLoginAuthority {
     // resolveOwner and deleteAll have no intervening await: a same-MID replace
     // cannot be accidentally deleted by an old remote logout result.
     await Accounts.deleteAll(targets);
-    await _onChanged?.call();
+    await onChanged?.call();
     return {'state': 'deleted', 'count': targets.length, 'nativeAuthorityEnabled': false};
   }
 

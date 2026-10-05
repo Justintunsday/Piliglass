@@ -50,8 +50,9 @@ void main() {
   test('actual LoginHttp and Dio export synthetic endpoint/body/response goldens', () async {
     final cases = <Map<String, Object?>>[];
     Future<void> capture(String operation, Map<String, Object?> response, Future<Object?> Function() call) async {
-      adapter.response = response;
-      adapter.last = null;
+      adapter
+        ..response = response
+        ..last = null;
       final result = await call();
       final request = adapter.last!;
       final fields = request['fields'] as Map<String, Object?>;
