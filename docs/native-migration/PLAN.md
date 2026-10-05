@@ -118,6 +118,10 @@ P05a2b Swift adapter 已在 4148caf 同 SHA 全部验证，见 [REQUEST_CONTEXT_
 CI 证据持续写入 `PROGRESS.md`。未通过 CI 的阶段保持进行中；等待真实 API/账户/真机验证的领域标记 N，不夸大成 V。
 
 当前并行工作和共同验收清单见 [P05_GROUP_ACCEPTANCE.md](P05_GROUP_ACCEPTANCE.md)。
+首个并行组已在 bedde36 完整 release5 + preview4 jobs 成功；仅接受其中列明的
+编译和实际 Dart/Native 合同，生产网络/账户权威尚未切换。继续 P05 的
+[有序 Cookie / 单写权威](P05_COOKIE_AUTHORITY_PLAN.md)，CA1 首组只实现 jar2
+shadow 格式；真实账户、全部 reader/writer、durable 交接/回退及其他网络语义门禁保留。
 
 ## Skills 适用决策
 

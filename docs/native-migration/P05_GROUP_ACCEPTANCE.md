@@ -6,11 +6,11 @@ P05 已完成。后续 P06–P12 同样采用组内并行、独立提交、组�
 
 | 工作组 | 本轮实现边界 | 汇合验收 | 状态 |
 |---|---|---|---|
-| 网络 | capability evaluator、head-aware executor、字段保留 transport、timeout/compression/pool probe | Swift 6 production tests、真实 H1/H2/timeout wire、原 owner 终结、iOS16 链接 | 78ad72b / 3f6942b / 40fddac；capability 局部通过，raw fixture 环境修复后重验收 |
-| 签名/正文 | Native WBI/App signer、key provider/cache、独立 gzip/br/UTF8 codec；旧 Dart synthetic golden | 实际 Dart 与 Swift 对照、UTF16/percent/time/cache、C iOS16 编译 | 3262e77 / c8475fc 局部通过，依赖锁定 3776573；整组未完成 |
-| 账户/存储 | 四用途 selection/session、Cookie/Keychain staging store、Hive 只读导出 | generation/revision/epoch、同 MID 隔离、重启/导入重复执行、完整 Cookie 属性 | e4431a9 / 1b8728d；lint 修复 15b2351 后重验收 |
-| 登录 | QR/password/SMS/Cookie/Geetest/退出、请求与副作用边界、状态机 | 实际 Dart synthetic response、RSA、挑战/手机验证、失败/取消/批量退出 | c2d4f2a / 3fee950 / 8eb2050 已提交，await owner 竞态并入第二轮 |
-| 集成 | bridge 薄路由、PBX/工具 source list、workflow 与 fixture 汇合 | 完整 release + 全 preview 同 SHA，无资源/功能删除 | 前两轮失败；94b62e5 第三轮局部通过、raw 取消断言修复待重跑，见 PROGRESS.md |
+| 网络 | capability evaluator、head-aware executor、字段保留 transport、timeout/compression/pool probe | Swift 6 production tests、真实 H1/H2/timeout wire、原 owner 终结、iOS16 链接 | bedde36 全CI通过；H1各14、H2/TLS19；production capability仍关闭，proxy/retry/pool未全部验收 |
+| 签名/正文 | Native WBI/App signer、key provider/cache、独立 gzip/br/UTF8 codec；旧 Dart synthetic golden | 实际 Dart 与 Swift 对照、UTF16/percent/time/cache、C iOS16 编译 | bedde36合同通过：签名102/19/5、正文25/67854/4、device/simulator；运行时未安装 |
+| 账户/存储 | 四用途 selection/session、Cookie/Keychain staging store、Hive 只读导出 | generation/revision/epoch、同 MID 隔离、重启/导入重复执行、完整 Cookie 属性 | bedde36合同通过：账户67、Cookie68、实际Dart83；schema1仅shadow，下一组jar2准备 |
+| 登录 | QR/password/SMS/Cookie/Geetest/退出、请求与副作用边界、状态机 | 实际 Dart synthetic response、RSA、挑战/手机验证、失败/取消/批量退出 | bedde36合同通过：实际7tests/20golden、Swift225；实际账户/设备与production安装尚未验收 |
+| 集成 | bridge 薄路由、PBX/工具 source list、workflow 与 fixture 汇合 | 完整 release + 全 preview 同 SHA，无资源/功能删除 | bedde36 release5 + preview4 jobs全成功，完整Runner/Aether顺序/导航压力通过，见 PROGRESS.md |
 | 生产切换 | transport/account/API 验收后按领域切 Repository | 真实 API、登录/多账户/重启、无重复写请求；原实现仍可回退 | 未授权以未验证实现替换；待验收 |
 
 每个组报告已实现与仍依赖 Dart 的路径，不能把一个协议或 synthetic test 视为真实

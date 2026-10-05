@@ -39,6 +39,22 @@ Swift 14 个观测符合预期，但 no-head 取消分支错误继续要求成�
 CA1–CA6 分别收口有序格式、mutation、统一 writer/reader、durable 交接与回退、
 真实账户候选验收及按证据开放。仅并行准备，旧 runtime/authority 保持不变。
 
+第四轮集成代码 **bedde36e4f08337bb42a18e7bb1da4799b04a09d** 的
+[release](https://github.com/Justintunsday/Piliglass/actions/runs/37318516019) 5个 jobs 与
+[preview](https://github.com/Justintunsday/Piliglass/actions/runs/37318521532) 4个 jobs 全部
+success，已读实际日志/artifacts。完整 Runner 109.1MB、BUILD SUCCEEDED、Aether
+FFmpeg 顺序通过。raw H1 实际 Dart/Native 各14观测、iOS16 device/simulator 通过；
+H2/TLS 14传输+2信任拒绝+2主机名拒绝+1自动H1 fallback通过。签名102/19/5、
+body25/67854/4、账户67、Cookie68、登录225/20及实际账户83tests通过。
+导航9tests、账户6、图片3、播放器2及压力 failures=[] 通过：comments1000懒加载/
+无离屏分页/末项分页正常，danmaku100000/maxActive60。资产、AetherEngine源码
+没有意外删除或本组变更。本组编译与这些合同验收完成，P05整体未完成；实际
+API/账户设备、proxy/retry/pool完整语义、Native写入权威与生产composition仍待做。
+
+下一组 CA1 第一交付准备了 jar-only 有序 schema2 exporter/strict codec/Keychain
+shadow，及真实 CookieJar/Hive mutation轨迹；不包含账户envelope或mutation engine。
+将独立提交后在同一SHA统一CI验收；准备代码尚不属于上述bedde36已验证范围。
+
 | 阶段 | 阶段代码 Commit | iOS release | Preview | 状态 |
 |---|---|---|---|---|
 | 起点 | 8044a8d | [成功](https://github.com/Justintunsday/Piliglass/actions/runs/36085475142) | [分页检查失败](https://github.com/Justintunsday/Piliglass/actions/runs/36085470278) | 仅基线 |
