@@ -79,6 +79,30 @@ WBI 必须保留时间/key cache、参数过滤/排序/编码；先复用 P05 �
 实现阶段接入 `ios.yml` 的生产源 Swift 6 checks，并保持完整 Runner release 与 `ios-home-preview.yml` 的 home/navigation/player/account/image 全部同 SHA 成功；失败读取实际日志、修复、commit/push 重跑。文档或 Windows skip 不算业务验证。
 fixture 不能只检查新实现自洽：对照原 Dart 参数/过滤/错误 fixture，真实 API 与多用途账户只做单路顺序对照，不在生产同时请求两实现；脱敏日志不含 Cookie/access_key/signing secret。
 
+## 2026-10-06 首个热门 REST 切片复核
+
+HV2/HV3 首候选仍为 `hotVideoList`，不替换当前 rcmd 首页或删除入口。
+真实 oracle 调用 VideoHttp、HotVideoItemModel、RecommendFilter 与 Hot/CommonList
+controller，仅 stub Dio adapter 并记录请求；不能复制过滤算法生成期望值。
+
+- Hot 对成功的**过滤后空列表**才结束且不推进 page，短非空页继续。与上面 rcmd
+  的 `isEnd=false` 政策分开，不以 `count<20` 编造服务端 hasMore。
+- 黑名单检查发生在原 JSON `owner.mid` 上，早于 Owner.safeToInt；wire string/int
+  MID 的差异须保留。热门不应用最低时长或已关注豁免，赞比/最低播放的严格边界
+  使用实际 mutable filter snapshot。用户 RegExp 未对齐时保持 Dart 处理。
+- DTO 保留完整字段、charging_pay→cooperation→pgc_label badge 优先级和 num coin；
+  必需类型错误显式失败，不变成成功空页；保留重复 bvid 与服务端顺序。
+- actual fixture 至少覆盖空原页/全过滤/短非空、MID string/int、like/view 的
+  null/负值/零/阈值等号、badge/coin小数、403正文code0、解码错误与实际取消。
+
+其他领域的新增核对：Profile 卡片实际为 App `/x/v2/space`、main+AppSign；
+Library history 显式使用 Accounts.history，即使入口要求 main 登录也不能换用途。
+Comments 主列表优先 gRPC、失败才 REST，二级回复只有 gRPC；P06 先建接口与
+fallback 边界，完整主路径仍属 P08。Dynamics 保留递归 offset 与发布/转发后的
+计数、刷新、关闭 composer 副作用。Home/Video 的展示代次还须包含原 owner
+generation，不能只比较 MID/bvid；原预热、TTL/inflight 与 action revision 分开。
+这些均为准备约束，尚无上述六域 Native Repository 或实际业务 golden 验收。
+
 ## 保留的路径与模块界限
 
 当前首页没有在用的推荐 gRPC：`GrpcUrl.popular`、`GrpcReq.popular` 都是注释；`ViewGrpc.view` 是 wrapper，PGC controller 引用也被注释。保留 `lib/grpc`/protobuf 的全部现有路径，后续 P08 按真实 caller 迁移，不能宣称已迁移首页 gRPC，也不能删 schema。
