@@ -24,6 +24,15 @@ codec155及真实 Keychain staging36 checks成功，15 exports/9 trajectories/34
 P05 仍需完整账户 envelope、mutation engine、统一 reader/writer、durable 交接/
 回退及真实账户/设备验收；Native runtime 关闭，视觉 UI 重写继续排在 P05–P12 后。
 
+修复后的 `0527fb2de6c00baded5a53f7dcbc8ae6661da6ec` 正在进行同 SHA
+[release](https://github.com/Justintunsday/Piliglass/actions/runs/37374811289) 与
+[preview](https://github.com/Justintunsday/Piliglass/actions/runs/37374822907)：
+账户预览已真实6/6通过，AX dismissal计数1/2及 `/download`→`/whisper` 精确路由
+通过；其余完整 jobs 尚未全部结束，CA1 jar-only 整组继续待验收。
+等待时准备下一组：默认 Dart Cookie/legacy persistence port `4a7171f` 已推送；
+纯 Native ordered reducer 与实际 mutation replay 正在接入独立 Swift6/Runner门禁。
+这些新候选尚无当前 SHA 完整编译证据，不计入完成。
+
 2026-10-05 执行节奏按用户要求改为组内并行实施、独立提交推送、组末统一编译
 验收。当前 P05 并行组已提交网络能力/响应头执行边界、原始字段候选、签名/cache、
 账户 shadow store、Cookie parser/selector、独立 body codec、登录协议/状态机及

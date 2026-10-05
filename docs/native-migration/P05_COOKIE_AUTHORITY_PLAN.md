@@ -187,6 +187,21 @@ durabilityVerified/authoritySwitchAllowed 继续 false；flush 不等于冻结�
 
 ### CA2 必须对照的 mutation / selection 语义
 
+2026-10-06 下一验证组的可执行范围：
+
+| 组件 | 实施状态 / 本组验证 | 仍未交付的边界 |
+|---|---|---|
+| CA3 response / legacy persistence port | `4a7171f` 已提交推送，默认实现同步转发真实 Dart jar / Hive；四个实际账户测试随完整 suite 验证 | install/delete/selection/activation/maintenance、credential reader、完整 writer barrier |
+| CA2 ordered mutation candidate | `PiliNativeOrderedCookieReducer` 纯值 save/delete/deleteAll；独立重放真实 Dart 9 轨迹、34 步、43 header observations，Swift 6 complete concurrency | 生产单账户事务、账户身份/写权限、durable commit、运行时安装 |
+| CA2 集成与门禁 | 注册 Runner source；`check_native_cookie_mutations.py` 依赖同 job 新产生且成功的 ordered-jar goldens；独立 artifact 与 mandatory outcome | 组末同 SHA release5 + preview4 全成功前均未验收 |
+
+真实 Cookie 创建读的是秒级 wall clock，Native batch 本切片注入单一 clock。
+短创建操作在实际秒的前半段开始，仍记录并断言实际 started/finished 同秒；跨秒
+证据明确失败，不重试 mutation、不跳过 snapshot/header、不从 expected jar 安装
+Native 输入。waitRealWallTime 保留真实等待与过期观测。人工 DateTime/Int64 极限
+只是显式注入的格式边界，不能声称实际 Dart clock 的精确边界已证明。
+本组保持 runtime/authority 关闭；同 SHA 实际编译失败继续修复，不标记 P05 完成。
+
 - 整批 raw fields 先解析成功，再按原顺序 apply；坏第 N 条不得留下前 N-1 条写入。
   provenance 独立保存；FoundationCombined 或无法确定的字段边界不以猜测拆分入库。
 - domain 属性非 nil 时只去一个 leading dot，默认 bucket path `/`；host-only 用

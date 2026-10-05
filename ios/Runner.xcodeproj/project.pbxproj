@@ -82,6 +82,7 @@
 		CF13040C2E800FEAA90FAA0C /* PiliHTTPBodyCodec in Frameworks */ = {isa = PBXBuildFile; productRef = E30400436C99C3E1602FC0F1 /* PiliHTTPBodyCodec */; };
 		6A9E719AD0040AC04EE99E1A /* PiliOrderedCookieArchive.swift in Sources */ = {isa = PBXBuildFile; fileRef = 172B13E5A79B6CF3E44BF95C /* PiliOrderedCookieArchive.swift */; };
 		19A581F34040A1B98B2CED17 /* PiliOrderedCookieArchiveCodec.swift in Sources */ = {isa = PBXBuildFile; fileRef = DB6B74A4E4124AB83D07BD74 /* PiliOrderedCookieArchiveCodec.swift */; };
+		C73A9FB2B400411F902BC3A1 /* PiliNativeOrderedCookieReducer.swift in Sources */ = {isa = PBXBuildFile; fileRef = C73A9FB2B400411F902BC3A2 /* PiliNativeOrderedCookieReducer.swift */; };
 		F4F9ADF5863060B76D08AC79 /* PiliOrderedCookieStagingStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C434866A40C62424F03FC66C /* PiliOrderedCookieStagingStore.swift */; };
 /* End PBXBuildFile section */
 
@@ -184,6 +185,7 @@
 		59FAAAC820CF047C217ACB81 /* PiliNativeCookieSelector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PiliNativeCookieSelector.swift; sourceTree = "<group>"; };
 		172B13E5A79B6CF3E44BF95C /* PiliOrderedCookieArchive.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PiliOrderedCookieArchive.swift; sourceTree = "<group>"; };
 		DB6B74A4E4124AB83D07BD74 /* PiliOrderedCookieArchiveCodec.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PiliOrderedCookieArchiveCodec.swift; sourceTree = "<group>"; };
+		C73A9FB2B400411F902BC3A2 /* PiliNativeOrderedCookieReducer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PiliNativeOrderedCookieReducer.swift; sourceTree = "<group>"; };
 		C434866A40C62424F03FC66C /* PiliOrderedCookieStagingStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PiliOrderedCookieStagingStore.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -471,6 +473,7 @@
 			isa = PBXGroup;
 			children = (
 				DB6B74A4E4124AB83D07BD74 /* PiliOrderedCookieArchiveCodec.swift */,
+				C73A9FB2B400411F902BC3A2 /* PiliNativeOrderedCookieReducer.swift */,
 				8A8AA1D63495F012D864BEB8 /* PiliAccountStagingBridgeCodec.swift */,
 				C36E25B49F6BAE87008C5D72 /* PiliAccountFlutterRepository.swift */,
 				135BB5F4B652128F4D42EB9C /* PiliAccountSnapshotBridgeCodec.swift */,
@@ -739,6 +742,7 @@
 			files = (
 				F4F9ADF5863060B76D08AC79 /* PiliOrderedCookieStagingStore.swift in Sources */,
 				19A581F34040A1B98B2CED17 /* PiliOrderedCookieArchiveCodec.swift in Sources */,
+				C73A9FB2B400411F902BC3A1 /* PiliNativeOrderedCookieReducer.swift in Sources */,
 				6A9E719AD0040AC04EE99E1A /* PiliOrderedCookieArchive.swift in Sources */,
 				A2634BDD46C966733309DD1B /* PiliNativeCookieSelector.swift in Sources */,
 				05630C88A9EDC7B57A1F66C4 /* PiliNativeCookieParser.swift in Sources */,

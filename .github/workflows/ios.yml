@@ -46,6 +46,7 @@ on:
       - "tool/check_native_cookie_store*"
       - "tool/check_native_cookies*"
       - "tool/check_native_ordered_cookie*"
+      - "tool/check_native_cookie_mutations*"
       - "tool/native_raw_http2_probe.py"
       - "tool/native_login_synthetic_rsa.json"
       - "tool/native_app_signing_release_golden.dart"
@@ -93,6 +94,7 @@ on:
       - "tool/check_native_cookie_store*"
       - "tool/check_native_cookies*"
       - "tool/check_native_ordered_cookie*"
+      - "tool/check_native_cookie_mutations*"
       - "tool/native_raw_http2_probe.py"
       - "tool/native_login_synthetic_rsa.json"
       - "tool/native_app_signing_release_golden.dart"
@@ -408,6 +410,21 @@ jobs:
             build/native-ordered-cookie-check/*.log
           if-no-files-found: warn
 
+      - name: Replay actual Dart Cookie mutations through Native ordered reducer
+        id: group-cookie-mutations
+        continue-on-error: true
+        run: python3 tool/check_native_cookie_mutations.py
+
+      - name: Upload Native mutation replay and real Dart clock evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: native-cookie-mutation-contracts
+          path: |
+            build/native-cookie-mutation-check/*.json
+            build/native-cookie-mutation-check/*.log
+          if-no-files-found: warn
+
       - name: Upload actual account export and Native staging evidence
         if: always()
         uses: actions/upload-artifact@v7
@@ -524,12 +541,13 @@ jobs:
           ACCOUNT_NATIVE: ${{ steps.group-account-native.outcome }}
           COOKIES: ${{ steps.group-cookies.outcome }}
           ORDERED_COOKIES: ${{ steps.group-ordered-cookies.outcome }}
+          COOKIE_MUTATIONS: ${{ steps.group-cookie-mutations.outcome }}
           LOGIN: ${{ steps.group-login.outcome }}
         run: |
           python3 - <<'PY'
           import os
           import sys
-          groups = ['SIGNING', 'BODY_CODEC', 'ACCOUNT_DART', 'ACCOUNT_NATIVE', 'COOKIES', 'ORDERED_COOKIES', 'LOGIN']
+          groups = ['SIGNING', 'BODY_CODEC', 'ACCOUNT_DART', 'ACCOUNT_NATIVE', 'COOKIES', 'ORDERED_COOKIES', 'COOKIE_MUTATIONS', 'LOGIN']
           failed = [name for name in groups if os.environ.get(name) != 'success']
           for name in failed:
               print(f"::error::{name} contract outcome: {os.environ.get(name, 'missing')}")
