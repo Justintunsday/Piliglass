@@ -113,7 +113,10 @@ def run(command, log, timeout=1200, env=None, cwd=PACKAGE):
     result = subprocess.run(command, cwd=cwd, capture_output=True, text=True, timeout=timeout, env=env)
     (OUTPUT/log).write_text(' '.join(command)+'\n'+result.stdout+result.stderr, encoding='utf-8')
     if result.returncode:
-        print((result.stdout+result.stderr)[-16000:])
+        # Swift Testing reports assertions on stdout, while long compiler
+        # progress goes to stderr. Preserve both when a command fails.
+        print(result.stdout[-8000:])
+        print(result.stderr[-8000:])
         raise RuntimeError(f'{log}: command failed ({result.returncode})')
 
 

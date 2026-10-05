@@ -80,7 +80,9 @@ private final class CancellationHandle: @unchecked Sendable {
       #expect(outcome.head?.version == "1.1")
     }
     switch item.mode {
-    case "pending": #expect(error == "cancelled")
+    case "pending", "no-head":
+      #expect(error == "cancelled")
+      #expect(body == nil)
     case "eof": #expect(error != nil)
     case "idle-timeout": #expect(error == "receiveIdleTimeout")
     default:
