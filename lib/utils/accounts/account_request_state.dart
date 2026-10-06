@@ -47,6 +47,21 @@ final class AccountRequestState<T extends Object> {
   /// Captures the installed generation without installing an unknown account.
   AccountRequestStamp<T>? capture(T account) => _active[account];
 
+  /// Pure lookup of an already installed account of [U].
+  ///
+  /// Zero or multiple matches are unavailable. This never creates an account,
+  /// invokes a callback or installs a generation.
+  AccountRequestStamp<T>? captureSingleOfType<U extends T>() {
+    AccountRequestStamp<T>? result;
+    for (final stamp in _active.values) {
+      if (stamp.account is U) {
+        if (result != null) return null;
+        result = stamp;
+      }
+    }
+    return result;
+  }
+
   /// Whether this exact stamp is still installed in this tracker.
   ///
   /// Stamp identity also rejects stamps created by another tracker, regardless

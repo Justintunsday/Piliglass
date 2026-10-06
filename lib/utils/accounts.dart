@@ -4,12 +4,18 @@ import 'package:PiliPlus/http/init.dart';
 import 'package:PiliPlus/models/common/account_type.dart';
 import 'package:PiliPlus/pages/mine/controller.dart';
 import 'package:PiliPlus/services/native_accounts/account_install_persistence_port.dart';
+import 'package:PiliPlus/services/native_accounts/native_ordered_cookie_jar_export.dart';
 import 'package:PiliPlus/utils/accounts/account.dart';
 import 'package:PiliPlus/utils/accounts/account_request_state.dart';
 import 'package:PiliPlus/utils/login_utils.dart';
 import 'package:hive_ce/hive.dart';
 
+part 'accounts/account_live_memory_shadow.dart';
+
 abstract final class Accounts {
+  static AccountLiveMemoryShadowCapture captureLiveMemoryShadow() =>
+      _captureAccountLiveMemoryShadow();
+
   static late final Box<LoginAccount> account;
   static final List<Account> _accountMode = List.filled(
     AccountType.values.length,
