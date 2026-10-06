@@ -54,8 +54,7 @@ abstract final class NativeOrderedCookieJarExporter {
   /// Counts bounded UTF8 chunks of an already bounded owned shadow tree.
   /// This is not a parser or a validation entry point for untrusted JSON.
   static void verifyWireCapacity(Object? value) {
-    final encoder = JsonUtf8Encoder().startChunkedConversion(_WireCapacitySink());
-    encoder
+    JsonUtf8Encoder().startChunkedConversion(_WireCapacitySink())
       ..add(value)
       ..close();
   }

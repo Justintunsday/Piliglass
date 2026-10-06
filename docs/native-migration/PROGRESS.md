@@ -115,6 +115,15 @@ durable/authority标志继续false，旧schema1及Dart writer不变。
 新 Accounts part 显式加入 fatal-infos 范围；断言、协议、限额与强制聚合门禁保留。
 待当前构建和预览结束后，对修复后的同一 SHA 重跑完整 release5 + preview4。
 
+第二轮 `144912844da3d63efc247907238cfc2a27fc9a82` 的
+[release](https://github.com/Justintunsday/Piliglass/actions/runs/37544570811) 与
+[preview](https://github.com/Justintunsday/Piliglass/actions/runs/37545090337)
+已启动。实际账户/ordered analyze 均仍报一条 exporter:58 cascade：原修复合并
+add/close，但没有合并初始化与后续表达式。新 part 显式分析没有额外诊断。
+因此131账户/state72/producer及 fresh-golden Native 对照仍未执行，第二轮不能
+验收。再次修正为直接在初始化表达式上 add/close；不降低 fatal-infos 或删除测试。
+等本轮完整日志保存后，以新 SHA 重跑全部构建与预览；后续 Swift envelope 仅草稿。
+
 2026-10-05 执行节奏按用户要求改为组内并行实施、独立提交推送、组末统一编译
 验收。当时 P05 并行组已提交网络能力/响应头执行边界、原始字段候选、签名/cache、
 账户 shadow store、Cookie parser/selector、独立 body codec、登录协议/状态机及
