@@ -29,8 +29,10 @@ abstract final class NativeOrderedCookieJarExporter {
     DefaultCookieJar jar, {
     NativeOrderedCookiePriorPersistence priorPersistence =
         NativeOrderedCookiePriorPersistence.unknown,
+    NativeOrderedCookieExportBudget? cumulativeBudget,
   }) {
-    final budget = _ExportBudget();
+    final budget = cumulativeBudget ?? NativeOrderedCookieExportBudget();
+    budget.reserveNodes(10);
     final result = <String, Object?>{
       'schemaVersion': 2,
       'ignoreExpires': jar.ignoreExpires,
@@ -45,15 +47,21 @@ abstract final class NativeOrderedCookieJarExporter {
       'domainBuckets': _buckets(jar.domainCookies, budget),
       'hostBuckets': _buckets(jar.hostCookies, budget),
     };
-    if (utf8.encode(jsonEncode(result)).length > maxWireBytes) {
-      throw const NativeOrderedCookieJarExportException('wireCapacityExceeded');
-    }
+    verifyWireCapacity(result);
     return result;
+  }
+
+  /// Counts bounded UTF8 chunks of an already bounded owned shadow tree.
+  /// This is not a parser or a validation entry point for untrusted JSON.
+  static void verifyWireCapacity(Object? value) {
+    final encoder = JsonUtf8Encoder().startChunkedConversion(_WireCapacitySink());
+    encoder.add(value);
+    encoder.close();
   }
 
   static List<Map<String, Object?>> _buckets(
     Map<String, Map<String, Map<String, SerializableCookie>>> source,
-    _ExportBudget budget,
+    NativeOrderedCookieExportBudget budget,
   ) => [
     for (final domain in source.entries)
       _bucket(domain.key, domain.value, budget),
@@ -62,7 +70,7 @@ abstract final class NativeOrderedCookieJarExporter {
   static Map<String, Object?> _bucket(
     String key,
     Map<String, Map<String, SerializableCookie>> paths,
-    _ExportBudget budget,
+    NativeOrderedCookieExportBudget budget,
   ) {
     budget.addBucket();
     return <String, Object?>{
@@ -77,7 +85,7 @@ abstract final class NativeOrderedCookieJarExporter {
   static Map<String, Object?> _path(
     String key,
     Map<String, SerializableCookie> cookies,
-    _ExportBudget budget,
+    NativeOrderedCookieExportBudget budget,
   ) {
     budget.addBucket();
     return <String, Object?>{
@@ -92,7 +100,7 @@ abstract final class NativeOrderedCookieJarExporter {
   static Map<String, Object?> _cookie(
     String key,
     SerializableCookie stored,
-    _ExportBudget budget,
+    NativeOrderedCookieExportBudget budget,
   ) {
     budget.addCookie();
     if (stored.createTimeStamp < 0) {
@@ -117,34 +125,68 @@ abstract final class NativeOrderedCookieJarExporter {
   }
 }
 
-final class _ExportBudget {
+/// Shared preallocation ledger for one complete shadow candidate. Jar output
+/// retains its fixed shape; nodes count JSON values, including each UTF16 unit.
+final class NativeOrderedCookieExportBudget {
+  int _nodes = 0;
   int _units = 0;
   int _buckets = 0;
   int _cookies = 0;
 
-  List<int>? optionalUnits(String? value, int limit) =>
-      value == null ? null : units(value, limit);
+  void reserveNodes(int count) {
+    if (count < 0 || (_nodes += count) > 3 * 1024 * 1024) {
+      throw const NativeOrderedCookieJarExportException('nodeCapacityExceeded');
+    }
+  }
+
+  void reserveUnits(int count) {
+    if (count < 0 || (_units += count) > NativeOrderedCookieJarExporter.maxUTF16Units) {
+      throw const NativeOrderedCookieJarExportException('unitCapacityExceeded');
+    }
+  }
+
+  List<int>? optionalUnits(String? value, int limit) {
+    if (value == null) {
+      reserveNodes(1);
+      return null;
+    }
+    return units(value, limit);
+  }
 
   List<int> units(String value, int limit) {
     if (value.length > limit) {
       throw const NativeOrderedCookieJarExportException('stringCapacityExceeded');
     }
-    _units += value.length;
-    if (_units > NativeOrderedCookieJarExporter.maxUTF16Units) {
-      throw const NativeOrderedCookieJarExportException('unitCapacityExceeded');
-    }
+    reserveUnits(value.length);
+    reserveNodes(1 + value.length);
     return List<int>.of(value.codeUnits);
   }
 
   void addBucket() {
+    reserveNodes(2);
     if (++_buckets > NativeOrderedCookieJarExporter.maxBuckets) {
       throw const NativeOrderedCookieJarExportException('bucketCapacityExceeded');
     }
   }
 
   void addCookie() {
+    reserveNodes(7);
     if (++_cookies > NativeOrderedCookieJarExporter.maxCookies) {
       throw const NativeOrderedCookieJarExportException('cookieCapacityExceeded');
     }
   }
+}
+
+final class _WireCapacitySink implements Sink<List<int>> {
+  int _bytes = 0;
+
+  @override
+  void add(List<int> data) {
+    if ((_bytes += data.length) > NativeOrderedCookieJarExporter.maxWireBytes) {
+      throw const NativeOrderedCookieJarExportException('wireCapacityExceeded');
+    }
+  }
+
+  @override
+  void close() {}
 }
