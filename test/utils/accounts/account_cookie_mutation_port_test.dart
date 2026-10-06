@@ -96,24 +96,25 @@ void main() {
     final owner = _account(810004, 'synthetic-fault');
     await Accounts.installCredentials(owner);
     final stamp = Accounts.captureRequest(owner)!;
-    final adapter = _EncodingProbeAdapter();
+    final probe = _EncodingProbeState();
+    final adapter = _EncodingProbeAdapter(probe);
     Hive.registerAdapter<LoginAccount>(adapter, override: true);
     try {
       final persisting = port.persistLegacyAccount(owner);
       expect(persisting, isNotNull);
       await persisting;
-      expect(adapter.writes, 1);
+      expect(probe.writes, 1);
 
       await port.saveResponseCookies(owner, uri, [
         Cookie('before_failure', 'memory-applied')..setBiliDomain(),
       ]);
       Accounts.notifyCookieMutation(owner);
       final failure = StateError('synthetic Hive encoding failure');
-      adapter.failure = failure;
+      probe.failure = failure;
       final failedPersistence = owner.onChange();
       expect(failedPersistence, isNotNull);
       await expectLater(failedPersistence!, throwsA(same(failure)));
-      expect(adapter.writes, 2);
+      expect(probe.writes, 2);
       expect(owner.cookieJar.toJson()['before_failure'], 'memory-applied');
       expect(Accounts.account.get(owner.storageKey), same(owner));
       expect(Accounts.isCurrentRequest(stamp), isTrue);
@@ -123,17 +124,23 @@ void main() {
   });
 }
 
+class _EncodingProbeState {
+  int writes = 0;
+  StateError? failure;
+}
+
 /// Real Hive calls the production type9 encoder before this synthetic failure.
 /// This tests error forwarding, not a post-disk acknowledgment or durable receipt.
 class _EncodingProbeAdapter extends LoginAccountAdapter {
-  int writes = 0;
-  StateError? failure;
+  final _EncodingProbeState probe;
+
+  _EncodingProbeAdapter(this.probe);
 
   @override
   void write(BinaryWriter writer, LoginAccount obj) {
-    writes++;
+    probe.writes++;
     super.write(writer, obj);
-    final error = failure;
+    final error = probe.failure;
     if (error != null) throw error;
   }
 }
