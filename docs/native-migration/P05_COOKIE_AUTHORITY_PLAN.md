@@ -203,6 +203,18 @@ durabilityVerified=false/authoritySwitchAllowed=false；这份只读候选不发
 下一实际测试须包含'02'/'2' distinct owners、独立cold-init isolate、pending真实Hive
 内存可见、raw未notify变更和跨账户累积越界；不使用fakeHive或公开可变owner Map。
 
+本组具体接入为 Accounts library 的独立 part 与薄 capture service；原账户私有
+lifecycle不搬出库，不向service暴露可变Account引用。公开payload全部deep-owned /
+unmodifiable，private stamp/object只供复核。共享ledger在每次UTF16/bucket/entry
+复制前记账；固定jar shape计JSON value nodes，最大嵌套含envelope不超过12。
+metadata保守预留固定64+每record40nodes、固定2048+每record512units，覆盖固定
+字段/枚举值；rawkey/凭据/全部jar units另按实际长度累计，不能添加任意新字段
+绕过ledger。实际JSON byte计数使用非const JsonUtf8Encoder的chunk sink，不缓存
+完整UTF8编码再查大小。新producer不发布Keychain/bridge/authority，只读候选。
+新增19项case覆盖真实Hive双顺序/rawMID/four slots/pending/reset/unknown entries/
+无notify变更/累积bucket、units、entries/255+匿名容量、deep ownership，以及独立
+dormant/cold-init和JSON framing字节计数；尚待同SHA完整Actions实际验证。
+
 ### CA2 必须对照的 mutation / selection 语义
 
 2026-10-06 已验收有限切片的范围（精确构建 `74101fad17d57933e85c965708ef70052cf74e6a`）：

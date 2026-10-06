@@ -96,6 +96,16 @@ selection/activation/constructor/maintenance/readers的完整barrier，不开放
 下一capture草稿审查发现JsonUtf8Encoder非const构造与dormant匿名创建副作用，
 须修正再实施；下一组尚未验收，不将前一SHA证据转用于新代码。
 
+完整账户capture组已提交、**尚未验收**：`98f80f3` 提供共享累计ledger与chunked
+JSON字节计数，`80edff7` 提供独立Accounts part的同步全量capture和checkpoint后
+复核。匿名从已有registry stamp查询，不调用factory/activate；保存raw存储键、
+Box/owner两种顺序、四slots/history、完整jar/凭据/type/activated，公开值深不可变。
+累计256records/16MiB wire/2Mi units/8192buckets/16384entries在复制或编码边界拒绝。
+新增19项真实Hive/纯query/byte计数回归，包含未初始化Pref的dormant隔离测试及
+跨账户bucket/units/entries限额；尚待实际fatal-infos与完整Actions。此候选没有
+Swift envelope、Keychain集合manifest、bridge命令或writer freeze；四项Native/
+durable/authority标志继续false，旧schema1及Dart writer不变。
+
 2026-10-05 执行节奏按用户要求改为组内并行实施、独立提交推送、组末统一编译
 验收。当时 P05 并行组已提交网络能力/响应头执行边界、原始字段候选、签名/cache、
 账户 shadow store、Cookie parser/selector、独立 body codec、登录协议/状态机及
