@@ -80,8 +80,10 @@ private struct NativeCookieMutationFixture {
       return .init(host: components.host ?? "", path: components.path)
     }
     func syntheticEntry(_ key: PiliCookieUTF16, _ value: String, _ now: Int64) -> PiliOrderedCookieEntry {
+      // Actual Dart Cookie(name, value) defaults httpOnly to true. This public
+      // map seed uses that constructor, separately from response-field parsing.
       .init(keyUnits: key, nameUnits: units("synthetic"), valueUnits: units(value),
-        cookieDomainUnits: nil, cookiePathUnits: nil, secure: false, httpOnly: false,
+        cookieDomainUnits: nil, cookiePathUnits: nil, secure: false, httpOnly: true,
         sameSite: nil, expiresMicroseconds: nil, maxAgeSeconds: nil, createdSeconds: now / 1_000_000)
     }
     func fieldAddresses(_ fields: [String], _ context: PiliOrderedCookieResponseLocation,
