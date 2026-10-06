@@ -190,13 +190,13 @@ durabilityVerified/authoritySwitchAllowed 继续 false；flush 不等于冻结�
 
 ### CA2 必须对照的 mutation / selection 语义
 
-2026-10-06 下一验证组的可执行范围：
+2026-10-06 已验收有限切片的范围（精确构建 `74101fad17d57933e85c965708ef70052cf74e6a`）：
 
 | 组件 | 实施状态 / 本组验证 | 仍未交付的边界 |
 |---|---|---|
-| CA3 response / legacy persistence port | `4a7171f` 已提交推送，默认实现同步转发真实 Dart jar / Hive；四个实际账户测试随完整 suite 验证 | install/delete/selection/activation/maintenance、credential reader、完整 writer barrier |
-| CA2 ordered mutation candidate | `PiliNativeOrderedCookieReducer` 纯值 save/delete/deleteAll；独立重放真实 Dart 9 轨迹、34 步、43 header observations，Swift 6 complete concurrency | 生产单账户事务、账户身份/写权限、durable commit、运行时安装 |
-| CA2 集成与门禁 | 注册 Runner source；`check_native_cookie_mutations.py` 依赖同 job 新产生且成功的 ordered-jar goldens；独立 artifact 与 mandatory outcome | 组末同 SHA release5 + preview4 全成功前均未验收 |
+| CA3 response / legacy persistence port | 默认实现同步转发真实 Dart jar / Hive；四个新增实际账户测试随105-test suite通过，同SHA release5/preview4成功 | install/delete/selection/activation/maintenance、credential reader、完整 writer barrier |
+| CA2 ordered mutation candidate | `PiliNativeOrderedCookieReducer` 纯值 save/delete/deleteAll；Swift6 complete concurrency与独立真实 Dart 9轨迹/34步/43headers共271 checks通过 | 生产单账户事务、账户身份/写权限、durable commit、运行时安装 |
+| CA2 集成与门禁 | Runner source实际构建；mutation driver消费同job新ordered goldens；独立artifact与8个mandatory outcomes同SHA全成功 | 仅纯值candidate验收，未提供生产store事务或authority |
 
 真实 Cookie 创建读的是秒级 wall clock，Native batch 本切片注入单一 clock。
 短创建操作在实际秒的前半段开始，仍记录并断言实际 started/finished 同秒；跨秒
@@ -239,8 +239,8 @@ selection/activation/constructors/maintenance与同步csrf/accessKey读者留后
 不能把这一小接口叫完整 writer barrier。Hive backend 已写入后 compaction 仍可抛错；
 Future failure不证明durable未写入，不因错误ack自动回滚或重放操作。
 
-下一有限 CA3 切片为 install/import 持久化转发（当前仅准备，待本组完整CI通过后
-整合生产变化）：独占新增 `account_install_persistence_port.dart`、`accounts.dart`
+下一有限 CA3 切片为 install/import 持久化转发（上组完整CI已通过，进入实施）：
+独占新增 `account_install_persistence_port.dart`、`accounts.dart`
 的两处 put/putAll 与一份实际 Hive 测试。默认方法接调用方原 Box/key/candidate/map，
 同步直接返回原 Future；不重排 map、不拆 bulk、不先 await，也不调用 ownsCredentials
 拒绝合法 pending candidate。`_beginInstall/_completeInstall/_failInstall`、私有
@@ -249,6 +249,15 @@ pending/retired/owner guard、refresh及catch/rethrow全部留原位置。
 generation，以及production type9编码失败后旧stamp不能因Hive回滚或refresh复活。
 这仍不覆盖delete/reset/selection/activation/constructor/maintenance/readers，
 不引入authority开关，也不宣称编码失败证明后端未写入或完整writer已冻结。
+
+同一下一验证组另拆 LoginAccount 删除转发切片：新增 `AccountDeletionPort`，默认
+Dart 实现同步返回原 jar.deleteAll / Box.delete Future。caller 的 `_hasDelete`、
+revoke、先启动 jar 清空、随后 exact Box object 判定及 Future.wait 顺序保持原样；
+不能以 ownsCredentials 拒绝已 revoke 的合法删除，也不能用 MID 查询 successor
+作为删除目标。匿名 reset 和 Accounts.clear 留后续切片。本组仅补删除开始后的
+即时 jar/Box 状态、在途删除后安装同 MID successor、jar 完成错误不复活旧请求的
+实际 Hive 回归；错误不证明两项删除都没发生，不自动回滚或重试。两切片分别
+commit/push，汇合后同一 SHA release5 + preview4 全部实际验收。
 
 统一 coordinator 状态为 DartActive → Transitioning → NativeActive；反向为
 NativeActive → Reverting → DartActive。authority marker 与 phase journal 只保存

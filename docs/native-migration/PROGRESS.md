@@ -4,8 +4,10 @@
 
 当前阶段为 **P05**。`bedde36` 的原并行组与 `0527fb2` 的
 [CA1 jar-only shadow](P05_COOKIE_AUTHORITY_PLAN.md) 均已通过同 SHA release5 +
-preview4 jobs。当前进入下一验证组：CA2 纯 Cookie mutation candidate 与 CA3
-默认 Dart writer port；账户 authority/runtime 尚未切换。CA1 首组的 exporter、
+preview4 jobs。`74101fa` 的 CA2 纯 Cookie mutation candidate 与 CA3 默认 Dart
+response/legacy persistence port 也已通过同 SHA 全部9 jobs。当前进入下一组
+install/import 与登录账户删除的默认 Dart port；账户 authority/runtime 尚未切换。
+CA1 首组的 exporter、
 严格 UTF16/有序格式及 Keychain staging
 已分五个独立提交推送，集成代码 `f11329b` 首次 CI 未通过。
 首次实际 Dart 检查发现一个 fixture 错误：原 nil path Cookie 已被同 bucket/name
@@ -42,7 +44,7 @@ profiling/重复样本，原因未确定；现门禁没有时延阈值，**不�
 `63ed14a`、Runner/Swift6依赖与第8个强制 COOKIE_MUTATIONS 门禁 `7381df0`。
 新增四项真实账户测试及实测同秒 creation/load clock 门禁；跨秒明确失败，不使用
 expected jar驱动Native mutation、不重试写入。P06首REST领域准备增补 `29824b7`
-也已保存；未新增该领域请求。新候选仍需自身同 SHA 全部 CI，不计入已验收。
+也已保存；未新增该领域请求。当时新候选尚未验收，以下记录失败与修复闭环。
 
 下一组首次 `a257830f55b2846e59a37c953ea19cef934f12f2` 的
 [release](https://github.com/Justintunsday/Piliglass/actions/runs/37379056385) 失败，
@@ -55,6 +57,22 @@ false，独立JSON对照正确拒绝。ordered producer18/codec155/staging36仍�
 已分别提交 `e25a662` 修正public构造种子（response parser/reducer不变）、
 `b6770b5` 将可变故障状态放到独立probe并让adapter引用final。未忽略分析规则、
 未弱化34-step/43-header断言；105账户tests与更新引擎完整检查须修复后实际重跑。
+
+修复后的 **`74101fad17d57933e85c965708ef70052cf74e6a` 已验收 CA2/CA3 有限切片**。
+同 SHA [release](https://github.com/Justintunsday/Piliglass/actions/runs/37466340429)
+5 jobs 与 [preview](https://github.com/Justintunsday/Piliglass/actions/runs/37466344845)
+4 jobs 全成功，已读完整主日志与实际 artifacts。Runner BUILD SUCCEEDED、109.1MB、
+Aether FFmpeg 加载顺序通过，8 个强制合同 outcome 全部 success。实际 Dart
+账户105/state72、ordered producer18、Swift6 codec155/真实Keychain staging36通过；
+新的纯 reducer 独立重放9轨迹/34操作/43header，271 checks通过，包括11项精确
+错误与实测同秒creation/load窗口，不重试操作。签名102/19/5、body25/67854/4、
+账户67/Cookie68、登录225/20/7、H1 14/14+iOS16、H2/TLS19均通过；prepared policy
+477、effective policy37通过/1个既有skip，strict analyze无问题。
+预览实际账户6/导航9/播放器2/图片3共20tests全通过，AX dismissal1/1/2通过。
+压力 failures=[]、1000评论懒加载/末页、100000弹幕保留/最多60活跃；本次单样本
+33.648ms，未重试，不据此宣称正式时延验收。此组不包含生产Cookie事务、完整
+账户envelope、全部reader/writer屏障、durable交接或真实账户切换；P05仍在进行。
+下一组安装/import与登录账户删除分别提交，汇合后继续同SHA全部9jobs验收。
 
 2026-10-05 执行节奏按用户要求改为组内并行实施、独立提交推送、组末统一编译
 验收。当时 P05 并行组已提交网络能力/响应头执行边界、原始字段候选、签名/cache、
