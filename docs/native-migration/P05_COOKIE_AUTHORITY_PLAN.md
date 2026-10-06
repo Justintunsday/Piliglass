@@ -239,6 +239,17 @@ selection/activation/constructors/maintenance与同步csrf/accessKey读者留后
 不能把这一小接口叫完整 writer barrier。Hive backend 已写入后 compaction 仍可抛错；
 Future failure不证明durable未写入，不因错误ack自动回滚或重放操作。
 
+下一有限 CA3 切片为 install/import 持久化转发（当前仅准备，待本组完整CI通过后
+整合生产变化）：独占新增 `account_install_persistence_port.dart`、`accounts.dart`
+的两处 put/putAll 与一份实际 Hive 测试。默认方法接调用方原 Box/key/candidate/map，
+同步直接返回原 Future；不重排 map、不拆 bulk、不先 await，也不调用 ownsCredentials
+拒绝合法 pending candidate。`_beginInstall/_completeInstall/_failInstall`、私有
+pending/retired/owner guard、refresh及catch/rethrow全部留原位置。
+新增验证只补实际安装/import在await前Box可见而candidate不可capture、await后新
+generation，以及production type9编码失败后旧stamp不能因Hive回滚或refresh复活。
+这仍不覆盖delete/reset/selection/activation/constructor/maintenance/readers，
+不引入authority开关，也不宣称编码失败证明后端未写入或完整writer已冻结。
+
 统一 coordinator 状态为 DartActive → Transitioning → NativeActive；反向为
 NativeActive → Reverting → DartActive。authority marker 与 phase journal 只保存
 非秘密元数据；完整 Cookie/Token、candidate manifest 和回退数据均留安全 store。

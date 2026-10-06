@@ -44,6 +44,18 @@ profiling/重复样本，原因未确定；现门禁没有时延阈值，**不�
 expected jar驱动Native mutation、不重试写入。P06首REST领域准备增补 `29824b7`
 也已保存；未新增该领域请求。新候选仍需自身同 SHA 全部 CI，不计入已验收。
 
+下一组首次 `a257830f55b2846e59a37c953ea19cef934f12f2` 的
+[release](https://github.com/Justintunsday/Piliglass/actions/runs/37379056385) 失败，
+[preview](https://github.com/Justintunsday/Piliglass/actions/runs/37379060582) 四jobs成功。
+完整Runner仍BUILD SUCCEEDED/109.1MB/FFmpeg顺序正确，强制8合同门禁阻止发布。
+实际日志有两个根因：账户测试探针继承@immutable但字段可变，strict analyze警告
+令完整账户suite未执行，账户/Cookie下游缺真实golden明确失败；Native更新Swift6
+严格编译成功，但public UTF16种子的Cookie构造默认httpOnly应为true，harness误设
+false，独立JSON对照正确拒绝。ordered producer18/codec155/staging36仍实际通过。
+已分别提交 `e25a662` 修正public构造种子（response parser/reducer不变）、
+`b6770b5` 将可变故障状态放到独立probe并让adapter引用final。未忽略分析规则、
+未弱化34-step/43-header断言；105账户tests与更新引擎完整检查须修复后实际重跑。
+
 2026-10-05 执行节奏按用户要求改为组内并行实施、独立提交推送、组末统一编译
 验收。当时 P05 并行组已提交网络能力/响应头执行边界、原始字段候选、签名/cache、
 账户 shadow store、Cookie parser/selector、独立 body codec、登录协议/状态机及
