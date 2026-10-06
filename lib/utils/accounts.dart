@@ -3,6 +3,7 @@ import 'dart:collection';
 import 'package:PiliPlus/http/init.dart';
 import 'package:PiliPlus/models/common/account_type.dart';
 import 'package:PiliPlus/pages/mine/controller.dart';
+import 'package:PiliPlus/services/native_accounts/account_install_persistence_port.dart';
 import 'package:PiliPlus/utils/accounts/account.dart';
 import 'package:PiliPlus/utils/accounts/account_request_state.dart';
 import 'package:PiliPlus/utils/login_utils.dart';
@@ -210,7 +211,11 @@ abstract final class Accounts {
     if (ownsCredentials(value)) return;
     final installation = _beginInstall(value, preserveTypes: preserveTypes);
     try {
-      await account.put(value.storageKey, value);
+      await accountInstallPersistencePort.writeLegacyInstall(
+        account,
+        value.storageKey,
+        value,
+      );
       _completeInstall(installation);
     } catch (_) {
       _failInstall(installation);
@@ -235,7 +240,7 @@ abstract final class Accounts {
         _beginInstall(value, preserveTypes: false),
     ];
     try {
-      await account.putAll(values);
+      await accountInstallPersistencePort.writeLegacyImport(account, values);
       for (final installation in installations) {
         _completeInstall(installation);
       }
