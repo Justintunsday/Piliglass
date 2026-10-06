@@ -1,12 +1,13 @@
 # 迁移进度与编译证据
 
-最后更新：2026-10-06（Asia/Hong_Kong）。目标仍在进行，Flutter runtime 保留。
+最后更新：2026-10-07（Asia/Hong_Kong）。目标仍在进行，Flutter runtime 保留。
 
 当前阶段为 **P05**。`bedde36` 的原并行组与 `0527fb2` 的
 [CA1 jar-only shadow](P05_COOKIE_AUTHORITY_PLAN.md) 均已通过同 SHA release5 +
 preview4 jobs。`74101fa` 的 CA2 纯 Cookie mutation candidate 与 CA3 默认 Dart
-response/legacy persistence port 也已通过同 SHA 全部9 jobs。当前进入下一组
-install/import 与登录账户删除的默认 Dart port；账户 authority/runtime 尚未切换。
+response/legacy persistence port 也已通过同 SHA 全部9 jobs。`74e8a4d` 的
+install/import 与登录账户删除默认 Dart port 已通过全部9 jobs，当前进入完整
+账户只读 live-memory capture；账户 authority/runtime 尚未切换。
 CA1 首组的 exporter、
 严格 UTF16/有序格式及 Keychain staging
 已分五个独立提交推送，集成代码 `f11329b` 首次 CI 未通过。
@@ -81,6 +82,19 @@ Future.wait求值顺序不变。新增4项真实Hive安装/编码失败回归和
 回归；本机未运行Dart/Swift，待组末实际Actions。本组不含匿名reset、clear、
 selection/activation/constructor/maintenance/readers的完整barrier，不开放NativeActive。
 完整账户只读capture的零副作用/累积预算/recheck方案已保存；未集成其生产实现。
+
+2026-10-07 核对 **`74e8a4d7e919e3ff80047bb68be69b20f70c3246` 已验收有限 writer 切片**：
+[release5](https://github.com/Justintunsday/Piliglass/actions/runs/37470268086) 与
+[preview4](https://github.com/Justintunsday/Piliglass/actions/runs/37470273356) 同SHA全部成功。
+完整日志实际Runner BUILD SUCCEEDED/109.1MB/Aether FFmpeg顺序正确，8强制outcomes
+全success。实际账户112tests含新增4安装/import和3删除回归、state72、fatal-infos
+无问题；ordered producer18/codec155/真实Keychain staging36、mutation271/34/43，
+以及签名/body/账户/Cookie/登录、H1/H2/iOS16合同通过。预览账户6/导航9/播放器2/
+图片3共20tests及AX1/1/2通过；压力1000评论/100000弹幕/最多60活跃、failures=[]，
+单样本24.534ms，仅记录，不宣称正式时延验收。两个port的生产Native authority、
+匿名reset/clear/selection/activation/constructor/maintenance/readers屏障仍未交付。
+下一capture草稿审查发现JsonUtf8Encoder非const构造与dormant匿名创建副作用，
+须修正再实施；下一组尚未验收，不将前一SHA证据转用于新代码。
 
 2026-10-05 执行节奏按用户要求改为组内并行实施、独立提交推送、组末统一编译
 验收。当时 P05 并行组已提交网络能力/响应头执行边界、原始字段候选、签名/cache、

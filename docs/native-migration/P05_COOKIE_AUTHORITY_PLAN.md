@@ -191,6 +191,8 @@ durabilityVerified/authoritySwitchAllowed 继续 false；flush 不等于冻结�
 2026-10-06 下一只读 capture 的实现边界补充：入口留 Accounts 内部，直接纯读
 `_requestState.capture/isCurrent`。不能复用 public captureRequest/ownsCredentials，
 后者会为匿名 activate；未注册匿名明确 unavailable，捕获不 reconcile/refresh。
+读取匿名还必须从原active stamp取得已有对象，不能调用匿名factory后才检查注册；
+否则dormant捕获会初始化Cookie/协议随机状态。新增纯registry类型查询只读原stamp。
 pending install/reset 令整个捕获 busy，不过滤未知/retired/错key的存储对象；exact
 object/stamp 与 raw storage key、Box顺序、owner顺序、四slots/history全量保存。
 共享累计预算约束256 records（含匿名）、16MiB wire、2Mi UTF16 units、8192 buckets、
@@ -271,6 +273,11 @@ revoke、先启动 jar 清空、随后 exact Box object 判定及 Future.wait �
 即时 jar/Box 状态、在途删除后安装同 MID successor、jar 完成错误不复活旧请求的
 实际 Hive 回归；错误不证明两项删除都没发生，不自动回滚或重试。两切片分别
 commit/push，汇合后同一 SHA release5 + preview4 全部实际验收。
+
+上述安装/import与LoginAccount删除转发在`74e8a4d7e919e3ff80047bb68be69b20f70c3246`
+同SHA release5/preview4全成功；实际112账户tests中新增7项全部通过，8强制门禁及
+Runner/Aether顺序通过。仅接受两项legacy forwarding边界，下一只读capture仍须
+新组验收；完整writer/reader/barrier及NativeActive门禁继续保留。
 
 统一 coordinator 状态为 DartActive → Transitioning → NativeActive；反向为
 NativeActive → Reverting → DartActive。authority marker 与 phase journal 只保存
