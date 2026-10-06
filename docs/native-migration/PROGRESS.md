@@ -106,6 +106,15 @@ Box/owner两种顺序、四slots/history、完整jar/凭据/type/activated，公
 Swift envelope、Keychain集合manifest、bridge命令或writer freeze；四项Native/
 durable/authority标志继续false，旧schema1及Dart writer不变。
 
+此组首次 `a1b162188af6bca5db4d8148cbbdcebd73bbf287` 的
+[release](https://github.com/Justintunsday/Piliglass/actions/runs/37542714967)
+实际账户 analyze 有4条 fatal-info：导出器两处 cascade、测试一处 cascade 与
+冗余 dart:io import；ordered producer 的独立 analyze 同样被两处 cascade 阻断。
+因此131账户/state72/ordered producer及依赖 fresh golden 的 Native 重放尚未执行，
+不能以 continue-on-error 步骤外观成功宣称通过。已按实际日志修正写法，另外将
+新 Accounts part 显式加入 fatal-infos 范围；断言、协议、限额与强制聚合门禁保留。
+待当前构建和预览结束后，对修复后的同一 SHA 重跑完整 release5 + preview4。
+
 2026-10-05 执行节奏按用户要求改为组内并行实施、独立提交推送、组末统一编译
 验收。当时 P05 并行组已提交网络能力/响应头执行边界、原始字段候选、签名/cache、
 账户 shadow store、Cookie parser/selector、独立 body codec、登录协议/状态机及

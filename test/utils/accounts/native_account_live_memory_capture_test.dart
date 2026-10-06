@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:io';
 
 import 'package:PiliPlus/models/common/account_type.dart';
 import 'package:PiliPlus/services/native_accounts/native_account_live_memory_capture.dart';
@@ -241,8 +240,7 @@ void main() {
     await Accounts.installCredentials(account);
     final stamp = Accounts.captureRequest(account)!;
     final revision = Accounts.requestRevision;
-    final capture = Accounts.captureLiveMemoryShadow();
-    capture.verifyCurrent();
+    final capture = Accounts.captureLiveMemoryShadow()..verifyCurrent();
     expect(Accounts.requestRevision, revision);
     expect(Accounts.captureRequest(account), same(stamp));
     expect(() => capture.value['records'] = [], throwsUnsupportedError);

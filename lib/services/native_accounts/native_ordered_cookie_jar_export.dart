@@ -31,8 +31,8 @@ abstract final class NativeOrderedCookieJarExporter {
         NativeOrderedCookiePriorPersistence.unknown,
     NativeOrderedCookieExportBudget? cumulativeBudget,
   }) {
-    final budget = cumulativeBudget ?? NativeOrderedCookieExportBudget();
-    budget.reserveNodes(10);
+    final budget = (cumulativeBudget ?? NativeOrderedCookieExportBudget())
+      ..reserveNodes(10);
     final result = <String, Object?>{
       'schemaVersion': 2,
       'ignoreExpires': jar.ignoreExpires,
@@ -55,8 +55,9 @@ abstract final class NativeOrderedCookieJarExporter {
   /// This is not a parser or a validation entry point for untrusted JSON.
   static void verifyWireCapacity(Object? value) {
     final encoder = JsonUtf8Encoder().startChunkedConversion(_WireCapacitySink());
-    encoder.add(value);
-    encoder.close();
+    encoder
+      ..add(value)
+      ..close();
   }
 
   static List<Map<String, Object?>> _buckets(

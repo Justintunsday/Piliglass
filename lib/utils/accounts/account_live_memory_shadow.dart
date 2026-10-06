@@ -71,10 +71,10 @@ AccountLiveMemoryShadowCapture _captureAccountLiveMemoryShadow() {
   final records = <Account>[anonymousStamp.account];
   final ids = HashMap<Account, int>.identity()..[records.first] = 0;
   final storedOrder = <Map<String, Object?>>[];
-  final budget = NativeOrderedCookieExportBudget();
   // Conservative reservation before allocating envelope metadata/ID arrays.
-  budget.reserveNodes(64 + 40 * (stored.length + 1));
-  budget.reserveUnits(2048 + 512 * (stored.length + 1));
+  final budget = NativeOrderedCookieExportBudget()
+    ..reserveNodes(64 + 40 * (stored.length + 1))
+    ..reserveUnits(2048 + 512 * (stored.length + 1));
   for (final entry in stored.entries) {
     final account = entry.value;
     final key = entry.key;
