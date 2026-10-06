@@ -188,6 +188,19 @@ durabilityVerified/authoritySwitchAllowed 继续 false；flush 不等于冻结�
 启动、四用途/history、未 notify 的 raw jar 更新、pending/reset/unknown entry、
 全量 shadow 重启和未知 ack。CA3/CA4 完成前不从此 envelope 安装 active writer。
 
+2026-10-06 下一只读 capture 的实现边界补充：入口留 Accounts 内部，直接纯读
+`_requestState.capture/isCurrent`。不能复用 public captureRequest/ownsCredentials，
+后者会为匿名 activate；未注册匿名明确 unavailable，捕获不 reconcile/refresh。
+pending install/reset 令整个捕获 busy，不过滤未知/retired/错key的存储对象；exact
+object/stamp 与 raw storage key、Box顺序、owner顺序、四slots/history全量保存。
+共享累计预算约束256 records（含匿名）、16MiB wire、2Mi UTF16 units、8192 buckets、
+16384 entries及节点/深度，先检查再复制，不能为每jar单独开上限后拼巨量envelope。
+checkpoint后重新完整复制并逐字段对照，包括无notify的jar/type/activated变化；
+opaque原引用只用于进程内复核，公开payload深不可变。保留captureLocal身份、
+durabilityVerified=false/authoritySwitchAllowed=false；这份只读候选不发布manifest。
+下一实际测试须包含'02'/'2' distinct owners、独立cold-init isolate、pending真实Hive
+内存可见、raw未notify变更和跨账户累积越界；不使用fakeHive或公开可变owner Map。
+
 ### CA2 必须对照的 mutation / selection 语义
 
 2026-10-06 已验收有限切片的范围（精确构建 `74101fad17d57933e85c965708ef70052cf74e6a`）：

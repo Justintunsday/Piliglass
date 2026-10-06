@@ -74,6 +74,14 @@ Aether FFmpeg 加载顺序通过，8 个强制合同 outcome 全部 success。�
 账户envelope、全部reader/writer屏障、durable交接或真实账户切换；P05仍在进行。
 下一组安装/import与登录账户删除分别提交，汇合后继续同SHA全部9jobs验收。
 
+下一组 CA3 legacy writer 收口已实现、**尚未验收**：`cbeee96` 将安装/import两处
+put/putAll转发至独立port，保留原私有pending/owner状态机、单次bulk及错误传播；
+`ef96d38` 将LoginAccount jar/Hive删除转发至独立port，原revoke、exact对象判定、
+Future.wait求值顺序不变。新增4项真实Hive安装/编码失败回归和3项删除/部分错误
+回归；本机未运行Dart/Swift，待组末实际Actions。本组不含匿名reset、clear、
+selection/activation/constructor/maintenance/readers的完整barrier，不开放NativeActive。
+完整账户只读capture的零副作用/累积预算/recheck方案已保存；未集成其生产实现。
+
 2026-10-05 执行节奏按用户要求改为组内并行实施、独立提交推送、组末统一编译
 验收。当时 P05 并行组已提交网络能力/响应头执行边界、原始字段候选、签名/cache、
 账户 shadow store、Cookie parser/selector、独立 body codec、登录协议/状态机及
