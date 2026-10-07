@@ -86,6 +86,7 @@
 		42D87350522E696E419FDB3B /* PiliAccountLiveMemoryShadowCodec.swift in Sources */ = {isa = PBXBuildFile; fileRef = 461D1B960DC269ABF25E4E05 /* PiliAccountLiveMemoryShadowCodec.swift */; };
 		C73A9FB2B400411F902BC3A1 /* PiliNativeOrderedCookieReducer.swift in Sources */ = {isa = PBXBuildFile; fileRef = C73A9FB2B400411F902BC3A2 /* PiliNativeOrderedCookieReducer.swift */; };
 		F4F9ADF5863060B76D08AC79 /* PiliOrderedCookieStagingStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C434866A40C62424F03FC66C /* PiliOrderedCookieStagingStore.swift */; };
+		9D4C71F0E3B6A82C5F1B0D7E /* PiliAccountEnvelopeStagingStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A6F80B2C9E14D57A0B3C6F8 /* PiliAccountEnvelopeStagingStore.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -191,6 +192,7 @@
 		461D1B960DC269ABF25E4E05 /* PiliAccountLiveMemoryShadowCodec.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PiliAccountLiveMemoryShadowCodec.swift; sourceTree = "<group>"; };
 		C73A9FB2B400411F902BC3A2 /* PiliNativeOrderedCookieReducer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PiliNativeOrderedCookieReducer.swift; sourceTree = "<group>"; };
 		C434866A40C62424F03FC66C /* PiliOrderedCookieStagingStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PiliOrderedCookieStagingStore.swift; sourceTree = "<group>"; };
+		3A6F80B2C9E14D57A0B3C6F8 /* PiliAccountEnvelopeStagingStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PiliAccountEnvelopeStagingStore.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -519,6 +521,7 @@
 			isa = PBXGroup;
 			children = (
 				C434866A40C62424F03FC66C /* PiliOrderedCookieStagingStore.swift */,
+				3A6F80B2C9E14D57A0B3C6F8 /* PiliAccountEnvelopeStagingStore.swift */,
 				59FAAAC820CF047C217ACB81 /* PiliNativeCookieSelector.swift */,
 				C59833C892D1075470BFEB17 /* PiliNativeCookieParser.swift */,
 				12F1F2B18C2AA05D548C69AF /* PiliAccountStagingStore.swift */,
@@ -747,6 +750,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				F4F9ADF5863060B76D08AC79 /* PiliOrderedCookieStagingStore.swift in Sources */,
+				9D4C71F0E3B6A82C5F1B0D7E /* PiliAccountEnvelopeStagingStore.swift in Sources */,
 				19A581F34040A1B98B2CED17 /* PiliOrderedCookieArchiveCodec.swift in Sources */,
 				42D87350522E696E419FDB3B /* PiliAccountLiveMemoryShadowCodec.swift in Sources */,
 				C73A9FB2B400411F902BC3A1 /* PiliNativeOrderedCookieReducer.swift in Sources */,

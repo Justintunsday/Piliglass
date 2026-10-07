@@ -41,6 +41,18 @@ SOURCES = [
     "ios/Runner/Native/Data/Accounts/PiliAccountLiveMemoryShadowCodec.swift",
     "tool/check_native_account_envelopes.swift",
 ]
+# Durable shadow publication is a separate contract phase. It reuses the same
+# actual Dart goldens but adds the isolated Keychain vault and fault matrix.
+STAGING_SOURCES = [
+    "ios/Runner/Native/Domain/Accounts/PiliAccountRepository.swift",
+    "ios/Runner/Native/Domain/Accounts/PiliOrderedCookieArchive.swift",
+    "ios/Runner/Native/Data/Accounts/PiliOrderedCookieArchiveCodec.swift",
+    "ios/Runner/Native/Domain/Accounts/PiliAccountLiveMemoryShadow.swift",
+    "ios/Runner/Native/Data/Accounts/PiliAccountLiveMemoryShadowCodec.swift",
+    "ios/Runner/Native/Persistence/Accounts/PiliAccountSecretStore.swift",
+    "ios/Runner/Native/Persistence/Accounts/PiliAccountEnvelopeStagingStore.swift",
+    "tool/check_native_account_envelope_staging.swift",
+]
 LIVE_IDS = [
     "anonymous-empty-jar",
     "stored-10-2-owner-2-10",
@@ -64,7 +76,7 @@ CONTRACT_INPUTS = [
 
 
 def source_hashes():
-    paths = {ROOT / path for path in [*SOURCES, *PRODUCERS, *ANALYSIS, *CONTRACT_INPUTS]}
+    paths = {ROOT / path for path in [*SOURCES, *STAGING_SOURCES, *PRODUCERS, *ANALYSIS, *CONTRACT_INPUTS]}
     files = set()
     for path in paths:
         if path.is_dir():
@@ -83,7 +95,7 @@ def clean_contract_sources(log):
     # patches unrelated lib/pubspec/Runner inputs. Require only this contract's
     # analyzed/compiled sources to match HEAD; hash the actual resolved inputs
     # separately, including those already prepared by the build workflow.
-    paths = sorted({*SOURCES, *PRODUCERS, *ANALYSIS,
+    paths = sorted({*SOURCES, *STAGING_SOURCES, *PRODUCERS, *ANALYSIS,
                     Path(__file__).resolve().relative_to(ROOT).as_posix()})
     run(["git", "diff", "--quiet", "HEAD", "--", *paths], log)
 
@@ -176,6 +188,7 @@ def main():
     (OUTPUT / "summary.json").write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
     try:
         for name in ["live-memory.json", "hive-reopened.json", "check-native-account-envelopes",
+                     "check-native-account-envelope-staging", "staging-compile.log", "staging-result.log",
                      "analyze.log", "dart-test.log", "compile.log", "result.log",
                      "source-revision.log", "source-revision-after.log",
                      "source-clean.log", "source-clean-after.log", "build-preparation-diff-names.log"]:
@@ -227,6 +240,18 @@ def main():
             r"negativeCases=(\d+) syntheticIntegerCases=1 runtimeEnabled=false", output)
         if not matched or int(matched[2]) != 10 or int(matched[3]) < MINIMUM_NEGATIVE_CASES:
             raise RuntimeError("Independent Native full-account comparison/negative evidence incomplete")
+        verify_golden_hashes(hashes)
+        staging = OUTPUT / "check-native-account-envelope-staging"
+        run(["xcrun", "swiftc", "-swift-version", "6", "-strict-concurrency=complete",
+             "-parse-as-library", "-o", str(staging), *(str(ROOT / path) for path in STAGING_SOURCES)],
+            "staging-compile.log")
+        verify_golden_hashes(hashes)
+        staging_output = run([str(staging), str(OUTPUT / "live-memory.json"), str(OUTPUT / "hive-reopened.json")],
+                             "staging-result.log", timeout=90)
+        print(staging_output, end="")
+        staging_matched = re.search(r"(\d+) native account envelope staging checks passed", staging_output)
+        if not staging_matched or int(staging_matched[1]) < 30:
+            raise RuntimeError("Durable account envelope shadow publication evidence incomplete")
         final_sha = run(["git", "rev-parse", "HEAD"], "source-revision-after.log").strip()
         if final_sha != source_sha or source_hashes() != source_digests:
             raise RuntimeError("Production sources changed during actual Dart/Native verification")
@@ -235,7 +260,7 @@ def main():
         summary.update(status="passed", actualDartTests=8, actualDartObservations=10,
                        actualDartGoldens=2, goldenSHA256=hashes, nativeChecks=int(matched[1]),
                        negativeCases=int(matched[3]), syntheticIntegerCases=1,
-                       sourceSHA256=source_digests)
+                       stagingChecks=int(staging_matched[1]), sourceSHA256=source_digests)
     except (OSError, RuntimeError, ValueError, subprocess.TimeoutExpired) as error:
         summary["reason"] = str(error)
         print(f"FAIL native account envelopes: {error}")
