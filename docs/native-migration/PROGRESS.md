@@ -6,8 +6,10 @@
 [CA1 jar-only shadow](P05_COOKIE_AUTHORITY_PLAN.md) 均已通过同 SHA release5 +
 preview4 jobs。`74101fa` 的 CA2 纯 Cookie mutation candidate 与 CA3 默认 Dart
 response/legacy persistence port 也已通过同 SHA 全部9 jobs。`74e8a4d` 的
-install/import 与登录账户删除默认 Dart port 已通过全部9 jobs，当前进入完整
-账户只读 live-memory capture；账户 authority/runtime 尚未切换。
+install/import 与登录账户删除默认 Dart port 已通过全部9 jobs。`6673e38` 的完整
+账户只读 live-memory capture 也已通过同 SHA 全部9 jobs；下一组按
+[原生完整账户格式计划](P05_ACCOUNT_ENVELOPE_PLAN.md) 接入 Native DTO/codec 与默认
+reset persistence port，尚未验收。账户 authority/runtime 尚未切换。
 CA1 首组的 exporter、
 严格 UTF16/有序格式及 Keychain staging
 已分五个独立提交推送，集成代码 `f11329b` 首次 CI 未通过。
@@ -136,6 +138,24 @@ ordered18/codec155/真实Keychain staging36、mutation271/34/43、账户67/Cooki
 查询严重拖延，无生产选页错误证据。仅将页码存在+精确label合并成一次服务器查询，
 保留三tests、全部2/3→3/3→2/3及单张1/1断言、6秒等待、单次动作；其它zoom/detail
 断言不变，不改生产UI。此修复假设待新SHA同一完整release5+preview4实际验证。
+
+第四轮 **`6673e38fae4c7267dbab44e0927b2580358643a3` 已验收完整只读 capture 切片**。
+[release 37604562707](https://github.com/Justintunsday/Piliglass/actions/runs/37604562707)
+与 [preview 37604760078](https://github.com/Justintunsday/Piliglass/actions/runs/37604760078)
+同 SHA 全部9 jobs成功，已下载并读取实际主日志与 artifacts。Runner BUILD SUCCEEDED、
+109.1MB、实际 Aether FFmpeg load order 与8强制合同 outcomes全部success。严格账户
+analyze（含新part）无问题，账户131/state72、新增capture19均执行通过；ordered18/
+codec155/真实Keychain staging36、mutation271/34/43、登录实际7/225/20及原签名/正文/
+账户/Cookie/policy/HTTP/transport合同通过。预览账户6/导航9/播放器2/图片3共20tests
+全部成功，AX1/1/2通过；图片精确2/3→3/3→2/3、缩放、单次手势和detail-opens 0→1
+实际执行，未增加等待、重试或修改生产UI。压力1000评论/100000弹幕/活跃上限60、
+failures=[]；17.894ms只是单样本，不宣称正式时延验收。
+
+已检查74e8a4d→6673e38逐文件diff，无功能/资源/依赖删除；Root/Player/Aether生产
+源码未改。此组仍是 capture-local owned tree 和完整端点复核，不证明 writer冻结、
+durable集合、Native authority或真实账户迁移。四项能力标志保持false，Flutter/Dart
+fallback保留，P05未完成。下一组计划已在生产修改前独立提交5f708ce并推送；按相关
+组独立提交、同SHA完整release5+preview4验收，当前SHA证据不能转用于下一组源码。
 
 2026-10-05 执行节奏按用户要求改为组内并行实施、独立提交推送、组末统一编译
 验收。当时 P05 并行组已提交网络能力/响应头执行边界、原始字段候选、签名/cache、

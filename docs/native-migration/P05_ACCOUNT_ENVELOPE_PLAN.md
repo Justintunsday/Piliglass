@@ -1,7 +1,7 @@
 # P05 下一最小切片：完整账户 capture-local Native DTO / strict codec
 
 2026-10-07。实施前保存的下一组执行计划，不是实现、CI 验收或 authority 切换证明。
-当前 capture 组 `6673e38` 必须完成同 SHA release5 + preview4 后，才接入本组生产代码。
+前置 capture 组 `6673e38` 已完成同 SHA release5 + preview4；现按本计划接入本组生产代码。
 本组不创建 Keychain 集合 manifest、bridge 命令、Native writer、runtime 开关或新 UI。
 
 ## 实际来源与可以复用的边界

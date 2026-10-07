@@ -123,6 +123,10 @@ CI 证据持续写入 `PROGRESS.md`。未通过 CI 的阶段保持进行中；�
 [有序 Cookie / 单写权威](P05_COOKIE_AUTHORITY_PLAN.md)，CA1 首组只实现 jar2
 shadow 格式；真实账户、全部 reader/writer、durable 交接/回退及其他网络语义门禁保留。
 
+2026-10-07：`6673e38` 完整账户只读 capture 已通过同 SHA release5 + preview4，
+P05 仍在进行。下一组实施前保存 [完整 Native 账户格式与 reset port计划](P05_ACCOUNT_ENVELOPE_PLAN.md)，
+只读 DTO/codec 与默认 Dart 转发接口不等于账户 authority 已原生化。
+
 ## Skills 适用决策
 
 已读取用户给定 [ios-engineer](https://github.com/i-stack/ai-coding-kit/blob/main/skills-engineering/ios-engineer/SKILL.md)、[SwiftUI Pro](https://github.com/twostraws/SwiftUI-Agent-Skill/tree/main/swiftui-pro/skills/swiftui-pro)、[interop](https://github.com/dpearson2699/swift-ios-skills/tree/main/skills/swiftui-uikit-interop)、[architecture](https://github.com/dpearson2699/swift-ios-skills/tree/main/skills/swift-architecture)、[concurrency](https://github.com/dpearson2699/swift-ios-skills/tree/main/skills/swift-concurrency)、[networking](https://github.com/dpearson2699/swift-ios-skills/tree/main/skills/ios-networking)、[axiom bridging](https://github.com/megastep/codex-skills/tree/main/axiom-uikit-bridging)、[UIKit modernization](https://github.com/superagents-lab/xcode27-skills/blob/master/uikit-app-modernization/SKILL.md)。最后一个仓库实际为 master，并非 main。
