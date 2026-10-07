@@ -1,15 +1,25 @@
 # P05 状态矩阵与剩余缺口（交付审核版）
 
-2026-10-07（Asia/Hong_Kong）。本文件对应当前分支 `codex/native-migration` 的最终
-交付 SHA `d2058d3b6efadce6b1c2664ffd7fe2a7e3df9d41`。结论：**P05 未完成**；本阶段
-交付的是完整账户只读 capture-local 格式、严格 codec、隔离 Keychain shadow 持久化、
+2026-10-07（Asia/Hong_Kong）。本文件对应当前分支 `codex/native-migration` 的已验证
+代码 SHA `7159af42e4dd942f989467d8c5a9eb77fb2a42e7`。结论：**P05 未整体完成**；
+本阶段交付的是完整账户只读 capture-local 格式、严格 codec、隔离 Keychain shadow 持久化、
 shadow-only 单账户 durable transaction（Cookie save/delete/deleteAll、临时选择、
-credentials、activated），外加默认 Dart reset port 的 CI 验收。
+credentials、activated）、durable authority marker/两阶段 handoff/revert/crash recovery
+与 Dart reverse import，外加默认 Dart reset port 的 CI 验收。
 账户/登录/Cookie/签名的生产 authority 仍是 Dart/Hive/Dio，Flutter runtime 保留。
+完整交付说明与未完成门禁见 [P05_COMPLETION_REPORT.md](P05_COMPLETION_REPORT.md)。
 
 ## 同 SHA CI 证据
 
-最终 SHA `d2058d3`：
+最终 SHA `7159af4`：
+
+- release [37701163766](https://github.com/Justintunsday/Piliglass/actions/runs/37701163766)
+  5/5 jobs、preview [37701168438](https://github.com/Justintunsday/Piliglass/actions/runs/37701168438)
+  4/4；driver `status=passed`：108 oracle、43 负例、36 staging、29 transaction、
+  24 authority checks；账户 analyze 无问题、`+146: All tests passed!`；9 outcomes success、
+  BUILD SUCCEEDED/109.1MB/FFmpeg 顺序通过。
+
+前序验收 SHA `d2058d3`（含 Cookie/selection/credentials/activated 事务）：
 
 - release [37656023018](https://github.com/Justintunsday/Piliglass/actions/runs/37656023018)
   5/5 jobs success；聚合门禁 9 个 outcome 全部 success（含第九个
@@ -45,8 +55,10 @@ driver `summary.json`、artifact 与聚合门禁 outcome 为准。
 | capture-local envelope DTO/codec | `PiliAccountLiveMemoryShadow.swift`、`PiliAccountLiveMemoryShadowCodec.swift` | 一次 parse + resource preflight + Domain 共享 ledger；全部 records/key/credential/jar/order/selections/history；四能力 flag 固定 false | 只读格式 |
 | 失败关闭的 reset port | `account_reset_persistence_port.dart` + 两处调用 | 匿名 jar.deleteAll 与 Hive clear 的默认 Dart 转发；生命周期顺序不变 | 非 Native authority |
 | 隔离 Keychain shadow | `PiliAccountEnvelopeStagingStore.swift` | 唯一 manifest 指针、record 全量 reread、写后错误读回、unknown ack 保留双记录、operation gate、cancel 前不发布 | shadow only |
-| shadow 单账户事务 | `PiliAccountEnvelopeTransactionStore.swift` | 按 raw key + generation 定位单 record；Cookie save/delete/deleteAll 经已对照 Dart 的 ordered reducer；临时 selection（派生 history）、credentials、activated 为显式值变更；全部候选先过累计 ledger 再发布 pointer | shadow only；持久用途/durable identity 未做 |
-| 跨语言对照 | `tool/check_native_account_*`、三个 Dart producer/fixture | fresh goldens 三阶段 hash、独立 JSON oracle、真实 Keychain/故障矩阵 | 仅 synthetic secrets |
+| shadow 单账户事务 | `PiliAccountEnvelopeTransactionStore.swift` | 按 raw key + generation 定位单 record；Cookie save/delete/deleteAll 经已对照 Dart 的 ordered reducer；临时 selection（派生 history）、credentials、activated 为显式值变更；全部候选先过累计 ledger 再发布 pointer | shadow only；持久用途/install/buvid 未做 |
+| durable authority | `PiliAccountAuthorityMarkerStore.swift`、`PiliAccountAuthorityCoordinator.swift` | 非秘密单 marker、写前/写后/unknown 三分支读回判定、nativeActive+候选/revision 一致性、transitioning/reverting corrupt 时 fail closed、两阶段 reverseExport→completeRevert | 仅 Native；无 Dart runtime proxy |
+| reverse import | `native_account_reverse_import.dart` | 严格形状重建 raw jar/attrs/create time/顺序，缓存 captured raw key 而不从 DedeUserID 重推，经 owner 路径注册并恢复选择；malformed/missing identity 不触碰 live | 兼容 reader；durable Dart store 未做 |
+| 跨语言对照 | `tool/check_native_account_*`、Dart producer/fixture/test | fresh goldens 三阶段 hash、独立 JSON oracle、真实 Keychain/故障矩阵、真实 Dart capture→reverse→逐字节比较 | 仅 synthetic secrets |
 
 ## 当前生产数据流（authority = Dart）
 
@@ -66,11 +78,14 @@ Dart Accounts live registry -> NativeAccountLiveMemoryCaptureService（checkpoin
   -> PiliAccountLiveMemoryShadowCodec（strict bounded）
   -> PiliAccountEnvelopeStagingStore（隔离 Keychain namespace + 单 manifest）
   -> PiliAccountEnvelopeTransactionStore（shadow Cookie transaction）
+  -> PiliAccountAuthorityCoordinator / MarkerStore（handoff/resume/revert）
+  -> Dart NativeAccountReverseImport（重建 LoginAccount 与选择）
 ```
 
 四项能力标志 `durableIdentityConfigured`、`durabilityVerified`、
 `authoritySwitchAllowed`、`nativeWritesAllowed` 在 capture 与所有候选/receipt 中保持 false；
-没有 bridge 命令、authority marker、durable record identity 或 runtime 开关。
+authority marker 与 coordinator 已实现并 CI 验收，但**没有** bridge 命令、
+durable record identity registry 或 runtime 开关把该 authority 接给生产 reader/writer。
 
 ## reader/writer 覆盖与仍存在旁路
 
@@ -109,8 +124,9 @@ Dart Accounts live registry -> NativeAccountLiveMemoryCaptureService（checkpoin
    install/import/buvid 补值的 durable 事务；durable commit receipt 与账号级排队。
 2. **CA3**：全部 reader/writer 收口到同一 authority；Dart proxy 与只读展示缓存；
    credential reader adapter；在途 writer 屏障。
-3. **CA4**：durable record identity、authority marker、freeze/drain/export/publish
-   协调器、schema2 reverse import、crash phase recovery、孤儿清理。
+3. **CA4 剩余**：durable record identity registry、namespace 级孤儿清理；把已验收的
+   marker/coordinator/reverse import 通过 bridge/proxy 接入生产 composition 的
+   freeze/drain/export/publish 流程（当前只有 Native 协调器，没有 runtime 调用方）。
 4. **CA5**：opt-in Native active composition，在测试设备验收 QR/password/SMS/Cookie、
    Geetest/手机验证、多账户用途隔离、实际响应 attrs、杀进程/重启与回退。
 5. **网络/登录**：Native login production 安装、proxy/retry/pool/H1/H2/TLS/timeout、
@@ -123,12 +139,16 @@ Dart Accounts live registry -> NativeAccountLiveMemoryCaptureService（checkpoin
 - transaction store 故意不 bump capture revision、不生成 durable identity；把 manifest
   发布误当 authority 会违反本阶段边界。
 - `continue-on-error` 步骤的 surface success 不是证据；请以 driver summary、artifact
-  与聚合 outcome 复核。
-- 第二轮 release 的 build job 曾重跑；run 内 build job 的第二次 attempt 才是成功证据。
-- Flutter/Dart/Hive/runtime 与全部旧页面保留，P05/P06–P12 未完成。
+  与聚合 outcome 复核（本阶段多次由该方式定位真实失败：SameSite、marker 写前错误、
+  测试 analyzer）。
+- 部分 run 的 build job 曾因 runner 网络或前置错误重跑；以最终同 run 的 success 为准。
+- Flutter/Dart/Hive/runtime 与全部旧页面保留，P05/P06–P12 未完成；P05 的完整判定必须
+  等待 CA5/CA6 真机验收。
 
 ## 回滚
 
-- `git revert eeed9ab`（事务）、`2545196`（shadow store）、`0aa98b5`/`c2bc5ab`/`f361947`
-  （DTO/codec/producers/driver）、`d1ef763`（fixture 修复）；`d1c3cd1`（reset port）按需
-  单独回滚。无运行时权威切换，无数据迁移，回滚不需要反向导入。
+- `git revert 7159af4`（Dart reverse import）、`52e4471`/`2cb8ce5`（authority marker/
+  coordinator）、`33345be`/`d2058d3`（事务扩展）、`eeed9ab`（Cookie 事务）、`2545196`
+  （shadow store）、`0aa98b5`/`c2bc5ab`/`f361947`（DTO/codec/producers/driver）；
+  `d1c3cd1`（reset port）按需单独回滚。无运行时权威切换，无数据迁移，回滚不需要
+  反向导入；本阶段未新增 package 依赖。

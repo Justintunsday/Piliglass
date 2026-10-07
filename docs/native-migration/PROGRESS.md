@@ -53,6 +53,21 @@ analyze 无问题、9 outcomes success、Runner BUILD SUCCEEDED/109.1MB/FFmpeg �
 取消并由本 SHA 替代。仍未交付：持久用途/install/buvid durable 事务、durable identity、
 统一 reader/writer barrier、authority handoff/reverse import 与真实账户/设备验收。
 
+**`7159af42e4dd942f989467d8c5a9eb77fb2a42e7` 已验收 durable authority + reverse import**：
+同 SHA [release 37701163766](https://github.com/Justintunsday/Piliglass/actions/runs/37701163766)
+5/5 与 [preview 37701168438](https://github.com/Justintunsday/Piliglass/actions/runs/37701168438)
+4/4 success；0 contract errors；Runner BUILD SUCCEEDED、109.1MB、实际 FFmpeg load order。
+driver `status=passed`：108 oracle/43 负例/36 staging/29 transaction 不变，新增 24 项
+authority checks（真实 Keychain handoff/resume、写前/写后/unknown ack、corrupt/missing/
+transitioning fail-closed、两阶段 revert、reentry gate）。账户组 analyze No issues、
+`+146: All tests passed!`（新增 2 项 Dart reverse-import 测试：完整 jar/顺序/凭据/用途/
+选择重建，以及 malformed/missing identity 不触碰 live accounts）。迭代中实际失败均按
+日志修复：authority marker 写前错误应判定未发布（`2cb8ce5`）、测试 analyzer
+（`4ad0970`/`6c6d615`/`7159af4`）。仍未交付：CA3 运行时 proxy/统一 barrier、持久用途/
+install/buvid 事务、Native 登录/签名 production 安装、网络 transport parity 与 CA5/CA6
+真实设备验收；P05 保持**未整体完成**，详见
+[P05 完成报告](P05_COMPLETION_REPORT.md)。
+
 CA1 首组的 exporter、
 严格 UTF16/有序格式及 Keychain staging
 已分五个独立提交推送，集成代码 `f11329b` 首次 CI 未通过。
