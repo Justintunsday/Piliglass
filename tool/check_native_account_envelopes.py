@@ -69,6 +69,20 @@ TRANSACTION_SOURCES = [
     "ios/Runner/Native/Persistence/Accounts/PiliAccountEnvelopeTransactionStore.swift",
     "tool/check_native_account_envelope_transaction.swift",
 ]
+# Durable authority marker and two-phase handoff/revert. Native-only machinery
+# with real Keychain crash/fault recovery; no Dart runtime caller is installed.
+AUTHORITY_SOURCES = [
+    "ios/Runner/Native/Domain/Accounts/PiliAccountRepository.swift",
+    "ios/Runner/Native/Domain/Accounts/PiliOrderedCookieArchive.swift",
+    "ios/Runner/Native/Data/Accounts/PiliOrderedCookieArchiveCodec.swift",
+    "ios/Runner/Native/Domain/Accounts/PiliAccountLiveMemoryShadow.swift",
+    "ios/Runner/Native/Data/Accounts/PiliAccountLiveMemoryShadowCodec.swift",
+    "ios/Runner/Native/Persistence/Accounts/PiliAccountSecretStore.swift",
+    "ios/Runner/Native/Persistence/Accounts/PiliAccountEnvelopeStagingStore.swift",
+    "ios/Runner/Native/Persistence/Accounts/PiliAccountAuthorityMarkerStore.swift",
+    "ios/Runner/Native/Persistence/Accounts/PiliAccountAuthorityCoordinator.swift",
+    "tool/check_native_account_authority.swift",
+]
 LIVE_IDS = [
     "anonymous-empty-jar",
     "stored-10-2-owner-2-10",
@@ -93,7 +107,7 @@ CONTRACT_INPUTS = [
 
 def source_hashes():
     paths = {ROOT / path for path in [*SOURCES, *STAGING_SOURCES, *TRANSACTION_SOURCES,
-                                      *PRODUCERS, *ANALYSIS, *CONTRACT_INPUTS]}
+                                      *AUTHORITY_SOURCES, *PRODUCERS, *ANALYSIS, *CONTRACT_INPUTS]}
     files = set()
     for path in paths:
         if path.is_dir():
@@ -112,7 +126,8 @@ def clean_contract_sources(log):
     # patches unrelated lib/pubspec/Runner inputs. Require only this contract's
     # analyzed/compiled sources to match HEAD; hash the actual resolved inputs
     # separately, including those already prepared by the build workflow.
-    paths = sorted({*SOURCES, *STAGING_SOURCES, *TRANSACTION_SOURCES, *PRODUCERS, *ANALYSIS,
+    paths = sorted({*SOURCES, *STAGING_SOURCES, *TRANSACTION_SOURCES, *AUTHORITY_SOURCES,
+                    *PRODUCERS, *ANALYSIS,
                     Path(__file__).resolve().relative_to(ROOT).as_posix()})
     run(["git", "diff", "--quiet", "HEAD", "--", *paths], log)
 
@@ -207,7 +222,8 @@ def main():
         for name in ["live-memory.json", "hive-reopened.json", "check-native-account-envelopes",
                      "check-native-account-envelope-staging", "staging-compile.log", "staging-result.log",
                      "check-native-account-envelope-transaction", "transaction-compile.log",
-                     "transaction-result.log",
+                     "transaction-result.log", "check-native-account-authority",
+                     "authority-compile.log", "authority-result.log",
                      "analyze.log", "dart-test.log", "compile.log", "result.log",
                      "source-revision.log", "source-revision-after.log",
                      "source-clean.log", "source-clean-after.log", "build-preparation-diff-names.log"]:
@@ -284,6 +300,18 @@ def main():
             r"(\d+) native account envelope transaction checks passed", transaction_output)
         if not transaction_matched or int(transaction_matched[1]) < 20:
             raise RuntimeError("Durable account envelope transaction evidence incomplete")
+        verify_golden_hashes(hashes)
+        authority = OUTPUT / "check-native-account-authority"
+        run(["xcrun", "swiftc", "-swift-version", "6", "-strict-concurrency=complete",
+             "-parse-as-library", "-o", str(authority), *(str(ROOT / path) for path in AUTHORITY_SOURCES)],
+            "authority-compile.log")
+        verify_golden_hashes(hashes)
+        authority_output = run([str(authority), str(OUTPUT / "live-memory.json")],
+                               "authority-result.log", timeout=90)
+        print(authority_output, end="")
+        authority_matched = re.search(r"(\d+) native account authority checks passed", authority_output)
+        if not authority_matched or int(authority_matched[1]) < 15:
+            raise RuntimeError("Durable account authority handoff/recovery evidence incomplete")
         final_sha = run(["git", "rev-parse", "HEAD"], "source-revision-after.log").strip()
         if final_sha != source_sha or source_hashes() != source_digests:
             raise RuntimeError("Production sources changed during actual Dart/Native verification")
@@ -293,7 +321,8 @@ def main():
                        actualDartGoldens=2, goldenSHA256=hashes, nativeChecks=int(matched[1]),
                        negativeCases=int(matched[3]), syntheticIntegerCases=1,
                        stagingChecks=int(staging_matched[1]),
-                       transactionChecks=int(transaction_matched[1]), sourceSHA256=source_digests)
+                       transactionChecks=int(transaction_matched[1]),
+                       authorityChecks=int(authority_matched[1]), sourceSHA256=source_digests)
     except (OSError, RuntimeError, ValueError, subprocess.TimeoutExpired) as error:
         summary["reason"] = str(error)
         print(f"FAIL native account envelopes: {error}")
