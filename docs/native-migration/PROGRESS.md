@@ -27,8 +27,21 @@ Dart producer tests、10 个 actual Dart 观察、2 个 fresh goldens、108 项 
 `Verified Aether FFmpeg precedes media-kit FFmpeg in Mach-O load order`；聚合门禁 9 个
 outcome（含新 `ACCOUNT_ENVELOPE_OUTCOME`）全部 success。本组只交付 capture-local
 只读格式、严格 codec 与隔离 shadow 持久化；writer 未冻结、无 durable identity、
-无 authority/写入权限，reset port 仍是默认 Dart 转发。下一片 durable 单账户 Cookie
-transaction 已实现、尚未验收。
+无 authority/写入权限，reset port 仍是默认 Dart 转发。
+
+**`eeed9abd7ebeb2915fb173aef0846c4baf12afc5` 已验收 shadow durable transaction 有限切片**：
+同 SHA [release 37652089143](https://github.com/Justintunsday/Piliglass/actions/runs/37652089143)
+5/5 jobs 与 [preview 37652094105](https://github.com/Justintunsday/Piliglass/actions/runs/37652094105)
+4/4 jobs success；聚合 9 outcomes 全部 success，Runner `BUILD SUCCEEDED`、109.1MB、实际
+FFmpeg load order 通过。envelope driver artifact `status=passed`：8 producer tests、
+10 观察、108 oracle checks、43 负例、36 真实 Keychain staging checks、新增 24 项 durable
+单账户 Cookie transaction checks（含真实 Keychain 重启、raww key + generation 定位、
+累计 ledger 重验、写后错误读回、unknown ack 保留双记录、reentry gate、取消不发布）。
+账户组 analyze 无问题、144 tests 全过、tracker 72。该事务仍是 shadow：不 bump capture
+revision、不生成 durable identity、无 authority；selection/credentials/activated、
+统一 reader/writer、durable handoff/reverse import 与真实账户/设备验收尚未交付。
+P05 当前矩阵与剩余缺口见 [P05_STATUS_MATRIX.md](P05_STATUS_MATRIX.md)。
+
 CA1 首组的 exporter、
 严格 UTF16/有序格式及 Keychain staging
 已分五个独立提交推送，集成代码 `f11329b` 首次 CI 未通过。
