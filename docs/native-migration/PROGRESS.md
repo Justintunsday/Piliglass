@@ -10,6 +10,13 @@ install/import 与登录账户删除默认 Dart port 已通过全部9 jobs。`66
 账户只读 live-memory capture 也已通过同 SHA 全部9 jobs；下一组按
 [原生完整账户格式计划](P05_ACCOUNT_ENVELOPE_PLAN.md) 接入 Native DTO/codec 与默认
 reset persistence port，尚未验收。账户 authority/runtime 尚未切换。
+
+下一组默认 reset port 已实现、**尚未验收**：`AccountResetPersistencePort` 的 const
+Dart 实现直接返回现 jar.deleteAll / Hive Box.clear Future，仅接入匿名 delete 与
+Accounts.clear 两处。调用前的revoke/fields及调用后的reset completion/reseed/activation
+不变，clear 保留并发 Future.wait 与 Future<int> 原返回语义。五项真实 Hive/账户 fixture
+包括closed Box错误与匿名reset部分成功；本机未运行Dart，不将补丁检查视为编译成功。
+与完整 Native envelope 同组汇合后执行全部真实 Actions。
 CA1 首组的 exporter、
 严格 UTF16/有序格式及 Keychain staging
 已分五个独立提交推送，集成代码 `f11329b` 首次 CI 未通过。

@@ -2,6 +2,7 @@ import 'package:PiliPlus/common/constants.dart';
 import 'package:PiliPlus/models/common/account_type.dart';
 import 'package:PiliPlus/services/native_accounts/account_cookie_mutation_port.dart';
 import 'package:PiliPlus/services/native_accounts/account_deletion_port.dart';
+import 'package:PiliPlus/services/native_accounts/account_reset_persistence_port.dart';
 import 'package:PiliPlus/utils/accounts.dart';
 import 'package:PiliPlus/utils/accounts/grpc_headers.dart';
 import 'package:PiliPlus/utils/id_utils.dart';
@@ -168,7 +169,7 @@ class AnonymousAccount extends Account {
     final reset = Accounts.beginAnonymousReset(this);
     activated = false;
     grpcHeaders['x-bili-fawkes-req-bin'] = GrpcHeaders.fawkes;
-    await cookieJar.deleteAll();
+    await accountResetPersistencePort.clearAnonymousCookies(this);
     if (!Accounts.isCurrentAnonymousReset(reset)) return;
     cookieJar.setBuvid3();
     Accounts.completeAnonymousReset(this, reset);

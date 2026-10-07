@@ -4,6 +4,7 @@ import 'package:PiliPlus/http/init.dart';
 import 'package:PiliPlus/models/common/account_type.dart';
 import 'package:PiliPlus/pages/mine/controller.dart';
 import 'package:PiliPlus/services/native_accounts/account_install_persistence_port.dart';
+import 'package:PiliPlus/services/native_accounts/account_reset_persistence_port.dart';
 import 'package:PiliPlus/services/native_accounts/native_ordered_cookie_jar_export.dart';
 import 'package:PiliPlus/utils/accounts/account.dart';
 import 'package:PiliPlus/utils/accounts/account_request_state.dart';
@@ -270,7 +271,10 @@ abstract final class Accounts {
     _accountMode.fillRange(0, _accountMode.length, anonymous);
     _requestState.changed();
     final reset = anonymous.delete();
-    await Future.wait([account.clear(), reset]);
+    await Future.wait([
+      accountResetPersistencePort.clearLegacyAccounts(account),
+      reset,
+    ]);
     if (ownsCredentials(anonymous)) Request.buvidActive(anonymous);
   }
 
