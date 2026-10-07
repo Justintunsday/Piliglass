@@ -69,14 +69,20 @@ actor PiliAccountAuthorityMarkerStore {
     let encoder = JSONEncoder()
     encoder.outputFormatting = [.sortedKeys]
     let bytes = try encoder.encode(marker)
+    // The prior durable value is needed to distinguish "write failed and did
+    // not commit" from a genuinely unknown publication result.
+    let previous: Data?
+    do { previous = try await secrets.read(markerKey) }
+    catch { throw PiliAccountAuthorityError.publicationUnknown }
     var writeFailure: (any Error)?
     do { try await secrets.write(bytes, key: markerKey) }
     catch { writeFailure = error }
     let observed: Data?
     do { observed = try await secrets.read(markerKey) }
     catch { throw PiliAccountAuthorityError.publicationUnknown }
-    guard observed == bytes else { throw PiliAccountAuthorityError.publicationUnknown }
-    return (marker, writeFailure != nil)
+    if observed == bytes { return (marker, writeFailure != nil) }
+    if let writeFailure, observed == previous { throw writeFailure }
+    throw PiliAccountAuthorityError.publicationUnknown
   }
 
   /// Clears the marker only while the observed durable marker is exactly the
@@ -89,7 +95,7 @@ actor PiliAccountAuthorityMarkerStore {
     let remaining: PiliAccountAuthorityMarker?
     do { remaining = try await load() }
     catch { throw PiliAccountAuthorityError.publicationUnknown }
-    if let removeFailure, remaining == nil { return }
+    if removeFailure != nil, remaining == nil { return }
     guard remaining == nil else { throw PiliAccountAuthorityError.publicationUnknown }
   }
 }
