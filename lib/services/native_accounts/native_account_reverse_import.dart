@@ -190,7 +190,7 @@ abstract final class NativeAccountReverseImport {
       ..httpOnly = entry['httpOnly'] == true
       ..sameSite = _sameSite(entry['sameSite']);
     if (expires != null) {
-      _expect(expires is int, 'invalidJar');
+      if (expires is! int) throw const NativeAccountReverseImportException('invalidJar');
       cookie.expires = DateTime.fromMicrosecondsSinceEpoch(expires, isUtc: true);
     }
     if (maxAge != null) cookie.maxAge = maxAge as int;
@@ -228,8 +228,7 @@ abstract final class NativeAccountReverseImport {
     final list = value is List ? value : null;
     if (list == null || list.length != AccountType.values.length) return null;
     final names = [for (final item in list) item];
-    if (!const ['main', 'heartbeat', 'recommend', 'video']
-        .every((expected) => names.contains(expected))) {
+    if (!const ['main', 'heartbeat', 'recommend', 'video'].every(names.contains)) {
       return null;
     }
     return [for (final item in list) item as String];
