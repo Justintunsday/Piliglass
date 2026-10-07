@@ -95,7 +95,6 @@ TESTS = r'''
 import XCTest
 final class ImagePreviewTests: XCTestCase {
   let app = XCUIApplication()
-  var index: XCUIElement { app.staticTexts["image-preview-index"] }
   var image: XCUIElement { app.images["预览大图"].firstMatch }
   override func setUpWithError() throws { continueAfterFailure = false }
   func launch(_ mode: String) {
@@ -108,6 +107,13 @@ final class ImagePreviewTests: XCTestCase {
     expectation(for: NSPredicate(format: "%K == %@", key, value), evaluatedWith: element)
     waitForExpectations(timeout: 6)
   }
+  func assertIndex(_ value: String) {
+    // Match existence and the exact index in one accessibility query. The
+    // failure recording showed 2 / 3 while the separate KVC query timed out.
+    let match = app.staticTexts.matching(identifier: "image-preview-index")
+      .matching(NSPredicate(format: "label == %@", value)).firstMatch
+    XCTAssertTrue(match.waitForExistence(timeout: 6), "Expected gallery index \(value)")
+  }
   func capture(_ name: String) {
     let attachment = XCTAttachment(screenshot: app.screenshot())
     attachment.name = name
@@ -116,8 +122,7 @@ final class ImagePreviewTests: XCTestCase {
   }
   func exerciseGallery() {
     app.buttons["预览图片 2"].tap()
-    XCTAssertTrue(index.waitForExistence(timeout: 5))
-    assertValue(index, "label", "2 / 3")
+    assertIndex("2 / 3")
     XCTAssertTrue(image.waitForExistence(timeout: 10))
     assertValue(image, "value", "1.0 倍")
     image.doubleTap()
@@ -129,9 +134,9 @@ final class ImagePreviewTests: XCTestCase {
     // The pager must receive swipes while the nested zoom scroll view is fitted.
     app.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: 0.5)).press(forDuration: 0.05,
       thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.2, dy: 0.5)))
-    assertValue(index, "label", "3 / 3")
+    assertIndex("3 / 3")
     app.buttons["上一张图片"].tap()
-    assertValue(index, "label", "2 / 3")
+    assertIndex("2 / 3")
     app.buttons["关闭图片预览"].tap()
     XCTAssertTrue(app.buttons["预览图片 2"].waitForExistence(timeout: 5))
   }
@@ -153,7 +158,7 @@ final class ImagePreviewTests: XCTestCase {
     XCTAssertTrue(retry.waitForExistence(timeout: 10))
     retry.tap()
     XCTAssertTrue(retry.waitForExistence(timeout: 10))
-    assertValue(index, "label", "1 / 1")
+    assertIndex("1 / 1")
     capture("image-load-failure")
     app.buttons["关闭图片预览"].tap()
     XCTAssertTrue(app.buttons["预览图片 1"].waitForExistence(timeout: 5))
