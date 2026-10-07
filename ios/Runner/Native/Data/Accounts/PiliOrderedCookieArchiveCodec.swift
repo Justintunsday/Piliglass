@@ -6,12 +6,25 @@ import Foundation
 struct PiliOrderedCookieArchiveCodec: Sendable {
   var limits: PiliOrderedCookieArchiveLimits = .standard
 
+  static let archiveKeys: Set<String> = ["schemaVersion", "ignoreExpires", "provenance",
+    "domainBuckets", "hostBuckets"]
+  static let bucketKeys: Set<String> = ["keyUnits", "paths"]
+  static let pathKeys: Set<String> = ["keyUnits", "cookies"]
+  static let cookieKeys: Set<String> = ["keyUnits", "nameUnits", "valueUnits", "cookieDomainUnits",
+    "cookiePathUnits", "secure", "httpOnly", "sameSite", "expiresMicroseconds", "maxAgeSeconds", "createdSeconds"]
+
   func decode(_ data: Data) throws -> PiliOrderedCookieArchive {
     let limits = try limits.validated()
     guard data.count <= limits.maximumEncodedBytes else { throw Error.resourceLimit }
     var parser = OrderedCookieJSONParser(bytes: Array(data), limits: limits)
-    let fields = try object(parser.parse(), keys: ["schemaVersion", "ignoreExpires", "provenance",
-      "domainBuckets", "hostBuckets"])
+    return try decodeValue(parser.parse()).validated(limits: limits)
+  }
+
+  /// Projects an already-bounded tree produced by the module-internal strict
+  /// parser. Shape/type projection only; the caller supplies the resource
+  /// ledger (standalone decode uses one jar, the account envelope shares one).
+  func decodeValue(_ value: OrderedCookieJSONValue) throws -> PiliOrderedCookieArchive {
+    let fields = try object(value, keys: Self.archiveKeys)
     let schema = try integer(fields["schemaVersion"])
     guard schema == 2 else { throw Error.unsupportedSchema }
     let provenance = try object(required(fields["provenance"]), keys: ["capture", "priorPersistence",
@@ -24,7 +37,6 @@ struct PiliOrderedCookieArchiveCodec: Sendable {
         legacyHiveAttributesIncomplete: boolean(provenance["legacyHiveAttributesIncomplete"]),
         currentBucketOrderComplete: boolean(provenance["currentBucketOrderComplete"])),
       domainBuckets: buckets(fields["domainBuckets"]), hostBuckets: buckets(fields["hostBuckets"]))
-      .validated(limits: limits)
   }
 
   func encode(_ archive: PiliOrderedCookieArchive) throws -> Data {
@@ -38,7 +50,7 @@ struct PiliOrderedCookieArchiveCodec: Sendable {
   }
 
   private typealias Error = PiliOrderedCookieArchiveError
-  private typealias Value = OrderedCookieJSONValue
+  typealias Value = OrderedCookieJSONValue
 
   private func buckets(_ value: Value?) throws -> [PiliOrderedCookieBucket] {
     try array(value).map { value in
@@ -67,7 +79,7 @@ struct PiliOrderedCookieArchiveCodec: Sendable {
       maxAgeSeconds: optionalInteger(f["maxAgeSeconds"]), createdSeconds: integer(f["createdSeconds"]))
   }
 
-  private func object(_ value: Value, keys: Set<String>) throws -> [String: Value] {
+  func object(_ value: Value, keys: Set<String>) throws -> [String: Value] {
     guard case .object(let pairs) = value, pairs.count == keys.count else { throw Error.invalidArchive }
     var fields: [String: Value] = [:]
     for pair in pairs {
@@ -78,13 +90,13 @@ struct PiliOrderedCookieArchiveCodec: Sendable {
     guard Set(fields.keys) == keys else { throw Error.invalidArchive }
     return fields
   }
-  private func required(_ value: Value?) throws -> Value {
+  func required(_ value: Value?) throws -> Value {
     guard let value else { throw Error.invalidArchive }; return value
   }
-  private func array(_ value: Value?) throws -> [Value] {
+  func array(_ value: Value?) throws -> [Value] {
     guard case .array(let values) = try required(value) else { throw Error.invalidArchive }; return values
   }
-  private func integer(_ value: Value?) throws -> Int64 {
+  func integer(_ value: Value?) throws -> Int64 {
     guard case .number(let token) = try required(value),
           !token.contains("."), !token.contains("e"), !token.contains("E"),
           let value = Int64(token) else { throw Error.invalidArchive }
@@ -93,16 +105,16 @@ struct PiliOrderedCookieArchiveCodec: Sendable {
   private func optionalInteger(_ value: Value?) throws -> Int64? {
     if case .null = try required(value) { return nil }; return try integer(value)
   }
-  private func boolean(_ value: Value?) throws -> Bool {
+  func boolean(_ value: Value?) throws -> Bool {
     guard case .bool(let value) = try required(value) else { throw Error.invalidArchive }; return value
   }
-  private func ascii(_ value: Value?) throws -> String {
+  func ascii(_ value: Value?) throws -> String {
     guard case .string(let units) = try required(value), units.units.allSatisfy({ $0 < 128 }) else {
       throw Error.invalidArchive
     }
     return String(decoding: units.units, as: UTF16.self)
   }
-  private func units(_ value: Value?) throws -> PiliCookieUTF16 {
+  func units(_ value: Value?) throws -> PiliCookieUTF16 {
     let values = try array(value)
     // Global archive validation decides whether this is key/name/value capacity.
     guard values.count <= limits.maximumUTF16Units else { throw Error.resourceLimit }
@@ -110,24 +122,24 @@ struct PiliOrderedCookieArchiveCodec: Sendable {
       guard let unit = UInt16(exactly: try integer(value)) else { throw Error.invalidArchive }; return unit
     })
   }
-  private func optionalUnits(_ value: Value?) throws -> PiliCookieUTF16? {
+  func optionalUnits(_ value: Value?) throws -> PiliCookieUTF16? {
     if case .null = try required(value) { return nil }; return try units(value)
   }
 }
 
-private struct OrderedCookieJSONPair {
+struct OrderedCookieJSONPair {
   let key: PiliCookieUTF16
   let value: OrderedCookieJSONValue
 }
 
-private indirect enum OrderedCookieJSONValue {
+indirect enum OrderedCookieJSONValue {
   case null, bool(Bool), number(String), string(PiliCookieUTF16)
   case array([OrderedCookieJSONValue]), object([OrderedCookieJSONPair])
 }
 
 /// JSON grammar and limits are independent from schema validation. No Double or
 /// NSNumber conversion can round a timestamp, coerce a Bool, or accept 1.0 as int.
-private struct OrderedCookieJSONParser {
+struct OrderedCookieJSONParser {
   let bytes: [UInt8]
   let limits: PiliOrderedCookieArchiveLimits
   private var cursor = 0

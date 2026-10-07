@@ -81,7 +81,9 @@
 		A2634BDD46C966733309DD1B /* PiliNativeCookieSelector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 59FAAAC820CF047C217ACB81 /* PiliNativeCookieSelector.swift */; };
 		CF13040C2E800FEAA90FAA0C /* PiliHTTPBodyCodec in Frameworks */ = {isa = PBXBuildFile; productRef = E30400436C99C3E1602FC0F1 /* PiliHTTPBodyCodec */; };
 		6A9E719AD0040AC04EE99E1A /* PiliOrderedCookieArchive.swift in Sources */ = {isa = PBXBuildFile; fileRef = 172B13E5A79B6CF3E44BF95C /* PiliOrderedCookieArchive.swift */; };
+		FBF7420E589C629EA85E0E9B /* PiliAccountLiveMemoryShadow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 79EE3076B041303A549416DC /* PiliAccountLiveMemoryShadow.swift */; };
 		19A581F34040A1B98B2CED17 /* PiliOrderedCookieArchiveCodec.swift in Sources */ = {isa = PBXBuildFile; fileRef = DB6B74A4E4124AB83D07BD74 /* PiliOrderedCookieArchiveCodec.swift */; };
+		42D87350522E696E419FDB3B /* PiliAccountLiveMemoryShadowCodec.swift in Sources */ = {isa = PBXBuildFile; fileRef = 461D1B960DC269ABF25E4E05 /* PiliAccountLiveMemoryShadowCodec.swift */; };
 		C73A9FB2B400411F902BC3A1 /* PiliNativeOrderedCookieReducer.swift in Sources */ = {isa = PBXBuildFile; fileRef = C73A9FB2B400411F902BC3A2 /* PiliNativeOrderedCookieReducer.swift */; };
 		F4F9ADF5863060B76D08AC79 /* PiliOrderedCookieStagingStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C434866A40C62424F03FC66C /* PiliOrderedCookieStagingStore.swift */; };
 /* End PBXBuildFile section */
@@ -184,7 +186,9 @@
 		C59833C892D1075470BFEB17 /* PiliNativeCookieParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PiliNativeCookieParser.swift; sourceTree = "<group>"; };
 		59FAAAC820CF047C217ACB81 /* PiliNativeCookieSelector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PiliNativeCookieSelector.swift; sourceTree = "<group>"; };
 		172B13E5A79B6CF3E44BF95C /* PiliOrderedCookieArchive.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PiliOrderedCookieArchive.swift; sourceTree = "<group>"; };
+		79EE3076B041303A549416DC /* PiliAccountLiveMemoryShadow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PiliAccountLiveMemoryShadow.swift; sourceTree = "<group>"; };
 		DB6B74A4E4124AB83D07BD74 /* PiliOrderedCookieArchiveCodec.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PiliOrderedCookieArchiveCodec.swift; sourceTree = "<group>"; };
+		461D1B960DC269ABF25E4E05 /* PiliAccountLiveMemoryShadowCodec.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PiliAccountLiveMemoryShadowCodec.swift; sourceTree = "<group>"; };
 		C73A9FB2B400411F902BC3A2 /* PiliNativeOrderedCookieReducer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PiliNativeOrderedCookieReducer.swift; sourceTree = "<group>"; };
 		C434866A40C62424F03FC66C /* PiliOrderedCookieStagingStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PiliOrderedCookieStagingStore.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -463,6 +467,7 @@
 			isa = PBXGroup;
 			children = (
 				172B13E5A79B6CF3E44BF95C /* PiliOrderedCookieArchive.swift */,
+				79EE3076B041303A549416DC /* PiliAccountLiveMemoryShadow.swift */,
 				4ECB985E2FA8FD588F4CFF8C /* PiliAccountRepository.swift */,
 				1C41030C5583C3179EA46900 /* PiliHTTPRequestContext.swift */,
 			);
@@ -473,6 +478,7 @@
 			isa = PBXGroup;
 			children = (
 				DB6B74A4E4124AB83D07BD74 /* PiliOrderedCookieArchiveCodec.swift */,
+				461D1B960DC269ABF25E4E05 /* PiliAccountLiveMemoryShadowCodec.swift */,
 				C73A9FB2B400411F902BC3A2 /* PiliNativeOrderedCookieReducer.swift */,
 				8A8AA1D63495F012D864BEB8 /* PiliAccountStagingBridgeCodec.swift */,
 				C36E25B49F6BAE87008C5D72 /* PiliAccountFlutterRepository.swift */,
@@ -742,8 +748,10 @@
 			files = (
 				F4F9ADF5863060B76D08AC79 /* PiliOrderedCookieStagingStore.swift in Sources */,
 				19A581F34040A1B98B2CED17 /* PiliOrderedCookieArchiveCodec.swift in Sources */,
+				42D87350522E696E419FDB3B /* PiliAccountLiveMemoryShadowCodec.swift in Sources */,
 				C73A9FB2B400411F902BC3A1 /* PiliNativeOrderedCookieReducer.swift in Sources */,
 				6A9E719AD0040AC04EE99E1A /* PiliOrderedCookieArchive.swift in Sources */,
+				FBF7420E589C629EA85E0E9B /* PiliAccountLiveMemoryShadow.swift in Sources */,
 				A2634BDD46C966733309DD1B /* PiliNativeCookieSelector.swift in Sources */,
 				05630C88A9EDC7B57A1F66C4 /* PiliNativeCookieParser.swift in Sources */,
 				46EC3D089DAE46AA88E9335D /* PiliGeetestWebSession.swift in Sources */,

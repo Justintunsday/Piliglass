@@ -128,42 +128,40 @@ struct PiliOrderedCookieArchive: Sendable, Equatable, Encodable {
   let hostBuckets: [PiliOrderedCookieBucket]
 
   func validated(limits: PiliOrderedCookieArchiveLimits = .standard) throws -> Self {
-    let limits = try limits.validated()
+    var budget = try PiliOrderedCookieArchiveBudget(limits: limits)
+    return try validated(budget: &budget)
+  }
+
+  /// Shared-ledger entry for one complete account capture. The caller owns the
+  /// ledger across metadata, raw keys, credentials and every jar; each jar still
+  /// runs all of its own duplicate, attribute and raw-key checks.
+  func validated(budget: inout PiliOrderedCookieArchiveBudget) throws -> Self {
+    let limits = budget.limits
     guard schemaVersion == 2 else { throw PiliOrderedCookieArchiveError.unsupportedSchema }
     // CA1 accepts the actual Dart exporter contract only. Future provenance
     // policies get their own codec version instead of asserting known history.
     guard provenance.capture == "live", provenance.legacyHiveAttributesIncomplete,
           provenance.currentBucketOrderComplete else { throw PiliOrderedCookieArchiveError.invalidArchive }
-    var buckets = 0, cookies = 0, units = 0
-    func count(_ value: PiliCookieUTF16, maximum: Int) throws {
-      guard value.units.count <= maximum, value.units.count <= limits.maximumUTF16Units - units else {
-        throw PiliOrderedCookieArchiveError.resourceLimit
-      }
-      units += value.units.count
-    }
     for group in [domainBuckets, hostBuckets] {
       var outerKeys = Set<PiliCookieUTF16>()
       for bucket in group {
         guard outerKeys.insert(bucket.keyUnits).inserted else { throw PiliOrderedCookieArchiveError.duplicateKey }
-        guard buckets < limits.maximumBuckets else { throw PiliOrderedCookieArchiveError.resourceLimit }
-        buckets += 1
-        try count(bucket.keyUnits, maximum: limits.maximumBucketKeyUnits)
+        try budget.addBucket()
+        try budget.count(bucket.keyUnits, maximum: limits.maximumBucketKeyUnits)
         var pathKeys = Set<PiliCookieUTF16>()
         for path in bucket.paths {
           guard pathKeys.insert(path.keyUnits).inserted else { throw PiliOrderedCookieArchiveError.duplicateKey }
-          guard buckets < limits.maximumBuckets else { throw PiliOrderedCookieArchiveError.resourceLimit }
-          buckets += 1
-          try count(path.keyUnits, maximum: limits.maximumBucketKeyUnits)
+          try budget.addBucket()
+          try budget.count(path.keyUnits, maximum: limits.maximumBucketKeyUnits)
           var cookieKeys = Set<PiliCookieUTF16>()
           for cookie in path.cookies {
             guard cookieKeys.insert(cookie.keyUnits).inserted else { throw PiliOrderedCookieArchiveError.duplicateKey }
-            guard cookies < limits.maximumCookies else { throw PiliOrderedCookieArchiveError.resourceLimit }
-            cookies += 1
-            try count(cookie.keyUnits, maximum: limits.maximumBucketKeyUnits)
-            try count(cookie.nameUnits, maximum: limits.maximumNameUnits)
-            try count(cookie.valueUnits, maximum: limits.maximumValueUnits)
-            if let domain = cookie.cookieDomainUnits { try count(domain, maximum: limits.maximumBucketKeyUnits) }
-            if let path = cookie.cookiePathUnits { try count(path, maximum: limits.maximumBucketKeyUnits) }
+            try budget.addCookie()
+            try budget.count(cookie.keyUnits, maximum: limits.maximumBucketKeyUnits)
+            try budget.count(cookie.nameUnits, maximum: limits.maximumNameUnits)
+            try budget.count(cookie.valueUnits, maximum: limits.maximumValueUnits)
+            if let domain = cookie.cookieDomainUnits { try budget.count(domain, maximum: limits.maximumBucketKeyUnits) }
+            if let path = cookie.cookiePathUnits { try budget.count(path, maximum: limits.maximumBucketKeyUnits) }
             guard cookie.createdSeconds >= 0 else { throw PiliOrderedCookieArchiveError.invalidArchive }
             if let expires = cookie.expiresMicroseconds {
               guard expires >= -Self.maximumDateTimeMicroseconds,
@@ -177,4 +175,56 @@ struct PiliOrderedCookieArchive: Sendable, Equatable, Encodable {
     }
     return self
   }
+}
+
+/// Cumulative ledger for one account-capture candidate. Standalone jar decode
+/// creates its own; the full account envelope shares one ledger across metadata,
+/// raw keys, credentials and every jar. Counts check the remaining budget before
+/// adding, so no candidate silently exceeds the declared limits.
+struct PiliOrderedCookieArchiveBudget {
+  let limits: PiliOrderedCookieArchiveLimits
+  private var buckets = 0
+  private var cookies = 0
+  private var units = 0
+
+  init(limits: PiliOrderedCookieArchiveLimits) throws {
+    self.limits = try limits.validated()
+  }
+
+  mutating func reserveUnits(_ count: Int) throws {
+    guard count >= 0, count <= limits.maximumUTF16Units - units else {
+      throw PiliOrderedCookieArchiveError.resourceLimit
+    }
+    units += count
+  }
+
+  mutating func countUnits(_ count: Int, maximum: Int) throws {
+    guard count >= 0, count <= maximum, count <= limits.maximumUTF16Units - units else {
+      throw PiliOrderedCookieArchiveError.resourceLimit
+    }
+    units += count
+  }
+
+  mutating func count(_ value: PiliCookieUTF16?, maximum: Int) throws {
+    guard let value else { return }
+    try countUnits(value.units.count, maximum: maximum)
+  }
+
+  mutating func addBuckets(_ count: Int) throws {
+    guard count >= 0, count <= limits.maximumBuckets - buckets else {
+      throw PiliOrderedCookieArchiveError.resourceLimit
+    }
+    buckets += count
+  }
+
+  mutating func addBucket() throws { try addBuckets(1) }
+
+  mutating func addCookies(_ count: Int) throws {
+    guard count >= 0, count <= limits.maximumCookies - cookies else {
+      throw PiliOrderedCookieArchiveError.resourceLimit
+    }
+    cookies += count
+  }
+
+  mutating func addCookie() throws { try addCookies(1) }
 }
