@@ -100,6 +100,33 @@ private actor TransactionFaultVault: PiliAccountSecretStore {
       try check(restarted?.revision == base.revision && restarted?.records[1].generation == record.generation,
                 "capture-local identity is not renumbered")
       let second = PiliAccountEnvelopeTransactionStore(vault: restartedVault)
+      _ = try await second.applyTemporarySelection(recordKeyUnits: key,
+        expectedGeneration: record.generation, purpose: .heartbeat)
+      let afterSelection = try await restartedVault.loadShadow()
+      try check(afterSelection?.selections == [0, record.record, 0, 0] &&
+        afterSelection?.history == record.record,
+        "temporary selection updates only the slot and derives actual history")
+      _ = try await second.applyCredentials(recordKeyUnits: key, expectedGeneration: record.generation,
+        accessKeyUnits: PiliCookieUTF16(units: Array("synthetic-tx-access".utf16)),
+        refreshTokenUnits: nil)
+      var afterCredentials = try await restartedVault.loadShadow()
+      try check(afterCredentials?.records[1].accessKeyUnits?.units == Array("synthetic-tx-access".utf16) &&
+        afterCredentials?.records[1].refreshTokenUnits == nil &&
+        afterCredentials?.records[2].accessKeyUnits == base.records[2].accessKeyUnits,
+        "durable credentials replacement stays inside one record")
+      do {
+        _ = try await second.applyCredentials(recordKeyUnits: key, expectedGeneration: record.generation,
+          accessKeyUnits: PiliCookieUTF16(units: Array(repeating: 97, count: 65537)),
+          refreshTokenUnits: nil)
+        throw TransactionFixtureError.failed("oversized credentials accepted")
+      } catch PiliAccountLiveMemoryShadowError.resourceLimit { checks += 1 }
+      afterCredentials = try await restartedVault.loadShadow()
+      try check(afterCredentials?.records[1].accessKeyUnits?.units == Array("synthetic-tx-access".utf16),
+                "oversized credentials never publish")
+      _ = try await second.applyActivated(recordKeyUnits: key, expectedGeneration: record.generation,
+                                          activated: false)
+      let afterActivated = try await restartedVault.loadShadow()
+      try check(afterActivated?.records[1].activated == false, "durable activated replacement")
       _ = try await second.applyCookieDelete(recordKeyUnits: key,
         expectedGeneration: record.generation, host: "bilibili.com", withDomainSharedCookie: true)
       let afterDelete = try await restartedVault.loadShadow()

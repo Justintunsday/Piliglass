@@ -18,10 +18,11 @@ struct PiliAccountShadowTransactionReceipt: Sendable, Equatable {
   let authoritySwitchAllowed: Bool
 }
 
-/// Durable single-account Cookie transaction over the capture-local shadow.
-/// It mutates one exact record's ordered jar through the production reducer,
-/// revalidates the whole envelope with the shared cumulative ledger and only
-/// then publishes a new immutable candidate through the vault pointer.
+/// Durable single-account transaction over the capture-local shadow. It mutates
+/// one exact record (ordered jar, temporary selection, credentials, activated)
+/// through production values, revalidates the whole envelope with the shared
+/// cumulative ledger and only then publishes a new immutable candidate through
+/// the vault pointer.
 ///
 /// This is not an authority handoff: generations stay capture-local, the
 /// revision is not renumbered and every receipt states both gates false.
@@ -43,30 +44,80 @@ actor PiliAccountEnvelopeTransactionStore {
   func applyCookieSave(recordKeyUnits: PiliCookieUTF16, expectedGeneration: Int64,
                        _ save: PiliAccountShadowCookieSave) async throws
     -> PiliAccountShadowTransactionReceipt {
-    try await mutate(recordKeyUnits: recordKeyUnits, expectedGeneration: expectedGeneration) { jar in
-      try self.reducer.save(jar, fields: save.fields, representation: save.representation,
-                            location: save.location, nowMicroseconds: save.nowMicroseconds)
+    try await transaction(recordKeyUnits: recordKeyUnits, expectedGeneration: expectedGeneration) { current, index in
+      let jar = try self.reducer.save(current.records[index].jar, fields: save.fields,
+                                      representation: save.representation, location: save.location,
+                                      nowMicroseconds: save.nowMicroseconds)
+      return self.replaceJar(current, index: index, jar: jar)
     }
   }
 
   func applyCookieDelete(recordKeyUnits: PiliCookieUTF16, expectedGeneration: Int64,
                          host: String, withDomainSharedCookie: Bool) async throws
     -> PiliAccountShadowTransactionReceipt {
-    try await mutate(recordKeyUnits: recordKeyUnits, expectedGeneration: expectedGeneration) { jar in
-      try self.reducer.delete(jar, host: host, withDomainSharedCookie: withDomainSharedCookie)
+    try await transaction(recordKeyUnits: recordKeyUnits, expectedGeneration: expectedGeneration) { current, index in
+      let jar = try self.reducer.delete(current.records[index].jar, host: host,
+                                        withDomainSharedCookie: withDomainSharedCookie)
+      return self.replaceJar(current, index: index, jar: jar)
     }
   }
 
   func applyCookieDeleteAll(recordKeyUnits: PiliCookieUTF16, expectedGeneration: Int64) async throws
     -> PiliAccountShadowTransactionReceipt {
-    try await mutate(recordKeyUnits: recordKeyUnits, expectedGeneration: expectedGeneration) { jar in
-      try self.reducer.deleteAll(jar)
+    try await transaction(recordKeyUnits: recordKeyUnits, expectedGeneration: expectedGeneration) { current, index in
+      let jar = try self.reducer.deleteAll(current.records[index].jar)
+      return self.replaceJar(current, index: index, jar: jar)
     }
   }
 
-  private func mutate(recordKeyUnits: PiliCookieUTF16, expectedGeneration: Int64,
-                      _ transform: (PiliOrderedCookieArchive) throws -> PiliOrderedCookieArchive)
-    async throws -> PiliAccountShadowTransactionReceipt {
+  /// Temporary selection only changes the effective slot; persisted purposes
+  /// and every other record stay untouched. History follows the actual source
+  /// policy: a login heartbeat uses its own slot, otherwise main.
+  func applyTemporarySelection(recordKeyUnits: PiliCookieUTF16, expectedGeneration: Int64,
+                               purpose: PiliAccountPurpose) async throws
+    -> PiliAccountShadowTransactionReceipt {
+    try await transaction(recordKeyUnits: recordKeyUnits, expectedGeneration: expectedGeneration) { current, index in
+      var selections = current.selections
+      selections[purpose.index] = current.records[index].record
+      let heartbeat = selections[1]
+      let history = current.records[heartbeat].isLogin ? heartbeat : selections[0]
+      return self.replace(current, selections: selections, history: history)
+    }
+  }
+
+  func applyCredentials(recordKeyUnits: PiliCookieUTF16, expectedGeneration: Int64,
+                        accessKeyUnits: PiliCookieUTF16?, refreshTokenUnits: PiliCookieUTF16?) async throws
+    -> PiliAccountShadowTransactionReceipt {
+    try await transaction(recordKeyUnits: recordKeyUnits, expectedGeneration: expectedGeneration) { current, index in
+      let record = current.records[index]
+      var records = current.records
+      records[index] = PiliAccountLiveMemoryRecord(
+        record: record.record, generation: record.generation, storageKeyUnits: record.storageKeyUnits,
+        mid: record.mid, isLogin: record.isLogin, accessKeyUnits: accessKeyUnits,
+        refreshTokenUnits: refreshTokenUnits, persistedPurposes: record.persistedPurposes,
+        activated: record.activated, jar: record.jar)
+      return self.replace(current, records: records)
+    }
+  }
+
+  func applyActivated(recordKeyUnits: PiliCookieUTF16, expectedGeneration: Int64,
+                      activated: Bool) async throws -> PiliAccountShadowTransactionReceipt {
+    try await transaction(recordKeyUnits: recordKeyUnits, expectedGeneration: expectedGeneration) { current, index in
+      let record = current.records[index]
+      var records = current.records
+      records[index] = PiliAccountLiveMemoryRecord(
+        record: record.record, generation: record.generation, storageKeyUnits: record.storageKeyUnits,
+        mid: record.mid, isLogin: record.isLogin, accessKeyUnits: record.accessKeyUnits,
+        refreshTokenUnits: record.refreshTokenUnits, persistedPurposes: record.persistedPurposes,
+        activated: activated, jar: record.jar)
+      return self.replace(current, records: records)
+    }
+  }
+
+  private func transaction(recordKeyUnits: PiliCookieUTF16, expectedGeneration: Int64,
+                           _ transform: (PiliAccountLiveMemoryShadow, Int) throws
+                             -> PiliAccountLiveMemoryShadow) async throws
+    -> PiliAccountShadowTransactionReceipt {
     try beginOperation()
     defer { operationInProgress = false }
     guard let current = try await vault.loadShadow() else {
@@ -81,27 +132,39 @@ actor PiliAccountEnvelopeTransactionStore {
     guard record.generation == expectedGeneration, record.isLogin else {
       throw PiliAccountShadowTransactionError.staleGeneration
     }
-    let mutated = try transform(record.jar)
-    var records = current.records
-    records[index] = PiliAccountLiveMemoryRecord(
-      record: record.record, generation: record.generation,
-      storageKeyUnits: record.storageKeyUnits, mid: record.mid, isLogin: record.isLogin,
-      accessKeyUnits: record.accessKeyUnits, refreshTokenUnits: record.refreshTokenUnits,
-      persistedPurposes: record.persistedPurposes, activated: record.activated, jar: mutated)
-    let candidate = PiliAccountLiveMemoryShadow(
-      schemaVersion: current.schemaVersion, scope: current.scope, identityScope: current.identityScope,
-      revision: current.revision, durableIdentityConfigured: current.durableIdentityConfigured,
-      durabilityVerified: current.durabilityVerified,
-      authoritySwitchAllowed: current.authoritySwitchAllowed,
-      nativeWritesAllowed: current.nativeWritesAllowed, records: records,
-      storedOrder: current.storedOrder, ownerOrder: current.ownerOrder,
-      selectionPurposes: current.selectionPurposes, selections: current.selections,
-      history: current.history)
+    let candidate = try transform(current, index)
     // The complete candidate must still fit the shared cumulative ledger.
     _ = try candidate.validated(limits: codec.limits)
     let publication = try await vault.importShadow(codec.encode(candidate))
     return .init(transactionID: publication.transactionID, record: record.record,
                  nativeWritesAllowed: false, authoritySwitchAllowed: false)
+  }
+
+  private func replaceJar(_ current: PiliAccountLiveMemoryShadow, index: Int,
+                          jar: PiliOrderedCookieArchive) -> PiliAccountLiveMemoryShadow {
+    let record = current.records[index]
+    var records = current.records
+    records[index] = PiliAccountLiveMemoryRecord(
+      record: record.record, generation: record.generation, storageKeyUnits: record.storageKeyUnits,
+      mid: record.mid, isLogin: record.isLogin, accessKeyUnits: record.accessKeyUnits,
+      refreshTokenUnits: record.refreshTokenUnits, persistedPurposes: record.persistedPurposes,
+      activated: record.activated, jar: jar)
+    return replace(current, records: records)
+  }
+
+  private func replace(_ current: PiliAccountLiveMemoryShadow,
+                       records: [PiliAccountLiveMemoryRecord]? = nil,
+                       selections: [Int]? = nil,
+                       history: Int? = nil) -> PiliAccountLiveMemoryShadow {
+    PiliAccountLiveMemoryShadow(
+      schemaVersion: current.schemaVersion, scope: current.scope, identityScope: current.identityScope,
+      revision: current.revision, durableIdentityConfigured: current.durableIdentityConfigured,
+      durabilityVerified: current.durabilityVerified,
+      authoritySwitchAllowed: current.authoritySwitchAllowed,
+      nativeWritesAllowed: current.nativeWritesAllowed,
+      records: records ?? current.records, storedOrder: current.storedOrder,
+      ownerOrder: current.ownerOrder, selectionPurposes: current.selectionPurposes,
+      selections: selections ?? current.selections, history: history ?? current.history)
   }
 
   private func beginOperation() throws {
