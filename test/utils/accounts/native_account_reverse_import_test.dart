@@ -95,6 +95,7 @@ void main() {
     final paths = (buckets.first['paths']! as List).cast<Map>();
     final cookies = (paths.first['cookies']! as List).cast<Map>()
       ..removeWhere((cookie) => _units(cookie['nameUnits']) == 'DedeUserID');
+    expect(cookies.any((cookie) => _units(cookie['nameUnits']) == 'DedeUserID'), isFalse);
     expect(() => NativeAccountReverseImport.decode(mutated),
       throwsA(isA<NativeAccountReverseImportException>()
         .having((error) => error.code, 'code', 'missingCapturedIdentity')));
