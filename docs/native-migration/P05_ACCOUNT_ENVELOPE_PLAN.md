@@ -4,6 +4,21 @@
 前置 capture 组 `6673e38` 已完成同 SHA release5 + preview4；现按本计划接入本组生产代码。
 本组不创建 Keychain 集合 manifest、bridge 命令、Native writer、runtime 开关或新 UI。
 
+## 实施与验收状态（2026-10-07 更新）
+
+计划中的 DTO/codec、隔离 Keychain shadow 与 reset port 已实施并通过同 SHA
+`25451968781cf8732b0c55294583f5cdac35d8b2` 的 release5 + preview4 全部 9 jobs：
+- `0aa98b5` 共享 strict parser/decodeValue 与累计 jar budget；新增 Domain DTO 与
+  Data strict codec，一次 parse + resource preflight + 共享 ledger；四能力标志固定 false。
+- `c2bc5ab` 7 live + 1 cold 真实 Dart producer goldens。
+- `f361947` oracle/driver/第九强制 outcome；首轮 `SameSite` fixture 失败，`d1ef763` 修复。
+- `2545196` `PiliAccountEnvelopeStagingStore` 隔离 Keychain shadow：唯一 manifest 指针、
+  record reread、写后错误读回、unknown ack 保留双记录、operation gate、cancel 前不发布。
+实际证据：envelope 108 checks/43 负例、staging 36 checks（真实 Security Keychain 重启与
+故障矩阵）、账户 144 tests、Runner BUILD SUCCEEDED/109.1MB/FFmpeg 顺序、9 outcomes success。
+仍未交付：durable record identity、writer 冻结、authority handoff、真实账户/设备验收。
+durable 单账户 Cookie transaction（reducer 接入 shadow store）已实现、尚未验收。
+
 ## 实际来源与可以复用的边界
 
 - `lib/utils/accounts/account_live_memory_shadow.dart` 当前同步捕获真实 Box.toMap

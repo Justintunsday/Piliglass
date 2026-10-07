@@ -7,16 +7,28 @@
 preview4 jobs。`74101fa` 的 CA2 纯 Cookie mutation candidate 与 CA3 默认 Dart
 response/legacy persistence port 也已通过同 SHA 全部9 jobs。`74e8a4d` 的
 install/import 与登录账户删除默认 Dart port 已通过全部9 jobs。`6673e38` 的完整
-账户只读 live-memory capture 也已通过同 SHA 全部9 jobs；下一组按
-[原生完整账户格式计划](P05_ACCOUNT_ENVELOPE_PLAN.md) 接入 Native DTO/codec 与默认
-reset persistence port，尚未验收。账户 authority/runtime 尚未切换。
+账户只读 live-memory capture 也已通过同 SHA 全部9 jobs。**`2545196` 的完整账户
+Native envelope/strict codec/隔离 Keychain shadow 与默认 reset port 已通过同 SHA
+release5 + preview4 全部9 jobs（9 个强制 outcome 全部 success）**；详见
+[原生完整账户格式计划](P05_ACCOUNT_ENVELOPE_PLAN.md)。账户 authority/runtime 尚未切换。
 
-下一组默认 reset port 已实现、**尚未验收**：`AccountResetPersistencePort` 的 const
-Dart 实现直接返回现 jar.deleteAll / Hive Box.clear Future，仅接入匿名 delete 与
-Accounts.clear 两处。调用前的revoke/fields及调用后的reset completion/reseed/activation
-不变，clear 保留并发 Future.wait 与 Future<int> 原返回语义。五项真实 Hive/账户 fixture
-包括closed Box错误与匿名reset部分成功；本机未运行Dart，不将补丁检查视为编译成功。
-与完整 Native envelope 同组汇合后执行全部真实 Actions。
+**`25451968781cf8732b0c55294583f5cdac35d8b2` 已验收 envelope + reset port 有限切片**：
+首轮 `f361947` 的 [release](https://github.com/Justintunsday/Piliglass/actions/runs/37643223421)
+实际 `dart analyze --fatal-infos` 报 fixture `SameSite` 未定义（cookie_jar 只再导出
+Cookie，`SameSite` 属 dart:io），账户组与 envelope 均未执行；修复 `d1ef763` 后同 SHA
+[release 37645667888](https://github.com/Justintunsday/Piliglass/actions/runs/37645667888)
+（build job 曾因 runner `pub.dev` socket error 在既有 Apply Patch 失败，同 SHA 重跑后
+5/5 jobs success）与 [preview 37645672968](https://github.com/Justintunsday/Piliglass/actions/runs/37645672968)
+4/4 jobs success。实际读取 artifacts/log：envelope driver `status=passed`，8 个真实
+Dart producer tests、10 个 actual Dart 观察、2 个 fresh goldens、108 项 Native oracle
+检查、43 个精确负例、36 项真实 Security Keychain staging 检查；账户组 analyze 无问题、
+`flutter test test/utils/accounts/` 实际 144 tests 全过（含新增 8 个 producer tests 与
+重置 port 回归）、tracker 72 checks；Runner `BUILD SUCCEEDED`、109.1MB、实际
+`Verified Aether FFmpeg precedes media-kit FFmpeg in Mach-O load order`；聚合门禁 9 个
+outcome（含新 `ACCOUNT_ENVELOPE_OUTCOME`）全部 success。本组只交付 capture-local
+只读格式、严格 codec 与隔离 shadow 持久化；writer 未冻结、无 durable identity、
+无 authority/写入权限，reset port 仍是默认 Dart 转发。下一片 durable 单账户 Cookie
+transaction 已实现、尚未验收。
 CA1 首组的 exporter、
 严格 UTF16/有序格式及 Keychain staging
 已分五个独立提交推送，集成代码 `f11329b` 首次 CI 未通过。
