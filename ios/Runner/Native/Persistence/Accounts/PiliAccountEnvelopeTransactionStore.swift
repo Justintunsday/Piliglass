@@ -76,9 +76,17 @@ actor PiliAccountEnvelopeTransactionStore {
   func applyTemporarySelection(recordKeyUnits: PiliCookieUTF16, expectedGeneration: Int64,
                                purpose: PiliAccountPurpose) async throws
     -> PiliAccountShadowTransactionReceipt {
-    try await transaction(recordKeyUnits: recordKeyUnits, expectedGeneration: expectedGeneration) { current, index in
+    // The source order is fixed: main, heartbeat, recommend, video.
+    let slot: Int
+    switch purpose {
+    case .main: slot = 0
+    case .heartbeat: slot = 1
+    case .recommend: slot = 2
+    case .video: slot = 3
+    }
+    return try await transaction(recordKeyUnits: recordKeyUnits, expectedGeneration: expectedGeneration) { current, index in
       var selections = current.selections
-      selections[purpose.index] = current.records[index].record
+      selections[slot] = current.records[index].record
       let heartbeat = selections[1]
       let history = current.records[heartbeat].isLogin ? heartbeat : selections[0]
       return self.replace(current, selections: selections, history: history)
