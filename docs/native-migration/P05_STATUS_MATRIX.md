@@ -1,30 +1,41 @@
 # P05 状态矩阵与剩余缺口（交付审核版）
 
 2026-10-07（Asia/Hong_Kong）。本文件对应当前分支 `codex/native-migration` 的最终
-交付 SHA `eeed9abd7ebeb2915fb173aef0846c4baf12afc5`。结论：**P05 未完成**；本阶段
-交付的是完整账户只读 capture-local 格式、严格 codec、隔离 Keychain shadow 持久化与
-shadow-only 单账户 Cookie durable transaction，外加默认 Dart reset port 的 CI 验收。
+交付 SHA `d2058d3b6efadce6b1c2664ffd7fe2a7e3df9d41`。结论：**P05 未完成**；本阶段
+交付的是完整账户只读 capture-local 格式、严格 codec、隔离 Keychain shadow 持久化、
+shadow-only 单账户 durable transaction（Cookie save/delete/deleteAll、临时选择、
+credentials、activated），外加默认 Dart reset port 的 CI 验收。
 账户/登录/Cookie/签名的生产 authority 仍是 Dart/Hive/Dio，Flutter runtime 保留。
 
-## 同 SHA CI 证据（eeed9ab）
+## 同 SHA CI 证据
 
-- release [37652089143](https://github.com/Justintunsday/Piliglass/actions/runs/37652089143)
+最终 SHA `d2058d3`：
+
+- release [37656023018](https://github.com/Justintunsday/Piliglass/actions/runs/37656023018)
   5/5 jobs success；聚合门禁 9 个 outcome 全部 success（含第九个
   `ACCOUNT_ENVELOPE_OUTCOME`）；Runner `BUILD SUCCEEDED`、Runner.app 109.1MB、
   实际 `Verified Aether FFmpeg precedes media-kit FFmpeg in Mach-O load order`。
-- preview [37652094105](https://github.com/Justintunsday/Piliglass/actions/runs/37652094105)
+- preview [37656028842](https://github.com/Justintunsday/Piliglass/actions/runs/37656028842)
   4/4 jobs success（player-controls、account-pages、image-preview、preview）。
 - envelope artifact 实际输出：`status=passed`，8 个真实 Dart producer tests、10 个
   actual Dart 观察、2 个 fresh goldens、108 项 Native oracle checks、43 个精确负例、
-  36 项真实 Security Keychain staging checks、24 项 durable transaction checks。
+  36 项真实 Security Keychain staging checks、29 项 durable transaction checks。
 - 账户组 artifact：定向 analyze `No issues found!`、`flutter test test/utils/accounts/`
   实际 `+144: All tests passed!`（含新增 8 producer tests 与 reset port 五项回归）、
   72 项 tracker checks。
-- 过程记录：首轮 release `37643223421` 实际 `--fatal-infos` 报 fixture `SameSite`
-  未定义（修复 `d1ef763`）；第二轮 `37645667888` 的 build job 曾因 runner `pub.dev`
-  socket error 在既有 `Apply Patch` 失败，同 SHA 重跑后 5/5 success。`continue-on-error`
-  step 的 surface conclusion 未被当作证据，验收以 driver `summary.json`、artifact 与
-  聚合门禁 outcome 为准。
+
+前一验收 SHA `eeed9ab`（Cookie-only transaction）：
+
+- release [37652089143](https://github.com/Justintunsday/Piliglass/actions/runs/37652089143)
+  5/5、preview [37652094105](https://github.com/Justintunsday/Piliglass/actions/runs/37652094105)
+  4/4；envelope `status=passed`、transaction 24 checks。
+
+过程记录：首轮 release `37643223421` 实际 `--fatal-infos` 报 fixture `SameSite`
+未定义（修复 `d1ef763`）；第二轮 `37645667888` 的 build job 曾因 runner `pub.dev`
+socket error 在既有 `Apply Patch` 失败，同 SHA 重跑后 5/5 success；扩展切片首版
+`33345be` 的 Swift enum `.index` 编译错误在实跑前发现并由 `d2058d3` 修复，旧 run
+被取消替代。`continue-on-error` step 的 surface conclusion 未被当作证据，验收以
+driver `summary.json`、artifact 与聚合门禁 outcome 为准。
 
 ## 已实现并 CI 验收的切片
 
@@ -34,7 +45,7 @@ shadow-only 单账户 Cookie durable transaction，外加默认 Dart reset port 
 | capture-local envelope DTO/codec | `PiliAccountLiveMemoryShadow.swift`、`PiliAccountLiveMemoryShadowCodec.swift` | 一次 parse + resource preflight + Domain 共享 ledger；全部 records/key/credential/jar/order/selections/history；四能力 flag 固定 false | 只读格式 |
 | 失败关闭的 reset port | `account_reset_persistence_port.dart` + 两处调用 | 匿名 jar.deleteAll 与 Hive clear 的默认 Dart 转发；生命周期顺序不变 | 非 Native authority |
 | 隔离 Keychain shadow | `PiliAccountEnvelopeStagingStore.swift` | 唯一 manifest 指针、record 全量 reread、写后错误读回、unknown ack 保留双记录、operation gate、cancel 前不发布 | shadow only |
-| shadow 单账户 Cookie 事务 | `PiliAccountEnvelopeTransactionStore.swift` | 按 raw key + generation 定位单 record，经已对照 Dart 的 ordered reducer 变更，累计 ledger 重验，vault finger pointer 发布 | 仅 Cookie save/delete/deleteAll |
+| shadow 单账户事务 | `PiliAccountEnvelopeTransactionStore.swift` | 按 raw key + generation 定位单 record；Cookie save/delete/deleteAll 经已对照 Dart 的 ordered reducer；临时 selection（派生 history）、credentials、activated 为显式值变更；全部候选先过累计 ledger 再发布 pointer | shadow only；持久用途/durable identity 未做 |
 | 跨语言对照 | `tool/check_native_account_*`、三个 Dart producer/fixture | fresh goldens 三阶段 hash、独立 JSON oracle、真实 Keychain/故障矩阵 | 仅 synthetic secrets |
 
 ## 当前生产数据流（authority = Dart）
@@ -94,8 +105,8 @@ Dart Accounts live registry -> NativeAccountLiveMemoryCaptureService（checkpoin
 
 ## 剩余缺口（后续切片）
 
-1. **CA2 剩余**：selection/credentials/activated/install 的 durable 事务；账号级
-   operation gate 与 durable commit receipt。
+1. **CA2 剩余**：持久用途（`Accounts.set` 的 type add/remove 双账户语义）与
+   install/import/buvid 补值的 durable 事务；durable commit receipt 与账号级排队。
 2. **CA3**：全部 reader/writer 收口到同一 authority；Dart proxy 与只读展示缓存；
    credential reader adapter；在途 writer 屏障。
 3. **CA4**：durable record identity、authority marker、freeze/drain/export/publish

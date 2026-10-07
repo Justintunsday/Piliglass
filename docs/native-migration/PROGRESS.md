@@ -42,6 +42,17 @@ revision、不生成 durable identity、无 authority；selection/credentials/ac
 统一 reader/writer、durable handoff/reverse import 与真实账户/设备验收尚未交付。
 P05 当前矩阵与剩余缺口见 [P05_STATUS_MATRIX.md](P05_STATUS_MATRIX.md)。
 
+**`d2058d3b6efadce6b1c2664ffd7fe2a7e3df9d41` 已验收 shadow transaction 扩展**：同 SHA
+[release 37656023018](https://github.com/Justintunsday/Piliglass/actions/runs/37656023018)
+5/5 与 [preview 37656028842](https://github.com/Justintunsday/Piliglass/actions/runs/37656028842)
+4/4 success；driver `status=passed`，transaction 29 checks（原 Cookie save/delete/deleteAll
+加真实 Keychain 重启、故障矩阵，另新增临时 selection 与 history、credentials 替换、
+超大 credentials 拒绝、activated），108 oracle/43 负例/36 staging 不变；账户 144 tests、
+analyze 无问题、9 outcomes success、Runner BUILD SUCCEEDED/109.1MB/FFmpeg 顺序通过。
+扩展首版 `33345be` 的 Swift enum `.index` 编译错误在实跑前发现，`d2058d3` 修复后旧 run
+取消并由本 SHA 替代。仍未交付：持久用途/install/buvid durable 事务、durable identity、
+统一 reader/writer barrier、authority handoff/reverse import 与真实账户/设备验收。
+
 CA1 首组的 exporter、
 严格 UTF16/有序格式及 Keychain staging
 已分五个独立提交推送，集成代码 `f11329b` 首次 CI 未通过。
