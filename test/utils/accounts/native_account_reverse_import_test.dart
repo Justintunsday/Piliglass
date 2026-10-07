@@ -93,8 +93,8 @@ void main() {
     final jars = (records[1]['jar']! as Map).cast<String, Object?>();
     final buckets = (jars['domainBuckets']! as List).cast<Map>();
     final paths = (buckets.first['paths']! as List).cast<Map>();
-    final cookies = (paths.first['cookies']! as List).cast<Map>();
-    cookies.removeWhere((cookie) => _units(cookie['nameUnits']) == 'DedeUserID');
+    final cookies = (paths.first['cookies']! as List).cast<Map>()
+      ..removeWhere((cookie) => _units(cookie['nameUnits']) == 'DedeUserID');
     expect(() => NativeAccountReverseImport.decode(mutated),
       throwsA(isA<NativeAccountReverseImportException>()
         .having((error) => error.code, 'code', 'missingCapturedIdentity')));
