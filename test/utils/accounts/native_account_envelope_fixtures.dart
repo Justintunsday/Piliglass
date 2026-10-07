@@ -1,3 +1,5 @@
+import 'dart:io' show SameSite;
+
 import 'package:PiliPlus/models/common/account_type.dart';
 import 'package:PiliPlus/utils/accounts/account.dart';
 import 'package:cookie_jar/cookie_jar.dart';
