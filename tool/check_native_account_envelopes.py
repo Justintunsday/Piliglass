@@ -53,6 +53,22 @@ STAGING_SOURCES = [
     "ios/Runner/Native/Persistence/Accounts/PiliAccountEnvelopeStagingStore.swift",
     "tool/check_native_account_envelope_staging.swift",
 ]
+# Durable single-account Cookie transactions over the shadow candidate. The
+# production reducer and parser own mutation semantics; this phase verifies the
+# transaction/publication plumbing and cumulative envelope revalidation.
+TRANSACTION_SOURCES = [
+    "ios/Runner/Native/Domain/Accounts/PiliAccountRepository.swift",
+    "ios/Runner/Native/Domain/Accounts/PiliOrderedCookieArchive.swift",
+    "ios/Runner/Native/Data/Accounts/PiliOrderedCookieArchiveCodec.swift",
+    "ios/Runner/Native/Domain/Accounts/PiliAccountLiveMemoryShadow.swift",
+    "ios/Runner/Native/Data/Accounts/PiliAccountLiveMemoryShadowCodec.swift",
+    "ios/Runner/Native/Data/Accounts/PiliNativeOrderedCookieReducer.swift",
+    "ios/Runner/Native/Persistence/Accounts/PiliNativeCookieParser.swift",
+    "ios/Runner/Native/Persistence/Accounts/PiliAccountSecretStore.swift",
+    "ios/Runner/Native/Persistence/Accounts/PiliAccountEnvelopeStagingStore.swift",
+    "ios/Runner/Native/Persistence/Accounts/PiliAccountEnvelopeTransactionStore.swift",
+    "tool/check_native_account_envelope_transaction.swift",
+]
 LIVE_IDS = [
     "anonymous-empty-jar",
     "stored-10-2-owner-2-10",
@@ -76,7 +92,8 @@ CONTRACT_INPUTS = [
 
 
 def source_hashes():
-    paths = {ROOT / path for path in [*SOURCES, *STAGING_SOURCES, *PRODUCERS, *ANALYSIS, *CONTRACT_INPUTS]}
+    paths = {ROOT / path for path in [*SOURCES, *STAGING_SOURCES, *TRANSACTION_SOURCES,
+                                      *PRODUCERS, *ANALYSIS, *CONTRACT_INPUTS]}
     files = set()
     for path in paths:
         if path.is_dir():
@@ -95,7 +112,7 @@ def clean_contract_sources(log):
     # patches unrelated lib/pubspec/Runner inputs. Require only this contract's
     # analyzed/compiled sources to match HEAD; hash the actual resolved inputs
     # separately, including those already prepared by the build workflow.
-    paths = sorted({*SOURCES, *STAGING_SOURCES, *PRODUCERS, *ANALYSIS,
+    paths = sorted({*SOURCES, *STAGING_SOURCES, *TRANSACTION_SOURCES, *PRODUCERS, *ANALYSIS,
                     Path(__file__).resolve().relative_to(ROOT).as_posix()})
     run(["git", "diff", "--quiet", "HEAD", "--", *paths], log)
 
@@ -189,6 +206,8 @@ def main():
     try:
         for name in ["live-memory.json", "hive-reopened.json", "check-native-account-envelopes",
                      "check-native-account-envelope-staging", "staging-compile.log", "staging-result.log",
+                     "check-native-account-envelope-transaction", "transaction-compile.log",
+                     "transaction-result.log",
                      "analyze.log", "dart-test.log", "compile.log", "result.log",
                      "source-revision.log", "source-revision-after.log",
                      "source-clean.log", "source-clean-after.log", "build-preparation-diff-names.log"]:
@@ -252,6 +271,19 @@ def main():
         staging_matched = re.search(r"(\d+) native account envelope staging checks passed", staging_output)
         if not staging_matched or int(staging_matched[1]) < 30:
             raise RuntimeError("Durable account envelope shadow publication evidence incomplete")
+        verify_golden_hashes(hashes)
+        transaction = OUTPUT / "check-native-account-envelope-transaction"
+        run(["xcrun", "swiftc", "-swift-version", "6", "-strict-concurrency=complete",
+             "-parse-as-library", "-o", str(transaction), *(str(ROOT / path) for path in TRANSACTION_SOURCES)],
+            "transaction-compile.log")
+        verify_golden_hashes(hashes)
+        transaction_output = run([str(transaction), str(OUTPUT / "live-memory.json")],
+                                 "transaction-result.log", timeout=90)
+        print(transaction_output, end="")
+        transaction_matched = re.search(
+            r"(\d+) native account envelope transaction checks passed", transaction_output)
+        if not transaction_matched or int(transaction_matched[1]) < 20:
+            raise RuntimeError("Durable account envelope transaction evidence incomplete")
         final_sha = run(["git", "rev-parse", "HEAD"], "source-revision-after.log").strip()
         if final_sha != source_sha or source_hashes() != source_digests:
             raise RuntimeError("Production sources changed during actual Dart/Native verification")
@@ -260,7 +292,8 @@ def main():
         summary.update(status="passed", actualDartTests=8, actualDartObservations=10,
                        actualDartGoldens=2, goldenSHA256=hashes, nativeChecks=int(matched[1]),
                        negativeCases=int(matched[3]), syntheticIntegerCases=1,
-                       stagingChecks=int(staging_matched[1]), sourceSHA256=source_digests)
+                       stagingChecks=int(staging_matched[1]),
+                       transactionChecks=int(transaction_matched[1]), sourceSHA256=source_digests)
     except (OSError, RuntimeError, ValueError, subprocess.TimeoutExpired) as error:
         summary["reason"] = str(error)
         print(f"FAIL native account envelopes: {error}")
