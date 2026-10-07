@@ -131,7 +131,8 @@ ordered18/codec155/真实Keychain staging36、mutation271/34/43、账户67/Cooki
 和登录7/225/20通过，前置分析问题已闭环。整组仍未验收：同 SHA
 [preview](https://github.com/Justintunsday/Piliglass/actions/runs/37602179050) 的图片
 测试2pass/1fail，动态点击第二张后的初始2/3断言超时，尚未执行缩放或滑动。
-实际失败录屏22/30/52/58秒均显示2/3，单次点击、detail-opens=0；日志首AX/KVC
+实际失败录屏22/30/52秒显示2/3，58秒已进入teardown，不用作页码证据；
+单次点击、detail-opens=0；日志首AX/KVC
 查询严重拖延，无生产选页错误证据。仅将页码存在+精确label合并成一次服务器查询，
 保留三tests、全部2/3→3/3→2/3及单张1/1断言、6秒等待、单次动作；其它zoom/detail
 断言不变，不改生产UI。此修复假设待新SHA同一完整release5+preview4实际验证。
