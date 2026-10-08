@@ -128,9 +128,10 @@ actor PiliAccountEnvelopeTransactionStore {
     -> PiliAccountShadowTransactionReceipt {
     try beginOperation()
     defer { operationInProgress = false }
-    guard let current = try await vault.loadShadow() else {
+    guard let snapshot = try await vault.loadShadowSnapshot() else {
       throw PiliAccountShadowTransactionError.shadowUnavailable
     }
+    let current = snapshot.envelope
     guard let index = current.records.firstIndex(where: {
       $0.record > 0 && $0.storageKeyUnits == recordKeyUnits
     }) else {
@@ -143,7 +144,11 @@ actor PiliAccountEnvelopeTransactionStore {
     let candidate = try transform(current, index)
     // The complete candidate must still fit the shared cumulative ledger.
     _ = try candidate.validated(limits: codec.limits)
-    let publication = try await vault.importShadow(codec.encode(candidate))
+    // The wrapper gate cannot fence other callers of the shared vault. Publish
+    // only if the exact pointer used for this transform is still current; the
+    // vault owns comparison and publication under one operation fence.
+    let publication = try await vault.importShadow(codec.encode(candidate),
+                                                   expectedTransactionID: snapshot.transactionID)
     return .init(transactionID: publication.transactionID, record: record.record,
                  nativeWritesAllowed: false, authoritySwitchAllowed: false)
   }

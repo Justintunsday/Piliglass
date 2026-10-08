@@ -9,13 +9,19 @@ private actor TransactionFaultVault: PiliAccountSecretStore {
   private var published = false
   private var pause = false
   private var suspended: CheckedContinuation<Void, Never>?
+  private var pauseObserver: CheckedContinuation<Void, Never>?
   private let pointer = "account-envelope-shadow-manifest-v2"
 
   func arm(_ next: Fault) { fault = next; published = false }
   func pauseWrite() { pause = true }
-  func isPaused() -> Bool { suspended != nil }
+  func waitUntilPaused() async {
+    if suspended != nil { return }
+    await withCheckedContinuation { pauseObserver = $0 }
+  }
   func resume() { suspended?.resume(); suspended = nil }
-  func recordCount() -> Int { values.keys.filter { $0 != pointer }.count }
+  func recordCount() -> Int {
+    values.keys.filter { $0.hasPrefix("account-envelope-shadow-v2.") }.count
+  }
 
   func read(_ key: String) throws -> Data? {
     if key == pointer, published, fault == .pointerReadAfter { fault = nil; throw TransactionFixtureError.injected }
@@ -25,7 +31,11 @@ private actor TransactionFaultVault: PiliAccountSecretStore {
   func write(_ data: Data, key: String) async throws {
     if pause {
       pause = false
-      await withCheckedContinuation { suspended = $0 }
+      await withCheckedContinuation {
+        suspended = $0
+        pauseObserver?.resume()
+        pauseObserver = nil
+      }
     }
     values[key] = data
     if key == pointer {
@@ -202,6 +212,40 @@ private actor TransactionFaultVault: PiliAccountSecretStore {
     let unknownReloaded = try await PiliAccountEnvelopeStagingStore(secrets: unknownVault).loadShadow()
     try check(unknownReloaded?.records[1].jar == cleared, "unknown acknowledgment resolves from durable pointer")
 
+    // A transform made from an old snapshot must not replace an intervening
+    // direct import, even when capture-local revision/generation are unchanged.
+    // This uses the actual shared-vault CAS path used by TransactionStore.
+    let conflictSecrets = TransactionFaultVault()
+    let conflictVault = PiliAccountEnvelopeStagingStore(secrets: conflictSecrets)
+    try await conflictVault.importShadow(codec.encode(base))
+    guard let obsolete = try await conflictVault.loadShadowSnapshot() else {
+      throw TransactionFixtureError.failed("missing conflict snapshot")
+    }
+    let conflictStore = PiliAccountEnvelopeTransactionStore(vault: conflictVault)
+    _ = try await conflictStore.applyCredentials(recordKeyUnits: key,
+      expectedGeneration: record.generation,
+      accessKeyUnits: PiliCookieUTF16(units: Array("intervening-credential".utf16)),
+      refreshTokenUnits: nil)
+    guard let intervening = try await conflictVault.loadShadowSnapshot() else {
+      throw TransactionFixtureError.failed("missing intervening snapshot")
+    }
+    try check(intervening.transactionID != obsolete.transactionID,
+              "each publication has an exact distinct pointer identity")
+    // Publish the complete newer envelope through the direct-import API too,
+    // covering a caller outside the transaction actor's own operation fence.
+    let direct = try await conflictVault.importShadow(codec.encode(intervening.envelope))
+    do {
+      _ = try await conflictVault.importShadow(codec.encode(obsolete.envelope),
+                                               expectedTransactionID: obsolete.transactionID)
+      throw TransactionFixtureError.failed("stale snapshot silently replaced direct import")
+    } catch PiliAccountEnvelopeStagingError.staleTransaction { checks += 1 }
+    let afterConflict = try await conflictVault.loadShadowSnapshot()
+    try check(afterConflict?.transactionID == direct.transactionID &&
+      afterConflict?.envelope == intervening.envelope,
+      "stale CAS leaves the entire newer direct import untouched")
+    try check(afterConflict?.envelope.records[1].accessKeyUnits?.units ==
+      Array("intervening-credential".utf16), "newer credentials survive rejected stale transform")
+
     // The operation gate fences actor reentry while a publication is awaiting.
     let fencedVault = TransactionFaultVault()
     let fencedOuter = PiliAccountEnvelopeStagingStore(secrets: fencedVault)
@@ -211,34 +255,34 @@ private actor TransactionFaultVault: PiliAccountSecretStore {
     let pending = Task {
       try await fencedStore.applyCookieDeleteAll(recordKeyUnits: key, expectedGeneration: record.generation)
     }
-    for _ in 0..<1000 {
-      if await fencedVault.isPaused() { break }
-      try await Task.sleep(for: .milliseconds(5))
-    }
-    if !(await fencedVault.isPaused()) {
-      pending.cancel(); throw TransactionFixtureError.failed("transaction did not suspend")
-    }
+    await fencedVault.waitUntilPaused()
     do {
       _ = try await fencedStore.applyCookieDeleteAll(recordKeyUnits: key, expectedGeneration: record.generation)
       throw TransactionFixtureError.failed("reentrant transaction admitted")
     } catch PiliAccountShadowTransactionError.operationInProgress { checks += 1 }
+    // A second transaction actor has a distinct wrapper fence, but the shared
+    // vault rejects its read while A's durable publication is in progress.
+    let competingStore = PiliAccountEnvelopeTransactionStore(vault: fencedOuter)
+    do {
+      _ = try await competingStore.applyCredentials(recordKeyUnits: key,
+        expectedGeneration: record.generation,
+        accessKeyUnits: PiliCookieUTF16(units: Array("must-not-publish".utf16)),
+        refreshTokenUnits: nil)
+      throw TransactionFixtureError.failed("second transaction actor overwrote pending publication")
+    } catch PiliAccountEnvelopeStagingError.operationInProgress { checks += 1 }
     await fencedVault.resume()
     _ = try await pending.value
     let fencedReloaded = try await PiliAccountEnvelopeStagingStore(secrets: fencedVault).loadShadow()
     try check(fencedReloaded?.records[1].jar == cleared, "fenced transaction publishes once")
+    try check(fencedReloaded?.records[1].accessKeyUnits == base.records[1].accessKeyUnits,
+              "rejected second actor never changes credentials")
 
     // Cancellation before pointer publication keeps the previous durable state.
     await fencedVault.pauseWrite()
     let cancelled = Task {
       try await fencedStore.applyCookieDeleteAll(recordKeyUnits: key, expectedGeneration: record.generation)
     }
-    for _ in 0..<1000 {
-      if await fencedVault.isPaused() { break }
-      try await Task.sleep(for: .milliseconds(5))
-    }
-    if !(await fencedVault.isPaused()) {
-      cancelled.cancel(); throw TransactionFixtureError.failed("cancel transaction did not suspend")
-    }
+    await fencedVault.waitUntilPaused()
     cancelled.cancel()
     await fencedVault.resume()
     do {
