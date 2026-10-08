@@ -305,6 +305,11 @@ jobs:
         shell: pwsh
         run: lib/scripts/patch.ps1 iOS
 
+      # The account header-transfer tests require fresh production Swift
+      # loopback evidence from this job. Generate it before the complete suite.
+      - name: Verify production HTTP transfer lifecycle and header finalization
+        run: python3 tool/check_native_http_transfer.py
+
       # Account changes are shared inputs of the HTTP/login fixtures. Verify
       # their actual Dart and Native contracts before those dependent groups.
       - name: Verify account generations and response ownership
@@ -393,9 +398,6 @@ jobs:
           name: effective-http-policy-contracts
           path: build/effective-http-policy/
           if-no-files-found: warn
-
-      - name: Verify production HTTP transfer lifecycle and header finalization
-        run: python3 tool/check_native_http_transfer.py
 
       - name: Upload native HTTP transfer and wire evidence
         if: always()
