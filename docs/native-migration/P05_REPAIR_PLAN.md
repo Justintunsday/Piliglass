@@ -2,7 +2,7 @@
 
 2026-10-08（Asia/Hong_Kong）。起点 `7d6766b`，对应
 `build/native-migration/review-7d6766b/P05_REVIEW.md` 的12项源码审核问题。
-本轮修复已交付有限组件的正确性，不实现完整P05、不启用Native authority，不重写UI。
+本轮修复聚焦既有有限组件的正确性，不实现完整P05、不启用Native authority，不重写UI。
 
 | 相关切片 | 审核项 | 实现与独立提交边界 | 必需回归 |
 |---|---|---|---|

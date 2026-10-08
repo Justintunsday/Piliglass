@@ -27,9 +27,7 @@ ANALYSIS = [
     "lib/utils/accounts/account_request_state.dart",
     "lib/utils/accounts/account_live_memory_shadow.dart",
     "lib/services/native_accounts/",
-    "test/utils/accounts/account_test_storage.dart",
-    "test/utils/accounts/native_account_envelope_fixtures.dart",
-    *PRODUCERS,
+    "test/utils/accounts/",
 ]
 # These are the intended production integration paths, not ignored draft files.
 # Jar parser/value sharing and the inout ledger remain in the existing jar sources.
@@ -285,7 +283,7 @@ def main():
                              "staging-result.log", timeout=90)
         print(staging_output, end="")
         staging_matched = re.search(r"(\d+) native account envelope staging checks passed", staging_output)
-        if not staging_matched or int(staging_matched[1]) < 30:
+        if not staging_matched or int(staging_matched[1]) < 40:
             raise RuntimeError("Durable account envelope shadow publication evidence incomplete")
         verify_golden_hashes(hashes)
         transaction = OUTPUT / "check-native-account-envelope-transaction"
@@ -298,7 +296,7 @@ def main():
         print(transaction_output, end="")
         transaction_matched = re.search(
             r"(\d+) native account envelope transaction checks passed", transaction_output)
-        if not transaction_matched or int(transaction_matched[1]) < 20:
+        if not transaction_matched or int(transaction_matched[1]) < 35:
             raise RuntimeError("Durable account envelope transaction evidence incomplete")
         verify_golden_hashes(hashes)
         authority = OUTPUT / "check-native-account-authority"
@@ -310,7 +308,7 @@ def main():
                                "authority-result.log", timeout=90)
         print(authority_output, end="")
         authority_matched = re.search(r"(\d+) native account authority checks passed", authority_output)
-        if not authority_matched or int(authority_matched[1]) < 15:
+        if not authority_matched or int(authority_matched[1]) < 51:
             raise RuntimeError("Durable account authority handoff/recovery evidence incomplete")
         final_sha = run(["git", "rev-parse", "HEAD"], "source-revision-after.log").strip()
         if final_sha != source_sha or source_hashes() != source_digests:

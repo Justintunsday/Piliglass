@@ -9,6 +9,11 @@ credentials、activated）、durable authority marker/两阶段 handoff/revert/c
 账户/登录/Cookie/签名的生产 authority 仍是 Dart/Hive/Dio，Flutter runtime 保留。
 完整交付说明与未完成门禁见 [P05_COMPLETION_REPORT.md](P05_COMPLETION_REPORT.md)。
 
+2026-10-08 审核更正：上述 CI 是历史编译/测试证据，旧用例未覆盖12项正确性问题。
+修复遵循 [P05_REPAIR_PLAN.md](P05_REPAIR_PLAN.md)，尚需重新验收。反向恢复缩为
+严格纯数据 decode + 空目标内存 apply；不支持非空合并/替换，不满足 durable Dart
+回退前提。已发布 shadow 记录保留给 marker 精确 UUID 读取，安全 GC 暂缓。
+
 ## 同 SHA CI 证据
 
 最终 SHA `7159af4`：
@@ -56,8 +61,8 @@ driver `summary.json`、artifact 与聚合门禁 outcome 为准。
 | 失败关闭的 reset port | `account_reset_persistence_port.dart` + 两处调用 | 匿名 jar.deleteAll 与 Hive clear 的默认 Dart 转发；生命周期顺序不变 | 非 Native authority |
 | 隔离 Keychain shadow | `PiliAccountEnvelopeStagingStore.swift` | 唯一 manifest 指针、record 全量 reread、写后错误读回、unknown ack 保留双记录、operation gate、cancel 前不发布 | shadow only |
 | shadow 单账户事务 | `PiliAccountEnvelopeTransactionStore.swift` | 按 raw key + generation 定位单 record；Cookie save/delete/deleteAll 经已对照 Dart 的 ordered reducer；临时 selection（派生 history）、credentials、activated 为显式值变更；全部候选先过累计 ledger 再发布 pointer | shadow only；持久用途/install/buvid 未做 |
-| durable authority | `PiliAccountAuthorityMarkerStore.swift`、`PiliAccountAuthorityCoordinator.swift` | 非秘密单 marker、写前/写后/unknown 三分支读回判定、nativeActive+候选/revision 一致性、transitioning/reverting corrupt 时 fail closed、两阶段 reverseExport→completeRevert | 仅 Native；无 Dart runtime proxy |
-| reverse import | `native_account_reverse_import.dart` | 严格形状重建 raw jar/attrs/create time/顺序，缓存 captured raw key 而不从 DedeUserID 重推，经 owner 路径注册并恢复选择；malformed/missing identity 不触碰 live | 兼容 reader；durable Dart store 未做 |
+| durable authority | `PiliAccountAuthorityMarkerStore.swift`、`PiliAccountAuthorityCoordinator.swift` | marker 精确 UUID/digest 绑定、合法起始态、跨 await gate；修复后需新 CI | 仅 Native；无 Dart runtime proxy；调用 completeRevert 前仍需 durable Dart 消费 |
+| reverse import | `native_account_reverse_import.dart` | 纯 immutable 蓝图、strict 累计限额、显式 captured identity 构造、空目标内存安装；匿名完整状态与 owner/stored 双顺序 | 修复后需新 CI；legacy Hive 属性重启仍丢失，durable replacement 未做 |
 | 跨语言对照 | `tool/check_native_account_*`、Dart producer/fixture/test | fresh goldens 三阶段 hash、独立 JSON oracle、真实 Keychain/故障矩阵、真实 Dart capture→reverse→逐字节比较 | 仅 synthetic secrets |
 
 ## 当前生产数据流（authority = Dart）
@@ -111,8 +116,8 @@ durable record identity registry 或 runtime 开关把该 authority 接给生产
   写失败通过读回判定，已发布则保留新指针，未发布则删除孤候选。
 - unknown acknowledgment：不重放、不删除任何一方；重启以 durable 指针为准。
 - cancel：record 写失败或指针发布前取消只删除未引用候选，不改变已发布状态。
-- 进程崩溃孤儿：实现只以 manifest 引用关系清理；**不假设**能枚举 secret store 做
-  namespace 级孤儿扫描，该清理与 durable identity registry 一起留给 CA4。
+- 已发布记录：shadow 替换/discard 保留 record 与 immutable descriptor，authority 可能
+  仍引用旧 UUID。安全引用追踪与 namespace GC 尚未实现，不能仅按当前 manifest 清理。
 - 回退：authority 从未切换，回退等于 revert 本阶段 commit，Dart/Hive 数据不受影响。
   不存在 Native 写后回退需要恢复完整状态的问题，因为 Native 从未写权威数据。
 - 真实账户/设备验收：**未执行**。没有提供测试设备、真实账户或必要输入；CA5/CA6 门禁
@@ -124,8 +129,8 @@ durable record identity registry 或 runtime 开关把该 authority 接给生产
    install/import/buvid 补值的 durable 事务；durable commit receipt 与账号级排队。
 2. **CA3**：全部 reader/writer 收口到同一 authority；Dart proxy 与只读展示缓存；
    credential reader adapter；在途 writer 屏障。
-3. **CA4 剩余**：durable record identity registry、namespace 级孤儿清理；把已验收的
-   marker/coordinator/reverse import 通过 bridge/proxy 接入生产 composition 的
+3. **CA4 剩余**：durable Dart reverse replacement、record identity registry、安全孤儿清理；
+   把经修复与重新验收的 marker/coordinator 通过 bridge/proxy 接入生产 composition 的
    freeze/drain/export/publish 流程（当前只有 Native 协调器，没有 runtime 调用方）。
 4. **CA5**：opt-in Native active composition，在测试设备验收 QR/password/SMS/Cookie、
    Geetest/手机验证、多账户用途隔离、实际响应 attrs、杀进程/重启与回退。

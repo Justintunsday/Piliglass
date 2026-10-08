@@ -1,6 +1,14 @@
 # 迁移进度与编译证据
 
-最后更新：2026-10-07（Asia/Hong_Kong）。目标仍在进行，Flutter runtime 保留。
+最后更新：2026-10-08（Asia/Hong_Kong）。目标仍在进行，Flutter runtime 保留。
+
+**P05 审核修复正在集成，尚未验收**：源码审核发现12项交接/反向恢复问题，
+修复按 [P05_REPAIR_PLAN.md](P05_REPAIR_PLAN.md) 执行。`741256b` 已修候选 UUID/digest
+绑定、旧记录保留、handoff 合法起始态和 marker 跨 await gate；`ab5ccbb` 已修 shared
+vault snapshot/CAS。严格纯 decoder、空目标恢复与新回归仍在集成，待同 SHA release5 +
+preview4 实际成功才能验收。旧7159af4的编译结果不能证明这些新问题已解决。
+反向 apply 不等于 durable Dart rollback；安全已发布记录 GC 及完整回退仍是剩余项。
+runtime flags 继续 false，UI 视觉重写继续排在 PLAN.md 业务迁移之后。
 
 当前阶段为 **P05**。`bedde36` 的原并行组与 `0527fb2` 的
 [CA1 jar-only shadow](P05_COOKIE_AUTHORITY_PLAN.md) 均已通过同 SHA release5 +

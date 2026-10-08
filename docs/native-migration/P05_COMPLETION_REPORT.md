@@ -5,6 +5,12 @@
 
 ## 结论摘要
 
+2026-10-08 审核更正：7159af4 的编译与测试结果有效，但旧测试未覆盖随后发现的
+12 项正确性问题，不能据此认定交接与反向恢复组件已满足完整合同。修复按
+[P05_REPAIR_PLAN.md](P05_REPAIR_PLAN.md) 实施，新代码必须重新通过同 SHA 完整 CI。
+反向 apply 仅支持空目标的内存恢复；legacy Hive 适配器仍会在重启后丢失属性，
+因此不能将它接到 `completeRevert()` 并宣称已完成 durable Dart 回退。
+
 - 本阶段把 P05 的**账户格式、严格 codec、隔离 Keychain 持久化、shadow 单账户事务、
   durable authority marker/handoff/revert 与 Dart reverse import** 实现并全部通过同 SHA
   release5 + preview4 实际 CI。
@@ -57,7 +63,7 @@
 | Cookie 格式与 mutation | strict 有序 jar2、累计 ledger、纯 reducer、shadow durable transaction（含 selection/credentials/activated） | 108/43/36/29 checks | 生产 store 事务运行时接入、持久用途/install/buvid |
 | 签名 | Native signer/body codec 合同通过；运行时未安装 | 既有签字/正文合同 | production 调用装配 |
 | 四用途账户状态 | 只读 snapshot/selection 合同；完整 capture；临时 selection/history shadow 事务 | 账户 146 tests、72 tracker、24 authority checks | 运行时 proxy、持久用途、真实账户切换 |
-| 账户持久化 | 完整账户 Keychain shadow + 唯一 manifest + 真实重启；durable authority marker/handoff/revert；Dart reverse import 重建完整 jar/attrs/顺序/选择 | staging 36、transaction 29、authority 24、reverse 测试 | durable record identity registry、孤儿清理、运行时切换 |
+| 账户持久化 | 完整账户 Keychain shadow + 唯一 manifest + 真实重启；authority 组件；Dart 空目标内存恢复（持久回退未完成） | 旧 CI staging 36、transaction 29、authority 24；审核修复另行验收 | durable reverse replacement、record identity registry、安全孤儿清理、运行时切换 |
 | 统一读写权威 | 未完成；Dart 仍是默认读写者 | — | CA3 全部 |
 | 原生网络兼容边界 | policy 描述/lease/capability 合同此前通过；transport 未 parity | 既有 HTTP/transport 合同 | proxy/retry/pool/H1/H2/TLS/timeout/raw Set-Cookie/gRPC metadata |
 | 真实账户/设备（CA5/CA6） | 未执行 | — | 测试设备与账户输入 |
@@ -78,7 +84,7 @@ Dart live registry -> capture service（checkpoint+全量复核）-> strict code
   -> 隔离 Keychain shadow（单 manifest 指针）
   -> 单账户 durable transaction（ordered reducer / 临时 selection / credentials / activated）
   -> authority marker + coordinator（handoff / resume / reverseExport / completeRevert）
-  -> Dart reverse import（重建 LoginAccount、jar、顺序与选择）
+  -> Dart 空目标内存恢复（完整 jar、双顺序、选择；不是 durable rollback）
 ```
 
 四能力标志（`durableIdentityConfigured`、`durabilityVerified`、`authoritySwitchAllowed`、
@@ -102,10 +108,12 @@ finish 写回、WK Cookie 镜像、全部 credential reader（csrf/accessKey/grp
   `publicationUnknown`，由下次 `resume()` 的 durable 读回决定，不重放 handoff。
 - 崩溃恢复：无 marker = Dart authority；corrupt/未知 schema/transitioning/reverting
   fail closed；nativeActive 但候选缺失 fail closed；从不静默回退旧 Hive。
-- 回退：`reverseExport()` 幂等返回完整 schema2 envelope；Dart 反导入完成后
-  `completeRevert()` 以读回证明清除 marker；marker 未能清除时保持 Native authority。
-- 孤儿：只按 manifest 引用清理；不假设可枚举 secret store 做 namespace 扫描，孤儿
-  清理与 durable record identity 一起作为后续门禁。
+- 回退：`reverseExport()` 返回完整 schema2 envelope。`completeRevert()` 要求调用方先
+  完成 durable Dart 消费；当前空目标 apply 不满足该前提，运行时不得将两者连接。
+  marker 未能清除时按 durable 读回决定 authority，未知结果不自动重放。
+- 修复后的 marker 按确切 UUID 与 immutable digest descriptor 读取候选，shadow 的
+  替换/discard 保留已发布记录。仅未发布候选允许清理；跨 authority/shadow 的引用安全
+  GC 尚未实现，因此已发布记录暂时保留，不能按当前 manifest 单独删除旧候选。
 
 ## 7. 未完成项与原因
 
