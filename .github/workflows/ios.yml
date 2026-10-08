@@ -305,6 +305,34 @@ jobs:
         shell: pwsh
         run: lib/scripts/patch.ps1 iOS
 
+      # Account changes are shared inputs of the HTTP/login fixtures. Verify
+      # their actual Dart and Native contracts before those dependent groups.
+      - name: Verify account generations and response ownership
+        id: group-account-dart
+        continue-on-error: true
+        shell: bash
+        run: |
+          mkdir -p build/account-request-state
+          set -o pipefail
+          dart analyze --fatal-infos lib/utils/accounts/account_request_state.dart lib/utils/accounts.dart lib/utils/accounts/account_live_memory_shadow.dart lib/utils/accounts/account.dart lib/utils/accounts/account_manager/account_mgr.dart lib/services/native_http/ lib/services/native_accounts/ tool/check_account_request_state.dart test/utils/accounts/ | tee build/account-request-state/analyze.log
+          dart tool/check_account_request_state.dart | tee build/account-request-state/runtime.log
+          flutter test --no-pub --reporter expanded test/utils/accounts/ | tee build/account-request-state/flutter-test.log
+
+      - name: Verify full account live-memory envelopes against fresh actual Dart capture
+        id: group-account-envelope
+        continue-on-error: true
+        run: python3 tool/check_native_account_envelopes.py
+
+      - name: Upload full account capture and strict Native envelope evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: native-account-envelope-contracts
+          path: |
+            build/native-account-envelope-check/*.json
+            build/native-account-envelope-check/*.log
+          if-no-files-found: warn
+
       - name: Verify playback sources and latency selection
         run: |
           dart tool/check_native_playback_source.dart
@@ -377,17 +405,6 @@ jobs:
           path: build/native-http-transfer-check/
           if-no-files-found: warn
 
-      - name: Verify account generations and response ownership
-        id: group-account-dart
-        continue-on-error: true
-        shell: bash
-        run: |
-          mkdir -p build/account-request-state
-          set -o pipefail
-          dart analyze --fatal-infos lib/utils/accounts/account_request_state.dart lib/utils/accounts.dart lib/utils/accounts/account_live_memory_shadow.dart lib/utils/accounts/account.dart lib/utils/accounts/account_manager/account_mgr.dart lib/services/native_http/ lib/services/native_accounts/ tool/check_account_request_state.dart test/utils/accounts/ | tee build/account-request-state/analyze.log
-          dart tool/check_account_request_state.dart | tee build/account-request-state/runtime.log
-          flutter test --no-pub --reporter expanded test/utils/accounts/ | tee build/account-request-state/flutter-test.log
-
       - name: Verify four-purpose account snapshots and Keychain shadow restart
         id: group-account-native
         continue-on-error: true
@@ -425,21 +442,6 @@ jobs:
           path: |
             build/native-cookie-mutation-check/*.json
             build/native-cookie-mutation-check/*.log
-          if-no-files-found: warn
-
-      - name: Verify full account live-memory envelopes against fresh actual Dart capture
-        id: group-account-envelope
-        continue-on-error: true
-        run: python3 tool/check_native_account_envelopes.py
-
-      - name: Upload full account capture and strict Native envelope evidence
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: native-account-envelope-contracts
-          path: |
-            build/native-account-envelope-check/*.json
-            build/native-account-envelope-check/*.log
           if-no-files-found: warn
 
       - name: Upload actual account export and Native staging evidence
