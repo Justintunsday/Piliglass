@@ -9,6 +9,7 @@ import 'package:PiliPlus/services/native_accounts/native_ordered_cookie_jar_expo
 import 'package:PiliPlus/utils/accounts/account.dart';
 import 'package:PiliPlus/utils/accounts/account_request_state.dart';
 import 'package:PiliPlus/utils/login_utils.dart';
+import 'package:cookie_jar/cookie_jar.dart';
 import 'package:hive_ce/hive.dart';
 
 part 'accounts/account_live_memory_shadow.dart';
@@ -30,6 +31,9 @@ abstract final class Accounts {
   // Restoring that object must not revive its revoked requests.
   static final _retired = Expando<bool>('retired account credentials');
   static Object? _anonymousReset;
+  static Object? _capturedRestoreOperation;
+  static Object? _capturedRecoveryOperation;
+  static bool _capturedRestoreFailed = false;
 
   static int get requestRevision => _requestState.revision;
   static bool get mainEqVideo => main == video;
@@ -50,6 +54,8 @@ abstract final class Accounts {
       _requestState.isCurrent(stamp) && ownsCredentials(stamp.account);
 
   static bool ownsCredentials(Account value) {
+    if (_capturedRestoreOperation != null || _capturedRecoveryOperation != null ||
+        _capturedRestoreFailed) return false;
     if (value is AnonymousAccount) {
       if (_anonymousReset != null) return false;
       _requestState.activate(value);
@@ -79,7 +85,12 @@ abstract final class Accounts {
     _requestState.changed();
   }
 
-  static Object beginAnonymousReset(AnonymousAccount value) {
+  static Object beginAnonymousReset(AnonymousAccount value, {Object? recoveryOperation}) {
+    // A failed restore stays unavailable while explicit clear/reset runs.
+    if (recoveryOperation == null ||
+        !identical(_capturedRecoveryOperation, recoveryOperation)) {
+      _requireNoCapturedRestore(allowFailed: true);
+    }
     final reset = Object();
     _anonymousReset = reset;
     _requestState
@@ -134,6 +145,7 @@ abstract final class Accounts {
   }
 
   static Future<void> refresh() {
+    _requireNoCapturedRestore();
     _reconcileStoredOwners();
     _accountMode.fillRange(0, _accountMode.length, AnonymousAccount());
     for (final value in _owners.values) {
@@ -154,6 +166,7 @@ abstract final class Accounts {
     LoginAccount value, {
     required bool preserveTypes,
   }) {
+    _requireNoCapturedRestore();
     if (_retired[value] == true) {
       throw StateError('Cannot reinstall retired account credentials');
     }
@@ -260,7 +273,12 @@ abstract final class Accounts {
     await refresh();
   }
 
-  static Future<void> clear() async {
+  static Future<void> clear({
+    AccountResetPersistencePort persistencePort = accountResetPersistencePort,
+  }) async {
+    _requireNoCapturedRestore(allowFailed: true);
+    final recoveryOperation = _capturedRestoreFailed ? Object() : null;
+    if (recoveryOperation != null) _capturedRecoveryOperation = recoveryOperation;
     for (final value in _owners.values) {
       _retired[value] = true;
     }
@@ -270,15 +288,24 @@ abstract final class Accounts {
     final anonymous = AnonymousAccount();
     _accountMode.fillRange(0, _accountMode.length, anonymous);
     _requestState.changed();
-    final reset = anonymous.delete();
-    await Future.wait([
-      accountResetPersistencePort.clearLegacyAccounts(account),
-      reset,
-    ]);
+    try {
+      final reset = anonymous.delete(recoveryOperation: recoveryOperation);
+      await Future.wait([
+        persistencePort.clearLegacyAccounts(account),
+        reset,
+      ]);
+      _capturedRestoreFailed = false;
+    } finally {
+      if (recoveryOperation != null &&
+          identical(_capturedRecoveryOperation, recoveryOperation)) {
+        _capturedRecoveryOperation = null;
+      }
+    }
     if (ownsCredentials(anonymous)) Request.buvidActive(anonymous);
   }
 
   static Future<void> deleteAll(Set<Account> accounts) async {
+    _requireNoCapturedRestore();
     final targets = HashSet<Account>.identity()
       ..addAll(
         accounts.where(
@@ -307,6 +334,7 @@ abstract final class Accounts {
   }
 
   static Account _resolveSelection(Account value) {
+    _requireNoCapturedRestore();
     if (value is LoginAccount && !ownsCredentials(value)) {
       final current = _owners[value.storageKey];
       if (current != null && ownsCredentials(current)) return current;
@@ -357,4 +385,104 @@ abstract final class Accounts {
 
   @pragma('vm:prefer-inline')
   static Account get(AccountType key) => _accountMode[key.index];
+
+  static void _requireNoCapturedRestore({bool allowFailed = false}) {
+    if (_capturedRestoreOperation != null || _capturedRecoveryOperation != null ||
+        (!allowFailed && _capturedRestoreFailed)) {
+      throw StateError('Captured restore is in progress or requires recovery');
+    }
+  }
+
+  /// This staging API is deliberately not complete durable reverse import.
+  /// Never merge a full candidate into existing Hive data or clear it first.
+  static void requireEmptyCapturedRestoreTarget() {
+    if (!account.isOpen || account.isNotEmpty || _owners.isNotEmpty ||
+        _pendingInstalls.isNotEmpty || _anonymousReset != null ||
+        _capturedRestoreOperation != null || _capturedRecoveryOperation != null ||
+        _capturedRestoreFailed) {
+      throw StateError('Captured restore requires an empty available target');
+    }
+    final stamp = _requestState.captureSingleOfType<AnonymousAccount>();
+    if (stamp == null || _accountMode.any((value) => !identical(value, stamp.account))) {
+      throw StateError('Anonymous lifecycle must already be initialized');
+    }
+  }
+
+  static bool isCurrentCapturedRestore(Object operation) =>
+      identical(_capturedRestoreOperation, operation);
+
+  /// Detached candidates become request owners only after the Hive write and
+  /// full target recheck. No refresh/activation/network callbacks are invoked.
+  /// Unknown write acknowledgement remains fail closed; no delete or replay.
+  static Future<void> restoreEmptyCaptured({
+    required List<LoginAccount> accounts,
+    required List<int> ownerOrdinals,
+    required DefaultCookieJar anonymousJar,
+    required Set<AccountType> anonymousPurposes,
+    required bool anonymousActivated,
+    required List<int> selections,
+    AccountInstallPersistencePort persistencePort = accountInstallPersistencePort,
+  }) async {
+    requireEmptyCapturedRestoreTarget();
+    final stamp = _requestState.captureSingleOfType<AnonymousAccount>()!;
+    final anonymous = stamp.account;
+    final owned = List<LoginAccount>.of(accounts);
+    final order = List<int>.of(ownerOrdinals);
+    final slots = List<int>.of(selections);
+    final anonymousTypes = Set<AccountType>.of(anonymousPurposes);
+    final input = <String, LoginAccount>{};
+    if (owned.length > 255 || order.length != owned.length || slots.length != 4 ||
+        order.toSet().length != owned.length ||
+        order.any((ordinal) => ordinal <= 0 || ordinal > owned.length) ||
+        slots.any((ordinal) => ordinal < 0 || ordinal > owned.length)) {
+      throw ArgumentError('Invalid detached captured restore');
+    }
+    for (final ordinal in order) {
+      final value = owned[ordinal - 1];
+      if (_retired[value] == true || _requestState.capture(value) != null ||
+          input.containsKey(value.storageKey)) {
+        throw ArgumentError('Captured restore requires fresh unique candidates');
+      }
+      input[value.storageKey] = value;
+    }
+    final revision = _requestState.revision;
+    final priorJar = NativeOrderedCookieJarExporter.export(anonymous.cookieJar);
+    final priorTypes = List<AccountType>.of(anonymous.type);
+    final priorActivated = anonymous.activated;
+    final priorSelections = List<Account>.of(_accountMode);
+    final operation = Object();
+    _capturedRestoreOperation = operation;
+    try {
+      await persistencePort.writeLegacyImport(account, input);
+      final stored = account.toMap();
+      if (!isCurrentCapturedRestore(operation) || _requestState.revision != revision ||
+          !_requestState.isCurrent(stamp) || _owners.isNotEmpty ||
+          _pendingInstalls.isNotEmpty || _anonymousReset != null ||
+          stored.length != input.length ||
+          input.entries.any((entry) => !identical(stored[entry.key], entry.value)) ||
+          !_sameOwned(priorJar, NativeOrderedCookieJarExporter.export(anonymous.cookieJar)) ||
+          !_sameOwned(priorTypes, List<AccountType>.of(anonymous.type)) ||
+          priorActivated != anonymous.activated ||
+          !_sameReferences(priorSelections, _accountMode)) {
+        throw StateError('Captured restore target changed during write');
+      }
+      _requestState.revokeAll();
+      anonymous.restoreCapturedState(operation, anonymousJar, anonymousTypes, anonymousActivated);
+      _owners.addAll(input);
+      _requestState.activate(anonymous);
+      for (final value in input.values) _requestState.activate(value);
+      for (var index = 0; index < slots.length; index++) {
+        final ordinal = slots[index];
+        _accountMode[index] = ordinal == 0 ? anonymous : owned[ordinal - 1];
+      }
+      _requestState.changed();
+    } catch (_) {
+      for (final value in owned) _retired[value] = true;
+      _requestState.revokeAll();
+      _capturedRestoreFailed = true;
+      rethrow;
+    } finally {
+      if (isCurrentCapturedRestore(operation)) _capturedRestoreOperation = null;
+    }
+  }
 }

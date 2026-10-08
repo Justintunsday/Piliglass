@@ -51,7 +51,9 @@ AccountLiveMemoryShadowCapture _captureAccountLiveMemoryShadow() {
   if (!box.isOpen) {
     throw const AccountLiveMemoryShadowException('unavailable');
   }
-  if (Accounts._pendingInstalls.isNotEmpty || Accounts._anonymousReset != null) {
+  if (Accounts._pendingInstalls.isNotEmpty || Accounts._anonymousReset != null ||
+      Accounts._capturedRestoreOperation != null || Accounts._capturedRecoveryOperation != null ||
+      Accounts._capturedRestoreFailed) {
     throw const AccountLiveMemoryShadowException('busy');
   }
   if (box.length + 1 > 256 || Accounts._owners.length + 1 > 256) {

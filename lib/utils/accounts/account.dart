@@ -62,7 +62,10 @@ class LoginAccount extends Account {
   bool activated = false;
 
   @override
-  late final int mid = int.parse(_midStr);
+  late final int mid = _restoredMid ?? int.parse(_midStr);
+
+  final String? _restoredStorageKey;
+  final int? _restoredMid;
 
   @override
   late final Map<String, String> headers = {
@@ -109,7 +112,7 @@ class LoginAccount extends Account {
     'type': type.map((i) => i.index).toList(),
   };
 
-  late final String _midStr = cookieJar
+  late final String _midStr = _restoredStorageKey ?? cookieJar
       .domainCookies['bilibili.com']!['/']!['DedeUserID']!
       .cookie
       .value;
@@ -121,9 +124,25 @@ class LoginAccount extends Account {
     this.accessKey,
     this.refresh, [
     Set<AccountType>? type,
-  ]) : type = type ?? {} {
+  ]) : type = type ?? {},
+       _restoredStorageKey = null,
+       _restoredMid = null {
     cookieJar.setBuvid3();
   }
+
+  /// Detached restore candidate. Explicit cached identity survives an empty
+  /// jar; construction performs no buvid, Pref or protocol initialization.
+  LoginAccount.restoreCaptured({
+    required this.cookieJar,
+    required String storageKey,
+    required int mid,
+    required this.accessKey,
+    required this.refresh,
+    required Set<AccountType> purposes,
+    required this.activated,
+  }) : type = Set.of(purposes),
+       _restoredStorageKey = storageKey,
+       _restoredMid = mid;
 
   factory LoginAccount.fromJson(Map json) => LoginAccount(
     BiliCookieJar.fromJson(json['cookies']),
@@ -144,7 +163,8 @@ class AnonymousAccount extends Account {
   @override
   final bool isLogin = false;
   @override
-  final DefaultCookieJar cookieJar = DefaultCookieJar()..setBuvid3();
+  DefaultCookieJar get cookieJar => _cookieJar;
+  DefaultCookieJar _cookieJar = DefaultCookieJar()..setBuvid3();
   @override
   final String? accessKey = null;
   @override
@@ -165,8 +185,8 @@ class AnonymousAccount extends Account {
   bool activated = false;
 
   @override
-  Future<void> delete() async {
-    final reset = Accounts.beginAnonymousReset(this);
+  Future<void> delete({Object? recoveryOperation}) async {
+    final reset = Accounts.beginAnonymousReset(this, recoveryOperation: recoveryOperation);
     activated = false;
     grpcHeaders['x-bili-fawkes-req-bin'] = GrpcHeaders.fawkes;
     await accountResetPersistencePort.clearAnonymousCookies(this);
@@ -178,6 +198,24 @@ class AnonymousAccount extends Account {
   static final _instance = AnonymousAccount._();
 
   AnonymousAccount._();
+
+  /// Only the Accounts empty-target restore boundary calls this after its
+  /// successful write and epoch checks. Replacement retains ignoreExpires.
+  void restoreCapturedState(
+    Object operation,
+    DefaultCookieJar jar,
+    Set<AccountType> purposes,
+    bool activated,
+  ) {
+    if (!Accounts.isCurrentCapturedRestore(operation)) {
+      throw StateError('Anonymous restore requires the Accounts restore gate');
+    }
+    _cookieJar = jar;
+    type
+      ..clear()
+      ..addAll(purposes);
+    this.activated = activated;
+  }
 
   factory AnonymousAccount() => _instance;
 
