@@ -1,7 +1,7 @@
 # P05 状态矩阵与剩余缺口（交付审核版）
 
-2026-10-07（Asia/Hong_Kong）。本文件对应当前分支 `codex/native-migration` 的已验证
-代码 SHA `7159af42e4dd942f989467d8c5a9eb77fb2a42e7`。结论：**P05 未整体完成**；
+2026-10-09（Asia/Hong_Kong）。本文件对应当前分支 `codex/native-migration` 的已验证
+代码 SHA `e740cace879630f8968f5f0733c6af708377cddd`。结论：**P05 未整体完成**；
 本阶段交付的是完整账户只读 capture-local 格式、严格 codec、隔离 Keychain shadow 持久化、
 shadow-only 单账户 durable transaction（Cookie save/delete/deleteAll、临时选择、
 credentials、activated）、durable authority marker/两阶段 handoff/revert/crash recovery
@@ -9,14 +9,27 @@ credentials、activated）、durable authority marker/两阶段 handoff/revert/c
 账户/登录/Cookie/签名的生产 authority 仍是 Dart/Hive/Dio，Flutter runtime 保留。
 完整交付说明与未完成门禁见 [P05_COMPLETION_REPORT.md](P05_COMPLETION_REPORT.md)。
 
-2026-10-08 审核更正：上述 CI 是历史编译/测试证据，旧用例未覆盖12项正确性问题。
-修复遵循 [P05_REPAIR_PLAN.md](P05_REPAIR_PLAN.md)，尚需重新验收。反向恢复缩为
+2026-10-09 审核修复验收：旧7159af4用例未覆盖12项正确性问题；本轮修复遵循
+[P05_REPAIR_PLAN.md](P05_REPAIR_PLAN.md)，已通过下列同 SHA 完整CI。反向恢复限定为
 严格纯数据 decode + 空目标内存 apply；不支持非空合并/替换，不满足 durable Dart
 回退前提。已发布 shadow 记录保留给 marker 精确 UUID 读取，安全 GC 暂缓。
 
 ## 同 SHA CI 证据
 
-最终 SHA `7159af4`：
+本轮修复 SHA `e740cac`（实际CI于2026-10-08结束，2026-10-09核对）：
+
+- release [37781658066](https://github.com/Justintunsday/Piliglass/actions/runs/37781658066)
+  5/5 jobs、preview [37782661482](https://github.com/Justintunsday/Piliglass/actions/runs/37782661482)
+  4/4 jobs；Runner `BUILD SUCCEEDED`、109.1MB、FFmpeg顺序通过，九个强制 outcome 全success。
+- envelope artifact `status=passed`，sourceSHA/workflowSHA均为 `e740cace879630f8968f5f0733c6af708377cddd`：
+  producer8/观察10/fresh goldens2，108 oracle/43负例/40 staging/35 transaction/51 authority；
+  四次 Swift6 complete concurrency 编译通过；62个相关源码 Git blob SHA256 与产物一致。
+- 账户组严格分析无问题，实际 `+157: All tests passed!`、tracker72；零网络恢复、dormant
+  decoder、真实Hive写后错误与clear恢复互斥用例均通过。Preview账户6/图片3/播放器2/导航9
+  共20测试通过，压力fixture `failures=[]`；单次burst测量不作为性能验收。
+- 历次真实失败与修复见修复计划；没有放宽 fatal-infos、跳过旧用例或降低九个强制门禁。
+
+历史 SHA `7159af4`（旧覆盖范围）：
 
 - release [37701163766](https://github.com/Justintunsday/Piliglass/actions/runs/37701163766)
   5/5 jobs、preview [37701168438](https://github.com/Justintunsday/Piliglass/actions/runs/37701168438)
@@ -61,8 +74,8 @@ driver `summary.json`、artifact 与聚合门禁 outcome 为准。
 | 失败关闭的 reset port | `account_reset_persistence_port.dart` + 两处调用 | 匿名 jar.deleteAll 与 Hive clear 的默认 Dart 转发；生命周期顺序不变 | 非 Native authority |
 | 隔离 Keychain shadow | `PiliAccountEnvelopeStagingStore.swift` | 唯一 manifest 指针、record 全量 reread、写后错误读回、unknown ack 保留双记录、operation gate、cancel 前不发布 | shadow only |
 | shadow 单账户事务 | `PiliAccountEnvelopeTransactionStore.swift` | 按 raw key + generation 定位单 record；Cookie save/delete/deleteAll 经已对照 Dart 的 ordered reducer；临时 selection（派生 history）、credentials、activated 为显式值变更；全部候选先过累计 ledger 再发布 pointer | shadow only；持久用途/install/buvid 未做 |
-| durable authority | `PiliAccountAuthorityMarkerStore.swift`、`PiliAccountAuthorityCoordinator.swift` | marker 精确 UUID/digest 绑定、合法起始态、跨 await gate；修复后需新 CI | 仅 Native；无 Dart runtime proxy；调用 completeRevert 前仍需 durable Dart 消费 |
-| reverse import | `native_account_reverse_import.dart` | 纯 immutable 蓝图、strict 累计限额、显式 captured identity 构造、空目标内存安装；匿名完整状态与 owner/stored 双顺序 | 修复后需新 CI；legacy Hive 属性重启仍丢失，durable replacement 未做 |
+| durable authority | `PiliAccountAuthorityMarkerStore.swift`、`PiliAccountAuthorityCoordinator.swift` | marker 精确 UUID/digest 绑定、合法起始态、跨 await gate；51项实际检查通过 | 仅 Native；无 Dart runtime proxy；调用 completeRevert 前仍需 durable Dart 消费 |
+| reverse import | `native_account_reverse_import.dart` | 纯 immutable 蓝图、strict 累计限额、显式 captured identity 构造、空目标内存安装；匿名完整状态与 owner/stored 双顺序；账户157测试通过 | legacy Hive 属性重启仍丢失，durable replacement 未做 |
 | 跨语言对照 | `tool/check_native_account_*`、Dart producer/fixture/test | fresh goldens 三阶段 hash、独立 JSON oracle、真实 Keychain/故障矩阵、真实 Dart capture→reverse→逐字节比较 | 仅 synthetic secrets |
 
 ## 当前生产数据流（authority = Dart）

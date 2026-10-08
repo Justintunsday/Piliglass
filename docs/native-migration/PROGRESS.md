@@ -1,14 +1,22 @@
 # 迁移进度与编译证据
 
-最后更新：2026-10-08（Asia/Hong_Kong）。目标仍在进行，Flutter runtime 保留。
+最后更新：2026-10-09（Asia/Hong_Kong）。目标仍在进行，Flutter runtime 保留。
 
-**P05 审核修复正在集成，尚未验收**：源码审核发现12项交接/反向恢复问题，
-修复按 [P05_REPAIR_PLAN.md](P05_REPAIR_PLAN.md) 执行。`741256b` 已修候选 UUID/digest
-绑定、旧记录保留、handoff 合法起始态和 marker 跨 await gate；`ab5ccbb` 已修 shared
-vault snapshot/CAS。严格纯 decoder、空目标恢复与新回归仍在集成，待同 SHA release5 +
-preview4 实际成功才能验收。旧7159af4的编译结果不能证明这些新问题已解决。
-反向 apply 不等于 durable Dart rollback；安全已发布记录 GC 及完整回退仍是剩余项。
-runtime flags 继续 false，UI 视觉重写继续排在 PLAN.md 业务迁移之后。
+**P05 本轮12项审核问题的有限组件修复已验收，P05整体仍未完成**：按
+[P05_REPAIR_PLAN.md](P05_REPAIR_PLAN.md) 完成精确候选 UUID/digest、发布记录保留、
+handoff 合法起始态、marker 跨 await gate、shared vault snapshot/CAS、纯 decoder、
+匿名完整状态与双顺序、严格累计限额、空目标恢复及失败后的互斥恢复。
+同代码 SHA `e740cace879630f8968f5f0733c6af708377cddd` 的
+[release 37781658066](https://github.com/Justintunsday/Piliglass/actions/runs/37781658066)
+5/5 与 [preview 37782661482](https://github.com/Justintunsday/Piliglass/actions/runs/37782661482)
+4/4 jobs 全部成功；已读取实际日志与 artifacts：账户157 tests、tracker72、严格分析
+无问题；envelope `status=passed`，108 oracle/43负例/40 staging/35 transaction/51 authority，
+四次 Swift6 complete concurrency 编译通过。九个强制 outcome 全 success，Runner
+`BUILD SUCCEEDED`、109.1MB、FFmpeg加载顺序通过；Preview20测试与压力 fixture 通过，
+62个相关源码 Git blob SHA256 与产物一致。失败轮次及修正已记录，未将其作通过证据。
+反向 apply 仍只支持空目标内存恢复，不等于 durable Dart rollback；安全已发布记录 GC
+及完整回退仍是剩余项。runtime flags 继续 false，生产 authority 仍为 Dart，UI视觉重写
+继续排在 PLAN.md 业务迁移之后。后续文档提交不改变上述已验证代码。
 
 当前阶段为 **P05**。`bedde36` 的原并行组与 `0527fb2` 的
 [CA1 jar-only shadow](P05_COOKIE_AUTHORITY_PLAN.md) 均已通过同 SHA release5 +

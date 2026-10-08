@@ -1,13 +1,13 @@
 # P05 完成报告（独立审查版）
 
-2026-10-07（Asia/Hong_Kong），分支 `codex/native-migration`，已验证代码 SHA
-`7159af42e4dd942f989467d8c5a9eb77fb2a42e7`。
+2026-10-09（Asia/Hong_Kong），分支 `codex/native-migration`，本轮审核修复已验证代码 SHA
+`e740cace879630f8968f5f0733c6af708377cddd`。7159af4证据保留为历史记录。
 
 ## 结论摘要
 
 2026-10-08 审核更正：7159af4 的编译与测试结果有效，但旧测试未覆盖随后发现的
 12 项正确性问题，不能据此认定交接与反向恢复组件已满足完整合同。修复按
-[P05_REPAIR_PLAN.md](P05_REPAIR_PLAN.md) 实施，新代码必须重新通过同 SHA 完整 CI。
+[P05_REPAIR_PLAN.md](P05_REPAIR_PLAN.md) 实施，已通过下列同 SHA 完整CI。
 反向 apply 仅支持空目标的内存恢复；legacy Hive 适配器仍会在重启后丢失属性，
 因此不能将它接到 `completeRevert()` 并宣称已完成 durable Dart 回退。
 
@@ -21,7 +21,28 @@
 - 所有完成项均由真实 Actions 日志、artifacts、独立 oracle 与聚合门禁证明；没有使用
   `continue-on-error` 的外观 success 或本地静态检查作为验收。
 
-## 1. 同 SHA CI 证据（7159af4）
+## 1. 本轮审核修复证据（e740cac）
+
+- 同代码 SHA 的 release [37781658066](https://github.com/Justintunsday/Piliglass/actions/runs/37781658066)
+  5/5 jobs 与 preview [37782661482](https://github.com/Justintunsday/Piliglass/actions/runs/37782661482)
+  4/4 jobs success；实际日志中九个强制 outcome 全success、0 contract errors；Runner
+  `BUILD SUCCEEDED`、109.1MB，Aether FFmpeg先于media-kit FFmpeg加载。
+- 账户完整测试实际 `+157: All tests passed!`、tracker72、fatal-infos分析无问题。
+  新11项恢复测试与2项无存储初始化的纯decoder测试通过，保留所有旧回归。
+- 新鲜Dart producer8/观察10/goldens2；Native oracle108/精确负例43、真实Security
+  Keychain staging40、transaction35、authority51；四次Swift6严格并发编译通过。
+  envelope `status=passed` 的sourceSHA/workflowSHA与代码SHA一致；62个相关Git blob
+  SHA256全部匹配；没有将Windows CRLF工作副本字节当作Git源文件。
+- Preview实际账户6/图片3/播放器2/导航9共20测试、0失败；压力fixture `failures=[]`。
+  burst单次188.41ms仅为fixture观察，不代表真机性能验收。
+- 已处理12项审核问题：精确候选身份与记录保留、合法handoff与marker互斥、vault CAS、
+  匿名全状态、cached MID/raw key与空jar、拒绝非空合并、owner顺序、零激活请求、严格
+  类型/历史/累计资源限额、无副作用decode。写后错误仍failclosed；失败clear不能解锁。
+  普通Dart构造与生命周期默认行为保持，所有runtime能力门禁仍关闭。
+- 失败轮次及修复提交见 [P05_REPAIR_PLAN.md](P05_REPAIR_PLAN.md)。实际CI于2026-10-08
+  结束，本报告于2026-10-09核对；后续仅文档提交不代表新的编译SHA。
+
+### 历史同 SHA CI 证据（7159af4，旧覆盖范围）
 
 - release [37701163766](https://github.com/Justintunsday/Piliglass/actions/runs/37701163766)
   5/5 jobs success；聚合门禁 9 个 outcome（含 `ACCOUNT_ENVELOPE_OUTCOME`）全部 success，
@@ -60,10 +81,10 @@
 | P05 目标 | 当前 Native 状态 | CI 证据 | 剩余 |
 |---|---|---|---|
 | 认证（QR/密码/SMS/Cookie/Geetest/手机验证、刷新、退出） | 独立 Native 状态机/协议与 synthetic 合同此前通过；production 执行器未安装 | 既有 bundle 合同 | production 安装 + 真实账户验收 |
-| Cookie 格式与 mutation | strict 有序 jar2、累计 ledger、纯 reducer、shadow durable transaction（含 selection/credentials/activated） | 108/43/36/29 checks | 生产 store 事务运行时接入、持久用途/install/buvid |
+| Cookie 格式与 mutation | strict 有序 jar2、累计 ledger、纯 reducer、shadow durable transaction（含 selection/credentials/activated） | 本轮108/43/40/35 checks | 生产 store 事务运行时接入、持久用途/install/buvid |
 | 签名 | Native signer/body codec 合同通过；运行时未安装 | 既有签字/正文合同 | production 调用装配 |
-| 四用途账户状态 | 只读 snapshot/selection 合同；完整 capture；临时 selection/history shadow 事务 | 账户 146 tests、72 tracker、24 authority checks | 运行时 proxy、持久用途、真实账户切换 |
-| 账户持久化 | 完整账户 Keychain shadow + 唯一 manifest + 真实重启；authority 组件；Dart 空目标内存恢复（持久回退未完成） | 旧 CI staging 36、transaction 29、authority 24；审核修复另行验收 | durable reverse replacement、record identity registry、安全孤儿清理、运行时切换 |
+| 四用途账户状态 | 只读 snapshot/selection 合同；完整 capture；临时 selection/history shadow 事务 | 账户157 tests、72 tracker、51 authority checks | 运行时 proxy、持久用途、真实账户切换 |
+| 账户持久化 | 完整账户 Keychain shadow + 唯一 manifest + 真实重启；authority 组件；Dart 空目标内存恢复（持久回退未完成） | 本轮staging40、transaction35、authority51实际通过 | durable reverse replacement、record identity registry、安全孤儿清理、运行时切换 |
 | 统一读写权威 | 未完成；Dart 仍是默认读写者 | — | CA3 全部 |
 | 原生网络兼容边界 | policy 描述/lease/capability 合同此前通过；transport 未 parity | 既有 HTTP/transport 合同 | proxy/retry/pool/H1/H2/TLS/timeout/raw Set-Cookie/gRPC metadata |
 | 真实账户/设备（CA5/CA6） | 未执行 | — | 测试设备与账户输入 |
