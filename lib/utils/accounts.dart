@@ -55,7 +55,9 @@ abstract final class Accounts {
 
   static bool ownsCredentials(Account value) {
     if (_capturedRestoreOperation != null || _capturedRecoveryOperation != null ||
-        _capturedRestoreFailed) return false;
+        _capturedRestoreFailed) {
+      return false;
+    }
     if (value is AnonymousAccount) {
       if (_anonymousReset != null) return false;
       _requestState.activate(value);
@@ -470,14 +472,18 @@ abstract final class Accounts {
       anonymous.restoreCapturedState(operation, anonymousJar, anonymousTypes, anonymousActivated);
       _owners.addAll(input);
       _requestState.activate(anonymous);
-      for (final value in input.values) _requestState.activate(value);
+      for (final value in input.values) {
+        _requestState.activate(value);
+      }
       for (var index = 0; index < slots.length; index++) {
         final ordinal = slots[index];
         _accountMode[index] = ordinal == 0 ? anonymous : owned[ordinal - 1];
       }
       _requestState.changed();
     } catch (_) {
-      for (final value in owned) _retired[value] = true;
+      for (final value in owned) {
+        _retired[value] = true;
+      }
       _requestState.revokeAll();
       _capturedRestoreFailed = true;
       rethrow;

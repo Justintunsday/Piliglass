@@ -24,8 +24,7 @@ abstract final class NativeAccountReverseImport {
   /// Never constructs LoginAccount/AnonymousAccount or reads Pref/Hive.
   static NativeAccountReverseImportResult decode(Map<String, Object?> envelope) {
     try {
-      final reader = _EnvelopeReader(envelope);
-      reader.validate();
+      final reader = _EnvelopeReader(envelope)..validate();
       NativeOrderedCookieJarExporter.verifyWireCapacity(envelope);
       return NativeAccountReverseImportResult._(
         _freeze(envelope) as Map<String, Object?>,
@@ -42,10 +41,10 @@ abstract final class NativeAccountReverseImport {
 /// authority transition/freeze. A nonempty target is rejected, never cleared.
 final class NativeAccountReverseImportService {
   const NativeAccountReverseImportService({
-    AccountInstallPersistencePort persistencePort = accountInstallPersistencePort,
-  }) : _persistencePort = persistencePort;
+    this.persistencePort = accountInstallPersistencePort,
+  });
 
-  final AccountInstallPersistencePort _persistencePort;
+  final AccountInstallPersistencePort persistencePort;
 
   Future<void> apply(NativeAccountReverseImportResult result) async {
     // Check before creating even detached Account objects.
@@ -75,7 +74,7 @@ final class NativeAccountReverseImportService {
       anonymousPurposes: _purposes(anonymous['persistedPurposes']),
       anonymousActivated: anonymous['activated']! as bool,
       selections: _list(result.value['selections']).cast<int>(),
-      persistencePort: _persistencePort,
+      persistencePort: persistencePort,
     );
   }
 }
@@ -178,7 +177,9 @@ final class _EnvelopeReader {
         _preflight(entry.value, depth + 1);
       }
     } else if (node is List) {
-      for (final child in node) _preflight(child, depth + 1);
+      for (final child in node) {
+        _preflight(child, depth + 1);
+      }
     } else {
       _expect(node == null || node is String || node is bool || node is int);
     }

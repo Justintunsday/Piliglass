@@ -22,7 +22,9 @@ List<Map<String, Object?>> _records(Map<String, Object?> value) =>
     (value['records']! as List).map((record) => (record as Map).cast<String, Object?>()).toList();
 Map<String, Object?> _normalized(Map<String, Object?> value) {
   final copy = _copy(value)..remove('revision');
-  for (final record in _records(copy)) record.remove('generation');
+  for (final record in _records(copy)) {
+    record.remove('generation');
+  }
   return copy;
 }
 
@@ -234,8 +236,7 @@ void main() {
       (value) => _records(value)[1]['persistedPurposes'] = ['main', 'main'],
       (value) => _records(value)[1]['storageKeyUnits'] = [65536],
       (value) {
-        final jar = _records(value)[1]['jar']! as Map;
-        jar.remove('provenance');
+        (_records(value)[1]['jar']! as Map).remove('provenance');
       },
       (value) {
         final jar = _records(value)[1]['jar']! as Map;
@@ -244,8 +245,8 @@ void main() {
       },
       (value) {
         final jar = _records(value)[1]['jar']! as Map;
-        final cookie = ((jar['domainBuckets'] as List).first['paths'] as List).first['cookies'][0] as Map;
-        cookie.remove('cookieDomainUnits');
+        (((jar['domainBuckets'] as List).first['paths'] as List).first['cookies'][0] as Map)
+            .remove('cookieDomainUnits');
       },
     ];
     final revision = Accounts.requestRevision;
