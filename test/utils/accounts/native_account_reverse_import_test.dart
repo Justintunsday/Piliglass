@@ -28,11 +28,25 @@ Map<String, Object?> _normalized(Map<String, Object?> value) {
   return copy;
 }
 
+/// Deterministic empty-target fixture: delete/reset only, with no clear()'s
+/// fire-and-forget buvid activation. All actual Hive/jar deletes are awaited.
+Future<void> _prepareEmptyTarget() async {
+  final anonymous = AnonymousAccount();
+  for (final purpose in AccountType.values) {
+    Accounts.selectTemporarily(purpose, anonymous);
+  }
+  for (final account in Accounts.account.values.toList()) {
+    await account.delete();
+  }
+  await anonymous.delete();
+  AnonymousAccount().activated = true;
+}
+
 void main() {
   late AccountTestStorage storage;
   setUpAll(() async { storage = await AccountTestStorage.open(); });
   setUp(() async {
-    await storage.reset();
+    await _prepareEmptyTarget();
     AnonymousAccount().type.clear();
   });
   tearDownAll(() => storage.close());
@@ -54,7 +68,7 @@ void main() {
     final capture = Accounts.captureLiveMemoryShadow().value;
     final decoded = NativeAccountReverseImport.decode(capture);
     expect(decoded.accountKeys, ['10', '2']);
-    await Accounts.clear();
+    await _prepareEmptyTarget();
     anonymous.type.clear();
     await const NativeAccountReverseImportService().apply(decoded);
     expect(_normalized(Accounts.captureLiveMemoryShadow().value), _normalized(capture));
@@ -79,13 +93,13 @@ void main() {
       }
       final capture = Accounts.captureLiveMemoryShadow().value;
       final decoded = NativeAccountReverseImport.decode(capture);
-      await Accounts.clear();
+      await _prepareEmptyTarget();
       await const NativeAccountReverseImportService().apply(decoded);
       final restored = Accounts.account.get('02')!;
       expect(restored.storageKey, '02');
       expect(restored.mid, 2);
       expect(_normalized(Accounts.captureLiveMemoryShadow().value), _normalized(capture));
-      await Accounts.clear();
+      await _prepareEmptyTarget();
     }
   });
 
@@ -99,7 +113,7 @@ void main() {
     first.cookieJar.domainCookies['bilibili.com']!['/']!['DedeUserID']!.cookie.value = '999';
     final capture = Accounts.captureLiveMemoryShadow().value;
     final decoded = NativeAccountReverseImport.decode(capture);
-    await Accounts.clear();
+    await _prepareEmptyTarget();
     await const NativeAccountReverseImportService().apply(decoded);
     expect(Accounts.account.keys.toList(), ['02', '2']);
     expect(Accounts.account.get('02')!.mid, 2);
@@ -113,7 +127,7 @@ void main() {
     Accounts.selectTemporarily(AccountType.main, AnonymousAccount());
     final capture = Accounts.captureLiveMemoryShadow().value;
     final decoded = NativeAccountReverseImport.decode(capture);
-    await Accounts.clear();
+    await _prepareEmptyTarget();
     final prior = Request.dio.httpClientAdapter;
     final counter = _CountingAdapter();
     Request.dio.httpClientAdapter = counter;

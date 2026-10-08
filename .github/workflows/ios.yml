@@ -323,6 +323,14 @@ jobs:
           dart tool/check_account_request_state.dart | tee build/account-request-state/runtime.log
           flutter test --no-pub --reporter expanded test/utils/accounts/ | tee build/account-request-state/flutter-test.log
 
+      - name: Upload account lifecycle evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: account-request-state-contracts
+          path: build/account-request-state/
+          if-no-files-found: warn
+
       - name: Verify full account live-memory envelopes against fresh actual Dart capture
         id: group-account-envelope
         continue-on-error: true
@@ -473,14 +481,6 @@ jobs:
         with:
           name: native-login-contracts
           path: build/native-login-contract/
-          if-no-files-found: warn
-
-      - name: Upload account lifecycle evidence
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: account-request-state-contracts
-          path: build/account-request-state/
           if-no-files-found: warn
 
       - name: Observe Darwin Cookie headers and cancellation lifecycle
