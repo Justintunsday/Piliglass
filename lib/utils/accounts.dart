@@ -425,7 +425,7 @@ abstract final class Accounts {
   }) async {
     requireEmptyCapturedRestoreTarget();
     final stamp = _requestState.captureSingleOfType<AnonymousAccount>()!;
-    final anonymous = stamp.account;
+    final anonymous = stamp.account as AnonymousAccount;
     final owned = List<LoginAccount>.of(accounts);
     final order = List<int>.of(ownerOrdinals);
     final slots = List<int>.of(selections);
