@@ -12,6 +12,7 @@ struct PiliAccountAuthorityHandoffReceipt: Sendable, Equatable {
 /// `beginHandoff` and the Dart-side durable import between `reverseExport` and
 /// `completeRevert`; this actor owns the single publish point and the crash
 /// recovery rules. It never writes account data itself.
+/// Composition owns one coordinator, marker actor and shared vault per namespace.
 ///
 /// Recovery: a missing marker means Dart authority. A corrupt, newer-schema or
 /// transitioning/reverting marker fails closed. A published Native marker whose
@@ -39,9 +40,18 @@ actor PiliAccountAuthorityCoordinator {
   func beginHandoff(candidate: Data, epoch: UUID) async throws -> PiliAccountAuthorityHandoffReceipt {
     try beginOperation()
     defer { operationInProgress = false }
+    // Validate durable authority before any candidate mutation. A handoff is
+    // exclusively Dart -> Native; unresolved or already Native state requires
+    // recovery/revert, not a second publication over its old pointer.
+    if let current = try await markers.load() {
+      guard current.authority == .dartHive, current.phase == .dartActive else {
+        throw PiliAccountAuthorityError.unsafeState
+      }
+    }
     let envelope = try codec.decode(candidate)
     let canonical = try codec.encode(envelope)
     let publication = try await vault.importShadow(canonical)
+    try Task.checkCancellation()
     let marker = try PiliAccountAuthorityMarker(
       schemaVersion: 2, authority: .nativeKeychain, phase: .nativeActive, epoch: epoch,
       candidateTransactionID: publication.transactionID, revision: envelope.revision).validated()
@@ -62,7 +72,7 @@ actor PiliAccountAuthorityCoordinator {
     case .dartActive:
       return nil
     case .nativeActive:
-      let envelope = try await durableEnvelope()
+      let envelope = try await durableEnvelope(marker)
       guard envelope.revision == marker.revision else {
         throw PiliAccountAuthorityError.unsafeState
       }
@@ -82,14 +92,14 @@ actor PiliAccountAuthorityCoordinator {
     guard let marker = try await markers.load(), marker.phase == .nativeActive else {
       throw PiliAccountAuthorityError.unsafeState
     }
-    let envelope = try await durableEnvelope()
+    let envelope = try await durableEnvelope(marker)
     guard envelope.revision == marker.revision else { throw PiliAccountAuthorityError.unsafeState }
     return try codec.encode(envelope)
   }
 
   /// Single switch back to Dart authority. The caller must have durably
   /// consumed `reverseExport` first. Readback of the marker decides success;
-  /// unknown results keep Native authority at the next launch.
+  /// unknown results are resolved from the durable marker at the next launch.
   func completeRevert() async throws {
     try beginOperation()
     defer { operationInProgress = false }
@@ -99,12 +109,12 @@ actor PiliAccountAuthorityCoordinator {
     try await markers.clear(ifMatches: marker)
   }
 
-  private func durableEnvelope() async throws -> PiliAccountLiveMemoryShadow {
+  private func durableEnvelope(_ marker: PiliAccountAuthorityMarker) async throws -> PiliAccountLiveMemoryShadow {
     do {
-      guard let envelope = try await vault.loadShadow() else {
+      guard let transactionID = marker.candidateTransactionID else {
         throw PiliAccountAuthorityError.missingCandidate
       }
-      return envelope
+      return try await vault.loadPublishedCandidate(transactionID: transactionID)
     } catch PiliAccountEnvelopeStagingError.missingRecord {
       throw PiliAccountAuthorityError.missingCandidate
     }

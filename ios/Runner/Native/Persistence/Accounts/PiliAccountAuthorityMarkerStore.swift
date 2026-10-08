@@ -48,12 +48,19 @@ struct PiliAccountAuthorityMarker: Codable, Sendable, Equatable {
 actor PiliAccountAuthorityMarkerStore {
   private let secrets: any PiliAccountSecretStore
   private let markerKey = "account-authority-marker-v2"
+  private var operationInProgress = false
 
   init(secrets: any PiliAccountSecretStore) {
     self.secrets = secrets
   }
 
   func load() async throws -> PiliAccountAuthorityMarker? {
+    try beginOperation()
+    defer { operationInProgress = false }
+    return try await readMarker()
+  }
+
+  private func readMarker() async throws -> PiliAccountAuthorityMarker? {
     guard let bytes = try await secrets.read(markerKey) else { return nil }
     guard bytes.count <= 4096 else { throw PiliAccountAuthorityError.invalidMarker }
     let marker: PiliAccountAuthorityMarker
@@ -65,6 +72,8 @@ actor PiliAccountAuthorityMarkerStore {
   @discardableResult
   func publish(_ marker: PiliAccountAuthorityMarker) async throws
     -> (marker: PiliAccountAuthorityMarker, recoveredWriteAcknowledgment: Bool) {
+    try beginOperation()
+    defer { operationInProgress = false }
     let marker = try marker.validated()
     let encoder = JSONEncoder()
     encoder.outputFormatting = [.sortedKeys]
@@ -88,14 +97,23 @@ actor PiliAccountAuthorityMarkerStore {
   /// Clears the marker only while the observed durable marker is exactly the
   /// expected one. Readback decides success; an unreadable result is unknown.
   func clear(ifMatches expected: PiliAccountAuthorityMarker) async throws {
-    guard try await load() == expected else { throw PiliAccountAuthorityError.unsafeState }
+    try beginOperation()
+    defer { operationInProgress = false }
+    guard try await readMarker() == expected else { throw PiliAccountAuthorityError.unsafeState }
     var removeFailure: (any Error)?
     do { try await secrets.remove(markerKey) }
     catch { removeFailure = error }
     let remaining: PiliAccountAuthorityMarker?
-    do { remaining = try await load() }
+    do { remaining = try await readMarker() }
     catch { throw PiliAccountAuthorityError.publicationUnknown }
     if removeFailure != nil, remaining == nil { return }
     guard remaining == nil else { throw PiliAccountAuthorityError.publicationUnknown }
+  }
+
+  private func beginOperation() throws {
+    // The compare/write/remove/readback sequence spans awaits. An actor alone
+    // cannot stop another publication from entering during one of those awaits.
+    guard !operationInProgress else { throw PiliAccountAuthorityError.operationInProgress }
+    operationInProgress = true
   }
 }

@@ -15,9 +15,14 @@ private actor EnvelopeFaultVault: PiliAccountSecretStore {
   func pauseWrite() { pause = true }
   func isPaused() -> Bool { suspended != nil }
   func resume() { suspended?.resume(); suspended = nil }
-  func recordCount() -> Int { values.keys.filter { $0 != pointer }.count }
+  func recordCount() -> Int { values.keys.filter { $0.hasPrefix("account-envelope-shadow-v2.") }.count }
   func corruptRecord() {
-    if let key = values.keys.first(where: { $0 != pointer }) { values[key] = Data("corrupt".utf8) }
+    if let key = values.keys.first(where: { $0.hasPrefix("account-envelope-shadow-v2.") }) {
+      values[key] = Data("corrupt".utf8)
+    }
+  }
+  func removeDescriptor(_ id: UUID) {
+    values.removeValue(forKey: "account-envelope-shadow-descriptor-v2.\(id.uuidString.lowercased())")
   }
 
   func read(_ key: String) throws -> Data? {
@@ -84,14 +89,16 @@ private actor EnvelopeFaultVault: PiliAccountSecretStore {
       try check(try await restarted.loadShadow() == expected, "actual Keychain actor restart")
       try check(await restarted.nativeWritesAllowed == false, "shadow never grants account writes")
       try check(try await keychain.read(
-        "account-envelope-shadow-v2.\(first.transactionID.uuidString.lowercased())") == nil,
-        "previous record cleaned after pointer verification")
+        "account-envelope-shadow-v2.\(first.transactionID.uuidString.lowercased())") != nil,
+        "published immutable record retained for independent authority references")
       try await restarted.importShadow(differentData)
       let fresh = PiliAccountEnvelopeStagingStore(
         secrets: PiliAccountKeychainSecretStore(stagingNamespace: namespace))
       try check(try await fresh.loadShadow() == differentExpected, "alternate envelope Keychain restart")
       try await fresh.discardShadow()
       try check(try await persistent.loadShadow() == nil, "actual Keychain pointer discarded")
+      try check(try await fresh.loadPublishedCandidate(transactionID: first.transactionID) == expected,
+                "exact candidate survives replacement and shadow discard")
     } catch {
       try? await persistent.discardShadow()
       throw error
@@ -107,7 +114,7 @@ private actor EnvelopeFaultVault: PiliAccountSecretStore {
       try check(try await store.loadShadow() == expected, "unpublished failure preserves previous pointer")
       try check(await vault.recordCount() == 1, "unpublished candidate removed")
       try await store.discardShadow()
-      try check(await vault.recordCount() == 0, "discard removes published record")
+      try check(await vault.recordCount() == 1, "discard retains published record until reference-aware GC")
     }
 
     let acknowledgmentVault = EnvelopeFaultVault()
@@ -118,7 +125,7 @@ private actor EnvelopeFaultVault: PiliAccountSecretStore {
     try check(recovered.recoveredWriteAcknowledgment, "write-then-error resolved by actual pointer reread")
     try check(recovered.transactionID != oldReceipt.transactionID, "recovered acknowledgment names new pointer")
     try check(try await acknowledgmentStore.loadShadow() == differentExpected, "published record never removed on write error")
-    try check(await acknowledgmentVault.recordCount() == 1, "verified publication cleans previous record")
+    try check(await acknowledgmentVault.recordCount() == 2, "verified publication retains previous immutable record")
 
     let unknownVault = EnvelopeFaultVault()
     let unknownStore = PiliAccountEnvelopeStagingStore(secrets: unknownVault)
@@ -140,6 +147,22 @@ private actor EnvelopeFaultVault: PiliAccountSecretStore {
     await invalidVault.corruptRecord()
     do { _ = try await invalidStore.loadShadow(); throw StagingFixtureError.failed("corruption accepted") }
     catch PiliAccountEnvelopeStagingError.verificationFailed { checks += 1 }
+
+    // Backfill manifest-only schema-2 candidates before replacing/removing the
+    // old pointer. An existing authority marker must still resolve its UUID.
+    let legacySecrets = EnvelopeFaultVault()
+    let legacyStore = PiliAccountEnvelopeStagingStore(secrets: legacySecrets)
+    let legacy = try await legacyStore.importShadow(data)
+    await legacySecrets.removeDescriptor(legacy.transactionID)
+    try check(try await legacyStore.loadPublishedCandidate(transactionID: legacy.transactionID) == expected,
+              "manifest-only candidate restores by exact current UUID")
+    let nextLegacy = try await legacyStore.importShadow(differentData)
+    try check(try await legacyStore.loadPublishedCandidate(transactionID: legacy.transactionID) == expected,
+              "replacement backfills old immutable digest descriptor")
+    await legacySecrets.removeDescriptor(nextLegacy.transactionID)
+    try await legacyStore.discardShadow()
+    try check(try await legacyStore.loadPublishedCandidate(transactionID: nextLegacy.transactionID) == differentExpected,
+              "discard backfills current immutable descriptor before removing pointer")
 
     let fencedVault = EnvelopeFaultVault()
     let fencedStore = PiliAccountEnvelopeStagingStore(secrets: fencedVault)
