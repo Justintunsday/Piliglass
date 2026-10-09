@@ -190,7 +190,7 @@ void main() {
     final first = await captureWith('2');
     final second = await captureWith('10');
     final vault = _FaultVault();
-    final ids = [_firstID, _secondID];
+    const ids = [_firstID, _secondID];
     var nextId = 0;
     final store = NativeAccountReverseRestoreStore(
       vault: vault,
@@ -244,7 +244,7 @@ void main() {
     final second = await captureWith('10');
     final third = await captureWith('20');
     final vault = _FaultVault();
-    final ids = [_firstID, _secondID, _thirdID];
+    const ids = [_firstID, _secondID, _thirdID];
     var nextId = 0;
     final store = NativeAccountReverseRestoreStore(
       vault: vault,
