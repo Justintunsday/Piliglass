@@ -815,7 +815,14 @@ void main() {
     final second = await captureWith('10');
     final vaultA = _FaultVault();
     final vaultB = _FaultVault();
-    final storeA = _faultStore(vaultA, id: _firstID);
+    // Two distinct transactions: the second must reach publication, not be
+    // rejected by create-only duplicate identity.
+    const ids = [_firstID, _secondID];
+    var nextId = 0;
+    final storeA = NativeAccountReverseRestoreStore(
+      vault: vaultA,
+      transactionIDFactory: () => ids[nextId++],
+    );
     await storeA.importRestore(
       envelope: first, authorityEpoch: _epoch, createdAtMicroseconds: 1);
     vaultA.arm(_Fault.readAfterPublish);
@@ -825,7 +832,7 @@ void main() {
       throwsA(isA<NativeAccountReverseRestoreException>()
         .having((error) => error.code, 'code', 'publicationUnknown')),
     );
-    final storeB = _faultStore(vaultB, id: _secondID);
+    final storeB = _faultStore(vaultB, id: _thirdID);
     final receipt = await storeB.importRestore(
       envelope: second, authorityEpoch: _epoch, createdAtMicroseconds: 2);
     final loaded = await storeB.loadRestore();
