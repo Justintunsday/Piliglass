@@ -216,7 +216,12 @@ final class NativeAccountReverseRestoreStore {
           sha256.convert(bytes).toString() != manifest.value.sha256) {
         throw const NativeAccountReverseRestoreException('verificationFailed');
       }
-      final decoded = jsonDecode(record);
+      final Object? decoded;
+      try {
+        decoded = jsonDecode(record);
+      } on FormatException {
+        throw const NativeAccountReverseRestoreException('invalidRecord');
+      }
       if (decoded is! Map) {
         throw const NativeAccountReverseRestoreException('invalidRecord');
       }
@@ -257,7 +262,12 @@ final class NativeAccountReverseRestoreStore {
     if (utf8.encode(json).length > _maxManifestBytes) {
       throw const NativeAccountReverseRestoreException('invalidManifest');
     }
-    final decoded = jsonDecode(json);
+    final Object? decoded;
+    try {
+      decoded = jsonDecode(json);
+    } on FormatException {
+      throw const NativeAccountReverseRestoreException('invalidManifest');
+    }
     if (decoded is! Map) {
       throw const NativeAccountReverseRestoreException('invalidManifest');
     }

@@ -14,6 +14,7 @@ const _boxName = 'account_reverse_restore';
 const _epoch = 'synthetic-authority-epoch';
 const _firstID = '11111111-1111-4111-8111-111111111111';
 const _secondID = '22222222-2222-4222-8222-222222222222';
+const _thirdID = '33333333-3333-4333-8333-333333333333';
 
 Map<String, Object?> _copy(Map<String, Object?> value) =>
     (jsonDecode(jsonEncode(value)) as Map).cast<String, Object?>();
@@ -238,7 +239,12 @@ void main() {
     final second = await captureWith('10');
     final third = await captureWith('20');
     final vault = _FaultVault();
-    final store = _store(vault, id: _firstID);
+    final ids = [_firstID, _secondID, _thirdID];
+    var nextId = 0;
+    final store = NativeAccountReverseRestoreStore(
+      vault: vault,
+      transactionIDFactory: () => ids[nextId++],
+    );
     await store.importRestore(
       envelope: first, authorityEpoch: _epoch, createdAtMicroseconds: 1);
     vault.arm(_Fault.readAfterPublish);
@@ -380,6 +386,13 @@ void main() {
     vault.values[recordKey] = record;
     final manifest = vault.values[NativeAccountReverseRestoreStore.manifestKey]!;
     vault.values[NativeAccountReverseRestoreStore.manifestKey] = '{"formatVersion":2}';
+    await expectLater(
+      store.loadRestore(),
+      throwsA(isA<NativeAccountReverseRestoreException>()
+        .having((error) => error.code, 'code', 'invalidManifest')),
+    );
+    expect(vault.values[recordKey], record);
+    vault.values[NativeAccountReverseRestoreStore.manifestKey] = 'not-json';
     await expectLater(
       store.loadRestore(),
       throwsA(isA<NativeAccountReverseRestoreException>()
