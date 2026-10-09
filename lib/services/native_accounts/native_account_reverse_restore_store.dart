@@ -51,14 +51,15 @@ abstract interface class NativeAccountReverseRestoreVault {
 
 final class HiveNativeAccountReverseRestoreVault
     implements NativeAccountReverseRestoreVault {
-  const HiveNativeAccountReverseRestoreVault(this.box, {Object? coordinationDomain})
-      : _coordinationDomain = coordinationDomain;
+  const HiveNativeAccountReverseRestoreVault(this.box);
 
   final Box<String> box;
-  final Object? _coordinationDomain;
 
+  /// In one isolate Hive returns the same Box instance for the same physical
+  /// box, so wrappers around it share one domain; composition may pass the same
+  /// Box instance to every wrapper that must share the gate.
   @override
-  Object get coordinationDomain => _coordinationDomain ?? box;
+  Object get coordinationDomain => box;
 
   @override
   Future<String?> read(String key) => Future<String?>.value(box.get(key));

@@ -810,8 +810,8 @@ void main() {
         '"transactionID":"$_firstID","byteCount":$recordBytes,'
         '"sha256":"${_digest(originalRecord)}"}';
     await expectInvalid('invalidManifest');
-    vault.values[_manifestKey] = List<String>.filled(12, '[').join() + 'null' +
-        List<String>.filled(12, ']').join();
+    vault.values[_manifestKey] =
+        '${List<String>.filled(12, '[').join()}null${List<String>.filled(12, ']').join()}';
     await expectInvalid('invalidManifest');
     vault.values[_manifestKey] = originalManifest;
 
