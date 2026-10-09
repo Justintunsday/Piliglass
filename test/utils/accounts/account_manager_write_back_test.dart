@@ -337,7 +337,7 @@ void main() {
     await drain;
     expect(coordinator.liveOperationCount, 0);
     expect(await _cookie(successor, 'predecessor_write'), isNull);
-    expect(await _cookie(successor, 'SESSDATA'), 'session-successor');
+    expect(await _cookie(successor, 'SESSDATA'), 'successor');
     expect(Accounts.account.get('920005'), same(successor));
   });
 
