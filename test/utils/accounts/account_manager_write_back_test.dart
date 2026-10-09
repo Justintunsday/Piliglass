@@ -32,22 +32,24 @@ final class _GatedJar extends DefaultCookieJar {
   }
 
   final saveStarted = Completer<void>();
-  Completer<void>? _gate;
+  Completer<void>? _pending;
+  Completer<void>? _held;
 
-  void holdNextSave() => _gate = Completer<void>();
+  void holdNextSave() => _pending = Completer<void>();
 
   void releaseSave() {
-    final gate = _gate;
-    _gate = null;
-    gate?.complete();
+    final held = _held;
+    _held = null;
+    held?.complete();
   }
 
   @override
   Future<void> saveFromResponse(Uri uri, List<Cookie> cookies) {
     final real = super.saveFromResponse(uri, cookies);
-    final gate = _gate;
+    final gate = _pending;
     if (gate == null) return real;
-    _gate = null;
+    _pending = null;
+    _held = gate;
     if (!saveStarted.isCompleted) saveStarted.complete();
     return _join(real, gate.future);
   }
@@ -69,22 +71,24 @@ final class _GatedAccount extends LoginAccount {
 
   final _GatedJar gatedJar;
   final persistenceStarted = Completer<void>();
-  Completer<void>? _persistenceGate;
+  Completer<void>? _pendingPersistence;
+  Completer<void>? _heldPersistence;
 
-  void holdNextPersistence() => _persistenceGate = Completer<void>();
+  void holdNextPersistence() => _pendingPersistence = Completer<void>();
 
   void releasePersistence() {
-    final gate = _persistenceGate;
-    _persistenceGate = null;
-    gate?.complete();
+    final held = _heldPersistence;
+    _heldPersistence = null;
+    held?.complete();
   }
 
   @override
   Future<void>? onChange() {
     final real = super.onChange();
-    final gate = _persistenceGate;
+    final gate = _pendingPersistence;
     if (gate == null) return real;
-    _persistenceGate = null;
+    _pendingPersistence = null;
+    _heldPersistence = gate;
     if (!persistenceStarted.isCompleted) persistenceStarted.complete();
     return _join(real, gate.future);
   }
