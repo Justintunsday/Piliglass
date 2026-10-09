@@ -7,6 +7,7 @@ import 'package:PiliPlus/http/effective_http_policy.dart';
 import 'package:PiliPlus/http/init.dart';
 import 'package:PiliPlus/models/common/account_type.dart';
 import 'package:PiliPlus/services/native_accounts/account_cookie_mutation_port.dart';
+import 'package:PiliPlus/services/native_accounts/account_write_back_coordinator.dart';
 import 'package:PiliPlus/services/native_http/prepared_http_policy.dart';
 import 'package:PiliPlus/utils/accounts.dart';
 import 'package:PiliPlus/utils/accounts/account.dart';
@@ -101,11 +102,14 @@ final class NativeHTTPRequestLeaseService {
     Future<void> Function(Account, Uri, Future<void>)? awaitCookieSave,
     Future<void> Function(Account, Future<void>?)? awaitAccountPersistence,
     Duration Function()? now,
+    AccountWriteBackCoordinator? writeBackCoordinator,
     this.ttl = const Duration(minutes: 1),
     this.maxLiveLeases = 32,
     this.maxTombstones = 128,
     this.autoExpire = true,
-  }) : _options = options ?? (() => Request.dio.options),
+  }) : writeBackCoordinator =
+            writeBackCoordinator ?? accountWriteBackCoordinator,
+       _options = options ?? (() => Request.dio.options),
        // Custom options without a paired describer must never borrow the
        // production pool's known policy (existing fixture/compatibility seam).
        _policy = policy ?? (options == null ? (() => Request.effectiveHTTPPolicy) : (() => null)),
@@ -122,6 +126,8 @@ final class NativeHTTPRequestLeaseService {
   final Duration ttl;
   final int maxLiveLeases;
   final int maxTombstones;
+  /// Shared admission/drain gate for the response write-back; composition only.
+  final AccountWriteBackCoordinator writeBackCoordinator;
   final BaseOptions Function() _options;
   final EffectiveHTTPPolicySnapshot? Function() _policy;
   final Account Function() _recommendAccount;
@@ -292,19 +298,32 @@ final class NativeHTTPRequestLeaseService {
         return NativeHTTPRequestLeaseReceipt(outcome);
       }
       final account = context.stamp.account;
-      // Pinned CookieJar mutates before this Future completes. Do not defer it.
-      final saving = accountCookieMutationPort.saveResponseCookies(account, context.snapshot.url, cookies);
-      Accounts.notifyCookieMutation(account);
-      await _awaitCookieSave(account, context.snapshot.url, saving);
-      if (!_owns(context)) {
-        outcome = _closed ? NativeHTTPRequestLeaseOutcome.closed : NativeHTTPRequestLeaseOutcome.revoked;
-        return NativeHTTPRequestLeaseReceipt(outcome, cookiesSaved: true, cookieCount: cookies.length);
+      // Frozen transitions reject new write-back admission without touching the
+      // jar; the existing outcome vocabulary is unchanged (no write applied).
+      final admission = writeBackCoordinator.tryAdmit();
+      if (admission == null) {
+        outcome = NativeHTTPRequestLeaseOutcome.revoked;
+        return NativeHTTPRequestLeaseReceipt(outcome);
       }
-      final persisting = account.onChange();
-      await _awaitAccountPersistence(account, persisting);
-      outcome = _owns(context) ? NativeHTTPRequestLeaseOutcome.finished
-          : _closed ? NativeHTTPRequestLeaseOutcome.closed : NativeHTTPRequestLeaseOutcome.revoked;
-      return NativeHTTPRequestLeaseReceipt(outcome, cookiesSaved: true, cookieCount: cookies.length);
+      try {
+        // Pinned CookieJar mutates before this Future completes. Do not defer it.
+        final saving = accountCookieMutationPort.saveResponseCookies(account, context.snapshot.url, cookies);
+        Accounts.notifyCookieMutation(account);
+        await _awaitCookieSave(account, context.snapshot.url, saving);
+        if (!_owns(context)) {
+          outcome = _closed ? NativeHTTPRequestLeaseOutcome.closed : NativeHTTPRequestLeaseOutcome.revoked;
+          return NativeHTTPRequestLeaseReceipt(outcome, cookiesSaved: true, cookieCount: cookies.length);
+        }
+        final persisting = account.onChange();
+        await _awaitAccountPersistence(account, persisting);
+        outcome = _owns(context) ? NativeHTTPRequestLeaseOutcome.finished
+            : _closed ? NativeHTTPRequestLeaseOutcome.closed : NativeHTTPRequestLeaseOutcome.revoked;
+        return NativeHTTPRequestLeaseReceipt(outcome, cookiesSaved: true, cookieCount: cookies.length);
+      } finally {
+        // Exactly once, including throw/abandon/dispose paths; the outer
+        // finally still owns lease-table cleanup.
+        admission.release();
+      }
     } catch (error) {
       if (error is NativeHTTPRequestLeaseException) rethrow;
       throw const NativeHTTPRequestLeaseException('persistenceFailed');
