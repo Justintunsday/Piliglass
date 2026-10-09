@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:PiliPlus/services/native_accounts/native_account_reverse_import.dart';
+import 'package:PiliPlus/services/native_accounts/strict_persistent_json.dart';
 import 'package:crypto/crypto.dart';
 import 'package:hive_ce/hive.dart';
 import 'package:uuid/v4.dart';
@@ -39,6 +40,10 @@ final class NativeAccountReverseRestoreResult {
 /// String-keyed persistence boundary. Production uses [HiveNativeAccountReverseRestoreVault];
 /// tests inject a deterministic fault vault. Never touches the legacy account box.
 abstract interface class NativeAccountReverseRestoreVault {
+  /// Physical storage identity. Stores sharing a domain share one operation
+  /// gate, recovery fence and transaction-ID reservation set.
+  Object get coordinationDomain;
+
   Future<String?> read(String key);
   Future<void> write(String key, String value);
   Future<void> remove(String key);
@@ -46,9 +51,14 @@ abstract interface class NativeAccountReverseRestoreVault {
 
 final class HiveNativeAccountReverseRestoreVault
     implements NativeAccountReverseRestoreVault {
-  const HiveNativeAccountReverseRestoreVault(this.box);
+  const HiveNativeAccountReverseRestoreVault(this.box, {Object? coordinationDomain})
+      : _coordinationDomain = coordinationDomain;
 
   final Box<String> box;
+  final Object? _coordinationDomain;
+
+  @override
+  Object get coordinationDomain => _coordinationDomain ?? box;
 
   @override
   Future<String?> read(String key) => Future<String?>.value(box.get(key));
@@ -61,16 +71,18 @@ final class HiveNativeAccountReverseRestoreVault
 }
 
 /// Durable candidate vault for a versioned reverse-export envelope. Protocol:
-/// strict pure validation -> candidate write -> exact readback -> CAS recheck
-/// -> single manifest publish -> readback. Published records are retained;
-/// safe GC is deferred while references cannot be proven. This component never
-/// applies state to Accounts, never switches authority and never clears or
-/// merges the legacy account box.
+/// reserve a create-only transaction ID -> strict pure validation -> candidate
+/// write -> exact readback -> CAS recheck -> single manifest publish ->
+/// readback. Published records are retained; safe GC is deferred while
+/// references cannot be proven. This component never applies state to
+/// Accounts, never switches authority and never clears or merges the legacy
+/// account box.
 final class NativeAccountReverseRestoreStore {
   NativeAccountReverseRestoreStore({
     required this.vault,
     String Function()? transactionIDFactory,
-  }) : _newTransactionID = transactionIDFactory ?? _defaultTransactionID;
+  })  : _newTransactionID = transactionIDFactory ?? _defaultTransactionID,
+        _domain = _RestoreDomain.of(vault.coordinationDomain);
 
   static const formatVersion = 1;
   static const source = 'nativeAccountReverseExport';
@@ -78,6 +90,10 @@ final class NativeAccountReverseRestoreStore {
   static const recordKeyPrefix = 'restore-record.';
   static const _maxManifestBytes = 4096;
   static const _maxRecordBytes = 20 * 1024 * 1024;
+  static const _manifestDepth = 8;
+  static const _manifestNodes = 256;
+  static const _recordDepth = 40;
+  static const _recordNodes = 3 * 1024 * 1024 + 65536;
   static const _manifestKeys = {
     'formatVersion', 'source', 'transactionID', 'byteCount', 'sha256',
   };
@@ -91,8 +107,7 @@ final class NativeAccountReverseRestoreStore {
 
   final NativeAccountReverseRestoreVault vault;
   final String Function() _newTransactionID;
-  bool _operationInProgress = false;
-  bool _requiresRecovery = false;
+  final _RestoreDomain _domain;
 
   static String _defaultTransactionID() => const UuidV4().generate();
 
@@ -102,14 +117,18 @@ final class NativeAccountReverseRestoreStore {
     required int createdAtMicroseconds,
     bool Function()? isCancelled,
   }) async {
-    if (_operationInProgress) {
+    if (_domain.operationInProgress) {
       throw const NativeAccountReverseRestoreException('operationInProgress');
     }
-    _operationInProgress = true;
+    _domain.operationInProgress = true;
     String? transactionID;
+    // Only a candidate this round exclusively reserved (create-only) and for
+    // which a write was attempted may ever be cleaned up.
+    var ownsCandidate = false;
+    var recordAttempted = false;
     var keepRecord = false;
     try {
-      if (_requiresRecovery) {
+      if (_domain.requiresRecovery) {
         throw const NativeAccountReverseRestoreException('recoveryRequired');
       }
       _checkCancelled(isCancelled);
@@ -120,6 +139,15 @@ final class NativeAccountReverseRestoreStore {
       if (!_identifierPattern.hasMatch(transactionID)) {
         throw const NativeAccountReverseRestoreException('invalidTransaction');
       }
+      final recordKey = '$recordKeyPrefix$transactionID';
+      // Create-only reservation at the shared persistent boundary: an existing
+      // immutable record or an in-flight reservation must never be overwritten.
+      if (_domain.reservedTransactions.contains(transactionID) ||
+          await vault.read(recordKey) != null) {
+        throw const NativeAccountReverseRestoreException('duplicateTransaction');
+      }
+      _domain.reservedTransactions.add(transactionID);
+      ownsCandidate = true;
       final recordJson = jsonEncode(<String, Object?>{
         'formatVersion': formatVersion,
         'source': source,
@@ -137,27 +165,25 @@ final class NativeAccountReverseRestoreStore {
       _checkCancelled(isCancelled);
 
       Object? recordError;
+      recordAttempted = true;
       try {
-        await vault.write('$recordKeyPrefix$transactionID', recordJson);
+        await vault.write(recordKey, recordJson);
       } catch (error) {
         recordError = error;
       }
       final String? observedRecord;
       try {
-        observedRecord = await vault.read('$recordKeyPrefix$transactionID');
+        observedRecord = await vault.read(recordKey);
       } catch (_) {
-        await _removeUnreferencedCandidate(transactionID);
         throw const NativeAccountReverseRestoreException('verificationFailed');
       }
       if (observedRecord != recordJson) {
-        await _removeUnreferencedCandidate(transactionID);
         if (recordError != null && observedRecord == null) throw recordError;
         throw const NativeAccountReverseRestoreException('verificationFailed');
       }
-      // CAS: the pointer may not change between the baseline read and publish.
+      // CAS: the shared gate makes this read+write exclusive per domain.
       final current = await _readManifest();
       if (current?.json != baseline?.json) {
-        await _removeUnreferencedCandidate(transactionID);
         throw const NativeAccountReverseRestoreException('staleSnapshot');
       }
       _checkCancelled(isCancelled);
@@ -181,7 +207,7 @@ final class NativeAccountReverseRestoreStore {
       } catch (_) {
         // The pointer cannot be read; neither side may be assumed unwritten.
         keepRecord = true;
-        _requiresRecovery = true;
+        _domain.requiresRecovery = true;
         throw const NativeAccountReverseRestoreException('publicationUnknown');
       }
       if (observedManifest == manifestJson) {
@@ -191,34 +217,38 @@ final class NativeAccountReverseRestoreStore {
         );
       }
       if (manifestError != null && observedManifest == baseline?.json) {
-        await _removeUnreferencedCandidate(transactionID);
         throw manifestError;
       }
       // The pointer may now reference the candidate; never delete either side.
       keepRecord = true;
-      _requiresRecovery = true;
+      _domain.requiresRecovery = true;
       throw const NativeAccountReverseRestoreException('publicationUnknown');
     } catch (_) {
-      if (!keepRecord && transactionID != null) {
+      if (!keepRecord && ownsCandidate && recordAttempted && transactionID != null) {
         await _removeUnreferencedCandidate(transactionID);
       }
       rethrow;
     } finally {
-      _operationInProgress = false;
+      if (transactionID != null) {
+        _domain.reservedTransactions.remove(transactionID);
+      }
+      _domain.operationInProgress = false;
     }
   }
 
   /// Durable truth reader and recovery barrier. Also resolves a previous
-  /// unknown publication: only a successful read re-opens `importRestore`.
+  /// unknown publication: only a successful durable read re-opens
+  /// `importRestore` for the shared domain. A corrupt manifest or record fails
+  /// closed without changing the fence (existing semantics are preserved).
   Future<NativeAccountReverseRestoreResult?> loadRestore() async {
-    if (_operationInProgress) {
+    if (_domain.operationInProgress) {
       throw const NativeAccountReverseRestoreException('operationInProgress');
     }
-    _operationInProgress = true;
+    _domain.operationInProgress = true;
     try {
       final manifest = await _readManifest();
       if (manifest == null) {
-        _requiresRecovery = false;
+        _domain.requiresRecovery = false;
         return null;
       }
       final recordKey = '$recordKeyPrefix${manifest.value.transactionID}';
@@ -231,19 +261,18 @@ final class NativeAccountReverseRestoreStore {
           sha256.convert(bytes).toString() != manifest.value.sha256) {
         throw const NativeAccountReverseRestoreException('verificationFailed');
       }
-      final Object? decoded;
-      try {
-        decoded = jsonDecode(record);
-      } on FormatException {
-        throw const NativeAccountReverseRestoreException('invalidRecord');
-      }
-      if (decoded is! Map) {
-        throw const NativeAccountReverseRestoreException('invalidRecord');
-      }
-      final fields = decoded.cast<String, Object?>();
+      final fields = _parseJson(
+        record,
+        maxCodeUnits: _maxRecordBytes,
+        maxDepth: _recordDepth,
+        maxNodes: _recordNodes,
+        errorCode: 'invalidRecord',
+      );
       if (fields.length != _recordKeys.length ||
           !_recordKeys.every(fields.containsKey) ||
+          fields['formatVersion'] is! int ||
           fields['formatVersion'] != formatVersion ||
+          fields['source'] is! String ||
           fields['source'] != source ||
           fields['transactionID'] != manifest.value.transactionID) {
         throw const NativeAccountReverseRestoreException('invalidRecord');
@@ -252,14 +281,12 @@ final class NativeAccountReverseRestoreStore {
       final createdAtMicroseconds = fields['createdAtMicroseconds'];
       final envelope = fields['envelope'];
       if (authorityEpoch is! String || createdAtMicroseconds is! int ||
-          envelope is! Map || envelope.keys.any((key) => key is! String)) {
+          envelope is! Map<String, Object?>) {
         throw const NativeAccountReverseRestoreException('invalidRecord');
       }
       _validateProvenance(authorityEpoch, createdAtMicroseconds);
-      final result = NativeAccountReverseImport.decode(
-        envelope.cast<String, Object?>(),
-      );
-      _requiresRecovery = false;
+      final result = NativeAccountReverseImport.decode(envelope);
+      _domain.requiresRecovery = false;
       return NativeAccountReverseRestoreResult._(
         transactionID: manifest.value.transactionID,
         authorityEpoch: authorityEpoch,
@@ -267,7 +294,7 @@ final class NativeAccountReverseRestoreStore {
         envelope: result,
       );
     } finally {
-      _operationInProgress = false;
+      _domain.operationInProgress = false;
     }
   }
 
@@ -277,19 +304,18 @@ final class NativeAccountReverseRestoreStore {
     if (utf8.encode(json).length > _maxManifestBytes) {
       throw const NativeAccountReverseRestoreException('invalidManifest');
     }
-    final Object? decoded;
-    try {
-      decoded = jsonDecode(json);
-    } on FormatException {
-      throw const NativeAccountReverseRestoreException('invalidManifest');
-    }
-    if (decoded is! Map) {
-      throw const NativeAccountReverseRestoreException('invalidManifest');
-    }
-    final fields = decoded.cast<String, Object?>();
+    final fields = _parseJson(
+      json,
+      maxCodeUnits: _maxManifestBytes,
+      maxDepth: _manifestDepth,
+      maxNodes: _manifestNodes,
+      errorCode: 'invalidManifest',
+    );
     if (fields.length != _manifestKeys.length ||
         !_manifestKeys.every(fields.containsKey) ||
+        fields['formatVersion'] is! int ||
         fields['formatVersion'] != formatVersion ||
+        fields['source'] is! String ||
         fields['source'] != source) {
       throw const NativeAccountReverseRestoreException('invalidManifest');
     }
@@ -309,6 +335,30 @@ final class NativeAccountReverseRestoreStore {
         sha256: digest,
       ),
     );
+  }
+
+  static Map<String, Object?> _parseJson(
+    String source, {
+    required int maxCodeUnits,
+    required int maxDepth,
+    required int maxNodes,
+    required String errorCode,
+  }) {
+    final Object? decoded;
+    try {
+      decoded = StrictPersistentJson.parse(
+        source,
+        maxCodeUnits: maxCodeUnits,
+        maxDepth: maxDepth,
+        maxNodes: maxNodes,
+      );
+    } on StrictPersistentJsonException {
+      throw NativeAccountReverseRestoreException(errorCode);
+    }
+    if (decoded is! Map<String, Object?>) {
+      throw NativeAccountReverseRestoreException(errorCode);
+    }
+    return decoded;
   }
 
   static void _validateProvenance(String authorityEpoch, int createdAtMicroseconds) {
@@ -332,7 +382,7 @@ final class NativeAccountReverseRestoreStore {
     try {
       await vault.remove('$recordKeyPrefix$transactionID');
     } catch (_) {
-      // Best effort for an unreferenced candidate only.
+      // Best effort for an exclusively created, unreferenced candidate only.
     }
   }
 
@@ -346,6 +396,22 @@ final class NativeAccountReverseRestoreStore {
     }
     return manifest?.value.transactionID == transactionID;
   }
+}
+
+/// Shared per physical vault/namespace coordination: one operation gate, one
+/// recovery fence and one transaction-ID reservation set for every store over
+/// the same domain. A per-store lock cannot make the final CAS+publish atomic.
+final class _RestoreDomain {
+  _RestoreDomain._();
+
+  static final Map<Object, _RestoreDomain> _domains = <Object, _RestoreDomain>{};
+
+  static _RestoreDomain of(Object key) =>
+      _domains.putIfAbsent(key, _RestoreDomain._);
+
+  bool operationInProgress = false;
+  bool requiresRecovery = false;
+  final Set<String> reservedTransactions = <String>{};
 }
 
 final class _Manifest {
