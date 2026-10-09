@@ -1,9 +1,9 @@
 import 'dart:async';
-import 'dart:convert';
 
 import 'package:PiliPlus/http/constants.dart';
 import 'package:PiliPlus/models/common/account_type.dart';
 import 'package:PiliPlus/services/native_accounts/account_write_back_coordinator.dart';
+import 'package:PiliPlus/services/native_accounts/native_ordered_cookie_jar_export.dart';
 import 'package:PiliPlus/services/native_http/native_http_request_lease_service.dart';
 import 'package:PiliPlus/utils/accounts.dart';
 import 'package:PiliPlus/utils/accounts/account.dart';
@@ -12,6 +12,7 @@ import 'package:PiliPlus/utils/accounts/account_manager/response_cookie_headers.
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'account_credential_reader_fixtures.dart';
 import 'account_test_storage.dart';
 
 int _nextID = 0;
@@ -254,7 +255,7 @@ void main() {
       final account = await select(910003);
       final service = create(coordinator: coordinator);
       final snapshot = await service.prepare(requestID: _requestID());
-      final before = jsonEncode(account.cookieJar.toJson());
+      final before = NativeOrderedCookieJarExporter.export(account.cookieJar);
       await coordinator.freeze();
       final receipt = await service.finish(
         requestID: snapshot.requestID,
@@ -263,7 +264,11 @@ void main() {
       );
       expect(receipt.outcome, NativeHTTPRequestLeaseOutcome.revoked);
       expect(receipt.cookiesSaved, false);
-      expect(jsonEncode(account.cookieJar.toJson()), before);
+      expect(NativeOrderedCookieJarExporter.export(account.cookieJar), before);
+      final hostOnly = account.cookieJar.hostCookies.values
+          .expand((cookies) => cookies)
+          .where((cookie) => cookie.name == 'lease_cookie');
+      expect(hostOnly, isEmpty);
       expect(coordinator.admittedCount, 0);
     });
 
@@ -329,6 +334,38 @@ void main() {
       await drain;
       expect(drained, true);
       expect(coordinator.liveOperationCount, 0);
+    });
+
+    test('lease prepare consumes the injected read-only credential context', () async {
+      final coordinator = AccountWriteBackCoordinator();
+      await select(910006);
+      final counter = CountingCredentialReader();
+      final service = NativeHTTPRequestLeaseService(
+        options: () => dio.options,
+        writeBackCoordinator: coordinator,
+        credentialReader: counter,
+        autoExpire: false,
+      );
+      services.add(service);
+      final snapshot = await service.prepare(requestID: _requestID());
+      expect(counter.captures, greaterThanOrEqualTo(1));
+      expect(snapshot.headers['x-bili-mid'], '910006');
+    });
+
+    test('lease prepare rejects when the read-only context is unavailable', () async {
+      final coordinator = AccountWriteBackCoordinator();
+      await select(910007);
+      final service = NativeHTTPRequestLeaseService(
+        options: () => dio.options,
+        writeBackCoordinator: coordinator,
+        credentialReader: const DeniedCredentialReader(),
+        autoExpire: false,
+      );
+      services.add(service);
+      await expectLater(
+        service.prepare(requestID: _requestID()),
+        throwsA(_leaseError('revoked')),
+      );
     });
   });
 }
