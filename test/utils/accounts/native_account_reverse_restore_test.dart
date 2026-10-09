@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:PiliPlus/models/common/account_type.dart';
 import 'package:PiliPlus/services/native_accounts/native_account_reverse_import.dart';
 import 'package:PiliPlus/services/native_accounts/native_account_reverse_restore_store.dart';
+import 'package:PiliPlus/services/native_accounts/strict_persistent_json.dart';
 import 'package:PiliPlus/utils/accounts.dart';
 import 'package:PiliPlus/utils/accounts/account.dart';
 import 'package:crypto/crypto.dart';
@@ -41,10 +42,13 @@ final class _FaultVault implements NativeAccountReverseRestoreVault {
   final paused = Completer<void>();
   int removeCalls = 0;
   _Fault? fault;
-  String? injectManifestOnRecordWrite;
+  String? _injectRecordKey;
+  String? _injectRecord;
+  String? _injectManifest;
   bool _pauseWrite = false;
   bool _pauseRead = false;
   bool _pauseManifestWrite = false;
+  bool _pauseReadAfterRecordWrite = false;
   bool _manifestWritten = false;
   int _recordWrites = 0;
   Completer<void>? _suspended;
@@ -65,6 +69,24 @@ final class _FaultVault implements NativeAccountReverseRestoreVault {
   void pauseNextWrite() => _pauseWrite = true;
   void pauseNextRead() => _pauseRead = true;
   void pauseNextManifestWrite() => _pauseManifestWrite = true;
+  void pauseNextReadAfterRecordWrite() {
+    _pauseReadAfterRecordWrite = true;
+    _recordWrites = 0;
+  }
+
+  /// Installs a complete, independently published competing candidate as soon
+  /// as this round writes its own record, making the final CAS see a different
+  /// pointer whose record is fully loadable.
+  void injectCompetingCandidate({
+    required String recordKey,
+    required String record,
+    required String manifest,
+  }) {
+    _injectRecordKey = recordKey;
+    _injectRecord = record;
+    _injectManifest = manifest;
+  }
+
   bool get isPaused => _suspended != null;
 
   void release() {
@@ -83,6 +105,10 @@ final class _FaultVault implements NativeAccountReverseRestoreVault {
   Future<String?> read(String key) async {
     if (_pauseRead) {
       _pauseRead = false;
+      await _suspend();
+    }
+    if (_pauseReadAfterRecordWrite && _recordWrites > 0 && key != _manifestKey) {
+      _pauseReadAfterRecordWrite = false;
       await _suspend();
     }
     if (key == _manifestKey && _manifestWritten && fault == _Fault.readAfterPublish) {
@@ -119,10 +145,13 @@ final class _FaultVault implements NativeAccountReverseRestoreVault {
       }
     } else {
       _recordWrites++;
-      final injected = injectManifestOnRecordWrite;
-      if (injected != null) {
-        values[_manifestKey] = injected;
-        injectManifestOnRecordWrite = null;
+      final injectedKey = _injectRecordKey;
+      if (injectedKey != null) {
+        values[injectedKey] = _injectRecord!;
+        values[_manifestKey] = _injectManifest!;
+        _injectRecordKey = null;
+        _injectRecord = null;
+        _injectManifest = null;
       }
       if (fault == _Fault.recordWriteThenError) {
         fault = null;
@@ -139,19 +168,21 @@ final class _FaultVault implements NativeAccountReverseRestoreVault {
 }
 
 /// Delegates to a real Hive vault while allowing one controlled manifest-write
-/// pause for two-wrapper interleaving tests.
+/// or read pause for interleaving and caller-mutation tests.
 final class _PausingVault implements NativeAccountReverseRestoreVault {
   _PausingVault(this.inner);
 
   final NativeAccountReverseRestoreVault inner;
   final paused = Completer<void>();
   bool _pauseManifest = false;
+  bool _pauseRead = false;
   Completer<void>? _suspended;
 
   @override
   Object get coordinationDomain => inner.coordinationDomain;
 
   void pauseManifestWrite() => _pauseManifest = true;
+  void pauseNextRead() => _pauseRead = true;
 
   void release() {
     _suspended?.complete();
@@ -159,7 +190,16 @@ final class _PausingVault implements NativeAccountReverseRestoreVault {
   }
 
   @override
-  Future<String?> read(String key) => inner.read(key);
+  Future<String?> read(String key) async {
+    if (_pauseRead) {
+      _pauseRead = false;
+      final suspended = Completer<void>();
+      _suspended = suspended;
+      if (!paused.isCompleted) paused.complete();
+      await suspended.future;
+    }
+    return inner.read(key);
+  }
 
   @override
   Future<void> write(String key, String value) async {
@@ -175,6 +215,22 @@ final class _PausingVault implements NativeAccountReverseRestoreVault {
 
   @override
   Future<void> remove(String key) => inner.remove(key);
+}
+
+/// Domain identity constraint probe: a primitive cannot be a stable object
+/// identity for the weak-key registry.
+final class _StringDomainVault implements NativeAccountReverseRestoreVault {
+  @override
+  Object get coordinationDomain => 'string-domain';
+
+  @override
+  Future<String?> read(String key) => Future<String?>.value();
+
+  @override
+  Future<void> write(String key, String value) => Future<void>.value();
+
+  @override
+  Future<void> remove(String key) => Future<void>.value();
 }
 
 NativeAccountReverseRestoreStore _faultStore(_FaultVault vault, {String? id}) =>
@@ -203,6 +259,11 @@ void main() {
   test('real Hive vault survives close and reopen and leaves legacy objects untouched', () async {
     final envelope = await captureWith('2');
     final legacyBefore = Accounts.account.toMap();
+    // Frozen content oracle: in-place mutation would change both sides if the
+    // after state were serialized against the same mutable objects.
+    final legacyContentBefore = {
+      for (final entry in legacyBefore.entries) entry.key: jsonEncode(entry.value.toJson()),
+    };
     final box = await Hive.openBox<String>(_boxName);
     final hiveStore = NativeAccountReverseRestoreStore(
       vault: HiveNativeAccountReverseRestoreVault(box),
@@ -226,8 +287,7 @@ void main() {
     expect(legacyAfter.keys.toList(), legacyBefore.keys.toList());
     for (final key in legacyBefore.keys) {
       expect(identical(legacyAfter[key], legacyBefore[key]), true);
-      expect(jsonEncode(legacyAfter[key]!.toJson()),
-        jsonEncode(legacyBefore[key]!.toJson()));
+      expect(jsonEncode(legacyAfter[key]!.toJson()), legacyContentBefore[key]);
     }
     await box.close();
 
@@ -315,6 +375,37 @@ void main() {
     final loadedValue = loaded!;
     expect(loadedValue.transactionID, receipt.transactionID);
     expect(loadedValue.envelope.value, second);
+    await reopened.close();
+  });
+
+  test('real reopen keeps the pre-call snapshot despite in-flight caller mutation', () async {
+    final envelope = _copy(await captureWith('2'));
+    final snapshot = jsonEncode(envelope);
+    final box = await Hive.openBox<String>(_boxName);
+    final pausing = _PausingVault(HiveNativeAccountReverseRestoreVault(box));
+    final store = NativeAccountReverseRestoreStore(
+      vault: pausing,
+      transactionIDFactory: () => _firstID,
+    );
+    pausing.pauseNextRead();
+    final pending = store.importRestore(
+      envelope: envelope, authorityEpoch: _epoch, createdAtMicroseconds: 1);
+    await pausing.paused.future;
+    envelope['revision'] = -1;
+    envelope['durabilityVerified'] = true;
+    final records = (envelope['records']! as List).cast<Map>();
+    ((records[1]['jar']! as Map)['hostBuckets'] as List).clear();
+    pausing.release();
+    await pending;
+    await box.close();
+
+    final reopened = await Hive.openBox<String>(_boxName);
+    final restarted = NativeAccountReverseRestoreStore(
+      vault: HiveNativeAccountReverseRestoreVault(reopened));
+    final loaded = await restarted.loadRestore();
+    expect(loaded, isNotNull);
+    expect(jsonEncode(loaded!.envelope.value), snapshot);
+    expect(loaded.envelope.value['revision'], isNot(-1));
     await reopened.close();
   });
 
@@ -423,6 +514,34 @@ void main() {
     expect(loadedValue.envelope.value, envelope);
   });
 
+  test('caller mutation during the create-only read cannot change the reserved snapshot', () async {
+    final envelope = _copy(await captureWith('2'));
+    final snapshot = jsonEncode(envelope);
+    final vault = _FaultVault();
+    final store = _faultStore(vault, id: _firstID);
+    vault.pauseNextRead();
+    final pending = store.importRestore(
+      envelope: envelope, authorityEpoch: _epoch, createdAtMicroseconds: 1);
+    await vault.paused.future;
+    // Top-level and nested in-place mutations after validation, before write.
+    envelope['schemaVersion'] = 1;
+    envelope['nativeWritesAllowed'] = true;
+    final records = (envelope['records']! as List).cast<Map>();
+    records[1]['mid'] = -1;
+    final jar = records[1]['jar']! as Map;
+    ((jar['domainBuckets']! as List).first as Map)['keyUnits'] = [9999];
+    vault.release();
+    final receipt = await pending;
+    expect(receipt.transactionID, _firstID);
+    final record = jsonDecode(vault.values[_recordKey(_firstID)]!) as Map<String, Object?>;
+    expect(record['envelope'], jsonDecode(snapshot));
+    final loaded = await store.loadRestore();
+    expect(loaded, isNotNull);
+    expect(jsonEncode(loaded!.envelope.value), snapshot);
+    expect(loaded.envelope.value['schemaVersion'], 2);
+    expect(loaded.envelope.value['nativeWritesAllowed'], false);
+  });
+
   test('unknown publication keeps both records and fences every store until a durable load', () async {
     final first = await captureWith('2');
     final second = await captureWith('10');
@@ -461,26 +580,41 @@ void main() {
     expect(recoveredValue.envelope.value, third);
   });
 
-  test('stale snapshot CAS rejects without deleting the competing manifest', () async {
-    final envelope = await captureWith('2');
+  test('stale snapshot CAS rejects while a complete competing candidate stays loadable', () async {
+    final first = await captureWith('2');
+    final second = await captureWith('10');
+    // Publish one complete candidate independently, then inject both its record
+    // and manifest as the competing pointer; it must remain loadable afterwards.
+    final competingVault = _FaultVault();
+    final competingStore = NativeAccountReverseRestoreStore(
+      vault: competingVault,
+      transactionIDFactory: () => _secondID,
+    );
+    await competingStore.importRestore(
+      envelope: second, authorityEpoch: _epoch, createdAtMicroseconds: 2);
+    final competingRecord = competingVault.values[_recordKey(_secondID)]!;
+    final competingManifest = competingVault.values[_manifestKey]!;
+
     final vault = _FaultVault();
     final store = _faultStore(vault, id: _firstID);
-    final external = jsonEncode(<String, Object?>{
-      'formatVersion': 1,
-      'source': 'nativeAccountReverseExport',
-      'transactionID': _secondID,
-      'byteCount': 1,
-      'sha256': List<String>.filled(64, 'a').join(),
-    });
-    vault.injectManifestOnRecordWrite = external;
+    vault.injectCompetingCandidate(
+      recordKey: _recordKey(_secondID),
+      record: competingRecord,
+      manifest: competingManifest,
+    );
     await expectLater(
       store.importRestore(
-        envelope: envelope, authorityEpoch: _epoch, createdAtMicroseconds: 1),
+        envelope: first, authorityEpoch: _epoch, createdAtMicroseconds: 1),
       throwsA(isA<NativeAccountReverseRestoreException>()
         .having((error) => error.code, 'code', 'staleSnapshot')),
     );
-    expect(vault.values[_manifestKey], external);
-    expect(vault.candidateCount, 0);
+    expect(vault.values[_manifestKey], competingManifest);
+    expect(vault.values[_recordKey(_secondID)], competingRecord);
+    expect(vault.values[_recordKey(_firstID)], isNull);
+    final loaded = await store.loadRestore();
+    expect(loaded, isNotNull);
+    expect(loaded!.transactionID, _secondID);
+    expect(loaded.envelope.value, second);
   });
 
   test('historical transaction id conflict and pre-write cancel never remove published records', () async {
@@ -563,6 +697,44 @@ void main() {
     expect(vault.removeCalls, 1);
   });
 
+  test('cancel after the candidate write but before pointer publication keeps the published baseline', () async {
+    final first = await captureWith('2');
+    final second = await captureWith('10');
+    final vault = _FaultVault();
+    const ids = [_firstID, _secondID];
+    var nextId = 0;
+    final store = NativeAccountReverseRestoreStore(
+      vault: vault,
+      transactionIDFactory: () => ids[nextId++],
+    );
+    await store.importRestore(
+      envelope: first, authorityEpoch: _epoch, createdAtMicroseconds: 1);
+    final baselineRecord = vault.values[_recordKey(_firstID)]!;
+    final baselineManifest = vault.values[_manifestKey]!;
+    vault.pauseNextReadAfterRecordWrite();
+    var cancelled = false;
+    final pending = store.importRestore(
+      envelope: second,
+      authorityEpoch: _epoch,
+      createdAtMicroseconds: 2,
+      isCancelled: () => cancelled,
+    );
+    await vault.paused.future;
+    expect(vault.values[_recordKey(_secondID)], isNotNull);
+    cancelled = true;
+    vault.release();
+    await expectLater(
+      pending,
+      throwsA(isA<NativeAccountReverseRestoreException>()
+        .having((error) => error.code, 'code', 'cancelled')),
+    );
+    expect(vault.values[_recordKey(_secondID)], isNull);
+    expect(vault.values[_recordKey(_firstID)], baselineRecord);
+    expect(vault.values[_manifestKey], baselineManifest);
+    final loaded = await store.loadRestore();
+    expect(loaded!.envelope.value, first);
+  });
+
   test('cleanup after a paused candidate releases the shared gate for the next publish', () async {
     final first = await captureWith('2');
     final second = await captureWith('10');
@@ -631,6 +803,35 @@ void main() {
     final loadedBValue = loadedB!;
     expect(loadedBValue.transactionID, receiptB.transactionID);
     expect(loadedBValue.envelope.value, second);
+  });
+
+  test('coordinationDomain must be a stable object identity', () {
+    expect(() => NativeAccountReverseRestoreStore(vault: _StringDomainVault()),
+      throwsStateError);
+  });
+
+  test('distinct object domains keep independent gates and recovery fences', () async {
+    final first = await captureWith('2');
+    final second = await captureWith('10');
+    final vaultA = _FaultVault();
+    final vaultB = _FaultVault();
+    final storeA = _faultStore(vaultA, id: _firstID);
+    await storeA.importRestore(
+      envelope: first, authorityEpoch: _epoch, createdAtMicroseconds: 1);
+    vaultA.arm(_Fault.readAfterPublish);
+    await expectLater(
+      storeA.importRestore(
+        envelope: second, authorityEpoch: _epoch, createdAtMicroseconds: 2),
+      throwsA(isA<NativeAccountReverseRestoreException>()
+        .having((error) => error.code, 'code', 'publicationUnknown')),
+    );
+    final storeB = _faultStore(vaultB, id: _secondID);
+    final receipt = await storeB.importRestore(
+      envelope: second, authorityEpoch: _epoch, createdAtMicroseconds: 2);
+    final loaded = await storeB.loadRestore();
+    final loadedValue = loaded!;
+    expect(loadedValue.transactionID, receipt.transactionID);
+    expect(loadedValue.envelope.value, second);
   });
 
   test('two Hive wrappers over one box share the operation gate', () async {
@@ -813,9 +1014,13 @@ void main() {
     vault.values[_manifestKey] =
         '${List<String>.filled(12, '[').join()}null${List<String>.filled(12, ']').join()}';
     await expectInvalid('invalidManifest');
+    vault.values[_manifestKey] =
+        List<String>.filled(5000, 'x').join();
+    await expectInvalid('invalidManifest');
     vault.values[_manifestKey] = originalManifest;
 
-    // Record: float version, escaped duplicate, envelope nested duplicate.
+    // Record: float version, escaped duplicate, envelope nested duplicate and
+    // an over-deep tree; each with a matching digest/byteCount.
     writePair(originalRecord.replaceFirst('"formatVersion":1,', '"formatVersion":1.0,'));
     await expectInvalid('invalidRecord');
     writePair(originalRecord.replaceFirst(
@@ -825,12 +1030,43 @@ void main() {
       '"scope":"coherentLiveMemoryShadow"',
       '"scope":"wrong","scope":"coherentLiveMemoryShadow"'));
     await expectInvalid('invalidRecord');
+    final deep = '${List<String>.filled(45, '[').join()}null'
+        '${List<String>.filled(45, ']').join()}';
+    writePair('{"formatVersion":1,"source":"nativeAccountReverseExport",'
+        '"transactionID":"$_firstID","authorityEpoch":"$_epoch",'
+        '"createdAtMicroseconds":1,"envelope":$deep}');
+    await expectInvalid('invalidRecord');
 
     vault.values[recordKey] = originalRecord;
     vault.values[_manifestKey] = originalManifest;
     final loaded = await store.loadRestore();
     expect(loaded, isNotNull);
     expect(loaded!.envelope.value, envelope);
+  });
+
+  test('strict persistent JSON enforces budgets escapes and integers directly', () {
+    Matcher code(String value) => isA<StrictPersistentJsonException>()
+        .having((error) => error.code, 'code', value);
+    expect(() => StrictPersistentJson.parse('[]',
+      maxCodeUnits: 1, maxDepth: 8, maxNodes: 8), throwsA(code('codeUnitLimit')));
+    expect(() => StrictPersistentJson.parse('[[[null]]]',
+      maxCodeUnits: 64, maxDepth: 2, maxNodes: 64), throwsA(code('depthLimit')));
+    expect(() => StrictPersistentJson.parse('[1,2,3]',
+      maxCodeUnits: 64, maxDepth: 8, maxNodes: 2), throwsA(code('nodeLimit')));
+    expect(() => StrictPersistentJson.parse('"\\q"',
+      maxCodeUnits: 64, maxDepth: 8, maxNodes: 8), throwsA(code('invalidEscape')));
+    expect(() => StrictPersistentJson.parse('{"a":1,"a":2}',
+      maxCodeUnits: 64, maxDepth: 8, maxNodes: 8), throwsA(code('duplicateKey')));
+    expect(() => StrictPersistentJson.parse('01',
+      maxCodeUnits: 64, maxDepth: 8, maxNodes: 8), throwsA(code('invalidNumber')));
+    expect(() => StrictPersistentJson.parse('1.0',
+      maxCodeUnits: 64, maxDepth: 8, maxNodes: 8), throwsA(code('nonIntegerNumber')));
+    expect(() => StrictPersistentJson.parse('{} trailing',
+      maxCodeUnits: 64, maxDepth: 8, maxNodes: 8), throwsA(code('trailingData')));
+    expect(StrictPersistentJson.parse('{"a":[1,true,null,-2]}',
+      maxCodeUnits: 64, maxDepth: 8, maxNodes: 16), {
+      'a': [1, true, null, -2],
+    });
   });
 }
 
