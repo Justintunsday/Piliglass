@@ -52,13 +52,13 @@ final class _FaultVault implements NativeAccountReverseRestoreVault {
   }
 
   @override
-  Future<String?> read(String key) async {
+  Future<String?> read(String key) {
     if (key == NativeAccountReverseRestoreStore.manifestKey &&
         _manifestWritten && fault == _Fault.readAfterPublish) {
       fault = null;
-      throw StateError('synthetic lost manifest readback');
+      return Future<String?>.error(StateError('synthetic lost manifest readback'));
     }
-    return values[key];
+    return Future<String?>.value(values[key]);
   }
 
   @override
@@ -95,19 +95,27 @@ final class _FaultVault implements NativeAccountReverseRestoreVault {
   }
 
   @override
-  Future<void> remove(String key) async => values.remove(key);
+  Future<void> remove(String key) {
+    values.remove(key);
+    return Future<void>.value();
+  }
 }
 
 NativeAccountReverseRestoreStore _store(_FaultVault vault, {String? id}) =>
     NativeAccountReverseRestoreStore(
       vault: vault,
-      transactionIDFactory: id == null ? null : () => id,
+      transactionIDFactory: id == null ? null : () => id!,
     );
 
 void main() {
   late AccountTestStorage storage;
   setUpAll(() async { storage = await AccountTestStorage.open(); });
-  setUp(() => storage.reset());
+  setUp(() async {
+    await storage.reset();
+    final box = await Hive.openBox<String>(_boxName);
+    await box.clear();
+    await box.close();
+  });
   tearDownAll(() => storage.close());
 
   Future<Map<String, Object?>> captureWith(String key) async {
@@ -132,10 +140,11 @@ void main() {
     expect(receipt.recoveredWriteAcknowledgment, false);
     final loaded = await hiveStore.loadRestore();
     expect(loaded, isNotNull);
-    expect(loaded!.envelope.value, envelope);
-    expect(jsonEncode(loaded.envelope.value), jsonEncode(envelope));
-    expect(loaded.authorityEpoch, _epoch);
-    expect(loaded.createdAtMicroseconds, 100);
+    final loadedValue = loaded!;
+    expect(loadedValue.envelope.value, envelope);
+    expect(jsonEncode(loadedValue.envelope.value), jsonEncode(envelope));
+    expect(loadedValue.authorityEpoch, _epoch);
+    expect(loadedValue.createdAtMicroseconds, 100);
     expect(Accounts.account.toMap().keys.toList(), legacyBefore);
     await box.close();
 
@@ -144,8 +153,9 @@ void main() {
       vault: HiveNativeAccountReverseRestoreVault(reopened));
     final afterRestart = await restarted.loadRestore();
     expect(afterRestart, isNotNull);
-    expect(afterRestart!.transactionID, _firstID);
-    expect(jsonEncode(afterRestart.envelope.value), jsonEncode(envelope));
+    final restartedValue = afterRestart!;
+    expect(restartedValue.transactionID, _firstID);
+    expect(jsonEncode(restartedValue.envelope.value), jsonEncode(envelope));
     await reopened.close();
   });
 
@@ -169,8 +179,9 @@ void main() {
     final receipt = await restarted.importRestore(
       envelope: second, authorityEpoch: _epoch, createdAtMicroseconds: 2);
     final loaded = await restarted.loadRestore();
-    expect(loaded!.transactionID, receipt.transactionID);
-    expect(loaded.envelope.value, second);
+    final loadedValue = loaded!;
+    expect(loadedValue.transactionID, receipt.transactionID);
+    expect(loadedValue.envelope.value, second);
     await reopened.close();
   });
 
@@ -191,8 +202,9 @@ void main() {
     expect(vault.values[NativeAccountReverseRestoreStore.manifestKey], manifestBefore);
     expect(vault.candidateCount, 1);
     final loaded = await store.loadRestore();
-    expect(loaded!.transactionID, firstReceipt.transactionID);
-    expect(loaded.envelope.value, first);
+    final loadedValue = loaded!;
+    expect(loadedValue.transactionID, firstReceipt.transactionID);
+    expect(loadedValue.envelope.value, first);
   });
 
   test('record write-then-error is accepted only after exact readback', () async {
@@ -216,8 +228,9 @@ void main() {
       envelope: envelope, authorityEpoch: _epoch, createdAtMicroseconds: 1);
     expect(receipt.recoveredWriteAcknowledgment, true);
     final loaded = await store.loadRestore();
-    expect(loaded!.transactionID, _firstID);
-    expect(loaded.envelope.value, envelope);
+    final loadedValue = loaded!;
+    expect(loadedValue.transactionID, _firstID);
+    expect(loadedValue.envelope.value, envelope);
   });
 
   test('unknown publication keeps both records and fences imports until a durable load', () async {
@@ -247,8 +260,9 @@ void main() {
     final receipt = await store.importRestore(
       envelope: third, authorityEpoch: _epoch, createdAtMicroseconds: 3);
     final afterRecovery = await store.loadRestore();
-    expect(afterRecovery!.transactionID, receipt.transactionID);
-    expect(afterRecovery.envelope.value, third);
+    final recoveredValue = afterRecovery!;
+    expect(recoveredValue.transactionID, receipt.transactionID);
+    expect(recoveredValue.envelope.value, third);
   });
 
   test('stale snapshot CAS rejects without deleting the competing manifest', () async {

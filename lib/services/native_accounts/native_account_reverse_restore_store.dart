@@ -51,7 +51,7 @@ final class HiveNativeAccountReverseRestoreVault
   final Box<String> box;
 
   @override
-  Future<String?> read(String key) async => box.get(key);
+  Future<String?> read(String key) => Future<String?>.value(box.get(key));
 
   @override
   Future<void> write(String key, String value) => box.put(key, value);
