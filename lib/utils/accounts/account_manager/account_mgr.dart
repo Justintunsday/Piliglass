@@ -5,6 +5,7 @@ import 'package:PiliPlus/http/api.dart';
 import 'package:PiliPlus/http/constants.dart';
 import 'package:PiliPlus/models/common/account_type.dart';
 import 'package:PiliPlus/services/native_accounts/account_cookie_mutation_port.dart';
+import 'package:PiliPlus/services/native_accounts/account_write_back_coordinator.dart';
 import 'package:PiliPlus/utils/accounts.dart';
 import 'package:PiliPlus/utils/accounts/account.dart';
 import 'package:PiliPlus/utils/accounts/account_manager/response_cookie_headers.dart';
@@ -21,7 +22,13 @@ import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
 import 'package:material_ui/material_ui.dart';
 
 class AccountManager extends Interceptor {
-  AccountManager();
+  AccountManager({AccountWriteBackCoordinator? writeBackCoordinator})
+      : writeBackCoordinator =
+            writeBackCoordinator ?? accountWriteBackCoordinator;
+
+  /// Shared admission/drain gate for response write-back; composition only.
+  /// It does not replace owner/generation checks in this class.
+  final AccountWriteBackCoordinator writeBackCoordinator;
 
   static const _bindingKey = '_piliglassAccountRequestBinding';
   static String blockServer = Pref.blockServer;
@@ -125,6 +132,7 @@ class AccountManager extends Interceptor {
       final future = _saveCookies(
         binding,
         response,
+        writeBackCoordinator,
       ).whenComplete(() => handler.next(response));
       assert(() {
         future.catchError(
@@ -154,7 +162,7 @@ class AccountManager extends Interceptor {
 
     if (err.response case final res?) {
       if (_boundRequestAccount(options) case final binding?) {
-        _saveCookies(binding, res).then(
+        _saveCookies(binding, res, writeBackCoordinator).then(
           (_) => handler.next(err),
           onError: (Object e, StackTrace s) => handler.next(
             DioException(
@@ -195,6 +203,7 @@ class AccountManager extends Interceptor {
   static Future<void> _saveCookies(
     _RequestAccountBinding binding,
     Response response,
+    AccountWriteBackCoordinator coordinator,
   ) async {
     final options = response.requestOptions;
     if (!_isCurrentBinding(binding, options)) return;
@@ -213,27 +222,35 @@ class AccountManager extends Interceptor {
     final originalUri = response.requestOptions.uri;
     final realUri = originalUri.resolveUri(response.realUri);
     if (!_isCurrentBinding(binding, options)) return;
-    final saving = accountCookieMutationPort.saveResponseCookies(account, realUri, cookies);
-    Accounts.notifyCookieMutation(account);
-    await saving;
-    if (!_isCurrentBinding(binding, options)) return;
-    if (isRedirectRequest && locations.isNotEmpty) {
-      final originalUri = response.realUri;
-      for (final location in locations) {
-        if (!_isCurrentBinding(binding, options)) return;
-        final redirectSaving = accountCookieMutationPort.saveResponseCookies(
-          account,
-          // Resolves the location based on the current Uri.
-          originalUri.resolve(location),
-          cookies,
-        );
-        Accounts.notifyCookieMutation(account);
-        await redirectSaving;
-        if (!_isCurrentBinding(binding, options)) return;
+    // Admission covers every real await below (Cookie save, each redirect
+    // save and Hive persistence). Frozen means zero write, never a new bypass.
+    final admission = coordinator.tryAdmit();
+    if (admission == null) return;
+    try {
+      final saving = accountCookieMutationPort.saveResponseCookies(account, realUri, cookies);
+      Accounts.notifyCookieMutation(account);
+      await saving;
+      if (!_isCurrentBinding(binding, options)) return;
+      if (isRedirectRequest && locations.isNotEmpty) {
+        final originalUri = response.realUri;
+        for (final location in locations) {
+          if (!_isCurrentBinding(binding, options)) return;
+          final redirectSaving = accountCookieMutationPort.saveResponseCookies(
+            account,
+            // Resolves the location based on the current Uri.
+            originalUri.resolve(location),
+            cookies,
+          );
+          Accounts.notifyCookieMutation(account);
+          await redirectSaving;
+          if (!_isCurrentBinding(binding, options)) return;
+        }
       }
+      if (!_isCurrentBinding(binding, options)) return;
+      await account.onChange();
+    } finally {
+      admission.release();
     }
-    if (!_isCurrentBinding(binding, options)) return;
-    await account.onChange();
   }
 
   static bool _skipCookie(String path) {
