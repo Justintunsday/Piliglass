@@ -71,7 +71,34 @@ owned 结果；`publicationUnknown` 后设置恢复 fence，先经一次成功�
 - 交付后仍需：apply/启动恢复政策、全部 reader/writer 屏障、跨重启验证、CA4 运行时
   交接、CA2 剩余、Native 登录/签名与网络兼容、CA5/CA6 真实设备验收。
 
-## 6. 实施与验收记录（2026-10-09）
+## 6. Codex 审核 R1–R4 修复计划（2026-10-09）
+
+依据 `build/native-migration/review-e1054b3/P05_REVIEW.md`（审核不通过：R1/R2 P1，
+R3/R4 P2）。本轮只修该有限 Vault 组件，不接 `completeRevert`/启动 apply、不开启
+Native authority，四 flag 继续 false。
+
+- **R1 create-only 身份**：生成 transactionID 后，在共享 gate 内先读 record key；
+  已存在（durable 记录或本轮预留）即拒绝 `duplicateTransaction`，绝不覆写不可变记录。
+  预留集与 gate 同属物理 vault domain；配同 ID 重用/读回失败/发布前取消回归，断言旧
+  record/manifest 原字节不变且原状态仍可 load。
+- **R2 本轮所有权清理**：只有“本轮独占新建 `recordCreated=true` 且未发布”的候选才允许
+  清理；仅生成 ID 不取得删除权限。历史已发布 ID 冲突、写前取消、写前错误时 remove
+  调用必须为 0，历史 A/T 原字节与 B/U 可 load 保持。
+- **R3 物理域共享 owner/gate/CAS**：新增按 `vault.coordinationDomain`（Hive 用 Box
+  实例，fault vault 用实例身份）注册的共享 domain，持有 operation gate、recovery fence、
+  ID 预留；基线读取、ID 预留、候选发布、清理、recovery 全部在同一 gate 内。CAS 读与
+  manifest 写不再被另一 Store 插入。补双 Store/双 Hive wrapper 受控交错、共享 unknown
+  recovery、清理/发布交错；用 Completer 控制，不用 sleep/retry。
+- **R4 严格持久 JSON 入口**：新增有界 strict parser（拒绝重复/转义重复字段、仅整数
+  number token、深度/节点/字节预算），manifest 与 record/envelope 都走该入口；
+  `formatVersion:1.0`、重复字段、配套正确 digest/byteCount 的嵌套负例必须拒绝。
+- **补测**：真实 close/reopen 使用 rich Cookie attrs、host/domain/空 bucket、raw UTF16、
+  nullable credentials、匿名完整状态、owner/stored 分歧与四用途实值；unknown ack 新实例
+  恢复、已有基线取消、完整可 load 的竞争候选、legacy 对象 identity/content。
+- 保留普通 Dart 生命周期、全部既有断言、fatal-infos 与九个强制门禁；分小 commit，
+  组末同 SHA release5+preview4 实际日志/artifacts 通过后交给 Codex 复审。
+
+## 7. 实施与验收记录（2026-10-09）
 
 代码 SHA `38ee18eb20785ecc521535b3dc4fad24da3a6dd1`（计划 `9c2a244`、store
 `c863083`、tests `5c0465a`、analyzer/JSON/CAS 修复 `ab578c3`/`aaed899`/`fd692b3`/
