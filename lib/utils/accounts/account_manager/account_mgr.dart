@@ -5,6 +5,7 @@ import 'package:PiliPlus/http/api.dart';
 import 'package:PiliPlus/http/constants.dart';
 import 'package:PiliPlus/models/common/account_type.dart';
 import 'package:PiliPlus/services/native_accounts/account_cookie_mutation_port.dart';
+import 'package:PiliPlus/services/native_accounts/account_credential_reader.dart';
 import 'package:PiliPlus/services/native_accounts/account_write_back_coordinator.dart';
 import 'package:PiliPlus/utils/accounts.dart';
 import 'package:PiliPlus/utils/accounts/account.dart';
@@ -22,13 +23,19 @@ import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
 import 'package:material_ui/material_ui.dart';
 
 class AccountManager extends Interceptor {
-  AccountManager({AccountWriteBackCoordinator? writeBackCoordinator})
-      : writeBackCoordinator =
-            writeBackCoordinator ?? accountWriteBackCoordinator;
+  AccountManager({
+    AccountWriteBackCoordinator? writeBackCoordinator,
+    AccountCredentialReader? credentialReader,
+  })  : writeBackCoordinator =
+            writeBackCoordinator ?? accountWriteBackCoordinator,
+        credentialReader = credentialReader ?? accountCredentialReader;
 
   /// Shared admission/drain gate for response write-back; composition only.
   /// It does not replace owner/generation checks in this class.
   final AccountWriteBackCoordinator writeBackCoordinator;
+
+  /// Read-only credential context provider for request header assembly.
+  final AccountCredentialReader credentialReader;
 
   static const _bindingKey = '_piliglassAccountRequestBinding';
   static String blockServer = Pref.blockServer;
@@ -57,11 +64,19 @@ class AccountManager extends Interceptor {
     final account = binding.account;
 
     if (account is NoAccount || _skipCookie(path)) return handler.next(options);
-    if (!_isCurrentBinding(binding, options)) {
+    final stamp = binding.stamp;
+    if (stamp == null || !_isCurrentBinding(binding, options)) {
+      return handler.reject(_revokedRequest(options), false);
+    }
+    // Read-only credential context for the already-bound owner/generation.
+    // A null result keeps the existing revoked handling; the context does not
+    // authorize the request and owner checks above still govern it.
+    final credentials = credentialReader.captureRequest(account, stamp);
+    if (credentials == null) {
       return handler.reject(_revokedRequest(options), false);
     }
 
-    if (!account.isLogin && path == Api.heartBeat) {
+    if (!credentials.isLogin && path == Api.heartBeat) {
       return handler.reject(
         DioException.requestCancelled(requestOptions: options, reason: null),
         false,
@@ -71,12 +86,12 @@ class AccountManager extends Interceptor {
     final isApp = path.startsWith(HttpString.appBaseUrl);
 
     if (isApp && options.responseType == ResponseType.bytes) {
-      options.headers.addAll(account.grpcHeaders);
+      options.headers.addAll(credentials.grpcHeaders);
       return handler.next(options);
     }
 
     options.headers
-      ..addAll(account.headers)
+      ..addAll(credentials.headers)
       ..['referer'] ??= HttpString.baseUrl;
 
     // app端不需要管理cookie
@@ -86,8 +101,9 @@ class AccountManager extends Interceptor {
           ? (options.data as Map).cast<String, dynamic>()
           : options.queryParameters);
       if (dataPtr.isNotEmpty) {
-        if (!account.accessKey.isNullOrEmpty) {
-          dataPtr['access_key'] = account.accessKey!;
+        final accessKey = credentials.accessKey;
+        if (!accessKey.isNullOrEmpty) {
+          dataPtr['access_key'] = accessKey!;
         }
         AppSign.appSign(dataPtr..remove('sign'));
         // if (kDebugMode) debugPrint(dataPtr.toString());
