@@ -106,7 +106,7 @@ final class NativeAccountReverseRestoreStore {
       throw const NativeAccountReverseRestoreException('operationInProgress');
     }
     _operationInProgress = true;
-    String? recordKey;
+    String? transactionID;
     var keepRecord = false;
     try {
       if (_requiresRecovery) {
@@ -116,11 +116,10 @@ final class NativeAccountReverseRestoreStore {
       _validateProvenance(authorityEpoch, createdAtMicroseconds);
       // Strict pure validation before any persistent mutation.
       NativeAccountReverseImport.decode(envelope);
-      final transactionID = _newTransactionID();
+      transactionID = _newTransactionID();
       if (!_identifierPattern.hasMatch(transactionID)) {
         throw const NativeAccountReverseRestoreException('invalidTransaction');
       }
-      recordKey = '$recordKeyPrefix$transactionID';
       final recordJson = jsonEncode(<String, Object?>{
         'formatVersion': formatVersion,
         'source': source,
@@ -139,20 +138,26 @@ final class NativeAccountReverseRestoreStore {
 
       Object? recordError;
       try {
-        await vault.write(recordKey, recordJson);
+        await vault.write('$recordKeyPrefix$transactionID', recordJson);
       } catch (error) {
         recordError = error;
       }
-      final observedRecord = await vault.read(recordKey);
+      final String? observedRecord;
+      try {
+        observedRecord = await vault.read('$recordKeyPrefix$transactionID');
+      } catch (_) {
+        await _removeUnreferencedCandidate(transactionID);
+        throw const NativeAccountReverseRestoreException('verificationFailed');
+      }
       if (observedRecord != recordJson) {
-        await _tryRemove(recordKey);
+        await _removeUnreferencedCandidate(transactionID);
         if (recordError != null && observedRecord == null) throw recordError;
         throw const NativeAccountReverseRestoreException('verificationFailed');
       }
       // CAS: the pointer may not change between the baseline read and publish.
       final current = await _readManifest();
       if (current?.json != baseline?.json) {
-        await _tryRemove(recordKey);
+        await _removeUnreferencedCandidate(transactionID);
         throw const NativeAccountReverseRestoreException('staleSnapshot');
       }
       _checkCancelled(isCancelled);
@@ -170,7 +175,15 @@ final class NativeAccountReverseRestoreStore {
       } catch (error) {
         manifestError = error;
       }
-      final observedManifest = await vault.read(manifestKey);
+      final String? observedManifest;
+      try {
+        observedManifest = await vault.read(manifestKey);
+      } catch (_) {
+        // The pointer cannot be read; neither side may be assumed unwritten.
+        keepRecord = true;
+        _requiresRecovery = true;
+        throw const NativeAccountReverseRestoreException('publicationUnknown');
+      }
       if (observedManifest == manifestJson) {
         return NativeAccountReverseRestoreReceipt(
           transactionID: transactionID,
@@ -178,7 +191,7 @@ final class NativeAccountReverseRestoreStore {
         );
       }
       if (manifestError != null && observedManifest == baseline?.json) {
-        await _tryRemove(recordKey);
+        await _removeUnreferencedCandidate(transactionID);
         throw manifestError;
       }
       // The pointer may now reference the candidate; never delete either side.
@@ -186,7 +199,9 @@ final class NativeAccountReverseRestoreStore {
       _requiresRecovery = true;
       throw const NativeAccountReverseRestoreException('publicationUnknown');
     } catch (_) {
-      if (!keepRecord && recordKey != null) await _tryRemove(recordKey);
+      if (!keepRecord && transactionID != null) {
+        await _removeUnreferencedCandidate(transactionID);
+      }
       rethrow;
     } finally {
       _operationInProgress = false;
@@ -310,13 +325,26 @@ final class NativeAccountReverseRestoreStore {
     }
   }
 
-  Future<void> _tryRemove(String key) async {
+  /// Removes a candidate only when no durable manifest references it. When the
+  /// reference cannot be read the record is retained; safe GC stays deferred.
+  Future<void> _removeUnreferencedCandidate(String transactionID) async {
+    if (await _isReferenced(transactionID)) return;
     try {
-      await vault.remove(key);
+      await vault.remove('$recordKeyPrefix$transactionID');
     } catch (_) {
-      // Best effort for an unreferenced candidate only; a referenced record is
-      // never passed here and safe GC stays deferred.
+      // Best effort for an unreferenced candidate only.
     }
+  }
+
+  Future<bool> _isReferenced(String transactionID) async {
+    final ({String json, _Manifest value})? manifest;
+    try {
+      manifest = await _readManifest();
+    } catch (_) {
+      // Cannot prove that the candidate is unreferenced.
+      return true;
+    }
+    return manifest?.value.transactionID == transactionID;
   }
 }
 

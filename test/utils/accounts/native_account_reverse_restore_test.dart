@@ -190,7 +190,12 @@ void main() {
     final first = await captureWith('2');
     final second = await captureWith('10');
     final vault = _FaultVault();
-    final store = _store(vault, id: _firstID);
+    final ids = [_firstID, _secondID];
+    var nextId = 0;
+    final store = NativeAccountReverseRestoreStore(
+      vault: vault,
+      transactionIDFactory: () => ids[nextId++],
+    );
     final firstReceipt = await store.importRestore(
       envelope: first, authorityEpoch: _epoch, createdAtMicroseconds: 1);
     final manifestBefore = vault.values[NativeAccountReverseRestoreStore.manifestKey];
