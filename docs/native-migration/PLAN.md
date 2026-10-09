@@ -127,6 +127,12 @@ shadow 格式；真实账户、全部 reader/writer、durable 交接/回退及�
 P05 仍在进行。下一组实施前保存 [完整 Native 账户格式与 reset port计划](P05_ACCOUNT_ENVELOPE_PLAN.md)，
 只读 DTO/codec 与默认 Dart 转发接口不等于账户 authority 已原生化。
 
+2026-10-10：用户指定 P05 全部剩余范围。五块（全部 reader/writer 与屏障、Native durable
+事务、生产交接/启动恢复/回退、登录/签名/网络生产接线、真实设备验收与开放）的可执行
+清单与依赖顺序已保存到 [P05_REMAINING_SCOPE_PLAN.md](P05_REMAINING_SCOPE_PLAN.md)。
+当前先闭环 credential reader 只读组，再按依赖持续推进；每块仍以同 SHA release5 +
+preview4 与聚合 outcome 为准，四 flag 保持 false，UI 视觉重写仍在全部业务迁移之后。
+
 ## Skills 适用决策
 
 已读取用户给定 [ios-engineer](https://github.com/i-stack/ai-coding-kit/blob/main/skills-engineering/ios-engineer/SKILL.md)、[SwiftUI Pro](https://github.com/twostraws/SwiftUI-Agent-Skill/tree/main/swiftui-pro/skills/swiftui-pro)、[interop](https://github.com/dpearson2699/swift-ios-skills/tree/main/skills/swiftui-uikit-interop)、[architecture](https://github.com/dpearson2699/swift-ios-skills/tree/main/skills/swift-architecture)、[concurrency](https://github.com/dpearson2699/swift-ios-skills/tree/main/skills/swift-concurrency)、[networking](https://github.com/dpearson2699/swift-ios-skills/tree/main/skills/ios-networking)、[axiom bridging](https://github.com/megastep/codex-skills/tree/main/axiom-uikit-bridging)、[UIKit modernization](https://github.com/superagents-lab/xcode27-skills/blob/master/uikit-app-modernization/SKILL.md)。最后一个仓库实际为 master，并非 main。

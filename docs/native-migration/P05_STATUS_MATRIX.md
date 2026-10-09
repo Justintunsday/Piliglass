@@ -166,7 +166,31 @@ caller，其他 writer/reader 仍不在同一 barrier 内。
 - 真实账户/设备验收：**未执行**。没有提供测试设备、真实账户或必要输入；CA5/CA6 门禁
   保持关闭，不开放默认 authority，也不删除 Dart fallback。
 
-## 剩余缺口（后续切片）
+## 剩余范围（用户 2026-10-10 指定的五块可执行清单）
+
+依赖顺序、逐项盘点要求、兼容约束与保留补测见
+[P05_REMAINING_SCOPE_PLAN.md](P05_REMAINING_SCOPE_PLAN.md)。与旧 CA 切片的对应：
+
+1. **全部 reader/writer 与统一屏障（CA3 全量）**：csrf/accessKey/gRPC/header/页面只读；
+   install/import/delete/set/selectTemporarily/refresh/clear/匿名 reset/activation、
+   构造器 buvid 补值、WK 镜像、LoginUtils 延迟副作用、Hive close/compact；token 不替代
+   owner/epoch/generation；嵌套/在途排空不死锁、不假清表。当前 response gate 只是有限组。
+2. **Native 账户 durable 事务（CA2 剩余）**：持久用途双账户 type 变更、install/import/
+   delete/buvid 补值；durable record identity、账号级排队与结果语义；完整 Cookie 属性/
+   顺序/nullable 凭据/临时选择/原副作用保持；unknown ack 不重放、不误判未写。
+3. **生产交接/启动恢复/完整回退（CA4 剩余）**：已验收 marker/coordinator、Dart proxy、
+   恢复 Vault 接入真实 composition；启动 apply、`completeRevert`、崩溃阶段恢复、非空
+   目标政策；legacy Hive 重启丢属性不得绕过；GC 仅在引用安全有证据时。组件/shadow 通过
+   不等于生产 authority 已迁移。
+4. **Native 登录/签名/网络生产接线**：完整 QR/密码/SMS/Cookie、Geetest/手机验证、退出与
+   多账户用途；原生签名/缓存与 HTTP 能力接 Repository/Client；补齐或精确标注 proxy/
+   retry/pool/H1/H2/TLS/timeout/raw `Set-Cookie`/gRPC auth metadata 范围；未验证组合显式
+   fallback；取消与未知结果不得二次发送写请求。
+5. **真实账户设备验收与开放（CA5/CA6）**：登录/换号、四用途隔离、响应 Cookie 属性、
+   杀进程/冷启动/重启、网络异常与回退；全门禁满足后才开放；缺真实账户/设备时列出具体
+   待验收步骤与阻塞项，不伪造通过、不提前写 P05 完成。
+
+旧 CA 映射（历史定位用）：
 
 1. **CA2 剩余**：持久用途（`Accounts.set` 的 type add/remove 双账户语义）与
    install/import/buvid 补值的 durable 事务；durable commit receipt 与账号级排队。
