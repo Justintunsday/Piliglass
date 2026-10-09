@@ -3,7 +3,7 @@ import 'dart:convert';
 import 'package:PiliPlus/services/native_accounts/native_account_reverse_import.dart';
 import 'package:crypto/crypto.dart';
 import 'package:hive_ce/hive.dart';
-import 'package:uuid/uuid.dart';
+import 'package:uuid/v4.dart';
 
 final class NativeAccountReverseRestoreException implements Exception {
   const NativeAccountReverseRestoreException(this.code);

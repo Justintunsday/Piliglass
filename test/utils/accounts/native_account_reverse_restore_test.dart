@@ -105,7 +105,7 @@ final class _FaultVault implements NativeAccountReverseRestoreVault {
 NativeAccountReverseRestoreStore _store(_FaultVault vault, {String? id}) =>
     NativeAccountReverseRestoreStore(
       vault: vault,
-      transactionIDFactory: id == null ? null : () => id!,
+      transactionIDFactory: id == null ? null : () => id,
     );
 
 void main() {
@@ -374,7 +374,7 @@ void main() {
     final store = _store(vault, id: _firstID);
     await store.importRestore(
       envelope: envelope, authorityEpoch: _epoch, createdAtMicroseconds: 1);
-    final recordKey = '${NativeAccountReverseRestoreStore.recordKeyPrefix}$_firstID';
+    const recordKey = '${NativeAccountReverseRestoreStore.recordKeyPrefix}$_firstID';
     final record = vault.values[recordKey]!;
     vault.values[recordKey] = '$record ';
     await expectLater(
