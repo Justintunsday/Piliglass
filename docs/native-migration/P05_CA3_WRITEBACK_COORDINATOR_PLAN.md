@@ -87,3 +87,35 @@ AccountManager `_saveCookies`（注入独立 coordinator；真实 Hive/真实 ja
 - 分小提交：计划 → 协调器 → AccountManager → lease → 测试；组末同 SHA 显式 dispatch
   `ios.yml` 与 `ios-home-preview.yml`，读实际日志/artifacts，失败修复后重跑，直到
   release5 + preview4 全绿；九个强制 outcome 与账户/envelope 计数以实际输出为准。
+
+## 实施与验收记录（2026-10-09）
+
+代码 SHA `d2555063a33f094473b42ecdf40cd0ccf3c93494`（计划 `a7987e2`、协调器
+`773f553`、AccountManager `9c84bca`、lease `93d95d5`、测试 `40cbfba`、lint 修复
+`5c46136`、preview 等待修复 `83c7b20`、测试 fixture 修复 `d255506`）：
+
+- 首轮 `40cbfba` 实际失败：release 账户组 `dart analyze --fatal-infos` 报 11 issues
+  （3 个 unused_local_variable、8 个 cascade_invocations），账户测试未执行，
+  ACCOUNT_DART/ACCOUNT_NATIVE/COOKIES/ACCOUNT_ENVELOPE_OUTCOME 四个合同 failure；
+  preview 仅 image-preview 的 comment gallery 在慢 runner 上等待初始缩放 value 超时。
+- `5c46136` 只改 lint 写法；`83c7b20` 将初始 value 就绪并入单一谓词等待（合并原
+  existence+value 预算），保留双击缩放、还原、2/3→3/3→2/3、单张 1/1、detail-opens
+  全部断言，无 retry/skip/生产 UI 改动。
+- 第二轮 `83c7b20`：preview 全绿，但 `account_manager_write_back_test.dart` 4 项
+  30s 超时；实际根因是测试 fixture 在消费 gate 后清空字段，`releaseSave/
+  releasePersistence` 无法完成被捕获的 gate。`d255506` 保留 held gate；生产代码与
+  断言不变。
+- **最终验收（同 SHA release 5/5 + preview 4/4）**：release
+  [37955657044](https://github.com/Justintunsday/Piliglass/actions/runs/37955657044)
+  5/5 jobs、preview
+  [37955661555](https://github.com/Justintunsday/Piliglass/actions/runs/37955661555)
+  4/4 jobs；九个强制 outcome 全 success、0 contract error；Runner `BUILD SUCCEEDED`、
+  109.1MB、实际 FFmpeg 顺序通过。账户 artifact：fatal-infos 无问题、实际
+  `+196: All tests passed!`（新增 14 项：协调器 4 + lease 5 + AccountManager 5）；
+  envelope `status=passed` 108/43/40/35/51。Preview 实际 account-pages 6 / image 3 /
+  player 2 / navigation 9 共 20 tests、0 失败；压力 `failures=[]`、1000 评论懒加载、
+  100000 弹幕、活跃上限 60。
+- **停止边界保持**：仅响应写回；credential reader、install/import/delete/set/refresh/
+  reset/activation、延迟登录副作用、storage close/compact 仍未收口；无生产 freeze
+  caller；未接 `completeRevert`/启动 apply/NativeActive；四 flag false，生产 authority
+  仍为 Dart，P05 未整体完成。

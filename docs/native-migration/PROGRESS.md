@@ -66,6 +66,27 @@ analyze No issues、实际 `+182: All tests passed!`（25 Vault）；envelope `s
 108/43/40/35/51。仍未接 `completeRevert`/启动 apply，未启用 Native authority，四 flag
 false，P05 未整体完成。
 
+**`d2555063a33f094473b42ecdf40cd0ccf3c93494` 已验收 CA3 默认 Dart 响应写回协调器组**：
+同 SHA [release 37955657044](https://github.com/Justintunsday/Piliglass/actions/runs/37955657044)
+5/5 与 [preview 37955661555](https://github.com/Justintunsday/Piliglass/actions/runs/37955661555)
+4/4 jobs success；九个强制 outcome 全 success、0 contract error；Runner BUILD SUCCEEDED、
+109.1MB、FFmpeg 顺序通过。计划与边界见
+[P05_CA3_WRITEBACK_COORDINATOR_PLAN.md](P05_CA3_WRITEBACK_COORDINATOR_PLAN.md)：新增共享
+`AccountWriteBackCoordinator`（一次性 operation token、freeze 拒绝新 admission、既有
+admitted 链排空、恰好一次释放；token 不替代 owner/generation），`AccountManager._saveCookies`
+的 Cookie/redirect/Hive persistence 全部 await 与 Native lease `finish` 的 Cookie/
+persistence await 共用该协调器；冻结时 AccountManager 零写、lease 返回 revoked 且 jar
+不变；lease `dispose` 清表不代表在途结束。测试用 Completer 精确阻塞真实 save/
+persistence/redirect await，覆盖 freeze/drain 时序、嵌套 admission、throw/abandon/
+dispose 恰好一次释放、A→B→A 同 MID successor、302 链与生产共享实例。首轮实际失败为
+11 项 lint（账户组未执行）与 image-preview 慢 runner 初始缩放 value 等待；分别以
+`5c46136`/`83c7b20` 修复。第二轮 4 项 fixture 超时根因是消费后清空 gate；`d255506`
+保留 held gate。账户 artifact analyze No issues、实际 `+196: All tests passed!`
+（新增 14 项）；envelope `status=passed` 108/43/40/35/51；preview 20 tests 与压力
+`failures=[]` 通过。范围仅为响应写回：credential reader、install/import/delete/set/
+refresh/reset/activation、延迟登录副作用与 storage close/compact 仍未收口，无生产
+freeze caller；未接 `completeRevert`/启动 apply/NativeActive，四 flag false，P05 未整体完成。
+
 当前阶段为 **P05**。`bedde36` 的原并行组与 `0527fb2` 的
 [CA1 jar-only shadow](P05_COOKIE_AUTHORITY_PLAN.md) 均已通过同 SHA release5 +
 preview4 jobs。`74101fa` 的 CA2 纯 Cookie mutation candidate 与 CA3 默认 Dart

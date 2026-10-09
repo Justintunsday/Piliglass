@@ -114,12 +114,15 @@ Dart live registry -> capture service（checkpoint+全量复核）-> strict code
 ## 5. reader/writer 覆盖与旁路
 
 已收口端口（默认 Dart 同步转发，行为不变）：response Cookie mutation、install/import、
-登录账户删除、匿名 reset + Hive clear。
+登录账户删除、匿名 reset + Hive clear。响应写回链（`AccountManager._saveCookies`
+normal/403/redirect + Hive persistence、Native HTTP lease `finish`）已接入共享
+admission/drain 协调器（`d255506`），但只是局部 gate：没有生产 freeze caller，写入
+时序与 Dart writer 不变。
 
 仍未收口：`Accounts.set/selectTemporarily` 的持久用途双账户语义、install/buvid 补值、
-`refresh` 对账、`AccountManager._saveCookies` 的 redirect/403 写回、Native HTTP lease
-finish 写回、WK Cookie 镜像、全部 credential reader（csrf/accessKey/grpcHeaders/用途路由/
-`account.values/toMap` 页面读取）、Hive compaction/close、LoginUtils 副作用。
+`refresh` 对账、install/import/delete/reset 的协调器 admission、WK Cookie 镜像、全部
+credential reader（csrf/accessKey/grpcHeaders/用途路由/`account.values/toMap` 页面读取）、
+Hive compaction/close、LoginUtils 副作用。
 
 ## 6. 持久化、崩溃与回退
 
