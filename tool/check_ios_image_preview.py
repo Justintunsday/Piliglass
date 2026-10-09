@@ -103,9 +103,9 @@ final class ImagePreviewTests: XCTestCase {
     app.launch()
     XCTAssertTrue(app.buttons["预览图片 1"].waitForExistence(timeout: 10))
   }
-  func assertValue(_ element: XCUIElement, _ key: String, _ value: String) {
+  func assertValue(_ element: XCUIElement, _ key: String, _ value: String, timeout: TimeInterval = 6) {
     expectation(for: NSPredicate(format: "%K == %@", key, value), evaluatedWith: element)
-    waitForExpectations(timeout: 6)
+    waitForExpectations(timeout: timeout)
   }
   func assertIndex(_ value: String) {
     // Match existence and the exact index in one accessibility query. The
@@ -123,8 +123,11 @@ final class ImagePreviewTests: XCTestCase {
   func exerciseGallery() {
     app.buttons["预览图片 2"].tap()
     assertIndex("2 / 3")
-    XCTAssertTrue(image.waitForExistence(timeout: 10))
-    assertValue(image, "value", "1.0 倍")
+    // The placeholder image element can exist well before the real image has
+    // loaded and the production zoom layout has published its fitted value.
+    // Wait once for the actual ready state with the combined existence+value
+    // budget instead of spending the existence budget before the value wait.
+    assertValue(image, "value", "1.0 倍", timeout: 16)
     image.doubleTap()
     expectation(for: NSPredicate(format: "value != %@", "1.0 倍"), evaluatedWith: image)
     waitForExpectations(timeout: 5)
