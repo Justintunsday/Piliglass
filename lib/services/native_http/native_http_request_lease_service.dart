@@ -7,6 +7,7 @@ import 'package:PiliPlus/http/effective_http_policy.dart';
 import 'package:PiliPlus/http/init.dart';
 import 'package:PiliPlus/models/common/account_type.dart';
 import 'package:PiliPlus/services/native_accounts/account_cookie_mutation_port.dart';
+import 'package:PiliPlus/services/native_accounts/account_credential_reader.dart';
 import 'package:PiliPlus/services/native_accounts/account_write_back_coordinator.dart';
 import 'package:PiliPlus/services/native_http/prepared_http_policy.dart';
 import 'package:PiliPlus/utils/accounts.dart';
@@ -103,12 +104,14 @@ final class NativeHTTPRequestLeaseService {
     Future<void> Function(Account, Future<void>?)? awaitAccountPersistence,
     Duration Function()? now,
     AccountWriteBackCoordinator? writeBackCoordinator,
+    AccountCredentialReader? credentialReader,
     this.ttl = const Duration(minutes: 1),
     this.maxLiveLeases = 32,
     this.maxTombstones = 128,
     this.autoExpire = true,
   }) : writeBackCoordinator =
             writeBackCoordinator ?? accountWriteBackCoordinator,
+       credentialReader = credentialReader ?? accountCredentialReader,
        _options = options ?? (() => Request.dio.options),
        // Custom options without a paired describer must never borrow the
        // production pool's known policy (existing fixture/compatibility seam).
@@ -128,6 +131,9 @@ final class NativeHTTPRequestLeaseService {
   final int maxTombstones;
   /// Shared admission/drain gate for the response write-back; composition only.
   final AccountWriteBackCoordinator writeBackCoordinator;
+
+  /// Read-only credential context provider for prepared request headers.
+  final AccountCredentialReader credentialReader;
   final BaseOptions Function() _options;
   final EffectiveHTTPPolicySnapshot? Function() _policy;
   final Account Function() _recommendAccount;
@@ -183,7 +189,7 @@ final class NativeHTTPRequestLeaseService {
         throw const NativeHTTPRequestLeaseException('revoked');
       }
       final revision = Accounts.requestRevision;
-      final input = _captureInput(account, limit);
+      final input = _captureInput(account, limit, stamp);
       final url = input.url;
       final headers = input.headers;
       final cookies = await _loadCookies(account, url);
@@ -196,7 +202,7 @@ final class NativeHTTPRequestLeaseService {
       // Pool generations cannot detect direct BaseOptions/retry/header edits.
       // Recompose all effective inputs before adding the awaited Cookie values.
       try {
-        final current = _captureInput(account, limit);
+        final current = _captureInput(account, limit, stamp);
         if (!input.policy.sameAs(current.policy) || current.url != url ||
             !identical(input.decoder, current.decoder) ||
             !identical(input.encoder, current.encoder) ||
@@ -232,7 +238,7 @@ final class NativeHTTPRequestLeaseService {
 
   ({Uri url, Map<String, String> headers, PreparedHTTPPolicy policy,
     Object? decoder, Object? encoder, Object validateStatus}) _captureInput(
-    Account account, int limit,
+    Account account, int limit, AccountRequestStamp<Account> stamp,
   ) {
     final effective = _policy();
     final composed = Options(method: 'GET', followRedirects: false).compose(
@@ -242,8 +248,15 @@ final class NativeHTTPRequestLeaseService {
     if (composed.uri.toString() != url.toString()) {
       throw const NativeHTTPRequestLeaseException('invalidRequest');
     }
+    // Read-only credential context for the already-bound owner/generation.
+    // A null result keeps the existing revoked path; owner checks above still
+    // govern the prepared snapshot.
+    final credentials = credentialReader.captureRequest(account, stamp);
+    if (credentials == null) {
+      throw const NativeHTTPRequestLeaseException('revoked');
+    }
     final headers = _headers(composed.headers)
-      ..addAll(_headers(account.headers))
+      ..addAll(_headers(credentials.headers))
       ..['referer'] ??= HttpString.baseUrl;
     return (url: url, headers: headers, decoder: composed.responseDecoder,
       encoder: composed.requestEncoder, validateStatus: composed.validateStatus,
