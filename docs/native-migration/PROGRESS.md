@@ -34,6 +34,23 @@ corrupt manifest/record 与 missing record）；envelope driver `status=passed` 
 账户恢复、全部 reader/writer 屏障与 CA4 运行时交接；安全 GC 暂缓，能力 flag 全 false，
 生产 authority 仍为 Dart，P05 未整体完成。
 
+**`f1eb57ba91d87810b04b9aff8300042e2364aed5` 已验收 R1–R4 修复组**（Codex 审核报告
+`build/native-migration/review-e1054b3/P05_REVIEW.md`）：同 SHA
+[release 37889641481](https://github.com/Justintunsday/Piliglass/actions/runs/37889641481)
+5/5 与 [preview 37889644334](https://github.com/Justintunsday/Piliglass/actions/runs/37889644334)
+4/4 jobs success；九个强制 outcome 全 success、0 contract error；Runner BUILD SUCCEEDED、
+109.1MB、FFmpeg 顺序通过。修复内容：R1 create-only 事务 ID 预留拒绝重复/已发布记录；
+R2 清理只作用于本轮独占新建且尝试写入的候选，历史 ID 冲突与写前取消 remove=0；R3
+operation gate/recovery fence/ID 预留按物理 vault domain 共享，最终 CAS+发布不可被
+另一 Store 或 Hive wrapper 交错；R4 manifest/record 走有界 strict JSON（重复/转义重复
+字段、非整数 number、控制字符与深度/节点/字节预算）。账户 artifact analyze No issues、
+实际 `+176: All tests passed!`（19 Vault 测试，含 8 项 R1–R4 回归与 rich close/reopen）；
+envelope `status=passed` 108/43/40/35/51。真实失败为两处 analyzer（`6a3107d`）与
+preview account-pages 慢 runner 单次 swipe 未滚出“切换账号”（`f1eb57b` 改为最多三次、
+存在即跳过的条件滚动，断言与生产 UI 不变）。证据边界：`box.get` 内存读不等于真实
+后端故障的 durable-readback 证明；仍未接 `completeRevert`/启动 apply，未启用 Native
+authority，四 flag false，P05 未整体完成。
+
 当前阶段为 **P05**。`bedde36` 的原并行组与 `0527fb2` 的
 [CA1 jar-only shadow](P05_COOKIE_AUTHORITY_PLAN.md) 均已通过同 SHA release5 +
 preview4 jobs。`74101fa` 的 CA2 纯 Cookie mutation candidate 与 CA3 默认 Dart

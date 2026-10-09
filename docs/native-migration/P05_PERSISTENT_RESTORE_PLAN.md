@@ -98,6 +98,29 @@ Native authority，四 flag 继续 false。
 - 保留普通 Dart 生命周期、全部既有断言、fatal-infos 与九个强制门禁；分小 commit，
   组末同 SHA release5+preview4 实际日志/artifacts 通过后交给 Codex 复审。
 
+### R1–R4 实施与验收（2026-10-09）
+
+代码 SHA `f1eb57ba91d87810b04b9aff8300042e2364aed5`（计划 `85d1909`、生产
+`a6d6980`、测试 `7dbf7f7`、analyzer 修复 `6a3107d`、preview 测试修复 `f1eb57b`）：
+
+- [release 37889641481](https://github.com/Justintunsday/Piliglass/actions/runs/37889641481)
+  5/5、[preview 37889644334](https://github.com/Justintunsday/Piliglass/actions/runs/37889644334)
+  4/4 jobs 全 success；九个强制 outcome 全 success、0 contract error；Runner
+  `BUILD SUCCEEDED`、109.1MB、FFmpeg 顺序实际通过。
+- 账户 artifact：`dart analyze --fatal-infos` No issues found，真实 `+176: All tests
+  passed!`（上轮 157 旧 + 19 Vault；本轮新增 8 项 R1–R4 回归：重复事务 ID、读回失败、
+  历史 ID 冲突/写前取消、清理交错、双 Store、双 Hive wrapper、rich reopen、strict JSON）。
+- envelope artifact `status=passed`：108/43/40/35/51 与上轮一致。
+- 真实失败与修复：首轮 analyze 报 `prefer_initializing_formals` 与
+  `prefer_interpolation_to_compose_strings`（`6a3107d`）；同 SHA preview 的
+  account-pages `testMineServiceAndToolbarActions` 在慢 runner 下单次 `swipeUp`
+  未滚出“切换账号”，改为最多三次、按钮已存在即跳过的条件滚动，保留全部断言、未加
+  sleep/retry、未改生产 UI（`f1eb57b`），同 SHA 重跑后 preview 4/4。
+- 证据边界（审核报告要求）：真实 Hive 只验证 close/openBox 与内容保真；`box.get`
+  内存读不构成真实后端故障下的 durable-readback/缓存回滚证明；本轮没有制造盘上
+  unknown，不把可能数据丢失写成已复现。仍不接 `completeRevert`/启动 apply，不启用
+  Native authority，四 flag 继续 false；P05 未整体完成。
+
 ## 7. 实施与验收记录（2026-10-09）
 
 代码 SHA `38ee18eb20785ecc521535b3dc4fad24da3a6dd1`（计划 `9c2a244`、store

@@ -135,9 +135,12 @@ finish 写回、WK Cookie 镜像、全部 credential reader（csrf/accessKey/grp
 - 持久化恢复 Vault（2026-10-09 新增）：`native_account_reverse_restore_store.dart`
   在独立 `Box<String>` 保存版本化候选与唯一 manifest，协议为纯候选验证→候选写入→
   精确读回→CAS→单指针发布→读回；写前/写后错误、unknown ack、取消、重入、corrupt
-  manifest/record、missing record 与真实 Hive close/reopen 均通过（账户 168 tests）。
+  manifest/record、missing record 与真实 Hive close/reopen 均通过。Codex 审核 R1–R4
+  已在 `f1eb57b` 修复：create-only 事务 ID 拒绝覆写、按本轮所有权清理、gate/fence/ID
+  预留按物理 vault domain 共享、有界 strict JSON 入口；账户 176 tests（19 Vault）。
   它只解决“durable 消费目标”组件；启动 apply、`completeRevert` 接线与跨重启完整账户
-  恢复仍未实现，legacy Hive 重启属性丢失仍未修复。
+  恢复仍未实现，legacy Hive 重启属性丢失仍未修复，`box.get` 内存读不等于后端故障
+  下的 durable-readback 证明。
 - 修复后的 marker 按确切 UUID 与 immutable digest descriptor 读取候选，shadow 的
   替换/discard 保留已发布记录。仅未发布候选允许清理；跨 authority/shadow 的引用安全
   GC 尚未实现，因此已发布记录暂时保留，不能按当前 manifest 单独删除旧候选。
