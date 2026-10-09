@@ -266,8 +266,9 @@ void main() {
       expect(receipt.cookiesSaved, false);
       expect(NativeOrderedCookieJarExporter.export(account.cookieJar), before);
       final hostOnly = account.cookieJar.hostCookies.values
-          .expand((cookies) => cookies)
-          .where((cookie) => cookie.name == 'lease_cookie');
+          .expand((paths) => paths.values)
+          .expand((cookies) => cookies.values)
+          .where((cookie) => cookie.cookie.name == 'lease_cookie');
       expect(hostOnly, isEmpty);
       expect(coordinator.admittedCount, 0);
     });
