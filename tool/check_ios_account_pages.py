@@ -188,7 +188,9 @@ final class AccountPageTests: XCTestCase {
     app.buttons["搜索"].tap()
     XCTAssertTrue(app.navigationBars["搜索"].waitForExistence(timeout: 5))
     app.navigationBars.buttons.firstMatch.tap()
-    app.swipeUp()
+    for _ in 0..<3 where !app.buttons["切换账号"].exists {
+      app.swipeUp()
+    }
     XCTAssertTrue(app.buttons["切换账号"].waitForExistence(timeout: 5))
     XCTAssertTrue(app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "切换主题，当前")).firstMatch.exists)
   }
