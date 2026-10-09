@@ -134,8 +134,9 @@ final class NativeAccountReverseRestoreStore {
       }
       _checkCancelled(isCancelled);
       _validateProvenance(authorityEpoch, createdAtMicroseconds);
-      // Strict pure validation before any persistent mutation.
-      NativeAccountReverseImport.decode(envelope);
+      // Strict pure validation before any persistent mutation. The owned tree
+      // is the round's snapshot: never read the caller-owned map after an await.
+      final validated = NativeAccountReverseImport.decode(envelope);
       transactionID = _newTransactionID();
       if (!_identifierPattern.hasMatch(transactionID)) {
         throw const NativeAccountReverseRestoreException('invalidTransaction');
@@ -155,7 +156,7 @@ final class NativeAccountReverseRestoreStore {
         'transactionID': transactionID,
         'authorityEpoch': authorityEpoch,
         'createdAtMicroseconds': createdAtMicroseconds,
-        'envelope': envelope,
+        'envelope': validated.value,
       });
       final bytes = utf8.encode(recordJson);
       if (bytes.length > _maxRecordBytes) {
@@ -402,13 +403,28 @@ final class NativeAccountReverseRestoreStore {
 /// Shared per physical vault/namespace coordination: one operation gate, one
 /// recovery fence and one transaction-ID reservation set for every store over
 /// the same domain. A per-store lock cannot make the final CAS+publish atomic.
+///
+/// The registry uses weak-key [Expando] so a closed Hive Box (and its cached
+/// record strings) is not rooted here after its stores are released. Domain
+/// identity must therefore be a stable non-primitive object; primitives are
+/// rejected explicitly instead of relying on an Expando runtime error.
 final class _RestoreDomain {
   _RestoreDomain._();
 
-  static final Map<Object, _RestoreDomain> _domains = <Object, _RestoreDomain>{};
+  static final Expando<_RestoreDomain> _domains =
+      Expando<_RestoreDomain>('accountReverseRestoreDomain');
 
-  static _RestoreDomain of(Object key) =>
-      _domains.putIfAbsent(key, _RestoreDomain._);
+  static _RestoreDomain of(Object key) {
+    if (key is String || key is num || key is bool || key is Record) {
+      throw StateError(
+        'coordinationDomain must be a stable object identity, not a primitive');
+    }
+    final existing = _domains[key];
+    if (existing != null) return existing;
+    final domain = _RestoreDomain._();
+    _domains[key] = domain;
+    return domain;
+  }
 
   bool operationInProgress = false;
   bool requiresRecovery = false;
