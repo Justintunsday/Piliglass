@@ -70,3 +70,25 @@ owned 结果；`publicationUnknown` 后设置恢复 fence，先经一次成功�
   完整 release5 + preview4，读取实际日志/artifacts；失败按日志修复重跑。
 - 交付后仍需：apply/启动恢复政策、全部 reader/writer 屏障、跨重启验证、CA4 运行时
   交接、CA2 剩余、Native 登录/签名与网络兼容、CA5/CA6 真实设备验收。
+
+## 6. 实施与验收记录（2026-10-09）
+
+代码 SHA `38ee18eb20785ecc521535b3dc4fad24da3a6dd1`（计划 `9c2a244`、store
+`c863083`、tests `5c0465a`、analyzer/JSON/CAS 修复 `ab578c3`/`aaed899`/`fd692b3`/
+`b92057b`/`38ee18e`）：
+
+- [release 37872430200](https://github.com/Justintunsday/Piliglass/actions/runs/37872430200)
+  5/5 jobs、[preview 37872432577](https://github.com/Justintunsday/Piliglass/actions/runs/37872432577)
+  4/4 jobs；九个强制 outcome 全 success、0 contract error；Runner `BUILD SUCCEEDED`、
+  109.1MB、实际 FFmpeg 加载顺序通过。
+- 账户 artifact：fatal-infos 分析无问题，真实 `+168: All tests passed!`（157 旧 + 11 新
+  Vault 测试），tracker 72 不变。
+- envelope artifact `status=passed`：108 oracle/43 负例/40 staging/35 transaction/
+  51 authority，与上一验收组一致。
+- 真实轮次发现并修复的缺陷（不是测试表面问题）：
+  1. `UuidV4` 导入自错误 library、两处 analyzer 规则首轮未过（`fd692b3`）；
+  2. manifest 读回失败被作为原始 vault 错误抛出而非 `publicationUnknown`；
+  3. candidate 清理在事务 ID 冲突时可能删除仍被 manifest 引用的记录 —— 现在清理前
+     必须先读 durable manifest，无法证明未引用则保留（`b92057b`）。
+- 未交付/未接线：`completeRevert` 生产接入、启动时 apply 政策、跨重启的完整账户
+  恢复、全部 reader/writer 屏障、CA4 运行时交接；安全 GC 继续暂缓，能力 flag 全 false。

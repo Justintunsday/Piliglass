@@ -132,6 +132,12 @@ finish 写回、WK Cookie 镜像、全部 credential reader（csrf/accessKey/grp
 - 回退：`reverseExport()` 返回完整 schema2 envelope。`completeRevert()` 要求调用方先
   完成 durable Dart 消费；当前空目标 apply 不满足该前提，运行时不得将两者连接。
   marker 未能清除时按 durable 读回决定 authority，未知结果不自动重放。
+- 持久化恢复 Vault（2026-10-09 新增）：`native_account_reverse_restore_store.dart`
+  在独立 `Box<String>` 保存版本化候选与唯一 manifest，协议为纯候选验证→候选写入→
+  精确读回→CAS→单指针发布→读回；写前/写后错误、unknown ack、取消、重入、corrupt
+  manifest/record、missing record 与真实 Hive close/reopen 均通过（账户 168 tests）。
+  它只解决“durable 消费目标”组件；启动 apply、`completeRevert` 接线与跨重启完整账户
+  恢复仍未实现，legacy Hive 重启属性丢失仍未修复。
 - 修复后的 marker 按确切 UUID 与 immutable digest descriptor 读取候选，shadow 的
   替换/discard 保留已发布记录。仅未发布候选允许清理；跨 authority/shadow 的引用安全
   GC 尚未实现，因此已发布记录暂时保留，不能按当前 manifest 单独删除旧候选。
@@ -140,7 +146,8 @@ finish 写回、WK Cookie 镜像、全部 credential reader（csrf/accessKey/grp
 
 1. **CA3 统一 reader/writer 与运行时 proxy**：需要把 Accounts 全部 reader/writer 与
    在途 writer 屏障切到同一 authority，并实现 Dart proxy；在无真机/真实账户验证的情况下
-   强行启用会违反“未验证不开放默认 authority”，因此保持关闭。
+   强行启用会违反“未验证不开放默认 authority”，因此保持关闭。持久化恢复 Vault 已提供
+   组件，但尚未接入启动 apply 或 `completeRevert`。
 2. **持久用途/install/buvid durable 事务**：`Accounts.set` 的双账户 type 变更与
    install/import 的凭据写入需要账号级原子事务与 durable identity；未实现。
 3. **Native 登录/签名 production 安装**：协议与 synthetic 合同已存在，但 production

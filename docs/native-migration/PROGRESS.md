@@ -18,6 +18,22 @@ handoff 合法起始态、marker 跨 await gate、shared vault snapshot/CAS、�
 及完整回退仍是剩余项。runtime flags 继续 false，生产 authority 仍为 Dart，UI视觉重写
 继续排在 PLAN.md 业务迁移之后。后续文档提交不改变上述已验证代码。
 
+**`38ee18eb20785ecc521535b3dc4fad24da3a6dd1` 已验收持久化反向恢复 Vault 有限切片**：
+同 SHA [release 37872430200](https://github.com/Justintunsday/Piliglass/actions/runs/37872430200)
+5/5 与 [preview 37872432577](https://github.com/Justintunsday/Piliglass/actions/runs/37872432577)
+4/4 jobs success；九个强制 outcome 全 success、0 contract error；Runner BUILD SUCCEEDED、
+109.1MB、FFmpeg 顺序通过。计划见 [P05_PERSISTENT_RESTORE_PLAN.md](P05_PERSISTENT_RESTORE_PLAN.md)：
+新 `Box<String>` Vault 保存版本化候选 record 与唯一 manifest 指针，严格纯候选验证 →
+候选写入 → 精确读回 → CAS 复核 → 单指针发布 → 读回；已发布记录保留，未知确认保留双方、
+`loadRestore` 前 fence 再次 import，取消只删除未引用候选，清理前必须读 durable manifest
+证明未引用。账户组实际 `+168: All tests passed!`（157 旧 + 11 新：真实 Hive close/reopen、
+无 manifest 孤儿重开、写前/写后错误、unknown ack、stale CAS、取消、重入、非法候选/来源、
+corrupt manifest/record 与 missing record）；envelope driver `status=passed` 108/43/40/35/51。
+真实轮次修复了 UuidV4 导入、两处 analyzer、manifest 读回未映射 unknown、以及清理可能删除
+被引用记录的缺陷。**仍未交付**：`completeRevert` 生产接入、启动 apply 政策、跨重启完整
+账户恢复、全部 reader/writer 屏障与 CA4 运行时交接；安全 GC 暂缓，能力 flag 全 false，
+生产 authority 仍为 Dart，P05 未整体完成。
+
 当前阶段为 **P05**。`bedde36` 的原并行组与 `0527fb2` 的
 [CA1 jar-only shadow](P05_COOKIE_AUTHORITY_PLAN.md) 均已通过同 SHA release5 +
 preview4 jobs。`74101fa` 的 CA2 纯 Cookie mutation candidate 与 CA3 默认 Dart

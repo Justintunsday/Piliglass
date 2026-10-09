@@ -14,6 +14,12 @@ credentials、activated）、durable authority marker/两阶段 handoff/revert/c
 严格纯数据 decode + 空目标内存 apply；不支持非空合并/替换，不满足 durable Dart
 回退前提。已发布 shadow 记录保留给 marker 精确 UUID 读取，安全 GC 暂缓。
 
+2026-10-09 持久化恢复 Vault：按 [P05_PERSISTENT_RESTORE_PLAN.md](P05_PERSISTENT_RESTORE_PLAN.md)
+新增独立 `Box<String>` 候选/唯一 manifest 发布组件并已同 SHA 验收（见下表）。它解决
+“reverse import 只能内存恢复”的第一步：候选验证、持久写入、完整读回、CAS、单指针发布、
+未知确认 fenced。**仍未接入** `completeRevert`/启动 apply，也不算 durable Dart
+replacement 完成；legacy Hive 重启属性丢失仍未修复。
+
 ## 同 SHA CI 证据
 
 本轮修复 SHA `e740cac`（实际CI于2026-10-08结束，2026-10-09核对）：
@@ -75,7 +81,8 @@ driver `summary.json`、artifact 与聚合门禁 outcome 为准。
 | 隔离 Keychain shadow | `PiliAccountEnvelopeStagingStore.swift` | 唯一 manifest 指针、record 全量 reread、写后错误读回、unknown ack 保留双记录、operation gate、cancel 前不发布 | shadow only |
 | shadow 单账户事务 | `PiliAccountEnvelopeTransactionStore.swift` | 按 raw key + generation 定位单 record；Cookie save/delete/deleteAll 经已对照 Dart 的 ordered reducer；临时 selection（派生 history）、credentials、activated 为显式值变更；全部候选先过累计 ledger 再发布 pointer | shadow only；持久用途/install/buvid 未做 |
 | durable authority | `PiliAccountAuthorityMarkerStore.swift`、`PiliAccountAuthorityCoordinator.swift` | marker 精确 UUID/digest 绑定、合法起始态、跨 await gate；51项实际检查通过 | 仅 Native；无 Dart runtime proxy；调用 completeRevert 前仍需 durable Dart 消费 |
-| reverse import | `native_account_reverse_import.dart` | 纯 immutable 蓝图、strict 累计限额、显式 captured identity 构造、空目标内存安装；匿名完整状态与 owner/stored 双顺序；账户157测试通过 | legacy Hive 属性重启仍丢失，durable replacement 未做 |
+| reverse import | `native_account_reverse_import.dart` | 纯 immutable 蓝图、strict 累计限额、显式 captured identity 构造、空目标内存安装；匿名完整状态与 owner/stored 双顺序 | legacy Hive 属性重启仍丢失，durable replacement 未做 |
+| 持久化恢复 Vault | `native_account_reverse_restore_store.dart` + `native_account_reverse_restore_test.dart` | 独立 `Box<String>` 版本化候选 + 唯一 manifest；纯候选验证→写入→读回→CAS→发布→读回；已发布记录保留，unknown ack 保留双方并 fence，取消只删未引用候选，清理前读 durable manifest 证明未引用 | 未接 `completeRevert`/启动 apply；账户168测试（新增11项）通过 |
 | 跨语言对照 | `tool/check_native_account_*`、Dart producer/fixture/test | fresh goldens 三阶段 hash、独立 JSON oracle、真实 Keychain/故障矩阵、真实 Dart capture→reverse→逐字节比较 | 仅 synthetic secrets |
 
 ## 当前生产数据流（authority = Dart）
@@ -142,9 +149,10 @@ durable record identity registry 或 runtime 开关把该 authority 接给生产
    install/import/buvid 补值的 durable 事务；durable commit receipt 与账号级排队。
 2. **CA3**：全部 reader/writer 收口到同一 authority；Dart proxy 与只读展示缓存；
    credential reader adapter；在途 writer 屏障。
-3. **CA4 剩余**：durable Dart reverse replacement、record identity registry、安全孤儿清理；
-   把经修复与重新验收的 marker/coordinator 通过 bridge/proxy 接入生产 composition 的
-   freeze/drain/export/publish 流程（当前只有 Native 协调器，没有 runtime 调用方）。
+3. **CA4 剩余**：把已验收的持久化 Vault 接入启动 apply/`completeRevert` 的
+   freeze/drain/export/publish 流程；durable record identity registry、安全孤儿清理；
+   通过 bridge/proxy 接入生产 composition 的 runtime 调用方（当前 Vault 与 Native
+   协调器都还没有生产 caller）。
 4. **CA5**：opt-in Native active composition，在测试设备验收 QR/password/SMS/Cookie、
    Geetest/手机验证、多账户用途隔离、实际响应 attrs、杀进程/重启与回退。
 5. **网络/登录**：Native login production 安装、proxy/retry/pool/H1/H2/TLS/timeout、
@@ -165,7 +173,9 @@ durable record identity registry 或 runtime 开关把该 authority 接给生产
 
 ## 回滚
 
-- `git revert 7159af4`（Dart reverse import）、`52e4471`/`2cb8ce5`（authority marker/
+- 本组：`git revert 38ee18e b92057b fd692b3 aaed899 ab578c3 5c0465a c863083 9c2a244`
+  （持久化恢复 Vault 与其修复；9c2a244 为计划文档），无运行时接线、无数据迁移。
+- 历史：`git revert 7159af4`（Dart reverse import）、`52e4471`/`2cb8ce5`（authority marker/
   coordinator）、`33345be`/`d2058d3`（事务扩展）、`eeed9ab`（Cookie 事务）、`2545196`
   （shadow store）、`0aa98b5`/`c2bc5ab`/`f361947`（DTO/codec/producers/driver）；
   `d1c3cd1`（reset port）按需单独回滚。无运行时权威切换，无数据迁移，回滚不需要
