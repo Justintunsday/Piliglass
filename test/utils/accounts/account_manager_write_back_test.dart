@@ -156,8 +156,8 @@ void main() {
     await account.gatedJar.saveStarted.future;
     expect(coordinator.liveOperationCount, 1);
     var drained = false;
-    final drain = coordinator.freeze();
-    drain.then((_) => drained = true);
+    final drain = coordinator.freeze()
+      ..then((_) => drained = true);
     await Future<void>.value();
     expect(drained, false);
     expect(coordinator.tryAdmit(), isNull);
@@ -183,8 +183,8 @@ void main() {
     await account.persistenceStarted.future;
     expect(coordinator.liveOperationCount, 1);
     var drained = false;
-    final drain = coordinator.freeze();
-    drain.then((_) => drained = true);
+    final drain = coordinator.freeze()
+      ..then((_) => drained = true);
     await Future<void>.value();
     expect(drained, false);
     account.releasePersistence();
@@ -234,8 +234,8 @@ void main() {
     await account.gatedJar.saveStarted.future;
     expect(coordinator.liveOperationCount, 1);
     var drained = false;
-    final drain = coordinator.freeze();
-    drain.then((_) => drained = true);
+    final drain = coordinator.freeze()
+      ..then((_) => drained = true);
     await Future<void>.value();
     expect(drained, false);
     account.gatedJar.releaseSave();

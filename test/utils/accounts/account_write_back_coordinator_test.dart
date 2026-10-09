@@ -57,8 +57,9 @@ void main() {
       final first = coordinator.tryAdmit()!;
       expect(coordinator.admittedCount, 1);
       expect(coordinator.liveOperationCount, 1);
-      first.release();
-      first.release();
+      first
+        ..release()
+        ..release();
       expect(first.isReleased, true);
       expect(coordinator.admittedCount, 0);
       expect(coordinator.liveOperationCount, 0);
@@ -97,8 +98,8 @@ void main() {
       final coordinator = AccountWriteBackCoordinator();
       final operation = coordinator.tryAdmit()!;
       var drained = false;
-      final drain = coordinator.freeze();
-      drain.then((_) => drained = true);
+      final drain = coordinator.freeze()
+        ..then((_) => drained = true);
       await Future<void>.value();
       expect(drained, false);
       await expectLater(
@@ -200,8 +201,8 @@ void main() {
       await saveStarted.future;
       expect(coordinator.liveOperationCount, 1);
       var drained = false;
-      final drain = coordinator.freeze();
-      drain.then((_) => drained = true);
+      final drain = coordinator.freeze()
+        ..then((_) => drained = true);
       await Future<void>.value();
       expect(drained, false);
       expect(coordinator.tryAdmit(), isNull);
@@ -216,7 +217,7 @@ void main() {
 
     test('persistence await is covered by the same admission', () async {
       final coordinator = AccountWriteBackCoordinator();
-      final account = await select(910002);
+      await select(910002);
       final gate = Completer<void>();
       final persistenceStarted = Completer<void>();
       final service = create(
@@ -236,8 +237,8 @@ void main() {
       await persistenceStarted.future;
       expect(coordinator.liveOperationCount, 1);
       var drained = false;
-      final drain = coordinator.freeze();
-      drain.then((_) => drained = true);
+      final drain = coordinator.freeze()
+        ..then((_) => drained = true);
       await Future<void>.value();
       expect(drained, false);
       gate.complete();
@@ -268,7 +269,7 @@ void main() {
 
     test('persistence throw releases once and later freeze drains immediately', () async {
       final coordinator = AccountWriteBackCoordinator();
-      final account = await select(910004);
+      await select(910004);
       final failure = StateError('synthetic persistence failure');
       final service = create(
         coordinator: coordinator,
@@ -293,7 +294,7 @@ void main() {
 
     test('abandon and dispose clear tables but never release the in-flight admission', () async {
       final coordinator = AccountWriteBackCoordinator();
-      final account = await select(910005);
+      await select(910005);
       final gate = Completer<void>();
       final saveStarted = Completer<void>();
       final service = create(
@@ -317,8 +318,8 @@ void main() {
       );
       service.dispose();
       var drained = false;
-      final drain = coordinator.freeze();
-      drain.then((_) => drained = true);
+      final drain = coordinator.freeze()
+        ..then((_) => drained = true);
       await Future<void>.value();
       expect(drained, false);
       expect(coordinator.liveOperationCount, 1);
