@@ -51,6 +51,21 @@ preview account-pages 慢 runner 单次 swipe 未滚出“切换账号”（`f1e
 后端故障的 durable-readback 证明；仍未接 `completeRevert`/启动 apply，未启用 Native
 authority，四 flag false，P05 未整体完成。
 
+**`55d6addb21c3e09e2488a255fa1d6b0a74be2f16` 已验收 R5/R6/C1 修复组**：同 SHA
+[release 37911302578](https://github.com/Justintunsday/Piliglass/actions/runs/37911302578)
+5/5 与 [preview 37911307214](https://github.com/Justintunsday/Piliglass/actions/runs/37911307214)
+4/4 jobs success；九个强制 outcome 全 success、0 contract error；Runner BUILD SUCCEEDED、
+109.1MB、FFmpeg 顺序通过。R5 保存严格 decode 的 owned 快照并只序列化 `validated.value`
+（受控 create-only read 暂停期间顶层/嵌套 caller 修改后，发布与真实 reopen 仍等于调用前
+完整快照）；R6 域注册表改弱键 Expando 并明确拒绝 primitive domain，保留同 Box 共享
+gate/recovery；C1 legacy 内容 oracle 预冻结。补测含 published 基线下写入后取消、完整
+可 load 的 CAS 竞争候选、对象域隔离、strict parser 直接预算、over-deep record/超长
+manifest。首版 `be17fa7` 的 domain isolation fixture 复用同一事务 ID 被 create-only
+拒绝，`55d6add` 改用两个事务 ID 并保留精确 `publicationUnknown` 断言。账户 artifact
+analyze No issues、实际 `+182: All tests passed!`（25 Vault）；envelope `status=passed`
+108/43/40/35/51。仍未接 `completeRevert`/启动 apply，未启用 Native authority，四 flag
+false，P05 未整体完成。
+
 当前阶段为 **P05**。`bedde36` 的原并行组与 `0527fb2` 的
 [CA1 jar-only shadow](P05_COOKIE_AUTHORITY_PLAN.md) 均已通过同 SHA release5 +
 preview4 jobs。`74101fa` 的 CA2 纯 Cookie mutation candidate 与 CA3 默认 Dart

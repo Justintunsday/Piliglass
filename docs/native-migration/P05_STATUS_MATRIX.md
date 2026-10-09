@@ -25,6 +25,12 @@ replacement 完成；legacy Hive 重启属性丢失仍未修复。
 本轮所有权清理、物理域共享 gate/CAS/fence、严格持久 JSON 入口均已落地；账户实际
 `+176` tests（19 Vault）。仍未改变 runtime/authority 状态。
 
+2026-10-09 R5/R6/C1 复审修复：Codex `review-f4219f3/P05_REVIEW.md` 的 R5（owned 快照
+被丢弃后序列化 caller 可变对象）、R6（域注册表强持有 closed Box）、C1（legacy oracle
+未冻结）已在 `55d6add` 修复并通过同 SHA release5+preview4。另补 published 基线下
+写入后取消、完整可 load 的 CAS 竞争候选、对象域隔离与 strict parser 直接预算；
+账户实际 `+182` tests（25 Vault）。仍未改变 runtime/authority 状态。
+
 ## 同 SHA CI 证据
 
 本轮修复 SHA `e740cac`（实际CI于2026-10-08结束，2026-10-09核对）：
@@ -87,7 +93,7 @@ driver `summary.json`、artifact 与聚合门禁 outcome 为准。
 | shadow 单账户事务 | `PiliAccountEnvelopeTransactionStore.swift` | 按 raw key + generation 定位单 record；Cookie save/delete/deleteAll 经已对照 Dart 的 ordered reducer；临时 selection（派生 history）、credentials、activated 为显式值变更；全部候选先过累计 ledger 再发布 pointer | shadow only；持久用途/install/buvid 未做 |
 | durable authority | `PiliAccountAuthorityMarkerStore.swift`、`PiliAccountAuthorityCoordinator.swift` | marker 精确 UUID/digest 绑定、合法起始态、跨 await gate；51项实际检查通过 | 仅 Native；无 Dart runtime proxy；调用 completeRevert 前仍需 durable Dart 消费 |
 | reverse import | `native_account_reverse_import.dart` | 纯 immutable 蓝图、strict 累计限额、显式 captured identity 构造、空目标内存安装；匿名完整状态与 owner/stored 双顺序 | legacy Hive 属性重启仍丢失，durable replacement 未做 |
-| 持久化恢复 Vault | `native_account_reverse_restore_store.dart` + `strict_persistent_json.dart` + `native_account_reverse_restore_test.dart` | 独立 `Box<String>` 版本化候选 + 唯一 manifest；纯候选验证→写入→读回→CAS→发布→读回；R1 create-only 拒绝重复/已发布 ID；R2 只清理本轮独占新建且尝试写入的候选；R3 gate/fence/ID 预留按物理 vault domain 共享；R4 有界 strict JSON 拒绝重复字段/浮点/预算逃逸；已发布记录保留，unknown ack 保留双方并 fence | 未接 `completeRevert`/启动 apply；账户176测试（19 Vault）通过；`box.get` 内存读不等于后端故障证明 |
+| 持久化恢复 Vault | `native_account_reverse_restore_store.dart` + `strict_persistent_json.dart` + `native_account_reverse_restore_test.dart` | 独立 `Box<String>` 版本化候选 + 唯一 manifest；纯候选验证→写入→读回→CAS→发布→读回；R1 create-only 拒绝重复/已发布 ID；R2 只清理本轮独占新建且尝试写入的候选；R3 gate/fence/ID 预留按物理 vault domain 共享；R4 有界 strict JSON 拒绝重复字段/浮点/预算逃逸；R5 只序列化 strict decode 的 owned 快照，caller 在 await 期间的修改不影响本次快照；R6 弱键 Expando 域注册 + primitive 拒绝；已发布记录保留，unknown ack 保留双方并 fence | 未接 `completeRevert`/启动 apply；账户182测试（25 Vault）通过；`box.get` 内存读不等于后端故障证明 |
 | 跨语言对照 | `tool/check_native_account_*`、Dart producer/fixture/test | fresh goldens 三阶段 hash、独立 JSON oracle、真实 Keychain/故障矩阵、真实 Dart capture→reverse→逐字节比较 | 仅 synthetic secrets |
 
 ## 当前生产数据流（authority = Dart）
@@ -178,6 +184,9 @@ durable record identity registry 或 runtime 开关把该 authority 接给生产
 
 ## 回滚
 
+- R5/R6/C1 组：`git revert 55d6add be17fa7 08a5b59 d1e89c8`
+  （owned 快照/弱域注册/oracle 冻结与对应测试；d1e89c8 为计划文档），无运行时接线、
+  无数据迁移。
 - R1–R4 组：`git revert f1eb57b 6a3107d 7dbf7f7 a6d6980 85d1909`
   （create-only/所有权/共享域 gate/strict JSON 与对应测试；85d1909 为计划文档），
   无运行时接线、无数据迁移。

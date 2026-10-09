@@ -146,6 +146,31 @@ Native authority，四 flag 继续 false。
   政策（write-before 仅 best-effort 清理本轮预留的空 key，历史 ID 在预留前拒绝）。
 - 分小 commit、组末同 SHA release5+preview4 实际日志/artifacts 全绿后交 Codex 复审。
 
+### R5/R6/C1 实施与验收（2026-10-09）
+
+代码 SHA `55d6addb21c3e09e2488a255fa1d6b0a74be2f16`（计划 `d1e89c8`、生产
+`08a5b59`、测试 `be17fa7`、fixture 修复 `55d6add`）：
+
+- R5：`decode` 结果保存为 `validated`，create-only read 之后只序列化
+  `validated.value`；受控 create-only read 暂停期间修改顶层与嵌套（fault vault 与
+  真实 Hive 两例），发布/真实 close/reopen 后内容仍等于调用前完整快照，在途 snapshot
+  不会被 caller 改成不可 load 数据。
+- R6：`_RestoreDomain` 改用弱键 `Expando`，closed Box 不再被静态 map 强持有；
+  `coordinationDomain` 必须是非 `String`/`num`/`bool`/`Record` 的稳定对象身份，primitive
+  明确抛 `StateError`；同 Box 双 wrapper/shared recovery 回归保留，另加对象域隔离。
+- C1：legacy 内容 oracle 在 import 前冻结为不可变 JSON 快照，identity 断言单独保留。
+- 补测：已有 published 基线下候选写完、指针发布前取消；CAS 竞争对象改为独立 vault
+  发布的完整可 load 候选，拒绝后 `loadRestore` 仍可加载；strict parser 直接覆盖
+  depth/node/code-unit/escape/number；over-deep record 与超长 manifest 拒绝。
+- 真实轮次：首版 `be17fa7` 的 domain isolation fixture 复用了同一事务 ID，第二次
+  import 被 create-only 正确拒绝、到不了 `readAfterPublish`；`55d6add` 改用两个事务 ID，
+  保留精确 `publicationUnknown` 与跨域隔离断言。
+- 验收：同 SHA release 5/5、preview 4/4、九强制 outcome 全 success、0 contract error、
+  `BUILD SUCCEEDED`/109.1MB/FFmpeg 顺序；账户 analyze 无问题、实际 `+182` tests
+  （25 Vault）；envelope `status=passed` 108/43/40/35/51。
+- 仍未接 `completeRevert`/启动 apply、未启用 Native authority、四 flag false；
+  `box.get` 内存读不等于后端故障下的 durable-readback 证明。P05 未整体完成。
+
 ## 7. 实施与验收记录（2026-10-09）
 
 代码 SHA `38ee18eb20785ecc521535b3dc4fad24da3a6dd1`（计划 `9c2a244`、store
