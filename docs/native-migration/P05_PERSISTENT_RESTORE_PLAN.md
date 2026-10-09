@@ -121,6 +121,31 @@ Native authority，四 flag 继续 false。
   unknown，不把可能数据丢失写成已复现。仍不接 `completeRevert`/启动 apply，不启用
   Native authority，四 flag 继续 false；P05 未整体完成。
 
+## 6b. Codex 复审 R5/R6/C1 修复计划（2026-10-09）
+
+依据 `build/native-migration/review-f4219f3/P05_REVIEW.md` 与
+`restore-vault-followup.md`（R1–R4 已确认修复；新 R5 P1、R6 P2、C1 测试校准）。
+以下触发均由源码/async 边界证明，本机未运行新负例，不写成已实测失败。
+仍只修该有限 Vault 组件，不接 `completeRevert`/启动 apply、不启用 Native authority。
+
+- **R5 owned 快照**：`NativeAccountReverseImport.decode(envelope)` 的返回值必须保留；
+  create-only read 之后只 `jsonEncode(validated.value)`，不得再读 caller 可变对象。
+  配受控 create-only read 暂停回归：暂停期间修改顶层（schemaVersion/nativeWritesAllowed）
+  与嵌套（jar 字段/raw UTF16 list）；发布与真实 close/reopen 后内容必须等于调用前
+  完整快照，并覆盖“在途 snapshot 不会被改成不可 load 数据”。
+- **R6 域生命周期**：改为弱生命周期注册（Expando 对象域），明确 `coordinationDomain`
+  必须是非 `String`/`num`/`bool`/`Record` 的稳定对象身份，primitive 明确拒绝；不得清空
+  全局 map 或恢复每 Store 锁；保留同 Box 双 wrapper 共享 gate 与 shared recovery 回归。
+  以对象域隔离、reopen 新域、primitive 拒绝做确定性命中，不写 GC 时序测试。
+- **C1 oracle 冻结**：legacy 内容断言改为在 import 前保存不可变 JSON 快照，再与
+  after 比较；对象 identity 断言单独保留，避免 in-place mutation 同时改变两侧。
+- **补测**：已有 published 基线下，候选写完、指针发布前取消（受控 record-readback
+  暂停）后基线字节不变；CAS 竞争对象改为完整可 load 候选（独立 vault 先发布，
+  注入其 record+manifest），拒绝后 `loadRestore` 仍能加载该候选。strict parser 直接
+  覆盖 depth/node/code-unit 预算与非法 escape；文档同步真实覆盖与“写入尝试 cleanup”
+  政策（write-before 仅 best-effort 清理本轮预留的空 key，历史 ID 在预留前拒绝）。
+- 分小 commit、组末同 SHA release5+preview4 实际日志/artifacts 全绿后交 Codex 复审。
+
 ## 7. 实施与验收记录（2026-10-09）
 
 代码 SHA `38ee18eb20785ecc521535b3dc4fad24da3a6dd1`（计划 `9c2a244`、store
