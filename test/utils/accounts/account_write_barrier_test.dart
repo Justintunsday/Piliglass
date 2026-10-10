@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:PiliPlus/models/common/account_type.dart';
 import 'package:PiliPlus/services/native_accounts/account_install_persistence_port.dart';
 import 'package:PiliPlus/services/native_accounts/account_reset_persistence_port.dart';
 import 'package:PiliPlus/services/native_accounts/account_write_back_coordinator.dart';
@@ -95,6 +96,57 @@ final class _GatedDeleteJar extends DefaultCookieJar {
     if (!started.isCompleted) started.complete();
     await real;
     await gate.future;
+  }
+}
+
+final class _PersistenceHold {
+  final gate = Completer<void>();
+  final started = Completer<void>();
+}
+
+final class _GatedPersistenceAccount extends LoginAccount {
+  _GatedPersistenceAccount()
+      : super(
+          BiliCookieJar.fromJson({
+            'DedeUserID': '940121',
+            'bili_jct': 'csrf-940121',
+            'SESSDATA': 'session-940121',
+          }),
+          'access-940121',
+          'refresh-940121',
+        ) {
+    activated = true;
+  }
+
+  final List<_PersistenceHold> _pending = [];
+  _PersistenceHold? _active;
+
+  _PersistenceHold holdNextPersistence() {
+    final hold = _PersistenceHold();
+    _pending.add(hold);
+    return hold;
+  }
+
+  void releasePersistence(_PersistenceHold hold) {
+    if (identical(_active, hold)) {
+      _active = null;
+      hold.gate.complete();
+    }
+  }
+
+  @override
+  Future<void>? onChange() {
+    final real = super.onChange();
+    if (_pending.isEmpty) return real;
+    final hold = _pending.removeAt(0);
+    _active = hold;
+    hold.started.complete();
+    return _join(real, hold.gate.future);
+  }
+
+  static Future<void> _join(Future<void>? real, Future<void> gate) async {
+    if (real != null) await real;
+    await gate;
   }
 }
 
@@ -267,6 +319,92 @@ void main() {
     expect(coordinator.liveOperationCount, 0);
     await Accounts.deleteAll({account}, coordinator: coordinator);
     expect(Accounts.account.isEmpty, true);
+    expect(coordinator.liveOperationCount, 0);
+  });
+
+  test('frozen set keeps the selection and purpose unchanged', () async {
+    final coordinator = AccountWriteBackCoordinator();
+    final account = _account(940091);
+    await Accounts.installCredentials(account);
+    await coordinator.freeze();
+    await expectLater(
+      Accounts.set(AccountType.recommend, account, coordinator: coordinator),
+      throwsA(_frozen),
+    );
+    expect(Accounts.get(AccountType.recommend) is AnonymousAccount, true);
+    expect(account.type.contains(AccountType.recommend), false);
+    expect(coordinator.admittedCount, 0);
+  });
+
+  test('frozen selectTemporarily keeps the selection unchanged', () async {
+    final coordinator = AccountWriteBackCoordinator();
+    final account = _account(940101);
+    await Accounts.installCredentials(account);
+    await coordinator.freeze();
+    expect(
+      () => Accounts.selectTemporarily(
+        AccountType.video,
+        account,
+        coordinator: coordinator,
+      ),
+      throwsA(_frozen),
+    );
+    expect(Accounts.get(AccountType.video) is AnonymousAccount, true);
+    expect(coordinator.admittedCount, 0);
+  });
+
+  test('frozen refresh is rejected before reconciling stored owners', () async {
+    final coordinator = AccountWriteBackCoordinator();
+    final account = _account(940111);
+    await Accounts.installCredentials(account);
+    await coordinator.freeze();
+    final revision = Accounts.requestRevision;
+    expect(
+      () => Accounts.refresh(coordinator: coordinator),
+      throwsA(_frozen),
+    );
+    expect(Accounts.ownsCredentials(account), true);
+    expect(Accounts.requestRevision, revision);
+    expect(coordinator.admittedCount, 0);
+  });
+
+  test('in-flight set holds the admission until persistence lands', () async {
+    final coordinator = AccountWriteBackCoordinator();
+    final account = _GatedPersistenceAccount();
+    await Accounts.installCredentials(account);
+    final hold = account.holdNextPersistence();
+    final selecting = Accounts.set(
+      AccountType.recommend,
+      account,
+      coordinator: coordinator,
+    );
+    await hold.started.future;
+    expect(coordinator.liveOperationCount, 1);
+    var drained = false;
+    final drain = coordinator.freeze()
+      ..then((_) => drained = true);
+    await Future<void>.value();
+    expect(drained, false);
+    account.releasePersistence(hold);
+    await selecting;
+    await drain;
+    expect(drained, true);
+    expect(Accounts.get(AccountType.recommend), same(account));
+    expect(account.type.contains(AccountType.recommend), true);
+    expect(coordinator.liveOperationCount, 0);
+  });
+
+  test('an injected unfrozen coordinator keeps selection working', () async {
+    final coordinator = AccountWriteBackCoordinator();
+    final account = _account(940131);
+    await Accounts.installCredentials(account);
+    await Accounts.set(
+      AccountType.recommend,
+      account,
+      coordinator: coordinator,
+    );
+    expect(Accounts.get(AccountType.recommend), same(account));
+    expect(account.type.contains(AccountType.recommend), true);
     expect(coordinator.liveOperationCount, 0);
   });
 }
