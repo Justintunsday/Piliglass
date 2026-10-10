@@ -45,8 +45,9 @@ abstract final class LoginUtils {
 
   static Future<void> onLoginMain({
     AccountWriteBackOperation? admission,
-    AccountWriteBackCoordinator coordinator = accountWriteBackCoordinator,
+    AccountWriteBackCoordinator? coordinator,
   }) async {
+    final writeBack = coordinator ?? accountWriteBackCoordinator;
     final account = Accounts.main;
     final res = await UserHttp.userInfo();
     if (res case Success(:final response)) {
@@ -74,7 +75,7 @@ abstract final class LoginUtils {
         await Accounts.deleteAll(
           {account},
           admission: admission,
-          coordinator: coordinator,
+          coordinator: writeBack,
         );
         SmartDialog.showNotify(
           msg: '登录失败，请检查cookie是否正确，$errMsg',

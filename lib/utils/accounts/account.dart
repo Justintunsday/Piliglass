@@ -91,9 +91,10 @@ class LoginAccount extends Account {
   @override
   Future<void> delete({
     AccountWriteBackOperation? admission,
-    AccountWriteBackCoordinator coordinator = accountWriteBackCoordinator,
+    AccountWriteBackCoordinator? coordinator,
   }) {
-    final owned = admission == null ? coordinator.tryAdmit() : null;
+    final writeBack = coordinator ?? accountWriteBackCoordinator;
+    final owned = admission == null ? writeBack.tryAdmit() : null;
     if (admission == null && owned == null) {
       throw StateError('Account write-back is frozen');
     }
@@ -196,9 +197,10 @@ class AnonymousAccount extends Account {
   Future<void> delete({
     Object? recoveryOperation,
     AccountWriteBackOperation? admission,
-    AccountWriteBackCoordinator coordinator = accountWriteBackCoordinator,
+    AccountWriteBackCoordinator? coordinator,
   }) async {
-    final owned = admission == null ? coordinator.tryAdmit() : null;
+    final writeBack = coordinator ?? accountWriteBackCoordinator;
+    final owned = admission == null ? writeBack.tryAdmit() : null;
     if (admission == null && owned == null) {
       throw StateError('Account write-back is frozen');
     }
