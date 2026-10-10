@@ -72,7 +72,7 @@ abstract final class ReplyHttp {
         'pn': pageNum,
         'type': type,
         'sort': 1,
-        if (isLogin) 'csrf': Accounts.main.csrf,
+        if (isLogin) 'csrf': Accounts.csrfOf(Accounts.main),
       },
       options: !isLogin ? options : null,
     );
@@ -101,7 +101,7 @@ abstract final class ReplyHttp {
         'oid': oid,
         'rpid': rpid,
         'action': action,
-        'csrf': Accounts.main.csrf,
+        'csrf': Accounts.csrfOf(Accounts.main),
       },
       options: Options(contentType: Headers.formUrlEncodedContentType),
     );
@@ -126,7 +126,7 @@ abstract final class ReplyHttp {
         'oid': oid,
         'rpid': rpid,
         'action': action,
-        'csrf': Accounts.main.csrf,
+        'csrf': Accounts.csrfOf(Accounts.main),
       },
       options: Options(contentType: Headers.formUrlEncodedContentType),
     );
@@ -212,7 +212,7 @@ abstract final class ReplyHttp {
         'type': type,
         'rpid': rpid,
         'action': isUpTop ? 0 : 1,
-        'csrf': Accounts.main.csrf,
+        'csrf': Accounts.csrfOf(Accounts.main),
       },
       options: Options(contentType: Headers.formUrlEncodedContentType),
     );
@@ -234,7 +234,7 @@ abstract final class ReplyHttp {
       Api.replyReport,
       data: {
         'add_blacklist': banUid,
-        'csrf': Accounts.main.csrf,
+        'csrf': Accounts.csrfOf(Accounts.main),
         'gaia_source': 'main_h5',
         'oid': oid,
         'platform': 'android',
@@ -288,7 +288,7 @@ abstract final class ReplyHttp {
         'oid': oid,
         'type': type,
         'action': action,
-        'csrf': Accounts.main.csrf,
+        'csrf': Accounts.csrfOf(Accounts.main),
       },
       options: Options(contentType: Headers.formUrlEncodedContentType),
     );

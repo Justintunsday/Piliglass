@@ -143,7 +143,7 @@ abstract final class PgcHttp {
         'media_id': mediaId,
         'review_type': 2,
         'review_id': reviewId,
-        'csrf': Accounts.main.csrf,
+        'csrf': Accounts.csrfOf(Accounts.main),
       },
       options: Options(contentType: Headers.formUrlEncodedContentType),
     );
@@ -164,7 +164,7 @@ abstract final class PgcHttp {
         'media_id': mediaId,
         'review_type': 2,
         'review_id': reviewId,
-        'csrf': Accounts.main.csrf,
+        'csrf': Accounts.csrfOf(Accounts.main),
       },
       options: Options(contentType: Headers.formUrlEncodedContentType),
     );
@@ -188,7 +188,7 @@ abstract final class PgcHttp {
         'score': score,
         'content': content,
         if (shareFeed) 'share_feed': 1,
-        'csrf': Accounts.main.csrf,
+        'csrf': Accounts.csrfOf(Accounts.main),
       },
       options: Options(contentType: Headers.formUrlEncodedContentType),
     );
@@ -212,7 +212,7 @@ abstract final class PgcHttp {
         'score': score,
         'content': content,
         'review_id': reviewId,
-        'csrf': Accounts.main.csrf,
+        'csrf': Accounts.csrfOf(Accounts.main),
       },
       options: Options(contentType: Headers.formUrlEncodedContentType),
     );
@@ -232,7 +232,7 @@ abstract final class PgcHttp {
       data: {
         'media_id': mediaId,
         'review_id': reviewId,
-        'csrf': Accounts.main.csrf,
+        'csrf': Accounts.csrfOf(Accounts.main),
       },
       options: Options(contentType: Headers.formUrlEncodedContentType),
     );

@@ -43,7 +43,7 @@ abstract final class DanmakuHttp {
       'rnd': DateTime.now().microsecondsSinceEpoch,
       'colorful': ?colorful ? 60001 : null,
       'checkbox_type': ?checkboxType,
-      'csrf': Accounts.main.csrf,
+      'csrf': Accounts.csrfOf(Accounts.main),
       // 'access_key': access_key,
     };
 
@@ -75,7 +75,7 @@ abstract final class DanmakuHttp {
       'spmid': '333.788.0.0',
       'from_spmid': '333.788.0.0',
       'statistics': '{"appId":100,"platform":5,"abtest":"","version":""}',
-      'csrf': Accounts.main.csrf,
+      'csrf': Accounts.csrfOf(Accounts.main),
     };
     final res = await Request().post(
       Api.danmakuLike,
@@ -108,7 +108,7 @@ abstract final class DanmakuHttp {
       'spmid': '333.788.0.0',
       'from_spmid': '333.788.0.0',
       'statistics': '{"appId":100,"platform":5,"abtest":"","version":""}',
-      'csrf': Accounts.main.csrf,
+      'csrf': Accounts.csrfOf(Accounts.main),
     };
     final res = await Request().post(
       Api.danmakuReport,
@@ -142,7 +142,7 @@ abstract final class DanmakuHttp {
       'dmid': id,
       'cid': cid,
       'type': 1,
-      'csrf': Accounts.main.csrf,
+      'csrf': Accounts.csrfOf(Accounts.main),
     };
     final res = await Request().post(
       Api.danmakuRecall,
@@ -170,7 +170,7 @@ abstract final class DanmakuHttp {
       'oid': oid,
       'state': state,
       'type': 1,
-      'csrf': Accounts.main.csrf,
+      'csrf': Accounts.csrfOf(Accounts.main),
     };
     final res = await Request().post(
       Api.danmakuRecall,
