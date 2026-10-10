@@ -5,6 +5,7 @@ import 'package:PiliPlus/models/common/account_type.dart';
 import 'package:PiliPlus/pages/mine/controller.dart';
 import 'package:PiliPlus/services/native_accounts/account_install_persistence_port.dart';
 import 'package:PiliPlus/services/native_accounts/account_reset_persistence_port.dart';
+import 'package:PiliPlus/services/native_accounts/account_write_back_coordinator.dart';
 import 'package:PiliPlus/services/native_accounts/native_ordered_cookie_jar_export.dart';
 import 'package:PiliPlus/utils/accounts/account.dart';
 import 'package:PiliPlus/utils/accounts/account_request_state.dart';
@@ -229,109 +230,161 @@ abstract final class Accounts {
   static Future<void> installCredentials(
     LoginAccount value, {
     bool preserveTypes = true,
+    AccountWriteBackCoordinator coordinator = accountWriteBackCoordinator,
+    AccountInstallPersistencePort persistencePort =
+        accountInstallPersistencePort,
   }) async {
-    if (ownsCredentials(value)) return;
-    final installation = _beginInstall(value, preserveTypes: preserveTypes);
+    final admission = coordinator.tryAdmit();
+    if (admission == null) {
+      throw StateError('Account write-back is frozen');
+    }
     try {
-      await accountInstallPersistencePort.writeLegacyInstall(
-        account,
-        value.storageKey,
-        value,
-      );
-      _completeInstall(installation);
-    } catch (_) {
-      _failInstall(installation);
-      rethrow;
+      if (ownsCredentials(value)) return;
+      final installation = _beginInstall(value, preserveTypes: preserveTypes);
+      try {
+        await persistencePort.writeLegacyInstall(
+          account,
+          value.storageKey,
+          value,
+        );
+        _completeInstall(installation);
+      } catch (_) {
+        _failInstall(installation);
+        rethrow;
+      }
+    } finally {
+      admission.release();
     }
   }
 
-  static Future<void> importCredentials(Map<Object?, LoginAccount> input) async {
-    final values = <String, LoginAccount>{};
-    for (final entry in input.entries) {
-      final key = entry.value.storageKey;
-      if (entry.key.toString() != key || values.containsKey(key)) {
-        throw ArgumentError('Imported account key must match its unique MID');
-      }
-      if (_retired[entry.value] == true) {
-        throw StateError('Cannot import retired account credentials');
-      }
-      values[key] = entry.value;
+  static Future<void> importCredentials(
+    Map<Object?, LoginAccount> input, {
+    AccountWriteBackCoordinator coordinator = accountWriteBackCoordinator,
+    AccountInstallPersistencePort persistencePort =
+        accountInstallPersistencePort,
+  }) async {
+    final admission = coordinator.tryAdmit();
+    if (admission == null) {
+      throw StateError('Account write-back is frozen');
     }
-    final installations = [
-      for (final value in values.values)
-        _beginInstall(value, preserveTypes: false),
-    ];
     try {
-      await accountInstallPersistencePort.writeLegacyImport(account, values);
-      for (final installation in installations) {
-        _completeInstall(installation);
+      final values = <String, LoginAccount>{};
+      for (final entry in input.entries) {
+        final key = entry.value.storageKey;
+        if (entry.key.toString() != key || values.containsKey(key)) {
+          throw ArgumentError('Imported account key must match its unique MID');
+        }
+        if (_retired[entry.value] == true) {
+          throw StateError('Cannot import retired account credentials');
+        }
+        values[key] = entry.value;
       }
-    } catch (_) {
-      for (final installation in installations) {
-        _failInstall(installation);
+      final installations = [
+        for (final value in values.values)
+          _beginInstall(value, preserveTypes: false),
+      ];
+      try {
+        await persistencePort.writeLegacyImport(account, values);
+        for (final installation in installations) {
+          _completeInstall(installation);
+        }
+      } catch (_) {
+        for (final installation in installations) {
+          _failInstall(installation);
+        }
+        rethrow;
       }
-      rethrow;
+      await refresh();
+    } finally {
+      admission.release();
     }
-    await refresh();
   }
 
   static Future<void> clear({
     AccountResetPersistencePort persistencePort = accountResetPersistencePort,
+    AccountWriteBackCoordinator coordinator = accountWriteBackCoordinator,
   }) async {
-    _requireNoCapturedRestore(allowFailed: true);
-    final recoveryOperation = _capturedRestoreFailed ? Object() : null;
-    if (recoveryOperation != null) _capturedRecoveryOperation = recoveryOperation;
-    for (final value in _owners.values) {
-      _retired[value] = true;
+    final admission = coordinator.tryAdmit();
+    if (admission == null) {
+      throw StateError('Account write-back is frozen');
     }
-    _owners.clear();
-    _pendingInstalls.clear();
-    _requestState.revokeAll();
-    final anonymous = AnonymousAccount();
-    _accountMode.fillRange(0, _accountMode.length, anonymous);
-    _requestState.changed();
     try {
-      final reset = anonymous.delete(recoveryOperation: recoveryOperation);
-      await Future.wait([
-        persistencePort.clearLegacyAccounts(account),
-        reset,
-      ]);
-      _capturedRestoreFailed = false;
-    } finally {
-      if (recoveryOperation != null &&
-          identical(_capturedRecoveryOperation, recoveryOperation)) {
-        _capturedRecoveryOperation = null;
+      _requireNoCapturedRestore(allowFailed: true);
+      final recoveryOperation = _capturedRestoreFailed ? Object() : null;
+      if (recoveryOperation != null) {
+        _capturedRecoveryOperation = recoveryOperation;
       }
+      for (final value in _owners.values) {
+        _retired[value] = true;
+      }
+      _owners.clear();
+      _pendingInstalls.clear();
+      _requestState.revokeAll();
+      final anonymous = AnonymousAccount();
+      _accountMode.fillRange(0, _accountMode.length, anonymous);
+      _requestState.changed();
+      try {
+        final reset = anonymous.delete(
+          recoveryOperation: recoveryOperation,
+          admission: admission,
+          coordinator: coordinator,
+        );
+        await Future.wait([
+          persistencePort.clearLegacyAccounts(account),
+          reset,
+        ]);
+        _capturedRestoreFailed = false;
+      } finally {
+        if (recoveryOperation != null &&
+            identical(_capturedRecoveryOperation, recoveryOperation)) {
+          _capturedRecoveryOperation = null;
+        }
+      }
+      if (ownsCredentials(anonymous)) Request.buvidActive(anonymous);
+    } finally {
+      admission.release();
     }
-    if (ownsCredentials(anonymous)) Request.buvidActive(anonymous);
   }
 
-  static Future<void> deleteAll(Set<Account> accounts) async {
-    _requireNoCapturedRestore();
-    final targets = HashSet<Account>.identity()
-      ..addAll(
-        accounts.where(
-          (value) => value is LoginAccount
-              ? _ownsStoredObject(value)
-              : value is AnonymousAccount && ownsCredentials(value),
-        ),
-      );
-    final isLoginMain = main.isLogin;
-    for (final value in targets) {
-      if (value is LoginAccount) revokeCredentials(value);
+  static Future<void> deleteAll(
+    Set<Account> accounts, {
+    AccountWriteBackCoordinator coordinator = accountWriteBackCoordinator,
+  }) async {
+    final admission = coordinator.tryAdmit();
+    if (admission == null) {
+      throw StateError('Account write-back is frozen');
     }
-    for (int i = 0; i < _accountMode.length; i++) {
-      if (targets.contains(_accountMode[i])) {
-        _accountMode[i] = AnonymousAccount();
+    try {
+      _requireNoCapturedRestore();
+      final targets = HashSet<Account>.identity()
+        ..addAll(
+          accounts.where(
+            (value) => value is LoginAccount
+                ? _ownsStoredObject(value)
+                : value is AnonymousAccount && ownsCredentials(value),
+          ),
+        );
+      final isLoginMain = main.isLogin;
+      for (final value in targets) {
+        if (value is LoginAccount) revokeCredentials(value);
       }
-    }
-    if (targets.isNotEmpty) _requestState.changed();
-    await Future.wait([
-      for (final value in targets.whereType<AnonymousAccount>()) value.delete(),
-      for (final value in targets.whereType<LoginAccount>()) value.delete(),
-    ]);
-    if (isLoginMain && !main.isLogin) {
-      await LoginUtils.onLogoutMain();
+      for (int i = 0; i < _accountMode.length; i++) {
+        if (targets.contains(_accountMode[i])) {
+          _accountMode[i] = AnonymousAccount();
+        }
+      }
+      if (targets.isNotEmpty) _requestState.changed();
+      await Future.wait([
+        for (final value in targets.whereType<AnonymousAccount>())
+          value.delete(admission: admission, coordinator: coordinator),
+        for (final value in targets.whereType<LoginAccount>())
+          value.delete(admission: admission, coordinator: coordinator),
+      ]);
+      if (isLoginMain && !main.isLogin) {
+        await LoginUtils.onLogoutMain();
+      }
+    } finally {
+      admission.release();
     }
   }
 

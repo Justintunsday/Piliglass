@@ -3,6 +3,7 @@ import 'package:PiliPlus/models/common/account_type.dart';
 import 'package:PiliPlus/services/native_accounts/account_cookie_mutation_port.dart';
 import 'package:PiliPlus/services/native_accounts/account_deletion_port.dart';
 import 'package:PiliPlus/services/native_accounts/account_reset_persistence_port.dart';
+import 'package:PiliPlus/services/native_accounts/account_write_back_coordinator.dart';
 import 'package:PiliPlus/utils/accounts.dart';
 import 'package:PiliPlus/utils/accounts/grpc_headers.dart';
 import 'package:PiliPlus/utils/id_utils.dart';
@@ -88,14 +89,21 @@ class LoginAccount extends Account {
   String get storageKey => _midStr;
 
   @override
-  Future<void> delete() {
+  Future<void> delete({
+    AccountWriteBackOperation? admission,
+    AccountWriteBackCoordinator coordinator = accountWriteBackCoordinator,
+  }) {
+    final owned = admission == null ? coordinator.tryAdmit() : null;
+    if (admission == null && owned == null) {
+      throw StateError('Account write-back is frozen');
+    }
     _hasDelete = true;
     Accounts.revokeCredentials(this);
     return Future.wait([
       accountDeletionPort.deleteCookies(this),
       if (_box.isOpen && identical(_box.get(_midStr), this))
         accountDeletionPort.deleteLegacyAccount(_box, _midStr),
-    ]);
+    ]).whenComplete(() => owned?.release());
   }
 
   @override
@@ -185,14 +193,26 @@ class AnonymousAccount extends Account {
   bool activated = false;
 
   @override
-  Future<void> delete({Object? recoveryOperation}) async {
-    final reset = Accounts.beginAnonymousReset(this, recoveryOperation: recoveryOperation);
-    activated = false;
-    grpcHeaders['x-bili-fawkes-req-bin'] = GrpcHeaders.fawkes;
-    await accountResetPersistencePort.clearAnonymousCookies(this);
-    if (!Accounts.isCurrentAnonymousReset(reset)) return;
-    cookieJar.setBuvid3();
-    Accounts.completeAnonymousReset(this, reset);
+  Future<void> delete({
+    Object? recoveryOperation,
+    AccountWriteBackOperation? admission,
+    AccountWriteBackCoordinator coordinator = accountWriteBackCoordinator,
+  }) async {
+    final owned = admission == null ? coordinator.tryAdmit() : null;
+    if (admission == null && owned == null) {
+      throw StateError('Account write-back is frozen');
+    }
+    try {
+      final reset = Accounts.beginAnonymousReset(this, recoveryOperation: recoveryOperation);
+      activated = false;
+      grpcHeaders['x-bili-fawkes-req-bin'] = GrpcHeaders.fawkes;
+      await accountResetPersistencePort.clearAnonymousCookies(this);
+      if (!Accounts.isCurrentAnonymousReset(reset)) return;
+      cookieJar.setBuvid3();
+      Accounts.completeAnonymousReset(this, reset);
+    } finally {
+      owned?.release();
+    }
   }
 
   static final _instance = AnonymousAccount._();
