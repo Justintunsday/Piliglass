@@ -195,7 +195,7 @@ abstract final class LiveHttp {
     bool moduleSelect = false,
   }) async {
     final params = {
-      'access_key': ?recommend.accessKey,
+      'access_key': ?Accounts.accessKeyOf(recommend),
       'channel': 'master',
       'actionKey': 'appkey',
       'build': 8430300,
@@ -268,7 +268,7 @@ abstract final class LiveHttp {
     String? sortType,
   }) async {
     final params = {
-      'access_key': ?recommend.accessKey,
+      'access_key': ?Accounts.accessKeyOf(recommend),
       'actionKey': 'appkey',
       'channel': 'master',
       'area_id': ?areaId,
@@ -324,7 +324,7 @@ abstract final class LiveHttp {
 
   static Future<LoadingState<List<AreaList>?>> liveAreaList() async {
     final params = {
-      'access_key': ?recommend.accessKey,
+      'access_key': ?Accounts.accessKeyOf(recommend),
       'actionKey': 'appkey',
       'build': 8430300,
       'channel': 'master',
@@ -355,7 +355,7 @@ abstract final class LiveHttp {
 
   static Future<LoadingState<List<AreaItem>>> getLiveFavTag() async {
     final params = {
-      'access_key': ?Accounts.main.accessKey,
+      'access_key': ?Accounts.accessKeyOf(Accounts.main),
       'actionKey': 'appkey',
       'build': 8430300,
       'channel': 'master',
@@ -391,7 +391,7 @@ abstract final class LiveHttp {
   }) async {
     final data = {
       'tags': ids,
-      'access_key': Accounts.main.accessKey,
+      'access_key': Accounts.accessKeyOf(Accounts.main),
       'actionKey': 'appkey',
       'build': 8430300,
       'channel': 'master',
@@ -422,7 +422,7 @@ abstract final class LiveHttp {
     required Object parentid,
   }) async {
     final params = {
-      'access_key': ?recommend.accessKey,
+      'access_key': ?Accounts.accessKeyOf(recommend),
       'actionKey': 'appkey',
       'build': 8430300,
       'channel': 'master',
@@ -458,7 +458,7 @@ abstract final class LiveHttp {
     required LiveSearchType type,
   }) async {
     final params = {
-      'access_key': ?recommend.accessKey,
+      'access_key': ?Accounts.accessKeyOf(recommend),
       'actionKey': 'appkey',
       'build': 8430300,
       'channel': 'master',
@@ -765,7 +765,7 @@ abstract final class LiveHttp {
     int page = 1,
   }) async {
     final params = {
-      'access_key': ?recommend.accessKey,
+      'access_key': ?Accounts.accessKeyOf(recommend),
       'actionKey': 'appkey',
       'build': 8430300,
       'channel': 'master',

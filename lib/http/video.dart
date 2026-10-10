@@ -455,7 +455,7 @@ abstract final class VideoHttp {
     required String bvid,
     required bool type,
   }) async {
-    if (Accounts.main.accessKey.isNullOrEmpty) {
+    if (Accounts.accessKeyOf(Accounts.main).isNullOrEmpty) {
       return const Error('请退出账号后重新登录');
     }
     final res = await Request().post(
@@ -480,7 +480,7 @@ abstract final class VideoHttp {
     int? reasonId,
     int? feedbackId,
   }) async {
-    if (Accounts.get(AccountType.recommend).accessKey.isNullOrEmpty) {
+    if (Accounts.accessKeyOf(Accounts.get(AccountType.recommend)).isNullOrEmpty) {
       return const Error('请退出账号后重新登录');
     }
     assert((reasonId != null) ^ (feedbackId != null));
@@ -509,7 +509,7 @@ abstract final class VideoHttp {
     int? reasonId,
     int? feedbackId,
   }) async {
-    if (Accounts.get(AccountType.recommend).accessKey.isNullOrEmpty) {
+    if (Accounts.accessKeyOf(Accounts.get(AccountType.recommend)).isNullOrEmpty) {
       return const Error('请退出账号后重新登录');
     }
     final res = await Request().get(
@@ -1050,7 +1050,7 @@ abstract final class VideoHttp {
     required int playurlType, // ugc 1, pgc 2
     int? qn,
   }) async {
-    final accessKey = Accounts.get(AccountType.video).accessKey;
+    final accessKey = Accounts.accessKeyOf(Accounts.get(AccountType.video));
     final params = {
       'access_key': ?accessKey,
       'actionKey': 'appkey',

@@ -808,7 +808,7 @@ abstract final class MemberHttp {
     required int mid,
   }) async {
     final params = {
-      'access_key': ?Accounts.main.accessKey,
+      'access_key': ?Accounts.accessKeyOf(Accounts.main),
       'actionKey': 'appkey',
       'build': 8430300,
       'mVersion': 309,

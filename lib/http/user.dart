@@ -513,7 +513,7 @@ abstract final class UserHttp {
     Object mid,
   ) async {
     final params = {
-      'access_key': Accounts.main.accessKey,
+      'access_key': Accounts.accessKeyOf(Accounts.main),
       'up_mid': mid,
     };
     AppSign.appSign(params);

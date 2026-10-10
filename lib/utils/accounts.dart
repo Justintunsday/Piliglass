@@ -67,6 +67,17 @@ abstract final class Accounts {
     return reader.csrfFor(owner, stamp) ?? owner.csrf;
   }
 
+  /// Read-only access key for an installed owner, routed through the credential
+  /// reader. Same fallback rule as [csrfOf].
+  static String? accessKeyOf(
+    Account owner, {
+    AccountCredentialReader reader = accountCredentialReader,
+  }) {
+    final stamp = _requestState.capture(owner);
+    if (stamp == null) return owner.accessKey;
+    return reader.accessKeyFor(owner, stamp) ?? owner.accessKey;
+  }
+
   static bool ownsCredentials(Account value) {
     if (_capturedRestoreOperation != null || _capturedRecoveryOperation != null ||
         _capturedRestoreFailed) {

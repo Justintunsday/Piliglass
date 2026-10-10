@@ -518,7 +518,7 @@ abstract final class LoginHttp {
       'csrf': Accounts.csrfOf(account),
       'mobi_app': 'android_hd',
       'platform': 'android',
-      'access_key': account.accessKey,
+      'access_key': Accounts.accessKeyOf(account),
       'statistics': Constants.statistics,
     };
     AppSign.appSign(params);

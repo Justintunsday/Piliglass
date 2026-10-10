@@ -10,6 +10,7 @@ final class CountingCredentialReader implements AccountCredentialReader {
   final AccountCredentialReader inner;
   int captures = 0;
   int csrfReads = 0;
+  int accessKeyReads = 0;
 
   @override
   AccountCredentialContext? captureRequest(
@@ -24,6 +25,12 @@ final class CountingCredentialReader implements AccountCredentialReader {
   String? csrfFor(Account owner, AccountRequestStamp<Account> stamp) {
     csrfReads++;
     return inner.csrfFor(owner, stamp);
+  }
+
+  @override
+  String? accessKeyFor(Account owner, AccountRequestStamp<Account> stamp) {
+    accessKeyReads++;
+    return inner.accessKeyFor(owner, stamp);
   }
 
   @override
@@ -42,6 +49,10 @@ final class DeniedCredentialReader implements AccountCredentialReader {
 
   @override
   String? csrfFor(Account owner, AccountRequestStamp<Account> stamp) => null;
+
+  @override
+  String? accessKeyFor(Account owner, AccountRequestStamp<Account> stamp) =>
+      null;
 
   @override
   List<AccountCredentialSummary> visibleAccounts() => const [];

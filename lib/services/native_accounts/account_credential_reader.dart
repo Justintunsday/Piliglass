@@ -57,6 +57,8 @@ abstract interface class AccountCredentialReader {
 
   String? csrfFor(Account owner, AccountRequestStamp<Account> stamp);
 
+  String? accessKeyFor(Account owner, AccountRequestStamp<Account> stamp);
+
   List<AccountCredentialSummary> visibleAccounts();
 }
 
@@ -87,6 +89,12 @@ final class DartAccountCredentialReader implements AccountCredentialReader {
   String? csrfFor(Account owner, AccountRequestStamp<Account> stamp) {
     if (!_isBound(owner, stamp)) return null;
     return owner.csrf;
+  }
+
+  @override
+  String? accessKeyFor(Account owner, AccountRequestStamp<Account> stamp) {
+    if (!_isBound(owner, stamp)) return null;
+    return owner.accessKey;
   }
 
   @override
