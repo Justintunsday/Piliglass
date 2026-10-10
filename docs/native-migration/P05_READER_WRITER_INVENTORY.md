@@ -31,8 +31,12 @@
   `lib/http` 全部 **122 处** csrf 读取已迁移（`black/music/follow/danmaku_block/validate/
   danmaku/pgc/reply/video/user/member/live/msg/dynamics/fav/login`）；`\.csrf` 直接字段读取
   归零。测试：`account_csrf_read_test.dart`（真实值、reader 计数、未安装回退、删除后回退）。
-- 剩余：`accessKey`（live 8、video 4、login/user/member 各 1）与页面
-  `Accounts.account.values/toMap/isEmpty` 摘要切换；全部迁移后再收紧无 stamp 回退。
+- 2026-10-10 第二批：`Accounts.accessKeyOf(owner)` 与 reader `accessKeyFor`（additive）
+  落地，`lib/http` 全部 **15 处** accessKey 读取迁移（live 8、video 4、login/user/member
+  各 1）；`.accessKey` 直接读取在 `lib/http` 归零。测试：`account_access_key_read_test.dart`
+  与 reader 契约新增 `accessKeyFor` bound-owner 用例。
+- 剩余：页面 `Accounts.account.values/toMap/isEmpty` 摘要切换；全部迁移后再收紧无
+  stamp 回退。
 - 本阶段不删除 `Account.csrf`/`accessKey` 原字段。
 
 ## B1d：延迟副作用与维护写入
