@@ -97,6 +97,16 @@ void main() {
     expect(accountCredentialReader.csrfFor(account, stamp), isNull);
   });
 
+  test('accessKeyFor follows the same bound-owner rule', () async {
+    final account = _account(930006, session: 'key');
+    await Accounts.installCredentials(account);
+    final stamp = Accounts.captureRequest(account)!;
+    expect(accountCredentialReader.accessKeyFor(account, stamp), 'access-key');
+    final successor = _account(930006, session: 'new');
+    await Accounts.installCredentials(successor);
+    expect(accountCredentialReader.accessKeyFor(account, stamp), isNull);
+  });
+
   test('visibleAccounts returns read-only summaries matching the real box', () async {
     await Accounts.installCredentials(_account(930011));
     await Accounts.installCredentials(_account(930012));
