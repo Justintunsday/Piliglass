@@ -23,7 +23,7 @@ abstract final class FavHttp {
       Api.favFavFolder,
       data: {
         'media_id': mediaId,
-        'csrf': Accounts.main.csrf,
+        'csrf': Accounts.csrfOf(Accounts.main),
       },
       options: Options(contentType: Headers.formUrlEncodedContentType),
     );
@@ -39,7 +39,7 @@ abstract final class FavHttp {
       Api.unfavFavFolder,
       data: {
         'media_id': mediaId,
-        'csrf': Accounts.main.csrf,
+        'csrf': Accounts.csrfOf(Accounts.main),
       },
       options: Options(contentType: Headers.formUrlEncodedContentType),
     );
@@ -88,7 +88,7 @@ abstract final class FavHttp {
             Api.unfavFolder,
             data: {
               'media_id': id,
-              'csrf': Accounts.main.csrf,
+              'csrf': Accounts.csrfOf(Accounts.main),
             },
             options: Options(contentType: Headers.formUrlEncodedContentType),
           )
@@ -97,7 +97,7 @@ abstract final class FavHttp {
             data: {
               'platform': 'web',
               'season_id': id,
-              'csrf': Accounts.main.csrf,
+              'csrf': Accounts.csrfOf(Accounts.main),
             },
             options: Options(contentType: Headers.formUrlEncodedContentType),
           );
@@ -153,7 +153,7 @@ abstract final class FavHttp {
       Api.addFavPugv,
       data: {
         'season_id': seasonId,
-        'csrf': Accounts.main.csrf,
+        'csrf': Accounts.csrfOf(Accounts.main),
       },
       options: Options(contentType: Headers.formUrlEncodedContentType),
     );
@@ -169,7 +169,7 @@ abstract final class FavHttp {
       Api.delFavPugv,
       data: {
         'season_id': seasonId,
-        'csrf': Accounts.main.csrf,
+        'csrf': Accounts.csrfOf(Accounts.main),
       },
       options: Options(contentType: Headers.formUrlEncodedContentType),
     );
@@ -203,7 +203,7 @@ abstract final class FavHttp {
       Api.addFavTopic,
       data: {
         'topic_id': topicId,
-        'csrf': Accounts.main.csrf,
+        'csrf': Accounts.csrfOf(Accounts.main),
       },
       options: Options(contentType: Headers.formUrlEncodedContentType),
     );
@@ -219,7 +219,7 @@ abstract final class FavHttp {
       Api.delFavTopic,
       data: {
         'topic_id': topicId,
-        'csrf': Accounts.main.csrf,
+        'csrf': Accounts.csrfOf(Accounts.main),
       },
       options: Options(contentType: Headers.formUrlEncodedContentType),
     );
@@ -240,7 +240,7 @@ abstract final class FavHttp {
         'action': isLike ? 'cancel_like' : 'like',
         'up_mid': Accounts.main.mid,
         'topic_id': topicId,
-        'csrf': Accounts.main.csrf,
+        'csrf': Accounts.csrfOf(Accounts.main),
         'business': 'topic',
       },
       options: Options(contentType: Headers.formUrlEncodedContentType),
@@ -276,7 +276,7 @@ abstract final class FavHttp {
       Api.addFavArticle,
       data: {
         'id': id,
-        'csrf': Accounts.main.csrf,
+        'csrf': Accounts.csrfOf(Accounts.main),
       },
       options: Options(
         contentType: Headers.formUrlEncodedContentType,
@@ -296,7 +296,7 @@ abstract final class FavHttp {
       Api.delFavArticle,
       data: {
         'id': id,
-        'csrf': Accounts.main.csrf,
+        'csrf': Accounts.csrfOf(Accounts.main),
       },
       options: Options(
         contentType: Headers.formUrlEncodedContentType,
@@ -317,7 +317,7 @@ abstract final class FavHttp {
       queryParameters: {
         'pn': page,
         'ps': 10,
-        'csrf': Accounts.main.csrf,
+        'csrf': Accounts.csrfOf(Accounts.main),
       },
     );
     if (res.data['code'] == 0) {
@@ -338,7 +338,7 @@ abstract final class FavHttp {
       queryParameters: {
         'pn': page,
         'ps': 10,
-        'csrf': Accounts.main.csrf,
+        'csrf': Accounts.csrfOf(Accounts.main),
       },
     );
     if (res.data['code'] == 0) {
@@ -359,7 +359,7 @@ abstract final class FavHttp {
       isPublish ? Api.delPublishNote : Api.delNote,
       data: {
         isPublish ? 'cvids' : 'note_ids': noteIds,
-        'csrf': Accounts.main.csrf,
+        'csrf': Accounts.csrfOf(Accounts.main),
       },
       options: Options(
         contentType: Headers.formUrlEncodedContentType,
@@ -420,7 +420,7 @@ abstract final class FavHttp {
   }) async {
     Map<String, dynamic> data = {
       'sort': sort,
-      'csrf': Accounts.main.csrf,
+      'csrf': Accounts.csrfOf(Accounts.main),
     };
     AppSign.appSign(data);
     final res = await Request().post(
@@ -444,7 +444,7 @@ abstract final class FavHttp {
     Map<String, dynamic> data = {
       'media_id': mediaId,
       'sort': sort,
-      'csrf': Accounts.main.csrf,
+      'csrf': Accounts.csrfOf(Accounts.main),
     };
     AppSign.appSign(data);
     final res = await Request().post(
@@ -469,7 +469,7 @@ abstract final class FavHttp {
       data: {
         'media_id': mediaId,
         'platform': 'web',
-        'csrf': Accounts.main.csrf,
+        'csrf': Accounts.csrfOf(Accounts.main),
       },
       options: Options(
         contentType: Headers.formUrlEncodedContentType,
@@ -490,7 +490,7 @@ abstract final class FavHttp {
       data: {
         'media_ids': mediaIds,
         'platform': 'web',
-        'csrf': Accounts.main.csrf,
+        'csrf': Accounts.csrfOf(Accounts.main),
       },
       options: Options(
         contentType: Headers.formUrlEncodedContentType,
@@ -518,7 +518,7 @@ abstract final class FavHttp {
         'intro': intro,
         'privacy': privacy,
         'cover': cover.isNotEmpty ? Uri.encodeFull(cover) : cover,
-        'csrf': Accounts.main.csrf,
+        'csrf': Accounts.csrfOf(Accounts.main),
         'media_id': ?mediaId,
       },
       options: Options(
@@ -557,7 +557,7 @@ abstract final class FavHttp {
       data: {
         'platform': 'web',
         'season_id': seasonId,
-        'csrf': Accounts.main.csrf,
+        'csrf': Accounts.csrfOf(Accounts.main),
       },
       options: Options(
         contentType: Headers.formUrlEncodedContentType,
@@ -612,7 +612,7 @@ abstract final class FavHttp {
     final res = await Request().post(
       Api.communityAction,
       queryParameters: {
-        'csrf': Accounts.main.csrf,
+        'csrf': Accounts.csrfOf(Accounts.main),
       },
       data: {
         "entity": {
@@ -641,7 +641,7 @@ abstract final class FavHttp {
         'resources': resources,
         'add_media_ids': addIds ?? '',
         'del_media_ids': delIds ?? '',
-        'csrf': Accounts.main.csrf,
+        'csrf': Accounts.csrfOf(Accounts.main),
       },
       options: Options(contentType: Headers.formUrlEncodedContentType),
     );
@@ -662,7 +662,7 @@ abstract final class FavHttp {
       data: {
         'rid': rid,
         'type': type,
-        'csrf': Accounts.main.csrf,
+        'csrf': Accounts.csrfOf(Accounts.main),
       },
       options: Options(contentType: Headers.formUrlEncodedContentType),
     );
@@ -695,7 +695,7 @@ abstract final class FavHttp {
         'mid': ?mid,
         'resources': resources,
         'platform': 'web',
-        'csrf': Accounts.main.csrf,
+        'csrf': Accounts.csrfOf(Accounts.main),
       },
       options: Options(contentType: Headers.formUrlEncodedContentType),
     );

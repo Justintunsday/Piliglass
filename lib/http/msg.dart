@@ -136,7 +136,7 @@ abstract final class MsgHttp {
   }
 
   static Future<LoadingState<void>> msgSysUpdateCursor(int cursor) async {
-    String csrf = Accounts.main.csrf;
+    String csrf = Accounts.csrfOf(Accounts.main);
     final res = await Request().get(
       Api.msgSysUpdateCursor,
       queryParameters: {
@@ -162,7 +162,7 @@ abstract final class MsgHttp {
         'bucket': bucket,
         'file': await MultipartFile.fromFile(path),
         'dir': dir,
-        'csrf': Accounts.main.csrf,
+        'csrf': Accounts.csrfOf(Accounts.main),
       }),
     );
     if (res.data['code'] == 0) {
@@ -184,7 +184,7 @@ abstract final class MsgHttp {
         'file_up': await MultipartFile.fromFile(path),
         'category': ?category,
         'biz': ?biz,
-        'csrf': Accounts.main.csrf,
+        'csrf': Accounts.csrfOf(Accounts.main),
       }),
       cancelToken: cancelToken,
     );
@@ -198,7 +198,7 @@ abstract final class MsgHttp {
   static Future<LoadingState<void>> createTextDynamic(
     Object content,
   ) async {
-    String csrf = Accounts.main.csrf;
+    String csrf = Accounts.csrfOf(Accounts.main);
     Map<String, dynamic> data = await WbiSign.makSign({
       'dynamic_id': 0,
       'type': 4,
@@ -228,7 +228,7 @@ abstract final class MsgHttp {
       Api.removeDynamic,
       queryParameters: {
         'platform': 'web',
-        'csrf': Accounts.main.csrf,
+        'csrf': Accounts.csrfOf(Accounts.main),
       },
       data: {
         "dyn_id_str": dynIdStr,
@@ -246,7 +246,7 @@ abstract final class MsgHttp {
   static Future<LoadingState<void>> removeMsg(
     Object talkerId,
   ) async {
-    String csrf = Accounts.main.csrf;
+    String csrf = Accounts.csrfOf(Accounts.main);
     Map<String, dynamic> data = await WbiSign.makSign({
       'talker_id': talkerId,
       'session_type': 1,
@@ -271,7 +271,7 @@ abstract final class MsgHttp {
     int tp,
     dynamic id,
   ) async {
-    String csrf = Accounts.main.csrf;
+    String csrf = Accounts.csrfOf(Accounts.main);
     final res = await Request().post(
       Api.delMsgfeed,
       data: {
@@ -294,7 +294,7 @@ abstract final class MsgHttp {
   static Future<LoadingState<void>> delSysMsg(
     Object id,
   ) async {
-    String csrf = Accounts.main.csrf;
+    String csrf = Accounts.csrfOf(Accounts.main);
     final res = await Request().post(
       HttpString.messageBaseUrl + Api.delSysMsg,
       queryParameters: {
@@ -320,7 +320,7 @@ abstract final class MsgHttp {
     required Object talkerId,
     required int opType,
   }) async {
-    String csrf = Accounts.main.csrf;
+    String csrf = Accounts.csrfOf(Accounts.main);
     Map<String, dynamic> data = await WbiSign.makSign({
       'talker_id': talkerId,
       'session_type': 1,
@@ -347,7 +347,7 @@ abstract final class MsgHttp {
     required int talkerId,
     required int ackSeqno,
   }) async {
-    String csrf = Accounts.main.csrf;
+    String csrf = Accounts.csrfOf(Accounts.main);
     final params = await WbiSign.makSign({
       'talker_id': talkerId,
       'session_type': 1,
@@ -376,7 +376,7 @@ abstract final class MsgHttp {
   //   int? msgType,
   //   dynamic content,
   // }) async {
-  //   String csrf = Accounts.main.csrf;
+  //   String csrf = Accounts.csrfOf(Accounts.main);
   //   final devId = getDevId();
   //   final data = {
   //     'msg': {
@@ -426,7 +426,7 @@ abstract final class MsgHttp {
     required Object id,
     required int noticeState,
   }) async {
-    final csrf = Accounts.main.csrf;
+    final csrf = Accounts.csrfOf(Accounts.main);
     final res = await Request().post(
       Api.msgSetNotice,
       data: {
@@ -455,7 +455,7 @@ abstract final class MsgHttp {
     required int setting,
     required dndUid,
   }) async {
-    final csrf = Accounts.main.csrf;
+    final csrf = Accounts.csrfOf(Accounts.main);
     final res = await Request().post(
       Api.setMsgDnd,
       data: {
@@ -480,7 +480,7 @@ abstract final class MsgHttp {
     required int setting,
     required talkerUid,
   }) async {
-    final csrf = Accounts.main.csrf;
+    final csrf = Accounts.csrfOf(Accounts.main);
     final res = await Request().post(
       Api.setPushSs,
       data: {
@@ -503,7 +503,7 @@ abstract final class MsgHttp {
   static Future<LoadingState<List<ImUserInfosData>?>> imUserInfos({
     required String uids,
   }) async {
-    final csrf = Accounts.main.csrf;
+    final csrf = Accounts.csrfOf(Accounts.main);
     final res = await Request().get(
       Api.imUserInfos,
       queryParameters: {
@@ -528,7 +528,7 @@ abstract final class MsgHttp {
   static Future<LoadingState<SessionSsData>> getSessionSs({
     required Object talkerUid,
   }) async {
-    final csrf = Accounts.main.csrf;
+    final csrf = Accounts.csrfOf(Accounts.main);
     final res = await Request().get(
       Api.getSessionSs,
       queryParameters: {
@@ -549,7 +549,7 @@ abstract final class MsgHttp {
   static Future<LoadingState<List<UidSetting>?>> getMsgDnd({
     required Object uidsStr,
   }) async {
-    final csrf = Accounts.main.csrf;
+    final csrf = Accounts.csrfOf(Accounts.main);
     final res = await Request().get(
       Api.getMsgDnd,
       queryParameters: {
@@ -623,7 +623,7 @@ abstract final class MsgHttp {
         'module': 604,
         'comment': jsonEncode(comment),
         'extra': jsonEncode(extra),
-        'csrf': Accounts.main.csrf,
+        'csrf': Accounts.csrfOf(Accounts.main),
       },
       options: Options(contentType: Headers.formUrlEncodedContentType),
     );

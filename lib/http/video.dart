@@ -365,7 +365,7 @@ abstract final class VideoHttp {
         // 'bvid': bvid,
         'multiply': multiply.toString(),
         'select_like': selectLike.toString(),
-        // 'csrf': Accounts.main.csrf,
+        // 'csrf': Accounts.csrfOf(Accounts.main),
       },
       options: Options(contentType: Headers.formUrlEncodedContentType),
     );
@@ -383,7 +383,7 @@ abstract final class VideoHttp {
   }) async {
     final res = await Request().post(
       Api.pgcTriple,
-      data: {'ep_id': epId, 'csrf': Accounts.main.csrf},
+      data: {'ep_id': epId, 'csrf': Accounts.csrfOf(Accounts.main)},
       options: Options(
         contentType: Headers.formUrlEncodedContentType,
         headers: {
@@ -413,7 +413,7 @@ abstract final class VideoHttp {
         'ramval': 0,
         'source': 'web_normal',
         'ga': 1,
-        'csrf': Accounts.main.csrf,
+        'csrf': Accounts.csrfOf(Accounts.main),
         'spmid': '333.788.0.0',
         'statistics': '{"appId":100,"platform":5}',
       },
@@ -558,7 +558,7 @@ abstract final class VideoHttp {
         'at_name_to_mid': jsonEncode(atNameToMid), // {"name":uid}
       if (pictures != null) 'pictures': jsonEncode(pictures),
       if (syncToDynamic) 'sync_to_dynamic': 1,
-      'csrf': Accounts.main.csrf,
+      'csrf': Accounts.csrfOf(Accounts.main),
     };
     final res = await Request().post(
       Api.replyAdd,
@@ -596,7 +596,7 @@ abstract final class VideoHttp {
         'type': type, //type.index
         'oid': oid,
         'rpid': rpid,
-        'csrf': Accounts.main.csrf,
+        'csrf': Accounts.csrfOf(Accounts.main),
       },
       options: Options(contentType: Headers.formUrlEncodedContentType),
     );
@@ -632,7 +632,7 @@ abstract final class VideoHttp {
           "entity_id": mid,
           'fp': BrowserUa.pc,
         }),
-        'csrf': Accounts.main.csrf,
+        'csrf': Accounts.csrfOf(Accounts.main),
       },
       options: Options(
         contentType: Headers.formUrlEncodedContentType,
@@ -660,7 +660,7 @@ abstract final class VideoHttp {
   static Future<void> roomEntryAction({required Object roomId}) {
     return Request().post(
       Api.roomEntryAction,
-      queryParameters: {'csrf': Accounts.heartbeat.csrf},
+      queryParameters: {'csrf': Accounts.csrfOf(Accounts.heartbeat)},
       data: {'room_id': roomId, 'platform': 'pc'},
     );
   }
@@ -671,7 +671,7 @@ abstract final class VideoHttp {
   }) {
     return Request().post(
       Api.historyReport,
-      data: {'aid': aid, 'type': type, 'csrf': Accounts.heartbeat.csrf},
+      data: {'aid': aid, 'type': type, 'csrf': Accounts.csrfOf(Accounts.heartbeat)},
       options: Options(contentType: Headers.formUrlEncodedContentType),
     );
   }
@@ -698,7 +698,7 @@ abstract final class VideoHttp {
         'type': videoType.type,
         'sub_type': ?subType,
         'played_time': progress,
-        'csrf': Accounts.heartbeat.csrf,
+        'csrf': Accounts.csrfOf(Accounts.heartbeat),
       },
       options: Options(contentType: Headers.formUrlEncodedContentType),
     );
@@ -715,7 +715,7 @@ abstract final class VideoHttp {
         'desc': desc,
         'oid': oid,
         'upper_mid': upperMid,
-        'csrf': Accounts.heartbeat.csrf,
+        'csrf': Accounts.csrfOf(Accounts.heartbeat),
       },
       options: Options(contentType: Headers.formUrlEncodedContentType),
     );
@@ -725,7 +725,7 @@ abstract final class VideoHttp {
   static Future<LoadingState<String>> pgcAdd({int? seasonId}) async {
     final res = await Request().post(
       Api.pgcAdd,
-      data: {'season_id': seasonId, 'csrf': Accounts.main.csrf},
+      data: {'season_id': seasonId, 'csrf': Accounts.csrfOf(Accounts.main)},
       options: Options(contentType: Headers.formUrlEncodedContentType),
     );
     if (res.data['code'] == 0) {
@@ -739,7 +739,7 @@ abstract final class VideoHttp {
   static Future<LoadingState<String>> pgcDel({int? seasonId}) async {
     final res = await Request().post(
       Api.pgcDel,
-      data: {'season_id': seasonId, 'csrf': Accounts.main.csrf},
+      data: {'season_id': seasonId, 'csrf': Accounts.csrfOf(Accounts.main)},
       options: Options(contentType: Headers.formUrlEncodedContentType),
     );
     if (res.data['code'] == 0) {
@@ -758,7 +758,7 @@ abstract final class VideoHttp {
       data: {
         'season_id': seasonId,
         'status': status,
-        'csrf': Accounts.main.csrf,
+        'csrf': Accounts.csrfOf(Accounts.main),
       },
       options: Options(contentType: Headers.formUrlEncodedContentType),
     );
@@ -954,7 +954,7 @@ abstract final class VideoHttp {
     final res = await Request().get(
       Api.archiveNoteList,
       queryParameters: {
-        'csrf': Accounts.main.csrf,
+        'csrf': Accounts.csrfOf(Accounts.main),
         'oid': oid,
         'oid_type': 0,
         'pn': page,

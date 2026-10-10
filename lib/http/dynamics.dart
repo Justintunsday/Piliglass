@@ -134,7 +134,7 @@ abstract final class DynamicsHttp {
   //     queryParameters: {
   //       'dynamic_id': dynamicId,
   //       'up': up,
-  //       'csrf': Accounts.main.csrf,
+  //       'csrf': Accounts.csrfOf(Accounts.main),
   //     },
   //   );
   //   if (res.data['code'] == 0) {
@@ -155,7 +155,7 @@ abstract final class DynamicsHttp {
     final res = await Request().post(
       Api.thumbDynamic,
       queryParameters: {
-        'csrf': Accounts.main.csrf,
+        'csrf': Accounts.csrfOf(Accounts.main),
       },
       data: {
         'dyn_id_str': dynamicId,
@@ -194,7 +194,7 @@ abstract final class DynamicsHttp {
       Api.createDynamic,
       queryParameters: {
         'platform': 'web',
-        'csrf': Accounts.main.csrf,
+        'csrf': Accounts.csrfOf(Accounts.main),
         'x-bili-device-req-json': '{"platform": "web", "device": "pc"}',
         'x-bili-web-req-json': '{"spm_id": "333.999"}',
       },
@@ -281,7 +281,7 @@ abstract final class DynamicsHttp {
         'web_location': '333.1330',
         'x-bili-device-req-json':
             '{"platform":"web","device":"pc","spmid":"333.1330"}',
-        if (!clearCookie && Accounts.main.isLogin) 'csrf': Accounts.main.csrf,
+        if (!clearCookie && Accounts.main.isLogin) 'csrf': Accounts.csrfOf(Accounts.main),
       },
       options: clearCookie ? ReplyHttp.options : null,
     );
@@ -302,7 +302,7 @@ abstract final class DynamicsHttp {
     final res = await Request().post(
       Api.setTopDyn,
       queryParameters: {
-        'csrf': Accounts.main.csrf,
+        'csrf': Accounts.csrfOf(Accounts.main),
       },
       data: {
         'dyn_str': dynamicId,
@@ -321,7 +321,7 @@ abstract final class DynamicsHttp {
     final res = await Request().post(
       Api.rmTopDyn,
       queryParameters: {
-        'csrf': Accounts.main.csrf,
+        'csrf': Accounts.csrfOf(Accounts.main),
       },
       data: {
         'dyn_str': dynamicId,
@@ -410,7 +410,7 @@ abstract final class DynamicsHttp {
     bool anonymous = false,
     int? dynamicId,
   }) async {
-    final csrf = Accounts.main.csrf;
+    final csrf = Accounts.csrfOf(Accounts.main);
     final data = {
       'vote_id': voteId,
       'votes': votes,
@@ -531,7 +531,7 @@ abstract final class DynamicsHttp {
     final res = await Request().post(
       Api.dynReserve,
       queryParameters: {
-        'csrf': Accounts.main.csrf,
+        'csrf': Accounts.csrfOf(Accounts.main),
       },
       data: {
         'reserve_id': ?reserveId,
@@ -610,7 +610,7 @@ abstract final class DynamicsHttp {
   static Future<LoadingState<int?>> createVote(VoteInfo voteInfo) async {
     final res = await Request().post(
       Api.createVote,
-      queryParameters: {'csrf': Accounts.main.csrf},
+      queryParameters: {'csrf': Accounts.csrfOf(Accounts.main)},
       data: {'vote_info': voteInfo.toJson()},
     );
     if (res.data['code'] == 0) {
@@ -623,7 +623,7 @@ abstract final class DynamicsHttp {
   static Future<LoadingState<int?>> updateVote(VoteInfo voteInfo) async {
     final res = await Request().post(
       Api.updateVote,
-      queryParameters: {'csrf': Accounts.main.csrf},
+      queryParameters: {'csrf': Accounts.csrfOf(Accounts.main)},
       data: {'vote_info': voteInfo.toJson()},
     );
     if (res.data['code'] == 0) {
@@ -646,7 +646,7 @@ abstract final class DynamicsHttp {
         'from': 1,
         'title': title,
         'live_plan_start_time': livePlanStartTime,
-        'csrf': Accounts.main.csrf,
+        'csrf': Accounts.csrfOf(Accounts.main),
       },
       options: Options(contentType: Headers.formUrlEncodedContentType),
     );
@@ -672,7 +672,7 @@ abstract final class DynamicsHttp {
         'title': title,
         'live_plan_start_time': livePlanStartTime,
         'id': sid,
-        'csrf': Accounts.main.csrf,
+        'csrf': Accounts.csrfOf(Accounts.main),
       },
       options: Options(contentType: Headers.formUrlEncodedContentType),
     );
@@ -730,7 +730,7 @@ abstract final class DynamicsHttp {
       Api.dynPrivatePubSetting,
       queryParameters: {
         'platform': 'web',
-        'csrf': Accounts.main.csrf,
+        'csrf': Accounts.csrfOf(Accounts.main),
       },
       data: {
         "object_id": jsonEncode({
@@ -766,7 +766,7 @@ abstract final class DynamicsHttp {
       Api.editDyn,
       queryParameters: await WbiSign.makSign({
         'platform': 'web',
-        'csrf': Accounts.main.csrf,
+        'csrf': Accounts.csrfOf(Accounts.main),
         'x-bili-device-req-json':
             '{"platform":"web","device":"pc","spmid":"333.1368"}',
         'w_dyn_req.upload_id': uploadId,

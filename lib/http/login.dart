@@ -494,7 +494,7 @@ abstract final class LoginHttp {
   static Future<LoadingState<void>> logout(LoginAccount account) async {
     final res = await Request().post(
       Api.logout,
-      data: {'biliCSRF': account.csrf},
+      data: {'biliCSRF': Accounts.csrfOf(account)},
       options: Options(
         contentType: Headers.formUrlEncodedContentType,
         extra: {'account': account},
@@ -515,7 +515,7 @@ abstract final class LoginHttp {
       'buvid': buvid,
       'device_name': 'android',
       'device_platform': 'android',
-      'csrf': account.csrf,
+      'csrf': Accounts.csrfOf(account),
       'mobi_app': 'android_hd',
       'platform': 'android',
       'access_key': account.accessKey,

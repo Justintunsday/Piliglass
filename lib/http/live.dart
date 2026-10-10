@@ -42,7 +42,7 @@ abstract final class LiveHttp {
     int replyMid = 0,
     String replayDmid = '',
   }) async {
-    String csrf = Accounts.main.csrf;
+    String csrf = Accounts.csrfOf(Accounts.main);
     final res = await Request().post(
       Api.sendLiveMsg,
       queryParameters: await WbiSign.makSign({'web_location': 444.8}),
@@ -510,7 +510,7 @@ abstract final class LiveHttp {
     required String type,
     required int level,
   }) async {
-    final csrf = Accounts.main.csrf;
+    final csrf = Accounts.csrfOf(Accounts.main);
     final res = await Request().post(
       Api.liveSetSilent,
       data: {
@@ -531,7 +531,7 @@ abstract final class LiveHttp {
   static Future<LoadingState<void>> addShieldKeyword({
     required String keyword,
   }) async {
-    final csrf = Accounts.main.csrf;
+    final csrf = Accounts.csrfOf(Accounts.main);
     final res = await Request().post(
       Api.addShieldKeyword,
       data: {
@@ -551,7 +551,7 @@ abstract final class LiveHttp {
   static Future<LoadingState<void>> delShieldKeyword({
     required String keyword,
   }) async {
-    final csrf = Accounts.main.csrf;
+    final csrf = Accounts.csrfOf(Accounts.main);
     final res = await Request().post(
       Api.delShieldKeyword,
       data: {
@@ -573,7 +573,7 @@ abstract final class LiveHttp {
     required Object roomid,
     required int type,
   }) async {
-    final csrf = Accounts.main.csrf;
+    final csrf = Accounts.csrfOf(Accounts.main);
     final res = await Request().post(
       Api.liveShieldUser,
       data: {
@@ -606,7 +606,7 @@ abstract final class LiveHttp {
         'uid': uid,
         'anchor_id': ?anchorId,
         'web_location': 444.8,
-        'csrf': Accounts.heartbeat.csrf,
+        'csrf': Accounts.csrfOf(Accounts.heartbeat),
       }),
       options: Options(contentType: Headers.formUrlEncodedContentType),
     );
@@ -649,7 +649,7 @@ abstract final class LiveHttp {
     required Object ts,
     required Object sign,
   }) async {
-    final csrf = Accounts.main.csrf;
+    final csrf = Accounts.csrfOf(Accounts.main);
     final data = {
       'id': 0,
       'roomid': roomId,
@@ -717,7 +717,7 @@ abstract final class LiveHttp {
     required int ts,
     required String token,
   }) async {
-    final csrf = Accounts.main.csrf;
+    final csrf = Accounts.csrfOf(Accounts.main);
     final res = await Request().post(
       Api.superChatReport,
       data: {

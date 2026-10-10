@@ -117,7 +117,7 @@ abstract final class UserHttp {
       data: {
         'switch': switchStatus,
         'jsonp': 'jsonp',
-        'csrf': account.csrf,
+        'csrf': Accounts.csrfOf(account),
       },
       options: Options(
         extra: {'account': account},
@@ -151,7 +151,7 @@ abstract final class UserHttp {
       Api.clearHistory,
       data: {
         'jsonp': 'jsonp',
-        'csrf': account.csrf,
+        'csrf': Accounts.csrfOf(account),
       },
       options: Options(
         extra: {'account': account},
@@ -176,7 +176,7 @@ abstract final class UserHttp {
       data: {
         'aid': ?aid,
         'bvid': ?bvid,
-        'csrf': Accounts.main.csrf,
+        'csrf': Accounts.csrfOf(Accounts.main),
       },
       options: Options(contentType: Headers.formUrlEncodedContentType),
     );
@@ -192,7 +192,7 @@ abstract final class UserHttp {
   // 移除已观看
   static Future<LoadingState<void>> toViewDel({required String aids}) async {
     final Map<String, dynamic> params = {
-      'csrf': Accounts.main.csrf,
+      'csrf': Accounts.csrfOf(Accounts.main),
       'resources': aids,
     };
     final res = await Request().post(
@@ -234,7 +234,7 @@ abstract final class UserHttp {
       Api.toViewClear,
       data: {
         'clean_type': ?cleanType,
-        'csrf': Accounts.main.csrf,
+        'csrf': Accounts.csrfOf(Accounts.main),
       },
       options: Options(contentType: Headers.formUrlEncodedContentType),
     );
@@ -256,7 +256,7 @@ abstract final class UserHttp {
       data: {
         'kid': kid,
         'jsonp': 'jsonp',
-        'csrf': account.csrf,
+        'csrf': Accounts.csrfOf(account),
       },
       options: Options(
         extra: {'account': account},
@@ -400,7 +400,7 @@ abstract final class UserHttp {
     final res = await Request().post(
       Api.dynamicReport,
       queryParameters: {
-        'csrf': Accounts.main.csrf,
+        'csrf': Accounts.csrfOf(Accounts.main),
       },
       data: {
         "accused_uid": mid,
@@ -437,7 +437,7 @@ abstract final class UserHttp {
     final res = await Request().post(
       Api.spaceSettingMod,
       queryParameters: {
-        'csrf': Accounts.main.csrf,
+        'csrf': Accounts.csrfOf(Accounts.main),
       },
       data: data,
       options: Options(contentType: Headers.formUrlEncodedContentType),
@@ -454,7 +454,7 @@ abstract final class UserHttp {
       Api.vipExpAdd,
       queryParameters: {
         'mid': Accounts.main.mid,
-        'csrf': Accounts.main.csrf,
+        'csrf': Accounts.csrfOf(Accounts.main),
       },
     );
     if (res.data['code'] == 0) {
@@ -535,7 +535,7 @@ abstract final class UserHttp {
     final res = await Request().get(
       Api.followedUp,
       queryParameters: {
-        'csrf': Accounts.main.csrf,
+        'csrf': Accounts.csrfOf(Accounts.main),
         'pn': pn,
         'vmid': mid,
         'web_location': 333.789,
@@ -557,7 +557,7 @@ abstract final class UserHttp {
     final res = await Request().get(
       Api.sameFollowing,
       queryParameters: {
-        'csrf': Accounts.main.csrf,
+        'csrf': Accounts.csrfOf(Accounts.main),
         'pn': ?pn,
         'vmid': mid,
         'web_location': 333.789,
@@ -580,7 +580,7 @@ abstract final class UserHttp {
       isFollow ? Api.spaceReserveCancel : Api.spaceReserve,
       data: {
         'sid': sid,
-        'csrf': Accounts.main.csrf,
+        'csrf': Accounts.csrfOf(Accounts.main),
       },
       options: Options(contentType: Headers.formUrlEncodedContentType),
     );

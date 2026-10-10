@@ -26,8 +26,13 @@
 `Accounts.account.values/toMap/isEmpty`；`visibleAccounts()` 已提供摘要，但页面尚未切换。
 
 - 现状：请求路径（AccountManager/lease）已走 reader；endpoint 与页面仍是直接读取。
-- 批次计划：按文件分组迁移到 `Accounts` 的只读访问器（保留缺 stamp 时的原值回退，
-  行为等价），每批 1–3 个文件 + 测试；全部迁移后再收紧回退。
+- 2026-10-10 第一批：引入 `Accounts.csrfOf(owner)` 只读访问器（installed owner 经
+  `accountCredentialReader.csrfFor`；无当前 generation 时回退原字段，行为等价），
+  `lib/http` 全部 **122 处** csrf 读取已迁移（`black/music/follow/danmaku_block/validate/
+  danmaku/pgc/reply/video/user/member/live/msg/dynamics/fav/login`）；`\.csrf` 直接字段读取
+  归零。测试：`account_csrf_read_test.dart`（真实值、reader 计数、未安装回退、删除后回退）。
+- 剩余：`accessKey`（live 8、video 4、login/user/member 各 1）与页面
+  `Accounts.account.values/toMap/isEmpty` 摘要切换；全部迁移后再收紧无 stamp 回退。
 - 本阶段不删除 `Account.csrf`/`accessKey` 原字段。
 
 ## B1d：延迟副作用与维护写入

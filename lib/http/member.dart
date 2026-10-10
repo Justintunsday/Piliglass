@@ -50,7 +50,7 @@ abstract final class MemberHttp {
         'mid': mid,
         'reason': reason,
         'reason_v2': ?reasonV2,
-        'csrf': Accounts.main.csrf,
+        'csrf': Accounts.csrfOf(Accounts.main),
       },
       options: Options(contentType: Headers.formUrlEncodedContentType),
     );
@@ -528,7 +528,7 @@ abstract final class MemberHttp {
       isAdd ? Api.addSpecial : Api.delSpecial,
       data: {
         'fid': fid,
-        'csrf': Accounts.main.csrf,
+        'csrf': Accounts.csrfOf(Accounts.main),
       },
       options: Options(contentType: Headers.formUrlEncodedContentType),
     );
@@ -550,7 +550,7 @@ abstract final class MemberHttp {
       data: {
         'fids': fids,
         'tagids': tagids,
-        'csrf': Accounts.main.csrf,
+        'csrf': Accounts.csrfOf(Accounts.main),
         // 'cross_domain': true
       },
       options: Options(contentType: Headers.formUrlEncodedContentType),
@@ -604,7 +604,7 @@ abstract final class MemberHttp {
       },
       data: {
         'tag': tagName,
-        'csrf': Accounts.main.csrf,
+        'csrf': Accounts.csrfOf(Accounts.main),
       },
       options: Options(contentType: Headers.formUrlEncodedContentType),
     );
@@ -628,7 +628,7 @@ abstract final class MemberHttp {
       data: {
         'tagid': tagid,
         'name': name,
-        'csrf': Accounts.main.csrf,
+        'csrf': Accounts.csrfOf(Accounts.main),
       },
       options: Options(contentType: Headers.formUrlEncodedContentType),
     );
@@ -648,7 +648,7 @@ abstract final class MemberHttp {
       },
       data: {
         'tagid': tagid,
-        'csrf': Accounts.main.csrf,
+        'csrf': Accounts.csrfOf(Accounts.main),
       },
       options: Options(contentType: Headers.formUrlEncodedContentType),
     );
@@ -756,7 +756,7 @@ abstract final class MemberHttp {
         'privilege_type': ?privilegeType,
         'mobi_app': 'web',
         'web_location': 333.1196,
-        if (Accounts.main.isLogin) 'csrf': Accounts.main.csrf,
+        if (Accounts.main.isLogin) 'csrf': Accounts.csrfOf(Accounts.main),
       },
     );
     if (res.data['code'] == 0) {
