@@ -5,6 +5,7 @@ import 'package:PiliPlus/http/loading_state.dart';
 import 'package:PiliPlus/http/user.dart';
 import 'package:PiliPlus/main.dart' show webViewEnvironment;
 import 'package:PiliPlus/services/account_service.dart';
+import 'package:PiliPlus/services/native_accounts/account_write_back_coordinator.dart';
 import 'package:PiliPlus/utils/accounts.dart';
 import 'package:PiliPlus/utils/accounts/account.dart';
 import 'package:PiliPlus/utils/request_utils.dart';
@@ -42,7 +43,10 @@ abstract final class LoginUtils {
     );
   }
 
-  static Future<void> onLoginMain() async {
+  static Future<void> onLoginMain({
+    AccountWriteBackOperation? admission,
+    AccountWriteBackCoordinator coordinator = accountWriteBackCoordinator,
+  }) async {
     final account = Accounts.main;
     final res = await UserHttp.userInfo();
     if (res case Success(:final response)) {
@@ -67,7 +71,11 @@ abstract final class LoginUtils {
       // 获取用户信息失败
       final errMsg = res.toString();
       if (errMsg == '账号未登录') {
-        await Accounts.deleteAll({account});
+        await Accounts.deleteAll(
+          {account},
+          admission: admission,
+          coordinator: coordinator,
+        );
         SmartDialog.showNotify(
           msg: '登录失败，请检查cookie是否正确，$errMsg',
           notifyType: .warning,

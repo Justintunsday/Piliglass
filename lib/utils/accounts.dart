@@ -147,22 +147,34 @@ abstract final class Accounts {
     }
   }
 
-  static Future<void> refresh() {
-    _requireNoCapturedRestore();
-    _reconcileStoredOwners();
-    _accountMode.fillRange(0, _accountMode.length, AnonymousAccount());
-    for (final value in _owners.values) {
-      for (final type in value.type) {
-        _accountMode[type.index] = value;
-      }
+  static Future<void> refresh({
+    AccountWriteBackOperation? admission,
+    AccountWriteBackCoordinator coordinator = accountWriteBackCoordinator,
+  }) {
+    final owned = admission == null ? coordinator.tryAdmit() : null;
+    if (admission == null && owned == null) {
+      throw StateError('Account write-back is frozen');
     }
-    _requestState.changed();
-    final selected = HashSet<Account>.identity()..addAll(_accountMode);
-    return Future.wait(
-      selected.where((value) => ownsCredentials(value) && !value.activated).map(
-        Request.buvidActive,
-      ),
-    );
+    try {
+      _requireNoCapturedRestore();
+      _reconcileStoredOwners();
+      _accountMode.fillRange(0, _accountMode.length, AnonymousAccount());
+      for (final value in _owners.values) {
+        for (final type in value.type) {
+          _accountMode[type.index] = value;
+        }
+      }
+      _requestState.changed();
+      final selected = HashSet<Account>.identity()..addAll(_accountMode);
+      return Future.wait(
+        selected
+            .where((value) => ownsCredentials(value) && !value.activated)
+            .map(Request.buvidActive),
+      ).whenComplete(() => owned?.release());
+    } catch (_) {
+      owned?.release();
+      rethrow;
+    }
   }
 
   static ({LoginAccount value, Object operation}) _beginInstall(
@@ -294,7 +306,7 @@ abstract final class Accounts {
         }
         rethrow;
       }
-      await refresh();
+      await refresh(admission: admission, coordinator: coordinator);
     } finally {
       admission.release();
     }
@@ -348,12 +360,14 @@ abstract final class Accounts {
 
   static Future<void> deleteAll(
     Set<Account> accounts, {
+    AccountWriteBackOperation? admission,
     AccountWriteBackCoordinator coordinator = accountWriteBackCoordinator,
   }) async {
-    final admission = coordinator.tryAdmit();
-    if (admission == null) {
+    final owned = admission == null ? coordinator.tryAdmit() : null;
+    if (admission == null && owned == null) {
       throw StateError('Account write-back is frozen');
     }
+    final effective = admission ?? owned;
     try {
       _requireNoCapturedRestore();
       final targets = HashSet<Account>.identity()
@@ -376,15 +390,15 @@ abstract final class Accounts {
       if (targets.isNotEmpty) _requestState.changed();
       await Future.wait([
         for (final value in targets.whereType<AnonymousAccount>())
-          value.delete(admission: admission, coordinator: coordinator),
+          value.delete(admission: effective, coordinator: coordinator),
         for (final value in targets.whereType<LoginAccount>())
-          value.delete(admission: admission, coordinator: coordinator),
+          value.delete(admission: effective, coordinator: coordinator),
       ]);
       if (isLoginMain && !main.isLogin) {
         await LoginUtils.onLogoutMain();
       }
     } finally {
-      admission.release();
+      owned?.release();
     }
   }
 
@@ -400,41 +414,68 @@ abstract final class Accounts {
     return value;
   }
 
-  static void selectTemporarily(AccountType key, Account value) {
-    _accountMode[key.index] = _resolveSelection(value);
-    _requestState.changed();
+  static void selectTemporarily(
+    AccountType key,
+    Account value, {
+    AccountWriteBackCoordinator coordinator = accountWriteBackCoordinator,
+  }) {
+    final admission = coordinator.tryAdmit();
+    if (admission == null) {
+      throw StateError('Account write-back is frozen');
+    }
+    try {
+      _accountMode[key.index] = _resolveSelection(value);
+      _requestState.changed();
+    } finally {
+      admission.release();
+    }
   }
 
-  static Future<void> set(AccountType key, Account value) async {
-    final selected = _resolveSelection(value);
-    final stamp = captureRequest(selected)!;
-    final oldAccount = _accountMode[key.index]..type.remove(key);
-    _accountMode[key.index] = selected..type.add(key);
-    _requestState.changed();
-    await Future.wait([
-      ?selected.onChange(),
-      if (!identical(oldAccount, selected)) ?oldAccount.onChange(),
-    ]);
-    if (!identical(_accountMode[key.index], selected) ||
-        !isCurrentRequest(stamp)) {
-      return;
+  static Future<void> set(
+    AccountType key,
+    Account value, {
+    AccountWriteBackCoordinator coordinator = accountWriteBackCoordinator,
+  }) async {
+    final admission = coordinator.tryAdmit();
+    if (admission == null) {
+      throw StateError('Account write-back is frozen');
     }
-    if (!selected.activated) await Request.buvidActive(selected);
-    if (!identical(_accountMode[key.index], selected) ||
-        !isCurrentRequest(stamp)) {
-      return;
-    }
-    switch (key) {
-      case AccountType.main:
-        await (selected.isLogin
-            ? LoginUtils.onLoginMain()
-            : LoginUtils.onLogoutMain());
-        break;
-      case AccountType.heartbeat:
-        MineController.anonymity.value = !selected.isLogin;
-        break;
-      default:
-        break;
+    try {
+      final selected = _resolveSelection(value);
+      final stamp = captureRequest(selected)!;
+      final oldAccount = _accountMode[key.index]..type.remove(key);
+      _accountMode[key.index] = selected..type.add(key);
+      _requestState.changed();
+      await Future.wait([
+        ?selected.onChange(),
+        if (!identical(oldAccount, selected)) ?oldAccount.onChange(),
+      ]);
+      if (!identical(_accountMode[key.index], selected) ||
+          !isCurrentRequest(stamp)) {
+        return;
+      }
+      if (!selected.activated) await Request.buvidActive(selected);
+      if (!identical(_accountMode[key.index], selected) ||
+          !isCurrentRequest(stamp)) {
+        return;
+      }
+      switch (key) {
+        case AccountType.main:
+          await (selected.isLogin
+              ? LoginUtils.onLoginMain(
+                  admission: admission,
+                  coordinator: coordinator,
+                )
+              : LoginUtils.onLogoutMain());
+          break;
+        case AccountType.heartbeat:
+          MineController.anonymity.value = !selected.isLogin;
+          break;
+        default:
+          break;
+      }
+    } finally {
+      admission.release();
     }
   }
 
