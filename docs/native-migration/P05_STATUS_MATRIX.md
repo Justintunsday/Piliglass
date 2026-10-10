@@ -140,6 +140,12 @@ Native HTTP lease `finish`）已接入共享 admission/drain 协调器；写入�
 generation 检查与 Dart jar/Hive writer 本身不变。这是**局部** gate：没有生产 freeze
 caller，其他 writer/reader 仍不在同一 barrier 内。
 
+`9dc8e04` 起两个请求路径（`AccountManager.onRequest`、Native lease `_captureInput`）的
+base/gRPC headers 与 accessKey 读取默认经只读 `accountCredentialReader`（owner/stamp
+校验后返回 owned 快照，null 保持既有 revoked 路径）；csrf/页面读取等其余 reader 与
+全部 writer barrier 仍未收口。证据：release 38004792296 / preview 38004795029
+（账户 **+208**、envelope 108/43/40/35/51、九 outcome success）。
+
 仍直接读写、未进入统一 barrier 的路径：
 
 - `Accounts.set/selectTemporarily/temporary` 选择；`Accounts.refresh` 的 Hive 对账与

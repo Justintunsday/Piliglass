@@ -1,6 +1,6 @@
 # 迁移进度与编译证据
 
-最后更新：2026-10-09（Asia/Hong_Kong）。目标仍在进行，Flutter runtime 保留。
+最后更新：2026-10-10（Asia/Hong_Kong）。目标仍在进行，Flutter runtime 保留。
 
 **P05 本轮12项审核问题的有限组件修复已验收，P05整体仍未完成**：按
 [P05_REPAIR_PLAN.md](P05_REPAIR_PLAN.md) 完成精确候选 UUID/digest、发布记录保留、
@@ -86,6 +86,30 @@ dispose 恰好一次释放、A→B→A 同 MID successor、302 链与生产共�
 `failures=[]` 通过。范围仅为响应写回：credential reader、install/import/delete/set/
 refresh/reset/activation、延迟登录副作用与 storage close/compact 仍未收口，无生产
 freeze caller；未接 `completeRevert`/启动 apply/NativeActive，四 flag false，P05 未整体完成。
+
+**`9dc8e041597ce1397e4ca228f9ea8c630d5b0583` 已验收 CA3 credential reader 只读 adapter 组**：
+同 SHA [release 38004792296](https://github.com/Justintunsday/Piliglass/actions/runs/38004792296)
+5/5 与 [preview 38004795029](https://github.com/Justintunsday/Piliglass/actions/runs/38004795029)
+4/4 jobs success；九个强制 outcome 全 success、0 contract error；Runner BUILD SUCCEEDED、
+109.1MB、FFmpeg 顺序通过。计划见 [P05_CREDENTIAL_READER_PLAN.md](P05_CREDENTIAL_READER_PLAN.md)：
+新增 `account_credential_reader.dart`（不可变 owned 快照、`csrfFor`、`visibleAccounts`；
+`_isBound` 先 tracker 身份后 current，短路避免激活 dormant 匿名；纯读不改 revision、
+不写 jar/Hive/网络），`AccountManager.onRequest` 与 Native lease `_captureInput` 默认共享
+`accountCredentialReader`，null 时保持既有 revoked 处理；owner/generation 检查不变。
+上组 4 项非阻塞补测同组完成：frozen lease 用完整 `NativeOrderedCookieJarExporter.export`
+前后对比 + host-only `lease_cookie` 不存在断言；redirect 原/两个 Location/最终 persistence
+逐阶段受控阻塞；AccountManager 真实 save 抛错与真实 Hive `onChange` 写后抛错在 403 路径
+token 精确释放；生产组合断言共享 reader 实例。首轮实际失败为 1 项 analyzer（hostCookies
+三层 map 展开错误，`a16a318`）与 1 项断言字符串（successor 的 SESSDATA 值，`9dc8e04`）；
+失败轮次取消后同 SHA 重跑。账户 artifact analyze 无问题、实际 `+208: All tests passed!`
+（+12）；envelope `status=passed` 108 oracle/10 观察/43 负例/40 staging/35 transaction/
+51 authority、跑后源码零 diff、sourceSHA/workflowSHA 匹配；preview 20 tests 0 failures、
+压力 `failures=[]`。image-preview 就绪等待是 ready deadline 从 6s 放宽到 16s 的稳定性
+调整（`83c7b20`），不宣称维持原 6 秒性能门槛。范围仅为两个请求路径的 header 读取与
+补测；csrf/100+ endpoint、accessKey/页面读取、生命周期 writer barrier、WK 镜像、
+LoginUtils 延迟副作用与 Hive close/compact 仍待后续切片。五项剩余范围清单已记入
+[P05_REMAINING_SCOPE_PLAN.md](P05_REMAINING_SCOPE_PLAN.md)，下一切片计划见
+[P05_WRITE_BARRIER_PLAN.md](P05_WRITE_BARRIER_PLAN.md)。四 flag false，P05 未整体完成。
 
 当前阶段为 **P05**。`bedde36` 的原并行组与 `0527fb2` 的
 [CA1 jar-only shadow](P05_COOKIE_AUTHORITY_PLAN.md) 均已通过同 SHA release5 +

@@ -120,9 +120,10 @@ admission/drain 协调器（`d255506`），但只是局部 gate：没有生产 f
 时序与 Dart writer 不变。
 
 仍未收口：`Accounts.set/selectTemporarily` 的持久用途双账户语义、install/buvid 补值、
-`refresh` 对账、install/import/delete/reset 的协调器 admission、WK Cookie 镜像、全部
-credential reader（csrf/accessKey/grpcHeaders/用途路由/`account.values/toMap` 页面读取）、
-Hive compaction/close、LoginUtils 副作用。
+`refresh` 对账、install/import/delete/reset 的协调器 admission、WK Cookie 镜像、
+credential reader 的其余读取（csrf/accessKey/grpcHeaders/用途路由/`account.values/toMap`
+页面读取；`AccountManager.onRequest` 与 lease `_captureInput` 两个请求路径已接入只读
+adapter，见 §10）、Hive compaction/close、LoginUtils 副作用。
 
 ## 6. 持久化、崩溃与回退
 
@@ -179,3 +180,30 @@ Hive compaction/close、LoginUtils 副作用。
   reverse import 的 raw key 缓存与 jar 逐字节保真、transaction 的累计 ledger 重验。
 - 已知限制：本阶段所有账户数据均为 synthetic；正样本来自真实 Dart capture，但未做
   真机登录/切号/重启验证。P05 的“完成”判定必须等待 CA5/CA6 在测试设备上完成。
+
+## 10. 2026-10-10 CA3 credential reader 只读组验收（9dc8e04）
+
+- 同代码 SHA `9dc8e041597ce1397e4ca228f9ea8c630d5b0583` 的
+  release [38004792296](https://github.com/Justintunsday/Piliglass/actions/runs/38004792296)
+  5/5 与 preview [38004795029](https://github.com/Justintunsday/Piliglass/actions/runs/38004795029)
+  4/4 jobs success；九个强制 outcome 全 success、0 contract error；Runner
+  `BUILD SUCCEEDED`、109.1MB、Aether FFmpeg 先于 media-kit FFmpeg。
+- 新增 `lib/services/native_accounts/account_credential_reader.dart`：不可变 owned 快照、
+  `csrfFor`、`visibleAccounts`；纯读（不改 revision、不 activate 匿名、不写 jar/Hive/
+  网络）；`AccountManager.onRequest` 与 Native lease `_captureInput` 默认共享
+  `accountCredentialReader`，null 时保持既有 revoked 路径；owner/generation 检查不变，
+  默认 Dart 行为等价。计划见 [P05_CREDENTIAL_READER_PLAN.md](P05_CREDENTIAL_READER_PLAN.md)。
+- 账户 artifact：analyze 无问题、实际 `+208: All tests passed!`（196→208，+12：reader
+  契约 6、lease 接线 2、manager 接线 2、真实 save/Hive 抛错 2；frozen/redirect 断言按
+  补测要求重写）。
+- envelope `status=passed`：108 oracle/10 观察/43 负例/40 staging/35 transaction/
+  51 authority；跑后源码零 diff、sourceSHA/workflowSHA 与代码 SHA 一致；preview 20
+  tests 0 failures、压力 `failures=[]`。
+- 上一组补测 1–3 同组完成；补测 4 记录：image-preview 就绪等待是 ready deadline 从 6s
+  放宽到 16s 的稳定性调整（`83c7b20`），不宣称维持原 6 秒性能门槛。
+- 失败轮次：`a16a318` 修复 hostCookies 三层 map 展开 analyzer；`9dc8e04` 修复 successor
+  SESSDATA 断言字符串；旧 run 取消后同 SHA 重跑通过，无跳过、无放宽。
+- 范围与边界：只读 adapter 与两个请求路径接线；csrf/100+ endpoint、accessKey/页面读取、
+  生命周期 writer barrier、WK 镜像、LoginUtils 延迟副作用、Hive close/compact 仍待后续
+  切片（[P05_REMAINING_SCOPE_PLAN.md](P05_REMAINING_SCOPE_PLAN.md)、
+  [P05_WRITE_BARRIER_PLAN.md](P05_WRITE_BARRIER_PLAN.md)）。四 flag false，P05 未整体完成。
