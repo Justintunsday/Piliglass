@@ -3,6 +3,7 @@ import 'dart:collection';
 import 'package:PiliPlus/http/init.dart';
 import 'package:PiliPlus/models/common/account_type.dart';
 import 'package:PiliPlus/pages/mine/controller.dart';
+import 'package:PiliPlus/services/native_accounts/account_credential_reader.dart';
 import 'package:PiliPlus/services/native_accounts/account_install_persistence_port.dart';
 import 'package:PiliPlus/services/native_accounts/account_reset_persistence_port.dart';
 import 'package:PiliPlus/services/native_accounts/account_write_back_coordinator.dart';
@@ -53,6 +54,18 @@ abstract final class Accounts {
 
   static bool isCurrentRequest(AccountRequestStamp<Account> stamp) =>
       _requestState.isCurrent(stamp) && ownsCredentials(stamp.account);
+
+  /// Read-only csrf for an installed owner, routed through the credential
+  /// reader. Owners without a current generation fall back to the direct field
+  /// so legacy call sites that do not carry stamps keep their exact behavior.
+  static String csrfOf(
+    Account owner, {
+    AccountCredentialReader reader = accountCredentialReader,
+  }) {
+    final stamp = _requestState.capture(owner);
+    if (stamp == null) return owner.csrf;
+    return reader.csrfFor(owner, stamp) ?? owner.csrf;
+  }
 
   static bool ownsCredentials(Account value) {
     if (_capturedRestoreOperation != null || _capturedRecoveryOperation != null ||

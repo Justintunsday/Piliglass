@@ -16,7 +16,7 @@ abstract final class BlackHttp {
         'ps': ps,
         're_version': 0,
         'jsonp': 'jsonp',
-        'csrf': Accounts.main.csrf,
+        'csrf': Accounts.csrfOf(Accounts.main),
       },
     );
     if (res.data['code'] == 0) {

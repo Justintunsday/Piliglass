@@ -32,7 +32,7 @@ abstract final class MusicHttp {
       data: {
         'music_id': musicId,
         'state': hasLike ? 2 : 1,
-        'csrf': Accounts.main.csrf,
+        'csrf': Accounts.csrfOf(Accounts.main),
       },
       options: Options(contentType: Headers.formUrlEncodedContentType),
     );

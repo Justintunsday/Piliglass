@@ -20,7 +20,7 @@ abstract final class DanmakuFilterHttp {
       Api.danmakuFilterDel,
       data: {
         'ids': ids,
-        'csrf': Accounts.main.csrf,
+        'csrf': Accounts.csrfOf(Accounts.main),
       },
       options: Options(contentType: Headers.formUrlEncodedContentType),
     );
@@ -40,7 +40,7 @@ abstract final class DanmakuFilterHttp {
       data: {
         'type': type,
         'filter': filter,
-        'csrf': Accounts.main.csrf,
+        'csrf': Accounts.csrfOf(Accounts.main),
       },
       options: Options(contentType: Headers.formUrlEncodedContentType),
     );

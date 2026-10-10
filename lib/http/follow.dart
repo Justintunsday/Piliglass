@@ -41,7 +41,7 @@ abstract final class FollowHttp {
       },
       data: {
         'tagids': tagids,
-        'csrf': Accounts.main.csrf,
+        'csrf': Accounts.csrfOf(Accounts.main),
       },
       options: Options(contentType: Headers.formUrlEncodedContentType),
     );

@@ -9,7 +9,7 @@ abstract final class ValidateHttp {
     final res = await Request().post(
       Api.gaiaVgateRegister,
       queryParameters: {
-        if (Accounts.main.isLogin) 'csrf': Accounts.main.csrf,
+        if (Accounts.main.isLogin) 'csrf': Accounts.csrfOf(Accounts.main),
       },
       data: {
         'v_voucher': vVoucher,
@@ -34,7 +34,7 @@ abstract final class ValidateHttp {
     final res = await Request().post(
       Api.gaiaVgateValidate,
       queryParameters: {
-        if (Accounts.main.isLogin) 'csrf': Accounts.main.csrf,
+        if (Accounts.main.isLogin) 'csrf': Accounts.csrfOf(Accounts.main),
       },
       data: {
         'challenge': challenge,
