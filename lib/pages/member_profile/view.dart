@@ -345,7 +345,7 @@ class _EditProfilePageState extends State<EditProfilePage> {
     required ProfileType type,
     dynamic datum,
   }) async {
-    final accessKey = Accounts.main.accessKey;
+    final accessKey = Accounts.accessKeyOf(Accounts.main);
     if (accessKey == null || accessKey.isEmpty) {
       SmartDialog.showToast('请退出账号后重新登录');
       return;
@@ -520,7 +520,7 @@ class _EditProfilePageState extends State<EditProfilePage> {
               .post(
                 '/x/member/web/face/update',
                 queryParameters: {
-                  'csrf': Accounts.main.csrf,
+                  'csrf': Accounts.csrfOf(Accounts.main),
                 },
                 data: FormData.fromMap({
                   'dopost': 'save',

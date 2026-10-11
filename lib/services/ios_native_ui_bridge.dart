@@ -2078,7 +2078,7 @@ final class IOSNativeUIBridge {
     if (sign is! String || sign.runes.length > 70) {
       return const {'state': 'error', 'error': '个性签名最多 70 字'};
     }
-    final key = Accounts.main.accessKey;
+    final key = Accounts.accessKeyOf(Accounts.main);
     if (key == null || key.isEmpty)
       return const {'state': 'error', 'error': '请重新登录后再编辑资料'};
     final data = <String, String>{

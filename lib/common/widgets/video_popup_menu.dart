@@ -101,7 +101,8 @@ class VideoPopupMenu extends StatelessWidget {
                     const Icon(MdiIcons.thumbDownOutline, size: 16),
                     () {
                       final rcmd = Accounts.get(.recommend);
-                      if (rcmd.accessKey == null || rcmd.accessKey == "") {
+                      final accessKey = Accounts.accessKeyOf(rcmd);
+                      if (accessKey == null || accessKey.isEmpty) {
                         SmartDialog.showToast(
                           rcmd.isLogin ? '请退出账号后重新登录' : '账号未登录',
                         );
