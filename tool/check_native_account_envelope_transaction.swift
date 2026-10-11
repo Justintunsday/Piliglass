@@ -333,9 +333,9 @@ private actor TransactionFaultVault: PiliAccountSecretStore {
     // A persistent purpose change moves one purpose between two exact login
     // records inside a single candidate: selected gains (Dart append order),
     // previous loses, slots/history follow the existing policy, jars/order/
-    // generations/revision stay untouched. Purpose-only growth is bounded by
-    // the four fixed purposes, so the shared cumulative ledger is exercised by
-    // the existing oversized-credentials case above.
+    // generations/revision stay untouched. It is a low-level primitive: the
+    // caller names the previous holder; no global uniqueness is implied, and
+    // legacy captures may hold the same purpose on several records.
     let purposeNamespace = UUID()
     let purposeVault = PiliAccountEnvelopeStagingStore(
       secrets: PiliAccountKeychainSecretStore(stagingNamespace: purposeNamespace))
@@ -452,6 +452,90 @@ private actor TransactionFaultVault: PiliAccountSecretStore {
       try check(afterReject?.transactionID == beforeReject.transactionID &&
         afterReject?.envelope == beforeReject.envelope,
         "purpose rejections never publish a new candidate")
+
+      // Primitive preconditions: previous is caller-named and never scanned.
+      guard let primitiveShadow = try await purposeVault.loadShadow() else {
+        throw TransactionFixtureError.failed("missing purpose primitive shadow")
+      }
+      try check(primitiveShadow.records[1].persistedPurposes.contains(purpose),
+                "primitive fixture holds the purpose on the other record")
+      _ = try await purposeStore.applyPurposeChange(
+        recordKeyUnits: secondKey, expectedGeneration: base.records[2].generation,
+        purpose: purpose, previousKeyUnits: nil, previousExpectedGeneration: nil)
+      let afterOmittedPrevious = try await purposeVault.loadShadow()
+      try check(afterOmittedPrevious?.records[1].persistedPurposes.contains(purpose) == true &&
+        afterOmittedPrevious?.records[2].persistedPurposes.contains(purpose) == true,
+        "omitted previous is documented: the unnamed holder keeps the purpose")
+      guard let nonHeldPurpose = PiliAccountPurpose.allCases.first(where: {
+        !primitiveShadow.records[1].persistedPurposes.contains($0)
+      }) else {
+        throw TransactionFixtureError.failed("no purpose left for the non-holder case")
+      }
+      _ = try await purposeStore.applyPurposeChange(
+        recordKeyUnits: secondKey, expectedGeneration: base.records[2].generation,
+        purpose: nonHeldPurpose, previousKeyUnits: key,
+        previousExpectedGeneration: record.generation)
+      let afterNonHolder = try await purposeVault.loadShadow()
+      try check(afterNonHolder?.records[1].persistedPurposes ==
+        primitiveShadow.records[1].persistedPurposes,
+        "a named previous that does not hold the purpose is left untouched")
+
+      // Close/reopen publishes and reads back the complete envelope.
+      guard let beforeReopenPurpose = try await purposeVault.loadShadowSnapshot() else {
+        throw TransactionFixtureError.failed("missing purpose reopen snapshot")
+      }
+      let reopenedPurposeVault = PiliAccountEnvelopeStagingStore(
+        secrets: PiliAccountKeychainSecretStore(stagingNamespace: purposeNamespace))
+      try check(try await reopenedPurposeVault.loadShadow() == beforeReopenPurpose.envelope,
+                "purpose changes survive real Keychain close/reopen")
+
+      // Adding a purpose must still fit the encoded byte budget.
+      let tightNamespace = UUID()
+      let tightVault = PiliAccountEnvelopeStagingStore(
+        secrets: PiliAccountKeychainSecretStore(stagingNamespace: tightNamespace))
+      let tightSeedStore = PiliAccountEnvelopeTransactionStore(vault: tightVault)
+      do {
+        try await tightVault.importShadow(codec.encode(base))
+        _ = try await tightSeedStore.adoptMissingIdentities()
+        guard let tightShadow = try await tightVault.loadShadow() else {
+          throw TransactionFixtureError.failed("missing tight budget shadow")
+        }
+        var tightTarget: (PiliCookieUTF16, Int64, PiliAccountPurpose)?
+        for index in 1..<tightShadow.records.count {
+          let record = tightShadow.records[index]
+          if let missing = PiliAccountPurpose.allCases.first(where: {
+            !record.persistedPurposes.contains($0)
+          }), let recordKey = record.storageKeyUnits {
+            tightTarget = (recordKey, record.generation, missing)
+            break
+          }
+        }
+        guard let tightTarget else {
+          throw TransactionFixtureError.failed("no purpose slot for the byte budget case")
+        }
+        let currentBytes = try codec.encode(tightShadow).count
+        var tightLimits = PiliOrderedCookieArchiveLimits.standard
+        tightLimits.maximumEncodedBytes = currentBytes
+        let tightStore = PiliAccountEnvelopeTransactionStore(vault: tightVault, limits: tightLimits)
+        guard let tightBefore = try await tightVault.loadShadowSnapshot() else {
+          throw TransactionFixtureError.failed("missing tight budget snapshot")
+        }
+        do {
+          _ = try await tightStore.applyPurposeChange(
+            recordKeyUnits: tightTarget.0, expectedGeneration: tightTarget.1,
+            purpose: tightTarget.2, previousKeyUnits: nil, previousExpectedGeneration: nil)
+          throw TransactionFixtureError.failed("purpose addition beyond the byte budget accepted")
+        } catch PiliAccountLiveMemoryShadowError.resourceLimit { checks += 1 }
+        let tightAfter = try await tightVault.loadShadowSnapshot()
+        try check(tightAfter?.transactionID == tightBefore.transactionID &&
+          tightAfter?.envelope == tightBefore.envelope,
+          "byte-budget rejection publishes nothing")
+        try await tightVault.discardShadow()
+      } catch {
+        try? await tightVault.discardShadow()
+        throw error
+      }
+
       try await purposeVault.discardShadow()
     } catch {
       try? await purposeVault.discardShadow()
@@ -539,6 +623,9 @@ private actor TransactionFaultVault: PiliAccountSecretStore {
     try expectRejectedIdentity("oversized identity accepted", .resourceLimit) { root in
       var records = root["records"] as? [[String: Any]] ?? []
       records[1]["durableIdentity"] = Array(repeating: 97, count: 4000)
+      // Schema 3 reaches the identity preflight; schema 2 rejects the key shape
+      // first, so the budget check needs the modern version.
+      root["schemaVersion"] = 3
       root["records"] = records
     }
     try expectRejectedIdentity("anonymous identity accepted", .invalidEnvelope) { root in
@@ -562,6 +649,11 @@ private actor TransactionFaultVault: PiliAccountSecretStore {
       var records = root["records"] as? [[String: Any]] ?? []
       records[1]["durableIdentity"] = identityUnits("00000000-0000-4000-8000-000000000001")
       root["schemaVersion"] = 3
+      root["records"] = records
+    }
+    try expectRejectedIdentity("schema 2 with an explicit null identity accepted", .invalidEnvelope) { root in
+      var records = root["records"] as? [[String: Any]] ?? []
+      records[1]["durableIdentity"] = NSNull()
       root["records"] = records
     }
 
@@ -700,6 +792,36 @@ private actor TransactionFaultVault: PiliAccountSecretStore {
       throw error
     }
 
+    // Delete + reinstall ABA: the reinstall gets a new generation, so an old
+    // request holding the original key+generation is rejected.
+    let abaNamespace = UUID()
+    let abaVault = PiliAccountEnvelopeStagingStore(
+      secrets: PiliAccountKeychainSecretStore(stagingNamespace: abaNamespace))
+    let abaStore = PiliAccountEnvelopeTransactionStore(vault: abaVault)
+    do {
+      try await abaVault.importShadow(codec.encode(base))
+      _ = try await abaStore.adoptMissingIdentities()
+      _ = try await abaStore.applyDelete(recordKeyUnits: key, expectedGeneration: record.generation)
+      _ = try await abaStore.applyInstall(PiliAccountShadowInstall(
+        storageKeyUnits: key, mid: record.mid, generation: record.generation + 9000,
+        accessKeyUnits: nil, refreshTokenUnits: nil, persistedPurposes: [], activated: false,
+        jar: cleared))
+      do {
+        _ = try await abaStore.applyCookieDeleteAll(
+          recordKeyUnits: key, expectedGeneration: record.generation)
+        throw TransactionFixtureError.failed("ABA old generation accepted")
+      } catch PiliAccountShadowTransactionError.staleGeneration { checks += 1 }
+      do {
+        _ = try await abaStore.applyCredentials(recordKeyUnits: key,
+          expectedGeneration: record.generation, accessKeyUnits: nil, refreshTokenUnits: nil)
+        throw TransactionFixtureError.failed("ABA old credentials generation accepted")
+      } catch PiliAccountShadowTransactionError.staleGeneration { checks += 1 }
+      try await abaVault.discardShadow()
+    } catch {
+      try? await abaVault.discardShadow()
+      throw error
+    }
+
     // Delete renumbers remaining records, remaps both orders and every slot
     // with the Dart policy, derives history again and preserves identities.
     let deleteNamespace = UUID()
@@ -805,6 +927,8 @@ private actor TransactionFaultVault: PiliAccountSecretStore {
     do {
       try await importVault.importShadow(codec.encode(base))
       _ = try await importStore.adoptMissingIdentities()
+      _ = try await importStore.applyTemporarySelection(
+        recordKeyUnits: key, expectedGeneration: record.generation, purpose: .heartbeat)
       guard let adoptedImport = try await importVault.loadShadow() else {
         throw TransactionFixtureError.failed("missing import adoption shadow")
       }
@@ -841,27 +965,75 @@ private actor TransactionFaultVault: PiliAccountSecretStore {
                 "appended import record has a canonical identity")
       let expectedImportOrder = PiliAccountLiveMemoryOrderEntry(
         keyUnits: newKey, record: appendedRecord.record)
-      try check(imported.storedOrder == adoptedImport.storedOrder + [expectedImportOrder] &&
-        imported.ownerOrder == adoptedImport.ownerOrder + [expectedImportOrder],
-        "import appends the new key to both orders")
-      try check(imported.selections == adoptedImport.selections &&
-        imported.history == adoptedImport.history && imported.revision == adoptedImport.revision,
-        "import keeps selections, history and revision")
+      try check(imported.storedOrder == adoptedImport.storedOrder + [expectedImportOrder],
+                "import appends the new key to the stored order")
+      let replacedOrder = PiliAccountLiveMemoryOrderEntry(keyUnits: key, record: 1)
+      let remainingOwners = adoptedImport.ownerOrder.filter { $0.keyUnits != key }
+      try check(imported.ownerOrder == remainingOwners + [replacedOrder, expectedImportOrder],
+                "import re-inserts the replaced owner after the remaining registry")
+      try check(adoptedImport.selections[1] == 1 &&
+        adoptedImport.history == 1,
+        "import fixture holds a temporary heartbeat selection")
+      var expectedSelections = [0, 0, 0, 0]
+      for orderEntry in imported.ownerOrder {
+        for purpose in imported.records[orderEntry.record].persistedPurposes {
+          switch purpose {
+          case .main: expectedSelections[0] = orderEntry.record
+          case .heartbeat: expectedSelections[1] = orderEntry.record
+          case .recommend: expectedSelections[2] = orderEntry.record
+          case .video: expectedSelections[3] = orderEntry.record
+          }
+        }
+      }
+      try check(imported.selections == expectedSelections,
+                "import rebuilds every slot from owner order and purposes")
+      try check(imported.selections[0] == 1 &&
+        imported.selections[3] == appendedRecord.record,
+        "replaced and appended owners own their rebuilt slots")
+      let importedHeartbeat = imported.selections[1]
+      try check(imported.history ==
+        (imported.records[importedHeartbeat].isLogin ? importedHeartbeat : imported.selections[0]),
+        "import derives history from the rebuilt slots")
+      try check(imported.revision == adoptedImport.revision,
+                "import keeps the capture-local revision")
       try check(imported.records[2] == adoptedImport.records[2],
                 "import leaves untouched records unchanged")
       let reopenedImportVault = PiliAccountEnvelopeStagingStore(
         secrets: PiliAccountKeychainSecretStore(stagingNamespace: importNamespace))
       try check(try await reopenedImportVault.loadShadow() == imported,
                 "imported envelope survives real Keychain close/reopen")
+      let reopenedImportStore = PiliAccountEnvelopeTransactionStore(vault: reopenedImportVault)
+      // The replaced key must use a genuinely new generation: old requests for
+      // the original key+generation are rejected.
+      do {
+        _ = try await reopenedImportStore.applyCookieDeleteAll(
+          recordKeyUnits: key, expectedGeneration: record.generation)
+        throw TransactionFixtureError.failed("old generation write accepted after import")
+      } catch PiliAccountShadowTransactionError.staleGeneration { checks += 1 }
+      do {
+        _ = try await reopenedImportStore.applyCredentials(recordKeyUnits: key,
+          expectedGeneration: record.generation, accessKeyUnits: nil, refreshTokenUnits: nil)
+        throw TransactionFixtureError.failed("old generation credentials accepted after import")
+      } catch PiliAccountShadowTransactionError.staleGeneration { checks += 1 }
+      let newGenerationReceipt = try await reopenedImportStore.applyCookieDeleteAll(
+        recordKeyUnits: key, expectedGeneration: record.generation + 5000)
+      try check(newGenerationReceipt.record == 1,
+                "replacement generation accepts new writes")
       guard let beforeImportRejects = try await reopenedImportVault.loadShadowSnapshot() else {
         throw TransactionFixtureError.failed("missing import reject snapshot")
       }
-      let reopenedImportStore = PiliAccountEnvelopeTransactionStore(vault: reopenedImportVault)
       let duplicateKeyEntries = [fresh, fresh]
       do {
         _ = try await reopenedImportStore.applyImport(duplicateKeyEntries)
         throw TransactionFixtureError.failed("duplicate import key accepted")
       } catch PiliAccountShadowTransactionError.duplicateRecordKey { checks += 1 }
+      do {
+        _ = try await reopenedImportStore.applyImport([PiliAccountShadowInstall(
+          storageKeyUnits: key, mid: 1, generation: record.generation + 5000,
+          accessKeyUnits: nil, refreshTokenUnits: nil, persistedPurposes: [],
+          activated: false, jar: cleared)])
+        throw TransactionFixtureError.failed("replaced generation reuse accepted")
+      } catch PiliAccountShadowTransactionError.staleGeneration { checks += 1 }
       do {
         _ = try await reopenedImportStore.applyImport([PiliAccountShadowInstall(
           storageKeyUnits: PiliCookieUTF16(units: []), mid: 1,
