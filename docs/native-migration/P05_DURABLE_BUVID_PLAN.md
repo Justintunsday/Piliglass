@@ -50,3 +50,12 @@
 - 通过后更新 PROGRESS/STATUS_MATRIX/本计划并交交付报告。
 - 后续（不在本组）：durable identity 消费/恢复语义、账号级队列与 receipt/unknown ack、
   Block 3/4/5。四 flag false。
+
+**已实现并验收（2026-10-12）**：计划 `6cfdb1e`、实现 `82e3ffe`、driver `399760b`、
+超长值用例修复 `d732ec0`/`9724ddb`；同 SHA
+[release 38177658968](https://github.com/Justintunsday/Piliglass/actions/runs/38177658968)
+5/5、[preview 38177662359](https://github.com/Justintunsday/Piliglass/actions/runs/38177662359)
+4/4；envelope `status=passed` 109/44/40/**178**/51、sourceSHA=9724ddb；账户 +250
+（无 Dart 变更）、九 outcome success、BUILD SUCCEEDED/109.1MB/FFmpeg、preview 20
+tests/`failures=[]`。注：超长值由 reducer 严格 Set-Cookie 解析以 `PiliNativeCookieError
+.invalidField` 拒绝（先于 envelope 预算），用例与计划按实际错误面记录。

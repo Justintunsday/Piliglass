@@ -204,6 +204,14 @@ tests/`failures=[]`。细节与逐项判定见
 [P05_REVIEW_3B8E821_REPAIR_PLAN.md](P05_REVIEW_3B8E821_REPAIR_PLAN.md)。仍未接
 authority、无生产 caller；四 flag false，P05 未整体完成。
 
+**Block 2 / B2d（buvid 补值事务）已在 `9724ddb` 验收**：`applyBuvidSeed` 对齐 Dart
+`setBuvid3` `??=` 语义（仅缺失时以 reducer 追加 `buvid3`、已存在 no-op 不发布；
+ASCII/无分隔符校验、schema 3、key/generation、CAS、重入、零发布）。证据：release
+38177658968 5/5、preview 38177662359 4/4；账户 **+250**、analyze 无问题；envelope
+**109/44/40/178/51**、sourceSHA=9724ddb；九 outcome success、BUILD
+SUCCEEDED/109.1MB/FFmpeg、preview 20 tests/`failures=[]`。仍未接 authority、无生产
+caller；durable identity 消费/恢复语义与账号级队列属后续；四 flag false。
+
 **Block 1 / B1d 切片（页面读取、延迟副作用、maintenance gate）已在 `98e6f9b` 验收**：
 `Accounts.installedAccounts()` 纯只读 seam + 页面 `isEmpty/isNotEmpty` 切
 `visibleAccounts()`（login/mine/setting/about，内容/顺序/读取时机不变、零

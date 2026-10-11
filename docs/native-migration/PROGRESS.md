@@ -223,6 +223,25 @@ import/delete/buvid durable transaction、durable identity 消费方与账号级
 shadow 组件：未接 authority、无生产 caller，buvid 补值 durable transaction、durable
 identity 消费方与账号级队列属后续；四能力 flag 保持 false，P05 未整体完成。
 
+**`9724ddbfcca421764e119b2aba01a32f1155d234` 已验收 Block 2 / B2d 切片（buvid 补值 durable transaction）**：
+同 SHA [release 38177658968](https://github.com/Justintunsday/Piliglass/actions/runs/38177658968)
+5/5 与 [preview 38177662359](https://github.com/Justintunsday/Piliglass/actions/runs/38177662359)
+4/4 jobs success；九个强制 outcome 全 success、BUILD SUCCEEDED、109.1MB、FFmpeg 顺序。
+计划见 [P05_DURABLE_BUVID_PLAN.md](P05_DURABLE_BUVID_PLAN.md)（`6cfdb1e`）。内容：
+`applyBuvidSeed` 对齐 Dart `BiliCookieJar.setBuvid3` 的 `??=` 语义——仅 schema 3、
+仅 login record、key/generation 校验、值必须为可打印 ASCII 且不含 `;`（`invalidBuvid`），
+缺失时用共享 reducer 以 `buvid3=<value>; Domain=.bilibili.com; Path=/` 追加并 CAS 发布，
+已存在时为 no-op（seeded=false、transactionID=nil、不发布）；除目标 jar 外
+identity/orders/selections/history/revision 全部不变；receipt 两门恒 false。实现
+`82e3ffe`，driver `399760b`，修复 `d732ec0`/`9724ddb`。测试覆盖：补值/指针推进/仅新增
+一个条目/identity 保留/真实 Keychain close-reopen、幂等 no-op、unknown key/stale/
+空值/非 ASCII/含分隔符/超长（reducer `invalidField`）/schema 2（`invalidBuvid`）/暂停
+重入，全部零发布；既有 transaction checks 157→**178**。账户 artifact analyze 无问题、
+`+250: All tests passed!`；envelope `status=passed` 109/44/40/178/51、
+sourceSHA=workflowSHA=9724ddb；preview 20 tests 0 failures、压力 `failures=[]`。范围仍为
+shadow 组件：未接 authority、无生产 caller，durable identity 消费/恢复语义、账号级队列与
+receipt/unknown ack、Block 3/4/5 仍未交付；四能力 flag 保持 false，P05 未整体完成。
+
 **`53aed639b4cf85ae21a7a13fec52b8373eaa22b5` 已验收 codex-3b8e821 复审修复组**：
 同 SHA [release 38150244501](https://github.com/Justintunsday/Piliglass/actions/runs/38150244501)
 5/5 与 [preview 38150247302](https://github.com/Justintunsday/Piliglass/actions/runs/38150247302)
