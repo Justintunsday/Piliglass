@@ -1489,10 +1489,25 @@ private actor TransactionFaultVault: PiliAccountSecretStore {
       try await jarOrderVault.importShadow(codec.encode(base))
       _ = try await jarOrderStore.adoptMissingIdentities()
       let orderKey = units("buvid-order")
+      // Hand-built non-empty jar without buvid3: the golden jars already carry
+      // the constructor-seeded buvid3, which would make the seed a no-op.
+      let siblingEntry = PiliOrderedCookieEntry(
+        keyUnits: units("sibling-cookie"), nameUnits: units("sibling-cookie"),
+        valueUnits: units("sibling-value"), cookieDomainUnits: units(".bilibili.com"),
+        cookiePathUnits: units("/"), secure: false, httpOnly: false, sameSite: nil,
+        expiresMicroseconds: nil, maxAgeSeconds: nil, createdSeconds: 1)
+      let siblingJar = PiliOrderedCookieArchive(
+        schemaVersion: 2, ignoreExpires: true,
+        provenance: PiliOrderedCookieProvenance(
+          capture: "live", priorPersistence: .unknown,
+          legacyHiveAttributesIncomplete: true, currentBucketOrderComplete: true),
+        domainBuckets: [PiliOrderedCookieBucket(keyUnits: units("bilibili.com"),
+          paths: [PiliOrderedCookiePath(keyUnits: units("/"), cookies: [siblingEntry])])],
+        hostBuckets: [])
       _ = try await jarOrderStore.applyInstall(PiliAccountShadowInstall(
         storageKeyUnits: orderKey, mid: 999, generation: record.generation + 12000,
         accessKeyUnits: nil, refreshTokenUnits: nil, persistedPurposes: [], activated: false,
-        jar: saved))
+        jar: siblingJar))
       let orderSeed = try await jarOrderStore.applyBuvidSeed(
         recordKeyUnits: orderKey, expectedGeneration: record.generation + 12000,
         valueUnits: units("order-seed-value"), nowMicroseconds: now)
@@ -1506,9 +1521,9 @@ private actor TransactionFaultVault: PiliAccountSecretStore {
         throw TransactionFixtureError.failed("missing jar order bucket")
       }
       try check(orderPath.cookies.count == 2 &&
-        orderPath.cookies[0].keyUnits == units("txn-cookie") &&
+        orderPath.cookies[0].keyUnits == units("sibling-cookie") &&
         orderPath.cookies[1].keyUnits == units("buvid3") &&
-        orderPath.cookies[0].valueUnits == units("txn-value"),
+        orderPath.cookies[0].valueUnits == units("sibling-value"),
         "buvid appends after existing sibling cookies without reordering them")
 
       // A different map key whose Cookie.name is buvid3 must not satisfy the
