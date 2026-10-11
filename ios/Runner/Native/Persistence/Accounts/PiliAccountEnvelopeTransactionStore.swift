@@ -77,19 +77,59 @@ actor PiliAccountEnvelopeTransactionStore {
                                purpose: PiliAccountPurpose) async throws
     -> PiliAccountShadowTransactionReceipt {
     // The source order is fixed: main, heartbeat, recommend, video.
-    let slot: Int
-    switch purpose {
-    case .main: slot = 0
-    case .heartbeat: slot = 1
-    case .recommend: slot = 2
-    case .video: slot = 3
-    }
+    let slot = slotIndex(purpose)
     return try await transaction(recordKeyUnits: recordKeyUnits, expectedGeneration: expectedGeneration) { current, index in
       var selections = current.selections
       selections[slot] = current.records[index].record
       let heartbeat = selections[1]
       let history = current.records[heartbeat].isLogin ? heartbeat : selections[0]
       return self.replace(current, selections: selections, history: history)
+    }
+  }
+
+  /// Durable persistent-purpose change across at most two login records.
+  ///
+  /// Mirrors the Dart `Accounts.set` shape: the selected record gains the
+  /// purpose (idempotent, appended in Dart insertion order), the optional
+  /// previous holder loses it, the slot points at the selected record and
+  /// history is derived with the existing policy. Only persistedPurposes,
+  /// selections and history may change; jars, order, generations and the
+  /// capture-local revision stay untouched.
+  func applyPurposeChange(recordKeyUnits: PiliCookieUTF16, expectedGeneration: Int64,
+                          purpose: PiliAccountPurpose,
+                          previousKeyUnits: PiliCookieUTF16?,
+                          previousExpectedGeneration: Int64?) async throws
+    -> PiliAccountShadowTransactionReceipt {
+    try await transaction(recordKeyUnits: recordKeyUnits, expectedGeneration: expectedGeneration) { current, index in
+      var records = current.records
+      let selected = records[index]
+      if !selected.persistedPurposes.contains(purpose) {
+        records[index] = Self.replacingPurposes(
+          selected, purposes: selected.persistedPurposes + [purpose])
+      }
+      if let previousKeyUnits {
+        guard let previousExpectedGeneration else {
+          throw PiliAccountShadowTransactionError.staleGeneration
+        }
+        guard let previousIndex = current.records.firstIndex(where: {
+          $0.record > 0 && $0.storageKeyUnits == previousKeyUnits
+        }) else {
+          throw PiliAccountShadowTransactionError.unknownRecordKey
+        }
+        let previous = records[previousIndex]
+        guard previous.generation == previousExpectedGeneration, previous.isLogin else {
+          throw PiliAccountShadowTransactionError.staleGeneration
+        }
+        if previousIndex != index, previous.persistedPurposes.contains(purpose) {
+          records[previousIndex] = Self.replacingPurposes(
+            previous, purposes: previous.persistedPurposes.filter { $0 != purpose })
+        }
+      }
+      var selections = current.selections
+      selections[slotIndex(purpose)] = records[index].record
+      let heartbeat = selections[1]
+      let history = records[heartbeat].isLogin ? heartbeat : selections[0]
+      return self.replace(current, records: records, selections: selections, history: history)
     }
   }
 
@@ -151,6 +191,26 @@ actor PiliAccountEnvelopeTransactionStore {
                                                    expectedTransactionID: snapshot.transactionID)
     return .init(transactionID: publication.transactionID, record: record.record,
                  nativeWritesAllowed: false, authoritySwitchAllowed: false)
+  }
+
+  private func slotIndex(_ purpose: PiliAccountPurpose) -> Int {
+    // The source order is fixed: main, heartbeat, recommend, video.
+    switch purpose {
+    case .main: return 0
+    case .heartbeat: return 1
+    case .recommend: return 2
+    case .video: return 3
+    }
+  }
+
+  private static func replacingPurposes(
+    _ record: PiliAccountLiveMemoryRecord, purposes: [PiliAccountPurpose]
+  ) -> PiliAccountLiveMemoryRecord {
+    PiliAccountLiveMemoryRecord(
+      record: record.record, generation: record.generation, storageKeyUnits: record.storageKeyUnits,
+      mid: record.mid, isLogin: record.isLogin, accessKeyUnits: record.accessKeyUnits,
+      refreshTokenUnits: record.refreshTokenUnits, persistedPurposes: purposes,
+      activated: record.activated, jar: record.jar)
   }
 
   private func replaceJar(_ current: PiliAccountLiveMemoryShadow, index: Int,
