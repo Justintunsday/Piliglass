@@ -121,3 +121,22 @@ Native 仍为 shadow 组件、四能力 flag false、无生产 authority 切换�
 - 通过后更新 PROGRESS/STATUS_MATRIX/相关计划并给交付报告。
 - 边界：不接 authority、不产生生产 caller、不改 Dart authority、四 flag false、不碰
   UI/Aether/`youtube/`；不伪造真机结论。
+
+## 闭环记录（2026-10-11，代码 SHA `53aed63`）
+
+- ① `await GStorage.localCache.put`；`account_owner_revalidation_test` 覆盖真实写与 drain。
+- ② 维护独占 barrier 实现于 `a5ec12e`；4 项 coordinator 契约测试 + compact 边界测试。
+- ③ owner 复核实现于 `335feb0`；A→B、delete/reinstall、onLoginMain 三项确定性测试。
+- ④ `clear` 的 buvid 链改为 await；`clear drains ...` 测试。
+- ⑤ `b489a36`：import 拒绝任何现有 generation 复用；旧代际写入、ABA 回归入 driver。
+- ⑥ `b489a36`：import 按 Dart refresh 重建 ownerOrder/selections/history（临时选择清理）。
+- ⑦ `6815230`：codec schema-aware；schema 2 identity 字段（含 null）成为负例。
+- ⑧ purpose primitive 文档化 + omitted previous/non-holder/close-reopen/字节预算测试。
+- ⑨ `11bfe0e`：bound 访问器与残余直读迁移；测试断言 revoked 不回退 stale 字段。
+- 全组同 SHA 验证：release 38150244501（5/5、九 outcome、BUILD SUCCEEDED/109.1MB/
+  FFmpeg）、preview 38150247302（4/4、20 tests、`failures=[]`）；账户 +250、envelope
+  109/44/40/157/51、sourceSHA=workflowSHA=53aed63。失败修复：`d8d65c7` cascade lint、
+  `57811cb` 测试 adapter/owner 选择、`53aed63` clear drain 测试；image-preview 一次
+  6s UI 超时按同 SHA rerun 通过（flake）。
+- 仍开放（不属于本修复组，生产接线前项）：durableIdentity 消费/恢复语义、buvid 补值
+  durable transaction、账号级队列、Block 3/4/5。四 flag false。

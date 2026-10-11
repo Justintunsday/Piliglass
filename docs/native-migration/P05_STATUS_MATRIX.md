@@ -193,6 +193,17 @@ preview 38137738208 4/4（无 rerun）；账户 **+239** tests、analyze 无问�
 BUILD SUCCEEDED/109.1MB/FFmpeg、preview 20 tests/`failures=[]`。仍未接 authority、
 无生产 caller；buvid 补值 durable transaction 与账号级队列属后续；四 flag false。
 
+**codex-3b8e821 复审修复组已在 `53aed63` 验收**（release 38150244501 5/5、
+preview 38150247302 4/4）：drain 真实 await 与 owner 复核、维护独占 barrier
+（`beginMaintenance`/permanent close、不触碰 freeze）、clear 的 buvid 链进入 token、
+import 全新代际 + Dart refresh parity（ownerOrder/selections/history 重建）、schema-aware
+record shape、purpose primitive 契约与缺失验证、bound reader 访问器与残余直读点迁移。
+证据：账户 **+250** tests、analyze 无问题；envelope **109/44/40/157/51**、
+sourceSHA=53aed63；九 outcome success、BUILD SUCCEEDED/109.1MB/FFmpeg、preview 20
+tests/`failures=[]`。细节与逐项判定见
+[P05_REVIEW_3B8E821_REPAIR_PLAN.md](P05_REVIEW_3B8E821_REPAIR_PLAN.md)。仍未接
+authority、无生产 caller；四 flag false，P05 未整体完成。
+
 **Block 1 / B1d 切片（页面读取、延迟副作用、maintenance gate）已在 `98e6f9b` 验收**：
 `Accounts.installedAccounts()` 纯只读 seam + 页面 `isEmpty/isNotEmpty` 切
 `visibleAccounts()`（login/mine/setting/about，内容/顺序/读取时机不变、零

@@ -222,6 +222,37 @@ import/delete/buvid durable transaction、durable identity 消费方与账号级
 `+239: All tests passed!`；preview 20 tests 0 failures、压力 `failures=[]`。范围仅为
 shadow 组件：未接 authority、无生产 caller，buvid 补值 durable transaction、durable
 identity 消费方与账号级队列属后续；四能力 flag 保持 false，P05 未整体完成。
+
+**`53aed639b4cf85ae21a7a13fec52b8373eaa22b5` 已验收 codex-3b8e821 复审修复组**：
+同 SHA [release 38150244501](https://github.com/Justintunsday/Piliglass/actions/runs/38150244501)
+5/5 与 [preview 38150247302](https://github.com/Justintunsday/Piliglass/actions/runs/38150247302)
+4/4 jobs success（前一轮 `57811cb` 的 image-preview `detail-opens=1` 6s UI 超时为慢
+runner flake，同 SHA rerun 后通过）；九个强制 outcome 全 success、BUILD SUCCEEDED、
+109.1MB、FFmpeg 顺序。计划见
+[P05_REVIEW_3B8E821_REPAIR_PLAN.md](P05_REVIEW_3B8E821_REPAIR_PLAN.md)（`4a00d89`）。
+逐项：①`syncHistoryStatus` 改为 `await GStorage.localCache.put`，真实写进入 admission
+并由 owner 复核保护；②coordinator 新增**维护独占 barrier**（`beginMaintenance` 同步拒绝
+新 admission、排空在途、token `end(permanent:)`；permanent 关闭永不恢复；不触碰
+authority freeze），`GStorage.compact/close` 在 barrier 内执行；③`onLoginMain` 与
+`syncHistoryStatus` 在 await 后复核 `Accounts.main/history` identity 与
+`ownsCredentials`，A→B、delete/reinstall 期间不再发布镜像/缓存；④`Accounts.clear` 的
+匿名 buvid 激活请求改为 await（最后真实 await 进入 token）；⑤`applyImport` 拒绝复用任何
+现有 generation（替换必须全新代际），新增旧 key+旧 generation 写入拒绝与
+delete/reinstall ABA 回归；⑥import 结果按 Dart 尾部 `refresh()` 重建 ownerOrder
+（其余 owner 原序 + 被替换 key 输入序 + 新 key 输入序）与 selections/history（临时选择的
+槽位按 purposes 覆盖重建）；⑦codec `recordFields` 按 schema 严格选形状（schema 2 拒绝
+identity 字段——含显式 null——而不静默丢弃）；⑧`applyPurposeChange` 明确为低层
+primitive（previous 由调用者指定、不扫描持有者、无全局唯一约束），补齐 omitted
+previous/non-holder/close-reopen 全量读回/编码字节预算拒绝测试；⑨新增
+`boundCsrf`/`boundAccessKey` 区分未安装与绑定被拒，`accessKeyOf` 对 revoked 不再回退
+stale 字段，并迁移 `ios_native_ui_bridge`/`member_profile`/`video_popup_menu` 的直读点。
+提交：`a5ec12e`、`335feb0`、`11bfe0e`、`a619951`、`6815230`、`b489a36`、`3279bff`、
+`d8d65c7`、`57811cb`、`53aed63`。账户 artifact analyze 无问题、实际
+`+250: All tests passed!`；envelope `status=passed` 109 oracle/10 观察/44 负例/40
+staging/157 transaction/51 authority、sourceSHA=workflowSHA=53aed63；preview 20 tests
+0 failures、压力 `failures=[]`。范围仍为 shadow/reader 边界：未接 authority、无生产
+caller，buvid 补值 durable transaction、durable identity 消费方与账号级队列、
+Block 3/4/5 仍未交付；四能力 flag 保持 false，P05 未整体完成。
 四能力 flag 保持 false，P05 未整体完成。
 
 当前阶段为 **P05**。`bedde36` 的原并行组与 `0527fb2` 的
