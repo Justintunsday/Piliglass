@@ -159,6 +159,24 @@ void main() {
     expect(coordinator.liveOperationCount, 0);
   });
 
+  test('clear drains the anonymous buvid activation request', () async {
+    final adapter = _ControlledAdapter();
+    Request.dio.httpClientAdapter = adapter;
+    final coordinator = AccountWriteBackCoordinator();
+    AnonymousAccount().activated = false;
+    final clearing = Accounts.clear(coordinator: coordinator);
+    final request = await adapter.nextRequest();
+    var completed = false;
+    final watcher = clearing.then((_) => completed = true);
+    await Future<void>.value();
+    expect(completed, false);
+    expect(coordinator.liveOperationCount, 1);
+    request.complete('{}');
+    await watcher;
+    expect(completed, true);
+    expect(coordinator.liveOperationCount, 0);
+  });
+
   test('onLoginMain does not mirror a replaced owner after the await', () async {
     final a = _account(980005);
     final b = _account(980006);
