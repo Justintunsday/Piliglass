@@ -260,6 +260,12 @@ private actor TransactionFaultVault: PiliAccountSecretStore {
       _ = try await fencedStore.applyCookieDeleteAll(recordKeyUnits: key, expectedGeneration: record.generation)
       throw TransactionFixtureError.failed("reentrant transaction admitted")
     } catch PiliAccountShadowTransactionError.operationInProgress { checks += 1 }
+    do {
+      _ = try await fencedStore.applyPurposeChange(recordKeyUnits: key,
+        expectedGeneration: record.generation, purpose: .recommend,
+        previousKeyUnits: nil, previousExpectedGeneration: nil)
+      throw TransactionFixtureError.failed("reentrant purpose change admitted")
+    } catch PiliAccountShadowTransactionError.operationInProgress { checks += 1 }
     // A second transaction actor has a distinct wrapper fence, but the shared
     // vault rejects its read while A's durable publication is in progress.
     let competingStore = PiliAccountEnvelopeTransactionStore(vault: fencedOuter)
@@ -291,6 +297,135 @@ private actor TransactionFaultVault: PiliAccountSecretStore {
     } catch is CancellationError { checks += 1 }
     let cancelledReloaded = try await PiliAccountEnvelopeStagingStore(secrets: fencedVault).loadShadow()
     try check(cancelledReloaded?.records[1].jar == cleared, "cancellation keeps previous durable jar")
+
+    // A persistent purpose change moves one purpose between two exact login
+    // records inside a single candidate: selected gains (Dart append order),
+    // previous loses, slots/history follow the existing policy, jars/order/
+    // generations/revision stay untouched. Purpose-only growth is bounded by
+    // the four fixed purposes, so the shared cumulative ledger is exercised by
+    // the existing oversized-credentials case above.
+    let purposeNamespace = UUID()
+    let purposeVault = PiliAccountEnvelopeStagingStore(
+      secrets: PiliAccountKeychainSecretStore(stagingNamespace: purposeNamespace))
+    let purposeStore = PiliAccountEnvelopeTransactionStore(vault: purposeVault)
+    do {
+      try await purposeVault.importShadow(codec.encode(base))
+      guard let importedSnapshot = try await purposeVault.loadShadowSnapshot() else {
+        throw TransactionFixtureError.failed("missing purpose base snapshot")
+      }
+      let purpose = PiliAccountPurpose.recommend
+      guard let secondKey = base.records[2].storageKeyUnits else {
+        throw TransactionFixtureError.failed("second login storage key missing")
+      }
+      let initialFirst = base.records[1].persistedPurposes
+      let initialSecond = base.records[2].persistedPurposes
+      let addReceipt = try await purposeStore.applyPurposeChange(
+        recordKeyUnits: secondKey, expectedGeneration: base.records[2].generation,
+        purpose: purpose, previousKeyUnits: nil, previousExpectedGeneration: nil)
+      try check(addReceipt.nativeWritesAllowed == false &&
+        addReceipt.authoritySwitchAllowed == false, "purpose change never grants authority")
+      try check(addReceipt.transactionID != importedSnapshot.transactionID,
+                "purpose publication has a distinct exact pointer identity")
+      let afterAdd = try await purposeVault.loadShadow()
+      try check(afterAdd?.records[2].persistedPurposes ==
+        (initialSecond.contains(purpose) ? initialSecond : initialSecond + [purpose]),
+        "add-from-none appends the purpose in Dart order")
+      try check(afterAdd?.records[2].persistedPurposes.filter { $0 == purpose }.count == 1,
+                "add never duplicates an existing purpose")
+      try check(afterAdd?.selections[2] == base.records[2].record,
+                "add points the purpose slot at the selected record")
+
+      let moveReceipt = try await purposeStore.applyPurposeChange(
+        recordKeyUnits: key, expectedGeneration: record.generation,
+        purpose: purpose, previousKeyUnits: secondKey,
+        previousExpectedGeneration: base.records[2].generation)
+      try check(moveReceipt.record == base.records[1].record,
+                "move names the exact selected record")
+      let afterMove = try await purposeVault.loadShadow()
+      try check(afterMove?.records[1].persistedPurposes ==
+        (initialFirst.contains(purpose) ? initialFirst : initialFirst + [purpose]),
+        "selected purposes follow Dart append order")
+      try check(afterMove?.records[2].persistedPurposes ==
+        initialSecond.filter { $0 != purpose },
+        "previous holder loses the purpose in the same candidate")
+      try check(afterMove?.selections[2] == base.records[1].record,
+                "move points the purpose slot at the selected record")
+      try check(afterMove?.selections[0] == base.selections[0] &&
+        afterMove?.selections[1] == base.selections[1] &&
+        afterMove?.selections[3] == base.selections[3],
+        "move leaves every other slot unchanged")
+      let heartbeat = afterMove?.selections[1] ?? -1
+      let expectedHistory = (afterMove?.records[heartbeat].isLogin ?? false)
+        ? heartbeat : (afterMove?.selections[0] ?? -1)
+      try check(afterMove?.history == expectedHistory,
+                "history follows the existing derivation policy")
+      try check(afterMove?.records[1].jar == base.records[1].jar &&
+        afterMove?.records[2].jar == base.records[2].jar, "purpose change never touches jars")
+      try check(afterMove?.storedOrder == base.storedOrder &&
+        afterMove?.ownerOrder == base.ownerOrder, "purpose change preserves account order")
+      try check(afterMove?.records[0] == base.records[0] &&
+        afterMove?.records.count == base.records.count,
+        "purpose change leaves anonymous and record count untouched")
+      try check(afterMove?.revision == base.revision &&
+        afterMove?.records[1].generation == base.records[1].generation &&
+        afterMove?.records[2].generation == base.records[2].generation,
+        "capture-local identity is not renumbered")
+
+      _ = try await purposeStore.applyPurposeChange(
+        recordKeyUnits: key, expectedGeneration: record.generation,
+        purpose: purpose, previousKeyUnits: secondKey,
+        previousExpectedGeneration: base.records[2].generation)
+      let repeated = try await purposeVault.loadShadow()
+      try check(repeated?.records[1].persistedPurposes == afterMove?.records[1].persistedPurposes &&
+        repeated?.records[2].persistedPurposes == afterMove?.records[2].persistedPurposes,
+        "repeated purpose change is idempotent")
+      _ = try await purposeStore.applyPurposeChange(
+        recordKeyUnits: key, expectedGeneration: record.generation,
+        purpose: purpose, previousKeyUnits: key, previousExpectedGeneration: record.generation)
+      let selfPrevious = try await purposeVault.loadShadow()
+      try check(selfPrevious?.records[1].persistedPurposes == afterMove?.records[1].persistedPurposes,
+                "same-record previous never removes the selected purpose")
+
+      guard let beforeReject = try await purposeVault.loadShadowSnapshot() else {
+        throw TransactionFixtureError.failed("missing purpose reject snapshot")
+      }
+      do {
+        _ = try await purposeStore.applyPurposeChange(
+          recordKeyUnits: key, expectedGeneration: record.generation,
+          purpose: purpose, previousKeyUnits: PiliCookieUTF16(units: Array("missing".utf16)),
+          previousExpectedGeneration: 1)
+        throw TransactionFixtureError.failed("unknown previous record key accepted")
+      } catch PiliAccountShadowTransactionError.unknownRecordKey { checks += 1 }
+      do {
+        _ = try await purposeStore.applyPurposeChange(
+          recordKeyUnits: key, expectedGeneration: record.generation + 1,
+          purpose: purpose, previousKeyUnits: nil, previousExpectedGeneration: nil)
+        throw TransactionFixtureError.failed("stale selected generation accepted")
+      } catch PiliAccountShadowTransactionError.staleGeneration { checks += 1 }
+      do {
+        _ = try await purposeStore.applyPurposeChange(
+          recordKeyUnits: key, expectedGeneration: record.generation,
+          purpose: purpose, previousKeyUnits: secondKey,
+          previousExpectedGeneration: base.records[2].generation + 1)
+        throw TransactionFixtureError.failed("stale previous generation accepted")
+      } catch PiliAccountShadowTransactionError.staleGeneration { checks += 1 }
+      do {
+        _ = try await purposeStore.applyPurposeChange(
+          recordKeyUnits: key, expectedGeneration: record.generation,
+          purpose: purpose, previousKeyUnits: secondKey,
+          previousExpectedGeneration: nil)
+        throw TransactionFixtureError.failed("missing previous generation accepted")
+      } catch PiliAccountShadowTransactionError.staleGeneration { checks += 1 }
+      let afterReject = try await purposeVault.loadShadowSnapshot()
+      try check(afterReject?.transactionID == beforeReject.transactionID &&
+        afterReject?.envelope == beforeReject.envelope,
+        "purpose rejections never publish a new candidate")
+      try await purposeVault.discardShadow()
+    } catch {
+      try? await purposeVault.discardShadow()
+      throw error
+    }
+
     print("\(checks) native account envelope transaction checks passed")
   }
 }
