@@ -298,6 +298,13 @@ private actor TransactionFaultVault: PiliAccountSecretStore {
         refreshTokenUnits: nil, persistedPurposes: [], activated: false, jar: cleared)])
       throw TransactionFixtureError.failed("reentrant import admitted")
     } catch PiliAccountShadowTransactionError.operationInProgress { checks += 1 }
+    do {
+      _ = try await fencedStore.applyBuvidSeed(recordKeyUnits: key,
+        expectedGeneration: record.generation,
+        valueUnits: PiliCookieUTF16(units: Array("reentrant-buvid".utf16)),
+        nowMicroseconds: now)
+      throw TransactionFixtureError.failed("reentrant buvid seed admitted")
+    } catch PiliAccountShadowTransactionError.operationInProgress { checks += 1 }
     // A second transaction actor has a distinct wrapper fence, but the shared
     // vault rejects its read while A's durable publication is in progress.
     let competingStore = PiliAccountEnvelopeTransactionStore(vault: fencedOuter)
@@ -1118,6 +1125,154 @@ private actor TransactionFaultVault: PiliAccountSecretStore {
         try? await legacyVault.discardShadow()
         throw error
       }
+    }
+
+    // Buvid seed mirrors Dart `??=`: only a missing buvid3 is appended, an
+    // existing one is an idempotent no-op, and rejections publish nothing.
+    let buvidNamespace = UUID()
+    let buvidVault = PiliAccountEnvelopeStagingStore(
+      secrets: PiliAccountKeychainSecretStore(stagingNamespace: buvidNamespace))
+    let buvidStore = PiliAccountEnvelopeTransactionStore(vault: buvidVault)
+    do {
+      try await buvidVault.importShadow(codec.encode(base))
+      _ = try await buvidStore.adoptMissingIdentities()
+      // The capture jars already carry constructor-seeded buvid3 cookies, so
+      // strip the record first to exercise the missing-value path.
+      _ = try await buvidStore.applyCookieDeleteAll(
+        recordKeyUnits: key, expectedGeneration: record.generation)
+      guard let stripped = try await buvidVault.loadShadow() else {
+        throw TransactionFixtureError.failed("missing stripped buvid shadow")
+      }
+      try check(stripped.records[1].jar.domainBuckets.isEmpty &&
+        stripped.records[1].jar.hostBuckets.isEmpty,
+        "buvid fixture record is stripped")
+      let buvidValue = PiliCookieUTF16(
+        units: Array("11111111-2222-4333-8444-55555555555512345infoc".utf16))
+      let seedReceipt = try await buvidStore.applyBuvidSeed(
+        recordKeyUnits: key, expectedGeneration: record.generation,
+        valueUnits: buvidValue, nowMicroseconds: now)
+      try check(seedReceipt.seeded && seedReceipt.transactionID != nil &&
+        seedReceipt.nativeWritesAllowed == false &&
+        seedReceipt.authoritySwitchAllowed == false,
+        "buvid seed publishes once and never grants authority")
+      guard let seeded = try await buvidVault.loadShadow() else {
+        throw TransactionFixtureError.failed("missing seeded buvid shadow")
+      }
+      let domainKey = PiliCookieUTF16(units: Array("bilibili.com".utf16))
+      let pathKey = PiliCookieUTF16(units: Array("/".utf16))
+      let nameKey = PiliCookieUTF16(units: Array("buvid3".utf16))
+      guard let bucket = seeded.records[1].jar.domainBuckets.first(where: {
+        $0.keyUnits == domainKey
+      }), let path = bucket.paths.first(where: { $0.keyUnits == pathKey }),
+        let entry = path.cookies.first(where: { $0.keyUnits == nameKey }) else {
+        throw TransactionFixtureError.failed("seeded buvid3 missing")
+      }
+      try check(entry.valueUnits == buvidValue, "buvid seed stores the exact value")
+      try check(path.cookies.count == 1 && path.cookies.last?.keyUnits == nameKey,
+                "buvid seed appends exactly one entry")
+      try check(seeded.records[1].durableIdentity == stripped.records[1].durableIdentity &&
+        seeded.records[1].storageKeyUnits == stripped.records[1].storageKeyUnits,
+        "buvid seed keeps the record identity")
+      try check(seeded.records[0] == stripped.records[0] &&
+        seeded.records[2] == stripped.records[2],
+        "buvid seed leaves other records unchanged")
+      try check(seeded.storedOrder == stripped.storedOrder &&
+        seeded.ownerOrder == stripped.ownerOrder &&
+        seeded.selections == stripped.selections &&
+        seeded.history == stripped.history &&
+        seeded.revision == stripped.revision,
+        "buvid seed keeps orders, slots and revision")
+      let reopenedBuvidVault = PiliAccountEnvelopeStagingStore(
+        secrets: PiliAccountKeychainSecretStore(stagingNamespace: buvidNamespace))
+      try check(try await reopenedBuvidVault.loadShadow() == seeded,
+                "seeded buvid survives real Keychain close/reopen")
+      guard let beforeSecondSeed = try await reopenedBuvidVault.loadShadowSnapshot() else {
+        throw TransactionFixtureError.failed("missing second buvid snapshot")
+      }
+      let reopenedBuvidStore = PiliAccountEnvelopeTransactionStore(vault: reopenedBuvidVault)
+      let secondSeed = try await reopenedBuvidStore.applyBuvidSeed(
+        recordKeyUnits: key, expectedGeneration: record.generation,
+        valueUnits: PiliCookieUTF16(units: Array("other-buvid-value".utf16)),
+        nowMicroseconds: now + 1)
+      try check(!secondSeed.seeded && secondSeed.transactionID == nil,
+                "existing buvid3 is an idempotent no-op")
+      let afterSecondSeed = try await reopenedBuvidVault.loadShadowSnapshot()
+      try check(afterSecondSeed?.transactionID == beforeSecondSeed.transactionID &&
+        afterSecondSeed?.envelope == beforeSecondSeed.envelope,
+        "idempotent buvid seed publishes nothing")
+      do {
+        _ = try await reopenedBuvidStore.applyBuvidSeed(
+          recordKeyUnits: PiliCookieUTF16(units: Array("missing".utf16)),
+          expectedGeneration: record.generation, valueUnits: buvidValue,
+          nowMicroseconds: now)
+        throw TransactionFixtureError.failed("unknown buvid key accepted")
+      } catch PiliAccountShadowTransactionError.unknownRecordKey { checks += 1 }
+      do {
+        _ = try await reopenedBuvidStore.applyBuvidSeed(
+          recordKeyUnits: key, expectedGeneration: record.generation + 1,
+          valueUnits: buvidValue, nowMicroseconds: now)
+        throw TransactionFixtureError.failed("stale buvid generation accepted")
+      } catch PiliAccountShadowTransactionError.staleGeneration { checks += 1 }
+      do {
+        _ = try await reopenedBuvidStore.applyBuvidSeed(
+          recordKeyUnits: key, expectedGeneration: record.generation,
+          valueUnits: PiliCookieUTF16(units: []), nowMicroseconds: now)
+        throw TransactionFixtureError.failed("empty buvid value accepted")
+      } catch PiliAccountShadowTransactionError.invalidBuvid { checks += 1 }
+      do {
+        _ = try await reopenedBuvidStore.applyBuvidSeed(
+          recordKeyUnits: key, expectedGeneration: record.generation,
+          valueUnits: PiliCookieUTF16(units: [0x4E2D]), nowMicroseconds: now)
+        throw TransactionFixtureError.failed("non-ASCII buvid value accepted")
+      } catch PiliAccountShadowTransactionError.invalidBuvid { checks += 1 }
+      do {
+        _ = try await reopenedBuvidStore.applyBuvidSeed(
+          recordKeyUnits: key, expectedGeneration: record.generation,
+          valueUnits: PiliCookieUTF16(units: [0x61, 0x3B, 0x62]), nowMicroseconds: now)
+        throw TransactionFixtureError.failed("separator buvid value accepted")
+      } catch PiliAccountShadowTransactionError.invalidBuvid { checks += 1 }
+      do {
+        _ = try await reopenedBuvidStore.applyBuvidSeed(
+          recordKeyUnits: key, expectedGeneration: record.generation,
+          valueUnits: PiliCookieUTF16(units: Array(repeating: 0x61, count: 70000)),
+          nowMicroseconds: now)
+        throw TransactionFixtureError.failed("oversized buvid value accepted")
+      } catch PiliAccountLiveMemoryShadowError.resourceLimit { checks += 1 }
+      let afterBuvidRejects = try await reopenedBuvidVault.loadShadowSnapshot()
+      try check(afterBuvidRejects?.transactionID == beforeSecondSeed.transactionID &&
+        afterBuvidRejects?.envelope == beforeSecondSeed.envelope,
+        "buvid rejections never publish")
+      try await reopenedBuvidVault.discardShadow()
+    } catch {
+      try? await buvidVault.discardShadow()
+      throw error
+    }
+
+    // A schema-2 envelope cannot seed buvid directly.
+    let legacyBuvidNamespace = UUID()
+    let legacyBuvidVault = PiliAccountEnvelopeStagingStore(
+      secrets: PiliAccountKeychainSecretStore(stagingNamespace: legacyBuvidNamespace))
+    let legacyBuvidStore = PiliAccountEnvelopeTransactionStore(vault: legacyBuvidVault)
+    do {
+      try await legacyBuvidVault.importShadow(codec.encode(base))
+      guard let legacyBuvidBefore = try await legacyBuvidVault.loadShadowSnapshot() else {
+        throw TransactionFixtureError.failed("missing legacy buvid snapshot")
+      }
+      do {
+        _ = try await legacyBuvidStore.applyBuvidSeed(recordKeyUnits: key,
+          expectedGeneration: record.generation,
+          valueUnits: PiliCookieUTF16(units: Array("legacy-buvid".utf16)),
+          nowMicroseconds: now)
+        throw TransactionFixtureError.failed("schema-2 buvid seed accepted")
+      } catch PiliAccountShadowTransactionError.invalidBuvid { checks += 1 }
+      let legacyBuvidAfter = try await legacyBuvidVault.loadShadowSnapshot()
+      try check(legacyBuvidAfter?.transactionID == legacyBuvidBefore.transactionID &&
+        legacyBuvidAfter?.envelope == legacyBuvidBefore.envelope,
+        "schema-2 buvid seed never publishes")
+      try await legacyBuvidVault.discardShadow()
+    } catch {
+      try? await legacyBuvidVault.discardShadow()
+      throw error
     }
 
     print("\(checks) native account envelope transaction checks passed")
