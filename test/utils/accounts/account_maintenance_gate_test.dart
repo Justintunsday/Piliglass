@@ -57,6 +57,9 @@ void main() {
     GStorage.historyWord = await Hive.openBox<dynamic>('historyWord');
     GStorage.video = await Hive.openBox<dynamic>('video');
     GStorage.watchProgress = await Hive.openBox<int>('watchProgress');
+    // Production init assigns reply (box or null) unconditionally; the shared
+    // fixture leaves it uninitialized, so the maintenance path needs the null.
+    GStorage.reply = null;
   });
   setUp(() => storage.reset());
   tearDownAll(() => storage.close());
