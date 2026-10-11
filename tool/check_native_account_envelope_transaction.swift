@@ -1147,7 +1147,9 @@ private actor TransactionFaultVault: PiliAccountSecretStore {
         stripped.records[1].jar.hostBuckets.isEmpty,
         "buvid fixture record is stripped")
       // The oversized value must be exercised while buvid3 is still missing;
-      // after a successful seed the transaction is an idempotent no-op.
+      // after a successful seed the transaction is an idempotent no-op. The
+      // reducer's strict Set-Cookie parser rejects it as invalidField before
+      // the envelope ledger runs.
       guard let beforeBuvidBudget = try await buvidVault.loadShadowSnapshot() else {
         throw TransactionFixtureError.failed("missing buvid budget snapshot")
       }
@@ -1157,7 +1159,7 @@ private actor TransactionFaultVault: PiliAccountSecretStore {
           valueUnits: PiliCookieUTF16(units: Array(repeating: 0x61, count: 70000)),
           nowMicroseconds: now)
         throw TransactionFixtureError.failed("oversized buvid value accepted")
-      } catch PiliAccountLiveMemoryShadowError.resourceLimit { checks += 1 }
+      } catch PiliNativeCookieError.invalidField { checks += 1 }
       let afterBuvidBudget = try await buvidVault.loadShadowSnapshot()
       try check(afterBuvidBudget?.transactionID == beforeBuvidBudget.transactionID &&
         afterBuvidBudget?.envelope == beforeBuvidBudget.envelope,
