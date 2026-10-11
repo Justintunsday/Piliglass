@@ -118,14 +118,20 @@ actor PiliAccountEnvelopeTransactionStore {
     }
   }
 
-  /// Durable persistent-purpose change across at most two login records.
-  ///
-  /// Mirrors the Dart `Accounts.set` shape: the selected record gains the
-  /// purpose (idempotent, appended in Dart insertion order), the optional
-  /// previous holder loses it, the slot points at the selected record and
-  /// history is derived with the existing policy. Only persistedPurposes,
-  /// selections and history may change; jars, order, generations and the
-  /// capture-local revision stay untouched.
+  /// Low-level durable purpose move across at most two explicitly named
+  /// records. It does NOT scan for other holders and does NOT enforce global
+  /// uniqueness: legacy captures (and Dart imports with `preserveTypes:false`)
+  /// may hold the same purpose on several records, and only the caller-named
+  /// `previousKeyUnits` loses it. Exact preconditions:
+  /// - `previousKeyUnits == nil` means "no holder to remove": if another record
+  ///   still holds the purpose it keeps it (documented primitive behavior).
+  /// - a non-nil previous must name the actual holder; a record that does not
+  ///   hold the purpose is left untouched.
+  /// - `previousKeyUnits == recordKeyUnits` is an idempotent no-op for removal.
+  /// The selected record gains the purpose (idempotent, appended in Dart
+  /// insertion order), the slot points at it and history is derived with the
+  /// existing policy. Only persistedPurposes, selections and history change;
+  /// jars, orders, generations and the capture-local revision stay untouched.
   func applyPurposeChange(recordKeyUnits: PiliCookieUTF16, expectedGeneration: Int64,
                           purpose: PiliAccountPurpose,
                           previousKeyUnits: PiliCookieUTF16?,
@@ -338,9 +344,11 @@ actor PiliAccountEnvelopeTransactionStore {
 
   /// Imports complete login records into an adopted envelope, mirroring Dart
   /// `importCredentials`: an input key that already exists replaces that exact
-  /// record in place (identity preserved, generation revalidated), a new key is
-  /// appended in input order with a minted identity. One candidate is
-  /// published; any rejection publishes nothing.
+  /// record in place (identity preserved, generation must be genuinely new), a
+  /// new key is appended in input order with a minted identity, and the owner
+  /// registry/selections/history are rebuilt exactly like Dart's trailing
+  /// `refresh()` (temporary selections cleared). One candidate is published;
+  /// any rejection publishes nothing.
   func applyImport(_ entries: [PiliAccountShadowInstall]) async throws
     -> PiliAccountShadowImportReceipt {
     try beginOperation()
@@ -368,13 +376,13 @@ actor PiliAccountEnvelopeTransactionStore {
         throw PiliAccountShadowTransactionError.staleGeneration
       }
     }
-    // A new generation may reuse the generation of the record it replaces, but
-    // never collides with a record that stays in the envelope.
-    for record in current.records where record.record > 0 {
-      if let key = record.storageKeyUnits, !entryKeys.contains(key),
-         entryGenerations.contains(record.generation) {
-        throw PiliAccountShadowTransactionError.staleGeneration
-      }
+    // Reusing an existing generation is always rejected: a replaced record must
+    // get a genuinely new generation so an old request holding the replaced
+    // key+generation can never hit replacement credentials, and an untouched
+    // record must not collide either.
+    for record in current.records
+    where record.record > 0 && entryGenerations.contains(record.generation) {
+      throw PiliAccountShadowTransactionError.staleGeneration
     }
     var records = current.records
     var identities = Set<PiliCookieUTF16>()
@@ -413,9 +421,31 @@ actor PiliAccountEnvelopeTransactionStore {
         keyUnits: entry.storageKeyUnits, record: newIndex))
       appended += 1
     }
+    // Dart importCredentials ends in refresh(): a replaced owner is revoked and
+    // re-inserted at the end of the owner registry, temporary selections are
+    // cleared and every slot is rebuilt from owners/types in that order with
+    // the last writer winning. Mirror that observable result exactly.
+    var ownerOrder = current.ownerOrder.filter { !entryKeys.contains($0.keyUnits) }
+    for entry in entries {
+      guard let index = records.firstIndex(where: {
+        $0.storageKeyUnits == entry.storageKeyUnits
+      }) else {
+        throw PiliAccountShadowTransactionError.invalidImport
+      }
+      ownerOrder.append(PiliAccountLiveMemoryOrderEntry(
+        keyUnits: entry.storageKeyUnits, record: records[index].record))
+    }
+    var selections = [0, 0, 0, 0]
+    for orderEntry in ownerOrder {
+      for purpose in records[orderEntry.record].persistedPurposes {
+        selections[slotIndex(purpose)] = orderEntry.record
+      }
+    }
+    let heartbeat = selections[1]
+    let history = records[heartbeat].isLogin ? heartbeat : selections[0]
     let candidate = replace(current, records: records,
       storedOrder: current.storedOrder + appendedOrder,
-      ownerOrder: current.ownerOrder + appendedOrder)
+      ownerOrder: ownerOrder, selections: selections, history: history)
     _ = try candidate.validated(limits: codec.limits)
     let publication = try await vault.importShadow(codec.encode(candidate),
                                                    expectedTransactionID: snapshot.transactionID)
