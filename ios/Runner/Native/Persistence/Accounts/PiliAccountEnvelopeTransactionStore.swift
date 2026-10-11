@@ -3,6 +3,7 @@ import Foundation
 enum PiliAccountShadowTransactionError: Error, Sendable, Equatable {
   case operationInProgress, shadowUnavailable, unknownRecordKey, staleGeneration
   case duplicateRecordKey, invalidInstall
+  case invalidDelete, invalidImport
 }
 
 struct PiliAccountShadowCookieSave: Sendable, Equatable {
@@ -29,6 +30,14 @@ struct PiliAccountShadowIdentityReceipt: Sendable, Equatable {
   /// Nil when the envelope already carried identities (no publication).
   let transactionID: UUID?
   let adopted: Int
+  let nativeWritesAllowed: Bool
+  let authoritySwitchAllowed: Bool
+}
+
+struct PiliAccountShadowImportReceipt: Sendable, Equatable {
+  let transactionID: UUID
+  let replaced: Int
+  let appended: Int
   let nativeWritesAllowed: Bool
   let authoritySwitchAllowed: Bool
 }
@@ -271,6 +280,156 @@ actor PiliAccountEnvelopeTransactionStore {
                                                    expectedTransactionID: snapshot.transactionID)
     return .init(transactionID: publication.transactionID, record: newIndex,
                  nativeWritesAllowed: false, authoritySwitchAllowed: false)
+  }
+
+  /// Deletes one exact login record from an adopted envelope. Records after the
+  /// deleted index are renumbered, both orders are removed and renumbered, and
+  /// every selection slot follows the Dart delete policy: a slot that pointed
+  /// at the deleted record becomes anonymous, later slots shift by one.
+  /// History is derived again; remaining record identities are preserved.
+  func applyDelete(recordKeyUnits: PiliCookieUTF16, expectedGeneration: Int64) async throws
+    -> PiliAccountShadowTransactionReceipt {
+    try beginOperation()
+    defer { operationInProgress = false }
+    guard let snapshot = try await vault.loadShadowSnapshot() else {
+      throw PiliAccountShadowTransactionError.shadowUnavailable
+    }
+    let current = snapshot.envelope
+    guard current.schemaVersion == 3 else {
+      throw PiliAccountShadowTransactionError.invalidDelete
+    }
+    // Anonymous records carry no storage key, so it can never be matched here.
+    guard let index = current.records.firstIndex(where: {
+      $0.record > 0 && $0.storageKeyUnits == recordKeyUnits
+    }) else {
+      throw PiliAccountShadowTransactionError.unknownRecordKey
+    }
+    let deleted = current.records[index]
+    guard deleted.generation == expectedGeneration, deleted.isLogin else {
+      throw PiliAccountShadowTransactionError.staleGeneration
+    }
+    var records: [PiliAccountLiveMemoryRecord] = []
+    for (oldIndex, record) in current.records.enumerated() where oldIndex != index {
+      let newIndex = oldIndex < index ? oldIndex : oldIndex - 1
+      records.append(newIndex == oldIndex ? record : Self.renumbered(record, as: newIndex))
+    }
+    let storedOrder = current.storedOrder
+      .filter { $0.record != index }
+      .map { entry in entry.record < index ? entry :
+        PiliAccountLiveMemoryOrderEntry(keyUnits: entry.keyUnits, record: entry.record - 1) }
+    let ownerOrder = current.ownerOrder
+      .filter { $0.record != index }
+      .map { entry in entry.record < index ? entry :
+        PiliAccountLiveMemoryOrderEntry(keyUnits: entry.keyUnits, record: entry.record - 1) }
+    let selections = current.selections.map { slot in
+      if slot == index { return 0 }
+      return slot > index ? slot - 1 : slot
+    }
+    let heartbeat = selections[1]
+    let history = records[heartbeat].isLogin ? heartbeat : selections[0]
+    let candidate = replace(current, records: records, storedOrder: storedOrder,
+                            ownerOrder: ownerOrder, selections: selections, history: history)
+    _ = try candidate.validated(limits: codec.limits)
+    let publication = try await vault.importShadow(codec.encode(candidate),
+                                                   expectedTransactionID: snapshot.transactionID)
+    return .init(transactionID: publication.transactionID, record: index,
+                 nativeWritesAllowed: false, authoritySwitchAllowed: false)
+  }
+
+  /// Imports complete login records into an adopted envelope, mirroring Dart
+  /// `importCredentials`: an input key that already exists replaces that exact
+  /// record in place (identity preserved, generation revalidated), a new key is
+  /// appended in input order with a minted identity. One candidate is
+  /// published; any rejection publishes nothing.
+  func applyImport(_ entries: [PiliAccountShadowInstall]) async throws
+    -> PiliAccountShadowImportReceipt {
+    try beginOperation()
+    defer { operationInProgress = false }
+    guard let snapshot = try await vault.loadShadowSnapshot() else {
+      throw PiliAccountShadowTransactionError.shadowUnavailable
+    }
+    let current = snapshot.envelope
+    guard current.schemaVersion == 3 else {
+      throw PiliAccountShadowTransactionError.invalidImport
+    }
+    guard !entries.isEmpty else { throw PiliAccountShadowTransactionError.invalidImport }
+    var entryKeys = Set<PiliCookieUTF16>()
+    var entryGenerations = Set<Int64>()
+    for entry in entries {
+      guard !entry.storageKeyUnits.units.isEmpty,
+            entry.generation > 0,
+            Set(entry.persistedPurposes).count == entry.persistedPurposes.count else {
+        throw PiliAccountShadowTransactionError.invalidImport
+      }
+      guard entryKeys.insert(entry.storageKeyUnits).inserted else {
+        throw PiliAccountShadowTransactionError.duplicateRecordKey
+      }
+      guard entryGenerations.insert(entry.generation).inserted else {
+        throw PiliAccountShadowTransactionError.staleGeneration
+      }
+    }
+    // A new generation may reuse the generation of the record it replaces, but
+    // never collides with a record that stays in the envelope.
+    for record in current.records where record.record > 0 {
+      if let key = record.storageKeyUnits, !entryKeys.contains(key),
+         entryGenerations.contains(record.generation) {
+        throw PiliAccountShadowTransactionError.staleGeneration
+      }
+    }
+    var records = current.records
+    var identities = Set<PiliCookieUTF16>()
+    for record in records {
+      if let identity = record.durableIdentity { identities.insert(identity) }
+    }
+    var replaced = 0
+    var appended = 0
+    var appendedOrder: [PiliAccountLiveMemoryOrderEntry] = []
+    for entry in entries {
+      if let index = records.firstIndex(where: {
+        $0.record > 0 && $0.storageKeyUnits == entry.storageKeyUnits
+      }) {
+        records[index] = PiliAccountLiveMemoryRecord(
+          record: index, generation: entry.generation,
+          storageKeyUnits: entry.storageKeyUnits, mid: entry.mid, isLogin: true,
+          accessKeyUnits: entry.accessKeyUnits, refreshTokenUnits: entry.refreshTokenUnits,
+          persistedPurposes: entry.persistedPurposes, activated: entry.activated,
+          jar: entry.jar, durableIdentity: records[index].durableIdentity)
+        replaced += 1
+        continue
+      }
+      guard records.count + 1 <= 256 else {
+        throw PiliAccountShadowTransactionError.invalidImport
+      }
+      let newIndex = records.count
+      let identity = Self.mintIdentity(excluding: identities)
+      identities.insert(identity)
+      records.append(PiliAccountLiveMemoryRecord(
+        record: newIndex, generation: entry.generation,
+        storageKeyUnits: entry.storageKeyUnits, mid: entry.mid, isLogin: true,
+        accessKeyUnits: entry.accessKeyUnits, refreshTokenUnits: entry.refreshTokenUnits,
+        persistedPurposes: entry.persistedPurposes, activated: entry.activated,
+        jar: entry.jar, durableIdentity: identity))
+      appendedOrder.append(PiliAccountLiveMemoryOrderEntry(
+        keyUnits: entry.storageKeyUnits, record: newIndex))
+      appended += 1
+    }
+    let candidate = replace(current, records: records,
+      storedOrder: current.storedOrder + appendedOrder,
+      ownerOrder: current.ownerOrder + appendedOrder)
+    _ = try candidate.validated(limits: codec.limits)
+    let publication = try await vault.importShadow(codec.encode(candidate),
+                                                   expectedTransactionID: snapshot.transactionID)
+    return .init(transactionID: publication.transactionID, replaced: replaced, appended: appended,
+                 nativeWritesAllowed: false, authoritySwitchAllowed: false)
+  }
+
+  private static func renumbered(_ record: PiliAccountLiveMemoryRecord,
+                                 as index: Int) -> PiliAccountLiveMemoryRecord {
+    PiliAccountLiveMemoryRecord(
+      record: index, generation: record.generation, storageKeyUnits: record.storageKeyUnits,
+      mid: record.mid, isLogin: record.isLogin, accessKeyUnits: record.accessKeyUnits,
+      refreshTokenUnits: record.refreshTokenUnits, persistedPurposes: record.persistedPurposes,
+      activated: record.activated, jar: record.jar, durableIdentity: record.durableIdentity)
   }
 
   private static func mintIdentity(excluding existing: Set<PiliCookieUTF16>) -> PiliCookieUTF16 {
