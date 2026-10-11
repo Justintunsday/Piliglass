@@ -78,6 +78,14 @@ abstract final class Accounts {
     return reader.accessKeyFor(owner, stamp) ?? owner.accessKey;
   }
 
+  /// Pure read-only snapshot of the stored account box in box order.
+  ///
+  /// This is the page-facing equivalent of `Accounts.account.toMap()`: a fresh
+  /// copy that performs no activation, reconcile, refresh, network or Hive
+  /// write. Callers still revalidate owners through the normal lifecycle
+  /// entries when they later mutate them.
+  static Map<dynamic, LoginAccount> installedAccounts() => account.toMap();
+
   static bool ownsCredentials(Account value) {
     if (_capturedRestoreOperation != null || _capturedRecoveryOperation != null ||
         _capturedRestoreFailed) {
@@ -424,7 +432,10 @@ abstract final class Accounts {
           value.delete(admission: effective, coordinator: writeBack),
       ]);
       if (isLoginMain && !main.isLogin) {
-        await LoginUtils.onLogoutMain();
+        await LoginUtils.onLogoutMain(
+          admission: effective,
+          coordinator: writeBack,
+        );
       }
     } finally {
       owned?.release();
@@ -497,7 +508,10 @@ abstract final class Accounts {
                   admission: admission,
                   coordinator: writeBack,
                 )
-              : LoginUtils.onLogoutMain());
+              : LoginUtils.onLogoutMain(
+                  admission: admission,
+                  coordinator: writeBack,
+                ));
           break;
         case AccountType.heartbeat:
           MineController.anonymity.value = !selected.isLogin;

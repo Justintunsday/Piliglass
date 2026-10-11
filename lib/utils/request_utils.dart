@@ -26,6 +26,7 @@ import 'package:PiliPlus/pages/fav_detail/controller.dart'
     show BaseFavController;
 import 'package:PiliPlus/pages/group_panel/view.dart';
 import 'package:PiliPlus/pages/login/geetest/geetest_webview_dialog.dart';
+import 'package:PiliPlus/services/native_accounts/account_write_back_coordinator.dart';
 import 'package:PiliPlus/utils/accounts.dart';
 import 'package:PiliPlus/utils/extension/context_ext.dart';
 import 'package:PiliPlus/utils/extension/size_ext.dart';
@@ -45,14 +46,26 @@ import 'package:get/get.dart';
 import 'package:material_ui/material_ui.dart';
 
 abstract final class RequestUtils {
-  static Future<void> syncHistoryStatus() async {
-    final account = Accounts.history;
-    if (!account.isLogin) {
-      return;
+  static Future<void> syncHistoryStatus({
+    AccountWriteBackOperation? admission,
+    AccountWriteBackCoordinator? coordinator,
+  }) async {
+    final writeBack = coordinator ?? accountWriteBackCoordinator;
+    final owned = admission == null ? writeBack.tryAdmit() : null;
+    if (admission == null && owned == null) {
+      throw StateError('Account write-back is frozen');
     }
-    final res = await UserHttp.historyStatus(account: account);
-    if (res case Success(:final response)) {
-      GStorage.localCache.put(LocalCacheKey.historyPause, response);
+    try {
+      final account = Accounts.history;
+      if (!account.isLogin) {
+        return;
+      }
+      final res = await UserHttp.historyStatus(account: account);
+      if (res case Success(:final response)) {
+        GStorage.localCache.put(LocalCacheKey.historyPause, response);
+      }
+    } finally {
+      owned?.release();
     }
   }
 

@@ -242,7 +242,7 @@ Commit Hash: ${BuildConfig.commitHash}''',
               title: '登录信息',
               localFileName: () => 'account',
               onExport: () =>
-                  Utils.jsonEncoder.convert(Accounts.account.toMap()),
+                  Utils.jsonEncoder.convert(Accounts.installedAccounts()),
               onImport: (json) async {
                 final res = json.map(
                   (key, value) => MapEntry(key, LoginAccount.fromJson(value)),

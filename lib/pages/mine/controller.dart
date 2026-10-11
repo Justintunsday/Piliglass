@@ -9,6 +9,7 @@ import 'package:PiliPlus/models/user/stat.dart';
 import 'package:PiliPlus/models_new/fav/fav_folder/data.dart';
 import 'package:PiliPlus/pages/common/common_data_controller.dart';
 import 'package:PiliPlus/services/account_service.dart';
+import 'package:PiliPlus/services/native_accounts/account_credential_reader.dart';
 import 'package:PiliPlus/utils/accounts.dart';
 import 'package:PiliPlus/utils/accounts/account.dart';
 import 'package:PiliPlus/utils/extension/scroll_controller_ext.dart';
@@ -39,7 +40,9 @@ class MineController extends CommonDataController<FavFolderData, FavFolderData>
       ThemeType.values[(themeType.value.index + 1) % ThemeType.values.length];
 
   static RxBool anonymity =
-      (Accounts.account.isNotEmpty && !Accounts.heartbeat.isLogin).obs;
+      (accountCredentialReader.visibleAccounts().isNotEmpty &&
+              !Accounts.heartbeat.isLogin)
+          .obs;
 
   late final list = <({IconData icon, String title, VoidCallback onTap})>[
     (
@@ -147,7 +150,7 @@ class MineController extends CommonDataController<FavFolderData, FavFolderData>
   }
 
   static void onChangeAnonymity() {
-    if (Accounts.account.isEmpty) {
+    if (accountCredentialReader.visibleAccounts().isEmpty) {
       SmartDialog.showToast('请先登录');
       return;
     }

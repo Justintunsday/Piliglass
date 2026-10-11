@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:PiliPlus/models/model_owner.dart';
 import 'package:PiliPlus/models/user/danmaku_rule_adapter.dart';
 import 'package:PiliPlus/models/user/info.dart';
+import 'package:PiliPlus/services/native_accounts/account_write_back_coordinator.dart';
 import 'package:PiliPlus/utils/accounts.dart';
 import 'package:PiliPlus/utils/accounts/account_adapter.dart';
 import 'package:PiliPlus/utils/accounts/account_type_adapter.dart';
@@ -108,7 +109,10 @@ abstract final class GStorage {
       ..registerAdapter(RuleFilterAdapter());
   }
 
-  static Future<List<void>> compact() {
+  static Future<List<void>> compact({AccountWriteBackCoordinator? coordinator}) async {
+    // Maintenance must not close/compact a box under an in-flight admitted
+    // account persistence chain; wait for the current chains to release first.
+    await (coordinator ?? accountWriteBackCoordinator).quiesce();
     return Future.wait([
       userInfo.compact(),
       historyWord.compact(),
@@ -121,7 +125,8 @@ abstract final class GStorage {
     ]);
   }
 
-  static Future<List<void>> close() {
+  static Future<List<void>> close({AccountWriteBackCoordinator? coordinator}) async {
+    await (coordinator ?? accountWriteBackCoordinator).quiesce();
     return Future.wait([
       userInfo.close(),
       historyWord.close(),

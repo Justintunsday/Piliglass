@@ -10,6 +10,7 @@ import 'package:PiliPlus/http/login.dart';
 import 'package:PiliPlus/models/common/account_type.dart';
 import 'package:PiliPlus/models/login/model.dart';
 import 'package:PiliPlus/pages/login/geetest/geetest_webview_dialog.dart';
+import 'package:PiliPlus/services/native_accounts/account_credential_reader.dart';
 import 'package:PiliPlus/utils/accounts.dart';
 import 'package:PiliPlus/utils/accounts/account.dart';
 import 'package:PiliPlus/utils/platform_utils.dart';
@@ -637,7 +638,7 @@ class LoginPageController extends GetxController
   }
 
   static Future<void>? switchAccountDialog(BuildContext context) {
-    if (Accounts.account.isEmpty) {
+    if (accountCredentialReader.visibleAccounts().isEmpty) {
       SmartDialog.showToast('请先登录');
       return Get.toNamed('/loginPage');
     }
@@ -645,7 +646,7 @@ class LoginPageController extends GetxController
     final selectAccount = List.of(Accounts.accountMode);
     final options = {
       AnonymousAccount(): '0',
-      ...Accounts.account.toMap().map(
+      ...Accounts.installedAccounts().map(
         (k, v) => MapEntry(v, k as String),
       ),
     };

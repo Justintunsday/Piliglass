@@ -64,6 +64,16 @@ final class AccountWriteBackCoordinator {
     return waiter.future;
   }
 
+  /// Waits for every currently admitted chain to release without freezing new
+  /// admissions. Completes immediately when none are live; a chain admitted
+  /// while waiting extends the wait because the count must reach zero first.
+  Future<void> quiesce() {
+    if (_admitted == 0) return Future<void>.value();
+    final waiter = Completer<void>();
+    _drainWaiters.add(waiter);
+    return waiter.future;
+  }
+
   void _release(Object token) {
     if (_live.remove(token) == null) return;
     _admitted--;

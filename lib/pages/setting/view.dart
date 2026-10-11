@@ -8,6 +8,7 @@ import 'package:PiliPlus/pages/login/controller.dart';
 import 'package:PiliPlus/pages/setting/common_setting.dart';
 import 'package:PiliPlus/pages/setting/widgets/multi_select_dialog.dart';
 import 'package:PiliPlus/pages/webdav/view.dart';
+import 'package:PiliPlus/services/native_accounts/account_credential_reader.dart';
 import 'package:PiliPlus/utils/accounts.dart';
 import 'package:PiliPlus/utils/accounts/account.dart';
 import 'package:PiliPlus/utils/extension/size_ext.dart';
@@ -38,7 +39,7 @@ class SettingPage extends StatefulWidget {
 
 class _SettingPageState extends State<SettingPage> {
   late SettingType _type = SettingType.privacySetting;
-  final RxBool _noAccount = Accounts.account.isEmpty.obs;
+  final RxBool _noAccount = accountCredentialReader.visibleAccounts().isEmpty.obs;
   late bool _isPortrait;
   late ThemeData theme;
 
@@ -218,7 +219,9 @@ class _SettingPageState extends State<SettingPage> {
 
   Future<void> _removeAccounts(Set<LoginAccount> accounts) async {
     await Accounts.deleteAll(accounts);
-    if (mounted) _noAccount.value = Accounts.account.isEmpty;
+    if (mounted) {
+      _noAccount.value = accountCredentialReader.visibleAccounts().isEmpty;
+    }
   }
 
   static Future<LoginAccount?> _logoutWrapper(LoginAccount account) async {
@@ -238,7 +241,8 @@ class _SettingPageState extends State<SettingPage> {
         title: '选择要登出的账号uid',
         initValues: const Iterable.empty(),
         values: {
-          for (final i in Accounts.account.values) i: i.mid.toString(),
+          for (final i in Accounts.installedAccounts().values)
+            i: i.mid.toString(),
         },
       ),
     );

@@ -20,27 +20,41 @@ import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
 import 'package:get/get.dart';
 
 abstract final class LoginUtils {
-  static FutureOr setWebCookie([Account? account]) {
+  static FutureOr<void> setWebCookie([
+    Account? account,
+    AccountWriteBackOperation? admission,
+    AccountWriteBackCoordinator? coordinator,
+  ]) {
     if (Platform.isLinux) return null;
-    final cookies = (account ?? Accounts.main).cookieJar.toList();
-    final webManager = web.CookieManager.instance(
-      webViewEnvironment: webViewEnvironment,
-    );
-    return Future.wait(
-      cookies.map(
-        (cookie) => webManager.setCookie(
-          url: web.WebUri(
-            '${Platform.isWindows ? 'https://' : ''}${cookie.domain}',
+    final writeBack = coordinator ?? accountWriteBackCoordinator;
+    final owned = admission == null ? writeBack.tryAdmit() : null;
+    if (admission == null && owned == null) {
+      throw StateError('Account write-back is frozen');
+    }
+    try {
+      final cookies = (account ?? Accounts.main).cookieJar.toList();
+      final webManager = web.CookieManager.instance(
+        webViewEnvironment: webViewEnvironment,
+      );
+      return Future.wait(
+        cookies.map(
+          (cookie) => webManager.setCookie(
+            url: web.WebUri(
+              '${Platform.isWindows ? 'https://' : ''}${cookie.domain}',
+            ),
+            name: cookie.name,
+            value: cookie.value,
+            path: cookie.path ?? '/',
+            domain: cookie.domain,
+            isSecure: cookie.secure,
+            isHttpOnly: cookie.httpOnly,
           ),
-          name: cookie.name,
-          value: cookie.value,
-          path: cookie.path ?? '/',
-          domain: cookie.domain,
-          isSecure: cookie.secure,
-          isHttpOnly: cookie.httpOnly,
         ),
-      ),
-    );
+      ).whenComplete(() => owned?.release());
+    } catch (_) {
+      owned?.release();
+      rethrow;
+    }
   }
 
   static Future<void> onLoginMain({
@@ -48,59 +62,84 @@ abstract final class LoginUtils {
     AccountWriteBackCoordinator? coordinator,
   }) async {
     final writeBack = coordinator ?? accountWriteBackCoordinator;
-    final account = Accounts.main;
-    final res = await UserHttp.userInfo();
-    if (res case Success(:final response)) {
-      setWebCookie(account);
-      RequestUtils.syncHistoryStatus();
-      if (response.isLogin == true) {
-        final accountService = Get.find<AccountService>()
-          ..face.value = response.face!;
-
-        if (accountService.isLogin.value) {
-          accountService.isLogin.refresh();
-        } else {
-          accountService.isLogin.value = true;
-        }
-
-        SmartDialog.showToast('main登录成功');
-        if (response != Pref.userInfoCache) {
-          await GStorage.userInfo.put('userInfoCache', response);
-        }
-      }
-    } else {
-      // 获取用户信息失败
-      final errMsg = res.toString();
-      if (errMsg == '账号未登录') {
-        await Accounts.deleteAll(
-          {account},
-          admission: admission,
+    final owned = admission == null ? writeBack.tryAdmit() : null;
+    if (admission == null && owned == null) {
+      throw StateError('Account write-back is frozen');
+    }
+    final effective = admission ?? owned;
+    try {
+      final account = Accounts.main;
+      final res = await UserHttp.userInfo();
+      if (res case Success(:final response)) {
+        await setWebCookie(account, effective, writeBack);
+        await RequestUtils.syncHistoryStatus(
+          admission: effective,
           coordinator: writeBack,
         );
-        SmartDialog.showNotify(
-          msg: '登录失败，请检查cookie是否正确，$errMsg',
-          notifyType: .warning,
-        );
+        if (response.isLogin == true) {
+          final accountService = Get.find<AccountService>()
+            ..face.value = response.face!;
+
+          if (accountService.isLogin.value) {
+            accountService.isLogin.refresh();
+          } else {
+            accountService.isLogin.value = true;
+          }
+
+          SmartDialog.showToast('main登录成功');
+          if (response != Pref.userInfoCache) {
+            await GStorage.userInfo.put('userInfoCache', response);
+          }
+        }
       } else {
-        SmartDialog.showToast(errMsg);
+        // 获取用户信息失败
+        final errMsg = res.toString();
+        if (errMsg == '账号未登录') {
+          await Accounts.deleteAll(
+            {account},
+            admission: effective,
+            coordinator: writeBack,
+          );
+          SmartDialog.showNotify(
+            msg: '登录失败，请检查cookie是否正确，$errMsg',
+            notifyType: .warning,
+          );
+        } else {
+          SmartDialog.showToast(errMsg);
+        }
       }
+    } finally {
+      owned?.release();
     }
   }
 
-  static Future<void> onLogoutMain() {
-    Get.find<AccountService>()
-      ..face.value = ''
-      ..isLogin.value = false;
+  static Future<void> onLogoutMain({
+    AccountWriteBackOperation? admission,
+    AccountWriteBackCoordinator? coordinator,
+  }) {
+    final writeBack = coordinator ?? accountWriteBackCoordinator;
+    final owned = admission == null ? writeBack.tryAdmit() : null;
+    if (admission == null && owned == null) {
+      throw StateError('Account write-back is frozen');
+    }
+    try {
+      Get.find<AccountService>()
+        ..face.value = ''
+        ..isLogin.value = false;
 
-    return Future.wait([
-      if (Platform.isLinux)
-        LinuxCookieManager.deleteAllCookies()
-      else
-        web.CookieManager.instance(
-          webViewEnvironment: webViewEnvironment,
-        ).deleteAllCookies(),
-      GStorage.userInfo.delete('userInfoCache'),
-    ]);
+      return Future.wait([
+        if (Platform.isLinux)
+          LinuxCookieManager.deleteAllCookies()
+        else
+          web.CookieManager.instance(
+            webViewEnvironment: webViewEnvironment,
+          ).deleteAllCookies(),
+        GStorage.userInfo.delete('userInfoCache'),
+      ]).whenComplete(() => owned?.release());
+    } catch (_) {
+      owned?.release();
+      rethrow;
+    }
   }
 
   static String generateBuvid() {
