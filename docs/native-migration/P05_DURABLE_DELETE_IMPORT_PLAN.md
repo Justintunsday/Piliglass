@@ -77,3 +77,10 @@ Import：
 - 通过后更新 PROGRESS/STATUS_MATRIX/本计划并交交付报告。
 - 本组不做 buvid 补值事务、不做账号级队列、不接 authority、无生产 caller；不改 Dart
   authority；四 flag false。
+
+**已实现并验收（2026-10-11）**：计划 `b72bac5`、实现 `3d96d05`、driver `3b8e821`；
+同 SHA [release 38137735191](https://github.com/Justintunsday/Piliglass/actions/runs/38137735191)
+5/5、[preview 38137738208](https://github.com/Justintunsday/Piliglass/actions/runs/38137738208)
+4/4（首轮即绿、无 rerun）；envelope `status=passed` 109/44/40/**139**/51、
+sourceSHA=3b8e821（transaction 101→139，无既有检查减少）；账户 +239 tests；九 outcome
+success、BUILD SUCCEEDED/109.1MB/FFmpeg、preview 20 tests/`failures=[]`。

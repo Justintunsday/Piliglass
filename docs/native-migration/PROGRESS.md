@@ -201,6 +201,29 @@ negativeCases **44**（43→44）、40 staging、transaction checks **101**（58
 import/delete/buvid durable transaction、durable identity 消费方与账号级队列属后续；
 四能力 flag 保持 false，P05 未整体完成。
 
+**`3b8e82171e35fadb8d81ce3e2af5c9dc63932976` 已验收 Block 2 / B2c 切片（durable delete 与 import 事务）**：
+同 SHA [release 38137735191](https://github.com/Justintunsday/Piliglass/actions/runs/38137735191)
+5/5 与 [preview 38137738208](https://github.com/Justintunsday/Piliglass/actions/runs/38137738208)
+4/4 jobs success（首轮即绿、无 rerun）；九个强制 outcome 全 success、BUILD SUCCEEDED、
+109.1MB、FFmpeg 顺序。计划见
+[P05_DURABLE_DELETE_IMPORT_PLAN.md](P05_DURABLE_DELETE_IMPORT_PLAN.md)（`b72bac5`）。
+内容：`applyDelete`（仅 schema 3；仅 login record，key 不可命中匿名；删除后后续 record
+重编号保持 `record == 序号`，storedOrder/ownerOrder 移除并重编号，selections 采用 Dart
+删除政策（被删槽 → 0、后续槽 −1），history 按 heartbeat/main 策略重算，剩余 identity
+保留；unknown/stale/重入拒绝、CAS 发布、receipt 两门恒 false）；`applyImport`
+（对齐 Dart `importCredentials`：同 key 原位替换并保留 identity、新 key 按输入顺序
+追加并铸发 identity，storedOrder/ownerOrder 同步追加，selections/history/revision 不变；
+输入重复 key → `duplicateRecordKey`、空 key/重复 purpose → `invalidImport`、输入内或与
+未替换记录 generation 冲突 → `staleGeneration`、超预算 → `resourceLimit`、schema 2 →
+`invalidDelete`/`invalidImport`（先 adopt）；单 candidate 原子发布，任何拒绝零发布）。
+提交：`3d96d05`（实现）、`3b8e821`（driver）。envelope artifact `status=passed`：
+109 envelope checks、negativeCases 44、40 staging、transaction checks **139**（101→139）、
+51 authority，sourceSHA=workflowSHA=3b8e821；账户 artifact analyze 无问题、
+`+239: All tests passed!`；preview 20 tests 0 failures、压力 `failures=[]`。范围仅为
+shadow 组件：未接 authority、无生产 caller，buvid 补值 durable transaction、durable
+identity 消费方与账号级队列属后续；四能力 flag 保持 false，P05 未整体完成。
+四能力 flag 保持 false，P05 未整体完成。
+
 当前阶段为 **P05**。`bedde36` 的原并行组与 `0527fb2` 的
 [CA1 jar-only shadow](P05_COOKIE_AUTHORITY_PLAN.md) 均已通过同 SHA release5 +
 preview4 jobs。`74101fa` 的 CA2 纯 Cookie mutation candidate 与 CA3 默认 Dart

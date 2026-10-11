@@ -182,6 +182,17 @@ preview 38136464878 4/4（无 rerun）；账户 **+239** tests、analyze 无问�
 BUILD SUCCEEDED/109.1MB/FFmpeg、preview 20 tests/`failures=[]`。仍未接 authority、
 无生产 caller；import/delete/buvid durable transaction、账号级队列属后续；四 flag false。
 
+**Block 2 / B2c 切片（durable delete 与 import 事务）已在 `3b8e821` 验收**：
+`applyDelete`（仅 schema 3、仅 login record；后续 record 重编号、两种 order 移除重编号、
+selections 采用 Dart 删除政策（被删槽→0、后续槽−1）、history 重算、identity 保留）；
+`applyImport`（同 key 原位替换保留 identity、新 key 顺序追加并铸发 identity、orders 追加、
+selections/history/revision 不变；重复 key/空 key/重复 purpose/generation 冲突/超预算/
+schema 2 全部显式拒绝且零发布；单 candidate 原子）。证据：release 38137735191 5/5、
+preview 38137738208 4/4（无 rerun）；账户 **+239** tests、analyze 无问题；envelope
+`status=passed` 109/44/40/**139**/51、sourceSHA=3b8e821；九 outcome success、
+BUILD SUCCEEDED/109.1MB/FFmpeg、preview 20 tests/`failures=[]`。仍未接 authority、
+无生产 caller；buvid 补值 durable transaction 与账号级队列属后续；四 flag false。
+
 **Block 1 / B1d 切片（页面读取、延迟副作用、maintenance gate）已在 `98e6f9b` 验收**：
 `Accounts.installedAccounts()` 纯只读 seam + 页面 `isEmpty/isNotEmpty` 切
 `visibleAccounts()`（login/mine/setting/about，内容/顺序/读取时机不变、零
