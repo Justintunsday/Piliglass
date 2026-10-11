@@ -114,9 +114,9 @@ void main() {
     priorMirror = LoginUtils.webCookieMirrorWriter;
     priorClear = LoginUtils.webCookieClearer;
     priorPublish = LoginUtils.loginMainPublisher;
-    LoginUtils.webCookieMirrorWriter = (account, cookies, isCurrent) async {};
-    LoginUtils.webCookieClearer = () async {};
-    LoginUtils.loginMainPublisher = (response) async {};
+    LoginUtils.webCookieMirrorWriter = (account, cookies, isCurrent) {};
+    LoginUtils.webCookieClearer = () {};
+    LoginUtils.loginMainPublisher = (response) {};
   });
   tearDown(() {
     LoginUtils.webCookieMirrorWriter = priorMirror;
@@ -204,10 +204,10 @@ void main() {
     Accounts.selectTemporarily(AccountType.main, a);
     var mirrored = false;
     var published = false;
-    LoginUtils.webCookieMirrorWriter = (account, cookies, isCurrent) async {
+    LoginUtils.webCookieMirrorWriter = (account, cookies, isCurrent) {
       mirrored = true;
     };
-    LoginUtils.loginMainPublisher = (response) async {
+    LoginUtils.loginMainPublisher = (response) {
       published = true;
     };
     final gate = Completer<LoadingState<UserInfoData>>();
@@ -242,13 +242,13 @@ void main() {
       await mirrorGate.future;
       staleAtResume = !isCurrent();
     };
-    LoginUtils.loginMainPublisher = (response) async {
+    LoginUtils.loginMainPublisher = (response) {
       published = true;
     };
     final coordinator = AccountWriteBackCoordinator();
     final running = LoginUtils.onLoginMain(
       coordinator: coordinator,
-      userInfo: () async => Success(UserInfoData.fromJson(const {})),
+      userInfo: () => Future.value(Success(UserInfoData.fromJson(const {}))),
     );
     await mirrorStarted.future;
     Accounts.selectTemporarily(AccountType.main, b);
@@ -265,7 +265,7 @@ void main() {
     await Accounts.installCredentials(a);
     Accounts.selectTemporarily(AccountType.main, a);
     var published = false;
-    LoginUtils.loginMainPublisher = (response) async {
+    LoginUtils.loginMainPublisher = (response) {
       published = true;
     };
     final adapter = _ControlledAdapter();
@@ -273,7 +273,7 @@ void main() {
     final coordinator = AccountWriteBackCoordinator();
     final running = LoginUtils.onLoginMain(
       coordinator: coordinator,
-      userInfo: () async => Success(UserInfoData.fromJson(const {'isLogin': true})),
+      userInfo: () => Future.value(Success(UserInfoData.fromJson(const {'isLogin': true}))),
     );
     final request = await adapter.nextRequest();
     await a.delete();
@@ -327,13 +327,13 @@ void main() {
       await mirrorGate.future;
       calls.add('mirror-end');
     };
-    LoginUtils.webCookieClearer = () async {
+    LoginUtils.webCookieClearer = () {
       calls.add('clear');
     };
     final coordinator = AccountWriteBackCoordinator();
     final running = LoginUtils.onLoginMain(
       coordinator: coordinator,
-      userInfo: () async => Success(UserInfoData.fromJson(const {})),
+      userInfo: () => Future.value(Success(UserInfoData.fromJson(const {}))),
     );
     await mirrorStarted.future;
     final loggingOut = LoginUtils.onLogoutMain(coordinator: coordinator);
@@ -349,14 +349,14 @@ void main() {
     final a = _account(980013);
     await Accounts.installCredentials(a);
     Accounts.selectTemporarily(AccountType.main, a);
-    LoginUtils.webCookieMirrorWriter = (account, cookies, isCurrent) async {
+    LoginUtils.webCookieMirrorWriter = (account, cookies, isCurrent) {
       throw StateError('synthetic mirror failure');
     };
     final coordinator = AccountWriteBackCoordinator();
     await expectLater(
       LoginUtils.onLoginMain(
         coordinator: coordinator,
-        userInfo: () async => Success(UserInfoData.fromJson(const {})),
+        userInfo: () => Future.value(Success(UserInfoData.fromJson(const {}))),
       ),
       throwsA(isA<StateError>()),
     );
@@ -369,17 +369,17 @@ void main() {
     Accounts.selectTemporarily(AccountType.main, a);
     var mirrorCalls = 0;
     var publishCalls = 0;
-    LoginUtils.webCookieMirrorWriter = (account, cookies, isCurrent) async {
+    LoginUtils.webCookieMirrorWriter = (account, cookies, isCurrent) {
       mirrorCalls++;
       expect(isCurrent(), true);
     };
-    LoginUtils.loginMainPublisher = (response) async {
+    LoginUtils.loginMainPublisher = (response) {
       publishCalls++;
     };
     final coordinator = AccountWriteBackCoordinator();
     await LoginUtils.onLoginMain(
       coordinator: coordinator,
-      userInfo: () async => Success(UserInfoData.fromJson(const {'isLogin': true})),
+      userInfo: () => Future.value(Success(UserInfoData.fromJson(const {'isLogin': true}))),
     );
     expect(mirrorCalls, 1);
     expect(publishCalls, 1);

@@ -179,7 +179,7 @@ void main() {
     final coordinator = AccountWriteBackCoordinator();
     await coordinator.freeze();
     expect(
-      () => LoginUtils.setWebCookie(null, null, coordinator),
+      () => LoginUtils.setWebCookie(coordinator: coordinator),
       throwsStateError,
     );
     await expectLater(
