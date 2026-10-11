@@ -135,6 +135,27 @@ sourceSHA=workflowSHA=405dd5c、runtimeEnabled=false；preview 20 tests 0 failur
 close/compact（B1d）与全部 durable/authority 切片仍未完成；四能力 flag 保持 false，
 生产 authority 仍为 Dart，P05 未整体完成。
 
+**`de2223a0bb18a5e547ba4bd3861f2618117c03b0` 已验收 Block 2 第一切片（B2a 持久用途双账户 durable transaction）**：
+同 SHA [release 38130025898](https://github.com/Justintunsday/Piliglass/actions/runs/38130025898)
+5/5 与 [preview 38130028273](https://github.com/Justintunsday/Piliglass/actions/runs/38130028273)
+4/4 jobs success；九个强制 outcome 全 success、0 contract error；Runner BUILD SUCCEEDED、
+109.1MB、实际 `Verified Aether FFmpeg precedes media-kit FFmpeg in Mach-O load order`。
+实现见 [P05_DURABLE_PURPOSE_TRANSACTION_PLAN.md](P05_DURABLE_PURPOSE_TRANSACTION_PLAN.md)
+（`3d9c3ed` 实现、`de2223a` driver）：`PiliAccountEnvelopeTransactionStore.applyPurposeChange`
+在单一 candidate 内把 purpose 从 previous 移到 selected（selected 幂等追加、previous 仅在
+持有时移除、同记录 previous 不清除；selections[purpose] 与 history 按既有策略重算；jar/
+order/generation/revision 不变）；两个 key 必须 record>0 且 isLogin 且 generation 匹配，
+unknown/stale 用现有错误枚举，共享累计 ledger 与 vault CAS 发布，`beginOperation` 重入
+拒绝，receipt 两门恒 false。driver 用例：add-from-none、move A→B、重复幂等、same-record
+previous、unknown/stale×3、missing previous generation、发布指针身份、拒绝零发布与暂停中
+重入；既有 35 项 transaction checks 全保留。envelope artifact `status=passed`，transaction
+checks 实际 **58**（35→58），108 oracle/10 观察/43 负例/40 staging/51 authority，
+sourceSHA=workflowSHA=de2223a；`-swift-version 6 -strict-concurrency=complete` 编译无诊断；
+账户 artifact analyze 无问题、实际 `+230: All tests passed!`；preview 20 tests 0 failures、
+压力 `failures=[]`。范围仅为 shadow durable transaction 切片：未接 authority、未产生
+durable identity，install/import/delete/buvid durable transaction、durable record identity、
+账号级队列与生产 composition 仍未交付；四能力 flag 保持 false，P05 未整体完成。
+
 当前阶段为 **P05**。`bedde36` 的原并行组与 `0527fb2` 的
 [CA1 jar-only shadow](P05_COOKIE_AUTHORITY_PLAN.md) 均已通过同 SHA release5 +
 preview4 jobs。`74101fa` 的 CA2 纯 Cookie mutation candidate 与 CA3 默认 Dart

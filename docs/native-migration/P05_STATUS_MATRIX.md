@@ -159,6 +159,17 @@ sourceSHA=workflowSHA=405dd5c；九 outcome success、BUILD SUCCEEDED/109.1MB/FF
 仍未收口：页面 `account.values/toMap` 读取、WK 镜像、LoginUtils 其它延迟副作用、
 Hive close/compact（B1d）；四 flag false，P05 未整体完成。
 
+**Block 2 第一切片（B2a 持久用途事务）已在 `de2223a` 验收**：
+`PiliAccountEnvelopeTransactionStore.applyPurposeChange` 在同一 candidate 内做双记录
+purpose move（selected 幂等追加、previous 仅持有时移除、same-record previous 不清除、
+selections/history 重算，jar/order/generation/revision 不变）；unknown/stale/missing
+generation/暂停重入全部拒绝且零发布；共享累计 ledger 与 vault CAS。envelope
+transaction checks 实际 **58**（原 35）。证据：release 38130025898 5/5、preview
+38130028273 4/4、账户 **+230** tests、108/43/40/58/51、九 outcome success、
+BUILD SUCCEEDED/109.1MB/FFmpeg。仍未接 authority、未产生 durable identity；
+install/import/delete/buvid durable transaction、账号级队列与生产 composition 属后续
+切片；四 flag false。
+
 仍直接读写、未进入统一 barrier 的路径：
 
 - `Accounts.set/selectTemporarily/temporary` 选择；`Accounts.refresh` 的 Hive 对账与

@@ -6,6 +6,15 @@
 [P05_READER_WRITER_INVENTORY.md](P05_READER_WRITER_INVENTORY.md)），同 SHA 验收以
 CI 为准。本文件是实施前计划；本组只做 Block 2 的第一个切片。
 
+**已实现并验收（2026-10-11）**：实现 `3d9c3ed`、driver `de2223a`；同 SHA
+[release 38130025898](https://github.com/Justintunsday/Piliglass/actions/runs/38130025898)
+5/5、[preview 38130028273](https://github.com/Justintunsday/Piliglass/actions/runs/38130028273)
+4/4；envelope transaction checks 实际 **58**（35→58），108/43/40/51 不变；
+sourceSHA=workflowSHA=de2223a；账户 +230 tests；九 outcome success、
+BUILD SUCCEEDED/109.1MB/FFmpeg。注：purpose-only 增长受 4 个固定 purpose 约束，
+共享 ledger 的越界路径由既有 oversized-credentials 用例覆盖（driver 注释说明）。
+四 flag 保持 false，P05 未整体完成。
+
 ## 现状盘点（代码事实）
 
 - `PiliAccountEnvelopeTransactionStore`（actor，`ios/Runner/Native/Persistence/Accounts/`）
