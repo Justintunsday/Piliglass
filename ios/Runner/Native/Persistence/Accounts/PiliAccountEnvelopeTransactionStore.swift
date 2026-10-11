@@ -380,19 +380,22 @@ actor PiliAccountEnvelopeTransactionStore {
     var entryKeys = Set<PiliCookieUTF16>()
     var entryGenerations = Set<Int64>()
     let highWater = current.effectiveGenerationHighWater
+    // Key shape and uniqueness first, so a duplicate input key is always
+    // reported as duplicateRecordKey regardless of generation arithmetic.
     for entry in entries {
       guard !entry.storageKeyUnits.units.isEmpty,
-            entry.generation > 0,
             Set(entry.persistedPurposes).count == entry.persistedPurposes.count else {
         throw PiliAccountShadowTransactionError.invalidImport
       }
       guard entryKeys.insert(entry.storageKeyUnits).inserted else {
         throw PiliAccountShadowTransactionError.duplicateRecordKey
       }
-      // Every imported generation must be genuinely new (above the persisted
-      // monotonic high-water) and unique inside the input, so replacement can
-      // never reuse a replaced or historically removed generation.
-      guard entry.generation > highWater,
+    }
+    // Every imported generation must be genuinely new (above the persisted
+    // monotonic high-water) and unique inside the input, so replacement can
+    // never reuse a replaced or historically removed generation.
+    for entry in entries {
+      guard entry.generation > 0, entry.generation > highWater,
             entryGenerations.insert(entry.generation).inserted else {
         throw PiliAccountShadowTransactionError.staleGeneration
       }
