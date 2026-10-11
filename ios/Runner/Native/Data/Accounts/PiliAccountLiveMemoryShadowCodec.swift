@@ -40,7 +40,7 @@ struct PiliAccountLiveMemoryShadowCodec: Sendable {
       // validation below are separate passes over that bounded tree / DTO.
       var parser = OrderedCookieJSONParser(bytes: Array(data), limits: limits)
       let codec = PiliOrderedCookieArchiveCodec(limits: limits)
-      let parsed = parser.parse()
+      let parsed = try parser.parse()
       // Envelope shape is schema-aware: schema 2 keeps the exact legacy key set;
       // schema 3 may carry the monotonic generation high-water. A schema-2
       // envelope with the extra key is rejected rather than silently losing it.

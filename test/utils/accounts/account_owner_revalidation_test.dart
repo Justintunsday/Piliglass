@@ -18,6 +18,7 @@ import 'package:PiliPlus/utils/storage_key.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:get/get.dart';
+import 'package:hive_ce/hive.dart';
 
 import 'account_test_storage.dart';
 
@@ -104,6 +105,9 @@ void main() {
 
   setUpAll(() async {
     storage = await AccountTestStorage.open();
+    // AccountService.onInit reads Pref.userInfoCache, which needs the real
+    // userInfo box; the shared fixture leaves it closed.
+    GStorage.userInfo = await Hive.openBox<UserInfoData>('userInfo');
     if (!Get.isRegistered<AccountService>()) {
       Get.put(AccountService(), permanent: true);
     }
