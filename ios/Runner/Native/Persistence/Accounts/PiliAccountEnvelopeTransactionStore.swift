@@ -4,6 +4,7 @@ enum PiliAccountShadowTransactionError: Error, Sendable, Equatable {
   case operationInProgress, shadowUnavailable, unknownRecordKey, staleGeneration
   case duplicateRecordKey, invalidInstall
   case invalidDelete, invalidImport
+  case invalidBuvid
 }
 
 struct PiliAccountShadowCookieSave: Sendable, Equatable {
@@ -38,6 +39,14 @@ struct PiliAccountShadowImportReceipt: Sendable, Equatable {
   let transactionID: UUID
   let replaced: Int
   let appended: Int
+  let nativeWritesAllowed: Bool
+  let authoritySwitchAllowed: Bool
+}
+
+struct PiliAccountShadowBuvidReceipt: Sendable, Equatable {
+  /// Nil when the record already carried buvid3 (idempotent no-op).
+  let transactionID: UUID?
+  let seeded: Bool
   let nativeWritesAllowed: Bool
   let authoritySwitchAllowed: Bool
 }
@@ -451,6 +460,70 @@ actor PiliAccountEnvelopeTransactionStore {
                                                    expectedTransactionID: snapshot.transactionID)
     return .init(transactionID: publication.transactionID, replaced: replaced, appended: appended,
                  nativeWritesAllowed: false, authoritySwitchAllowed: false)
+  }
+
+  /// Seeds the missing `buvid3` cookie of one exact login record, mirroring
+  /// Dart `BiliCookieJar.setBuvid3` (`domainCookies['bilibili.com']['/']
+  /// ['buvid3'] ??=`). The value is caller-supplied printable ASCII; the
+  /// transaction never mints credentials. An existing buvid3 is an idempotent
+  /// no-op that publishes nothing.
+  func applyBuvidSeed(recordKeyUnits: PiliCookieUTF16, expectedGeneration: Int64,
+                      valueUnits: PiliCookieUTF16, nowMicroseconds: Int64) async throws
+    -> PiliAccountShadowBuvidReceipt {
+    try beginOperation()
+    defer { operationInProgress = false }
+    guard let snapshot = try await vault.loadShadowSnapshot() else {
+      throw PiliAccountShadowTransactionError.shadowUnavailable
+    }
+    let current = snapshot.envelope
+    guard current.schemaVersion == 3 else {
+      throw PiliAccountShadowTransactionError.invalidBuvid
+    }
+    guard let index = current.records.firstIndex(where: {
+      $0.record > 0 && $0.storageKeyUnits == recordKeyUnits
+    }) else {
+      throw PiliAccountShadowTransactionError.unknownRecordKey
+    }
+    let record = current.records[index]
+    guard record.generation == expectedGeneration, record.isLogin else {
+      throw PiliAccountShadowTransactionError.staleGeneration
+    }
+    // Printable ASCII without the field separator: the value is interpolated
+    // into a single Set-Cookie field, so CR/LF/';' or empty values are rejected.
+    guard !valueUnits.units.isEmpty,
+          valueUnits.units.allSatisfy({ $0 >= 0x21 && $0 < 0x7F && $0 != 0x3B }) else {
+      throw PiliAccountShadowTransactionError.invalidBuvid
+    }
+    if Self.hasBuvid3(record.jar) {
+      return .init(transactionID: nil, seeded: false,
+                   nativeWritesAllowed: false, authoritySwitchAllowed: false)
+    }
+    let value = String(decoding: valueUnits.units, as: UTF16.self)
+    let jar = try reducer.save(
+      record.jar,
+      fields: ["buvid3=\(value); Domain=.bilibili.com; Path=/"],
+      representation: .separated,
+      location: PiliOrderedCookieResponseLocation(host: "bilibili.com", path: "/"),
+      nowMicroseconds: nowMicroseconds)
+    let candidate = replaceJar(current, index: index, jar: jar)
+    _ = try candidate.validated(limits: codec.limits)
+    let publication = try await vault.importShadow(codec.encode(candidate),
+                                                   expectedTransactionID: snapshot.transactionID)
+    return .init(transactionID: publication.transactionID, seeded: true,
+                 nativeWritesAllowed: false, authoritySwitchAllowed: false)
+  }
+
+  /// Presence follows the Dart jar map key: the `buvid3` entry inside the
+  /// `bilibili.com` domain bucket at path `/` (never the mutable Cookie.name).
+  private static func hasBuvid3(_ jar: PiliOrderedCookieArchive) -> Bool {
+    let domainKey = PiliCookieUTF16(units: Array("bilibili.com".utf16))
+    let pathKey = PiliCookieUTF16(units: Array("/".utf16))
+    let nameKey = PiliCookieUTF16(units: Array("buvid3".utf16))
+    guard let bucket = jar.domainBuckets.first(where: { $0.keyUnits == domainKey }),
+          let path = bucket.paths.first(where: { $0.keyUnits == pathKey }) else {
+      return false
+    }
+    return path.cookies.contains(where: { $0.keyUnits == nameKey })
   }
 
   private static func renumbered(_ record: PiliAccountLiveMemoryRecord,
