@@ -114,9 +114,10 @@ void main() {
     priorMirror = LoginUtils.webCookieMirrorWriter;
     priorClear = LoginUtils.webCookieClearer;
     priorPublish = LoginUtils.loginMainPublisher;
-    LoginUtils.webCookieMirrorWriter = (account, cookies, isCurrent) {};
-    LoginUtils.webCookieClearer = () {};
-    LoginUtils.loginMainPublisher = (response) {};
+    LoginUtils.webCookieMirrorWriter =
+        (account, cookies, isCurrent) => Future<void>.value();
+    LoginUtils.webCookieClearer = () => Future<void>.value();
+    LoginUtils.loginMainPublisher = (response) => Future<void>.value();
   });
   tearDown(() {
     LoginUtils.webCookieMirrorWriter = priorMirror;
@@ -206,9 +207,11 @@ void main() {
     var published = false;
     LoginUtils.webCookieMirrorWriter = (account, cookies, isCurrent) {
       mirrored = true;
+      return Future<void>.value();
     };
     LoginUtils.loginMainPublisher = (response) {
       published = true;
+      return Future<void>.value();
     };
     final gate = Completer<LoadingState<UserInfoData>>();
     final coordinator = AccountWriteBackCoordinator();
@@ -244,6 +247,7 @@ void main() {
     };
     LoginUtils.loginMainPublisher = (response) {
       published = true;
+      return Future<void>.value();
     };
     final coordinator = AccountWriteBackCoordinator();
     final running = LoginUtils.onLoginMain(
@@ -267,6 +271,7 @@ void main() {
     var published = false;
     LoginUtils.loginMainPublisher = (response) {
       published = true;
+      return Future<void>.value();
     };
     final adapter = _ControlledAdapter();
     Request.dio.httpClientAdapter = adapter;
@@ -329,6 +334,7 @@ void main() {
     };
     LoginUtils.webCookieClearer = () {
       calls.add('clear');
+      return Future<void>.value();
     };
     final coordinator = AccountWriteBackCoordinator();
     final running = LoginUtils.onLoginMain(
@@ -372,9 +378,11 @@ void main() {
     LoginUtils.webCookieMirrorWriter = (account, cookies, isCurrent) {
       mirrorCalls++;
       expect(isCurrent(), true);
+      return Future<void>.value();
     };
     LoginUtils.loginMainPublisher = (response) {
       publishCalls++;
+      return Future<void>.value();
     };
     final coordinator = AccountWriteBackCoordinator();
     await LoginUtils.onLoginMain(
