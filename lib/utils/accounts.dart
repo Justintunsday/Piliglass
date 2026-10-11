@@ -55,27 +55,50 @@ abstract final class Accounts {
   static bool isCurrentRequest(AccountRequestStamp<Account> stamp) =>
       _requestState.isCurrent(stamp) && ownsCredentials(stamp.account);
 
-  /// Read-only csrf for an installed owner, routed through the credential
-  /// reader. Owners without a current generation fall back to the direct field
-  /// so legacy call sites that do not carry stamps keep their exact behavior.
-  static String csrfOf(
+  /// Bound csrf for an installed owner, routed through the credential reader.
+  /// Null means the owner is not installed in the tracker (legacy/uninstalled
+  /// compatibility) or the reader rejected the bound stamp (revoked). Use this
+  /// when the distinction matters; [csrfOf] is the legacy-compatible wrapper.
+  static String? boundCsrf(
     Account owner, {
     AccountCredentialReader reader = accountCredentialReader,
   }) {
     final stamp = _requestState.capture(owner);
-    if (stamp == null) return owner.csrf;
-    return reader.csrfFor(owner, stamp) ?? owner.csrf;
+    if (stamp == null) return null;
+    return reader.csrfFor(owner, stamp);
   }
 
-  /// Read-only access key for an installed owner, routed through the credential
-  /// reader. Same fallback rule as [csrfOf].
+  /// Bound access key for an installed owner, routed through the credential
+  /// reader. Null covers "not installed", "reader rejected the stamp" and the
+  /// legitimate "no access key"; callers own that ambiguity.
+  static String? boundAccessKey(
+    Account owner, {
+    AccountCredentialReader reader = accountCredentialReader,
+  }) {
+    final stamp = _requestState.capture(owner);
+    if (stamp == null) return null;
+    return reader.accessKeyFor(owner, stamp);
+  }
+
+  /// Legacy-compatible csrf read: uninstalled owners fall back to the direct
+  /// field, and so does a bound owner that the reader rejects, so existing
+  /// endpoint call sites keep their historical value.
+  static String csrfOf(
+    Account owner, {
+    AccountCredentialReader reader = accountCredentialReader,
+  }) => boundCsrf(owner, reader: reader) ?? owner.csrf;
+
+  /// Legacy-compatible access key read. A bound owner's reader result is used
+  /// as-is, a revoked owner returns null so its stale direct field is never
+  /// resurrected, and only an uninstalled owner falls back to the direct field.
   static String? accessKeyOf(
     Account owner, {
     AccountCredentialReader reader = accountCredentialReader,
   }) {
     final stamp = _requestState.capture(owner);
-    if (stamp == null) return owner.accessKey;
-    return reader.accessKeyFor(owner, stamp) ?? owner.accessKey;
+    if (stamp != null) return reader.accessKeyFor(owner, stamp);
+    if (owner is LoginAccount && _retired[owner] == true) return null;
+    return owner.accessKey;
   }
 
   /// Pure read-only snapshot of the stored account box in box order.
@@ -388,7 +411,9 @@ abstract final class Accounts {
           _capturedRecoveryOperation = null;
         }
       }
-      if (ownsCredentials(anonymous)) Request.buvidActive(anonymous);
+      if (ownsCredentials(anonymous)) {
+        await Request.buvidActive(anonymous);
+      }
     } finally {
       admission.release();
     }

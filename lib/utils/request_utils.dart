@@ -61,8 +61,14 @@ abstract final class RequestUtils {
         return;
       }
       final res = await UserHttp.historyStatus(account: account);
+      // Admission is lifecycle only, not ownership: revalidate the exact owner
+      // after the await before publishing shared history state.
+      if (!identical(Accounts.history, account) ||
+          !Accounts.ownsCredentials(account)) {
+        return;
+      }
       if (res case Success(:final response)) {
-        GStorage.localCache.put(LocalCacheKey.historyPause, response);
+        await GStorage.localCache.put(LocalCacheKey.historyPause, response);
       }
     } finally {
       owned?.release();

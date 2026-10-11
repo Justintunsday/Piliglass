@@ -4,6 +4,7 @@ import 'dart:io' show Platform;
 import 'package:PiliPlus/http/loading_state.dart';
 import 'package:PiliPlus/http/user.dart';
 import 'package:PiliPlus/main.dart' show webViewEnvironment;
+import 'package:PiliPlus/models/user/info.dart';
 import 'package:PiliPlus/services/account_service.dart';
 import 'package:PiliPlus/services/native_accounts/account_write_back_coordinator.dart';
 import 'package:PiliPlus/utils/accounts.dart';
@@ -60,6 +61,7 @@ abstract final class LoginUtils {
   static Future<void> onLoginMain({
     AccountWriteBackOperation? admission,
     AccountWriteBackCoordinator? coordinator,
+    Future<LoadingState<UserInfoData>> Function() userInfo = UserHttp.userInfo,
   }) async {
     final writeBack = coordinator ?? accountWriteBackCoordinator;
     final owned = admission == null ? writeBack.tryAdmit() : null;
@@ -69,7 +71,13 @@ abstract final class LoginUtils {
     final effective = admission ?? owned;
     try {
       final account = Accounts.main;
-      final res = await UserHttp.userInfo();
+      final res = await userInfo();
+      // Admission is lifecycle only, not ownership: a slow response must not
+      // mirror or publish state for an owner that was replaced meanwhile.
+      if (!identical(Accounts.main, account) ||
+          !Accounts.ownsCredentials(account)) {
+        return;
+      }
       if (res case Success(:final response)) {
         await setWebCookie(account, effective, writeBack);
         await RequestUtils.syncHistoryStatus(
