@@ -21,7 +21,15 @@
 
 - 仅 schema 3；仅 login record；key 未知 → `unknownRecordKey`；generation 不匹配 →
   `staleGeneration`。
-- 值必须非空、全部为可打印 ASCII 且不含 `;`（防头部注入）→ 否则 `invalidBuvid`。
+- **支持值域**：可打印 ASCII（0x21…0x7E）且不含 `;`，长度 ≤
+  `PiliAccountEnvelopeTransactionStore.buvidMaximumValueUnits`
+  （= standard `maximumValueUnits` 65536 − 64 头部余量 = 65472）。逗号/反斜杠/内引号
+  属于 parser 进一步拒绝的子集，不在本 API 的承诺值域内。
+- **错误分类**：空值/非 ASCII/含 `;` → `invalidBuvid`；超过 API 长度上限 →
+  `PiliAccountLiveMemoryShadowError.resourceLimit`（在构造 field 之前主动校验）；
+  有效普通值导致最终 candidate 超过共享累计/编码字节预算 → 同样 `resourceLimit`
+  （codec ledger）；reducer/parser 的 65536 字段上限仍由既有 reducer/raw-field 套件
+  覆盖，本 API 不再依赖 parser 报错。
 - 存在性按 jar 的 map key 判断（domain 桶 `bilibili.com`、path `/`、entry key
   `buvid3`），与 Dart `??=` 的 map key 语义一致。
 - 缺失：用共享 `PiliNativeOrderedCookieReducer.save` 以
@@ -51,11 +59,14 @@
 - 后续（不在本组）：durable identity 消费/恢复语义、账号级队列与 receipt/unknown ack、
   Block 3/4/5。四 flag false。
 
-**已实现并验收（2026-10-12）**：计划 `6cfdb1e`、实现 `82e3ffe`、driver `399760b`、
-超长值用例修复 `d732ec0`/`9724ddb`；同 SHA
+**已实现（2026-10-12）；同 SHA CI 通过；独立审核 CHANGES_REQUESTED（R12 等），退修见
+[P05_REVIEW_53AED63_R12_REPAIR_PLAN.md](P05_REVIEW_53AED63_R12_REPAIR_PLAN.md)**：计划
+`6cfdb1e`、实现 `82e3ffe`、driver `399760b`、超长值用例修复 `d732ec0`/`9724ddb`；同 SHA
 [release 38177658968](https://github.com/Justintunsday/Piliglass/actions/runs/38177658968)
 5/5、[preview 38177662359](https://github.com/Justintunsday/Piliglass/actions/runs/38177662359)
 4/4；envelope `status=passed` 109/44/40/**178**/51、sourceSHA=9724ddb；账户 +250
 （无 Dart 变更）、九 outcome success、BUILD SUCCEEDED/109.1MB/FFmpeg、preview 20
-tests/`failures=[]`。注：超长值由 reducer 严格 Set-Cookie 解析以 `PiliNativeCookieError
-.invalidField` 拒绝（先于 envelope 预算），用例与计划按实际错误面记录。
+tests/`failures=[]`。**注意**：9724ddb 的 70k 用例证明的是 parser 上限拒绝
+（`PiliNativeCookieError.invalidField`），不构成共享 ledger 预算验证；R12 退修新增
+API 主动长度校验、边界值、真实预算回归、非空 jar 顺序、map-key≠Cookie.name 与
+expired no-op 覆盖。此组与 53aed63 修复组均**未获独立审核 PASS**。

@@ -193,24 +193,26 @@ preview 38137738208 4/4（无 rerun）；账户 **+239** tests、analyze 无问�
 BUILD SUCCEEDED/109.1MB/FFmpeg、preview 20 tests/`failures=[]`。仍未接 authority、
 无生产 caller；buvid 补值 durable transaction 与账号级队列属后续；四 flag false。
 
-**codex-3b8e821 复审修复组已在 `53aed63` 验收**（release 38150244501 5/5、
-preview 38150247302 4/4）：drain 真实 await 与 owner 复核、维护独占 barrier
-（`beginMaintenance`/permanent close、不触碰 freeze）、clear 的 buvid 链进入 token、
-import 全新代际 + Dart refresh parity（ownerOrder/selections/history 重建）、schema-aware
-record shape、purpose primitive 契约与缺失验证、bound reader 访问器与残余直读点迁移。
-证据：账户 **+250** tests、analyze 无问题；envelope **109/44/40/157/51**、
-sourceSHA=53aed63；九 outcome success、BUILD SUCCEEDED/109.1MB/FFmpeg、preview 20
-tests/`failures=[]`。细节与逐项判定见
-[P05_REVIEW_3B8E821_REPAIR_PLAN.md](P05_REVIEW_3B8E821_REPAIR_PLAN.md)。仍未接
-authority、无生产 caller；四 flag false，P05 未整体完成。
-
-**Block 2 / B2d（buvid 补值事务）已在 `9724ddb` 验收**：`applyBuvidSeed` 对齐 Dart
-`setBuvid3` `??=` 语义（仅缺失时以 reducer 追加 `buvid3`、已存在 no-op 不发布；
-ASCII/无分隔符校验、schema 3、key/generation、CAS、重入、零发布）。证据：release
-38177658968 5/5、preview 38177662359 4/4；账户 **+250**、analyze 无问题；envelope
-**109/44/40/178/51**、sourceSHA=9724ddb；九 outcome success、BUILD
+**codex-3b8e821 复审修复组在 `53aed63` 同 SHA CI 通过；独立复审 CHANGES_REQUESTED
+（R10/R11 开放，退修见 P05_REVIEW_53AED63_R12_REPAIR_PLAN.md）**（release
+38150244501 5/5、preview 38150247302 4/4）：drain 真实 await 与 owner 复核、维护独占
+barrier（`beginMaintenance`/permanent close、不触碰 freeze）、clear 的 buvid 链进入
+token、import 全新代际 + Dart refresh parity（ownerOrder/selections/history 重建）、
+schema-aware record shape、purpose primitive 契约与缺失验证、bound reader 访问器与残余
+直读点迁移。证据：账户 **+250** tests、analyze 无问题；envelope
+**109/44/40/157/51**、sourceSHA=53aed63；九 outcome success、BUILD
 SUCCEEDED/109.1MB/FFmpeg、preview 20 tests/`failures=[]`。仍未接 authority、无生产
-caller；durable identity 消费/恢复语义与账号级队列属后续；四 flag false。
+caller；四 flag false，P05 未整体完成。
+
+**Block 2 / B2d（buvid 补值事务）在 `9724ddb` 同 SHA CI 通过；独立复审
+CHANGES_REQUESTED（R12 退修中）**：`applyBuvidSeed` 对齐 Dart `setBuvid3` `??=` 语义
+（仅缺失时以 reducer 追加 `buvid3`、已存在 no-op 不发布；ASCII/无分隔符校验、schema 3、
+key/generation、CAS、重入、零发布）。证据：release 38177658968 5/5、preview
+38177662359 4/4；账户 **+250**、analyze 无问题；envelope **109/44/40/178/51**、
+sourceSHA=9724ddb；九 outcome success、BUILD SUCCEEDED/109.1MB/FFmpeg、preview 20
+tests/`failures=[]`。特别说明：9724ddb 的超长用例只证明 parser 上限拒绝，不构成共享
+ledger 预算验证（R12 退修补齐主动长度上限、边界值与真实预算回归）。仍未接 authority、
+无生产 caller；durable identity 消费/恢复语义与账号级队列属后续；四 flag false。
 
 **Block 1 / B1d 切片（页面读取、延迟副作用、maintenance gate）已在 `98e6f9b` 验收**：
 `Accounts.installedAccounts()` 纯只读 seam + 页面 `isEmpty/isNotEmpty` 切

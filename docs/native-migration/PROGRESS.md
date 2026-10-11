@@ -223,7 +223,8 @@ import/delete/buvid durable transaction、durable identity 消费方与账号级
 shadow 组件：未接 authority、无生产 caller，buvid 补值 durable transaction、durable
 identity 消费方与账号级队列属后续；四能力 flag 保持 false，P05 未整体完成。
 
-**`9724ddbfcca421764e119b2aba01a32f1155d234` 已验收 Block 2 / B2d 切片（buvid 补值 durable transaction）**：
+**`9724ddbfcca421764e119b2aba01a32f1155d234` 同 SHA CI 通过（未获独立审核 PASS，R12 退修中）**：
+（Block 2 / B2d 切片：buvid 补值 durable transaction）
 同 SHA [release 38177658968](https://github.com/Justintunsday/Piliglass/actions/runs/38177658968)
 5/5 与 [preview 38177662359](https://github.com/Justintunsday/Piliglass/actions/runs/38177662359)
 4/4 jobs success；九个强制 outcome 全 success、BUILD SUCCEEDED、109.1MB、FFmpeg 顺序。
@@ -242,8 +243,10 @@ sourceSHA=workflowSHA=9724ddb；preview 20 tests 0 failures、压力 `failures=[
 shadow 组件：未接 authority、无生产 caller，durable identity 消费/恢复语义、账号级队列与
 receipt/unknown ack、Block 3/4/5 仍未交付；四能力 flag 保持 false，P05 未整体完成。
 
-**`53aed639b4cf85ae21a7a13fec52b8373eaa22b5` 已验收 codex-3b8e821 复审修复组**：
-同 SHA [release 38150244501](https://github.com/Justintunsday/Piliglass/actions/runs/38150244501)
+**`53aed639b4cf85ae21a7a13fec52b8373eaa22b5` 同 SHA CI 通过（未获独立审核 PASS）**：
+Codex 复审 `build/native-migration/codex-review-53aed63/REVIEW.md` 为 CHANGES_REQUESTED
+（R10/R11 开放），退修见 [P05_REVIEW_53AED63_R12_REPAIR_PLAN.md](P05_REVIEW_53AED63_R12_REPAIR_PLAN.md)。
+CI 事实：release [38150244501](https://github.com/Justintunsday/Piliglass/actions/runs/38150244501)
 5/5 与 [preview 38150247302](https://github.com/Justintunsday/Piliglass/actions/runs/38150247302)
 4/4 jobs success（前一轮 `57811cb` 的 image-preview `detail-opens=1` 6s UI 超时为慢
 runner flake，同 SHA rerun 后通过）；九个强制 outcome 全 success、BUILD SUCCEEDED、
