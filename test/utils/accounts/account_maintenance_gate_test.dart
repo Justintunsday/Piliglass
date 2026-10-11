@@ -129,8 +129,7 @@ void main() {
 
   test('permanent maintenance close never reopens', () async {
     final coordinator = AccountWriteBackCoordinator();
-    final token = (await coordinator.beginMaintenance())!;
-    token.end(permanent: true);
+    (await coordinator.beginMaintenance())!.end(permanent: true);
     expect(coordinator.isClosed, true);
     expect(coordinator.tryAdmit(), isNull);
     expect(await coordinator.beginMaintenance(), isNull);
