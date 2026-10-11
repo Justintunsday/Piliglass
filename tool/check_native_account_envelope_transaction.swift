@@ -800,7 +800,8 @@ private actor TransactionFaultVault: PiliAccountSecretStore {
     }
 
     // Delete + reinstall ABA: the reinstall gets a new generation, so an old
-    // request holding the original key+generation is rejected.
+    // request holding the original key+generation is rejected. The deleted
+    // generation itself must also be refused (historical reuse).
     let abaNamespace = UUID()
     let abaVault = PiliAccountEnvelopeStagingStore(
       secrets: PiliAccountKeychainSecretStore(stagingNamespace: abaNamespace))
@@ -809,8 +810,28 @@ private actor TransactionFaultVault: PiliAccountSecretStore {
       try await abaVault.importShadow(codec.encode(base))
       _ = try await abaStore.adoptMissingIdentities()
       _ = try await abaStore.applyDelete(recordKeyUnits: key, expectedGeneration: record.generation)
+      // Historical reuse: the deleted record's own generation is below the
+      // persisted high-water and must be rejected, not merely a +9000 choice.
+      guard let beforeAbaReuse = try await abaVault.loadShadowSnapshot() else {
+        throw TransactionFixtureError.failed("missing ABA reuse snapshot")
+      }
+      do {
+        _ = try await abaStore.applyInstall(PiliAccountShadowInstall(
+          storageKeyUnits: key, mid: record.mid, generation: record.generation,
+          accessKeyUnits: nil, refreshTokenUnits: nil, persistedPurposes: [], activated: false,
+          jar: cleared))
+        throw TransactionFixtureError.failed("historical generation reuse after delete accepted")
+      } catch PiliAccountShadowTransactionError.staleGeneration { checks += 1 }
+      let afterAbaReuse = try await abaVault.loadShadowSnapshot()
+      try check(afterAbaReuse?.transactionID == beforeAbaReuse.transactionID &&
+        afterAbaReuse?.envelope == beforeAbaReuse.envelope,
+        "historical generation reuse never publishes")
+      guard let adoptedAba = try await abaVault.loadShadow() else {
+        throw TransactionFixtureError.failed("missing adopted ABA shadow")
+      }
+      let abaHighWater = adoptedAba.effectiveGenerationHighWater
       _ = try await abaStore.applyInstall(PiliAccountShadowInstall(
-        storageKeyUnits: key, mid: record.mid, generation: record.generation + 9000,
+        storageKeyUnits: key, mid: record.mid, generation: abaHighWater + 9000,
         accessKeyUnits: nil, refreshTokenUnits: nil, persistedPurposes: [], activated: false,
         jar: cleared))
       do {
@@ -823,9 +844,138 @@ private actor TransactionFaultVault: PiliAccountSecretStore {
           expectedGeneration: record.generation, accessKeyUnits: nil, refreshTokenUnits: nil)
         throw TransactionFixtureError.failed("ABA old credentials generation accepted")
       } catch PiliAccountShadowTransactionError.staleGeneration { checks += 1 }
-      try await abaVault.discardShadow()
+      // The high-water survives a real Keychain reopen: neither the removed
+      // generation nor an intermediate one can seed a new record.
+      let reopenedAbaVault = PiliAccountEnvelopeStagingStore(
+        secrets: PiliAccountKeychainSecretStore(stagingNamespace: abaNamespace))
+      let reopenedAbaStore = PiliAccountEnvelopeTransactionStore(vault: reopenedAbaVault)
+      guard let reopenedAba = try await reopenedAbaVault.loadShadow() else {
+        throw TransactionFixtureError.failed("missing reopened ABA shadow")
+      }
+      try check(reopenedAba.generationHighWater == abaHighWater + 9000,
+                "generation high-water persists across reopen")
+      for reuse in [record.generation, abaHighWater + 5000] {
+        do {
+          _ = try await reopenedAbaStore.applyInstall(PiliAccountShadowInstall(
+            storageKeyUnits: PiliCookieUTF16(units: Array("aba-reuse".utf16)), mid: 2,
+            generation: reuse, accessKeyUnits: nil, refreshTokenUnits: nil,
+            persistedPurposes: [], activated: false, jar: cleared))
+          throw TransactionFixtureError.failed("historical generation reuse after reopen accepted")
+        } catch PiliAccountShadowTransactionError.staleGeneration { checks += 1 }
+      }
+      // Overflow boundary: Int64.max is accepted once and permanently closes
+      // further allocation (no wraparound).
+      _ = try await reopenedAbaStore.applyInstall(PiliAccountShadowInstall(
+        storageKeyUnits: PiliCookieUTF16(units: Array("aba-max".utf16)), mid: 3,
+        generation: Int64.max, accessKeyUnits: nil, refreshTokenUnits: nil,
+        persistedPurposes: [], activated: false, jar: cleared))
+      do {
+        _ = try await reopenedAbaStore.applyInstall(PiliAccountShadowInstall(
+          storageKeyUnits: PiliCookieUTF16(units: Array("aba-past-max".utf16)), mid: 4,
+          generation: Int64.max, accessKeyUnits: nil, refreshTokenUnits: nil,
+          persistedPurposes: [], activated: false, jar: cleared))
+        throw TransactionFixtureError.failed("generation allocation past Int64.max accepted")
+      } catch PiliAccountShadowTransactionError.staleGeneration { checks += 1 }
+      try await reopenedAbaVault.discardShadow()
     } catch {
       try? await abaVault.discardShadow()
+      throw error
+    }
+
+    // Legacy schema-3 envelopes without the persisted high-water fall back to
+    // the maximum record generation; the next install persists the value.
+    let compatNamespace = UUID()
+    let compatVault = PiliAccountEnvelopeStagingStore(
+      secrets: PiliAccountKeychainSecretStore(stagingNamespace: compatNamespace))
+    let compatStore = PiliAccountEnvelopeTransactionStore(vault: compatVault)
+    do {
+      try await compatVault.importShadow(codec.encode(base))
+      _ = try await compatStore.adoptMissingIdentities()
+      guard let adoptedCompat = try await compatVault.loadShadow() else {
+        throw TransactionFixtureError.failed("missing compat adopted shadow")
+      }
+      let patchedWire = try patchedEnvelope(codec.encode(adoptedCompat)) { root in
+        root.removeValue(forKey: "generationHighWater")
+      }
+      let decodedCompat = try codec.decode(patchedWire)
+      try check(decodedCompat.generationHighWater == nil &&
+        decodedCompat.effectiveGenerationHighWater == adoptedCompat.effectiveGenerationHighWater,
+        "legacy schema-3 fallback derives the effective high-water")
+      let compatMax = adoptedCompat.effectiveGenerationHighWater
+      let compatReopenVault = PiliAccountEnvelopeStagingStore(
+        secrets: PiliAccountKeychainSecretStore(stagingNamespace: compatNamespace))
+      try await compatReopenVault.importShadow(patchedWire)
+      let compatReopenStore = PiliAccountEnvelopeTransactionStore(vault: compatReopenVault)
+      do {
+        _ = try await compatReopenStore.applyInstall(PiliAccountShadowInstall(
+          storageKeyUnits: PiliCookieUTF16(units: Array("compat-reuse".utf16)), mid: 5,
+          generation: compatMax, accessKeyUnits: nil, refreshTokenUnits: nil,
+          persistedPurposes: [], activated: false, jar: cleared))
+        throw TransactionFixtureError.failed("legacy schema-3 effective reuse accepted")
+      } catch PiliAccountShadowTransactionError.staleGeneration { checks += 1 }
+      _ = try await compatReopenStore.applyInstall(PiliAccountShadowInstall(
+        storageKeyUnits: PiliCookieUTF16(units: Array("compat-new".utf16)), mid: 6,
+        generation: compatMax + 1, accessKeyUnits: nil, refreshTokenUnits: nil,
+        persistedPurposes: [], activated: false, jar: cleared))
+      guard let compatPersisted = try await compatReopenVault.loadShadow() else {
+        throw TransactionFixtureError.failed("missing compat persisted shadow")
+      }
+      try check(compatPersisted.generationHighWater == compatMax + 1,
+                "next install persists the monotonic high-water")
+      try await compatReopenVault.discardShadow()
+    } catch {
+      try? await compatVault.discardShadow()
+      throw error
+    }
+
+    // Import G1→G2→G1: a replaced generation cannot be re-imported, including
+    // after a real Keychain reopen.
+    let reuseNamespace = UUID()
+    let reuseVault = PiliAccountEnvelopeStagingStore(
+      secrets: PiliAccountKeychainSecretStore(stagingNamespace: reuseNamespace))
+    let reuseStore = PiliAccountEnvelopeTransactionStore(vault: reuseVault)
+    do {
+      guard let reuseKey = base.records[2].storageKeyUnits else {
+        throw TransactionFixtureError.failed("missing reuse key")
+      }
+      try await reuseVault.importShadow(codec.encode(base))
+      _ = try await reuseStore.adoptMissingIdentities()
+      let firstGen = record.generation + 20000
+      _ = try await reuseStore.applyImport([PiliAccountShadowInstall(
+        storageKeyUnits: reuseKey, mid: 7, generation: firstGen,
+        accessKeyUnits: nil, refreshTokenUnits: nil, persistedPurposes: [], activated: false,
+        jar: cleared)])
+      _ = try await reuseStore.applyImport([PiliAccountShadowInstall(
+        storageKeyUnits: reuseKey, mid: 8, generation: firstGen + 1,
+        accessKeyUnits: nil, refreshTokenUnits: nil, persistedPurposes: [], activated: false,
+        jar: cleared)])
+      guard let beforeReuseImport = try await reuseVault.loadShadowSnapshot() else {
+        throw TransactionFixtureError.failed("missing reuse import snapshot")
+      }
+      do {
+        _ = try await reuseStore.applyImport([PiliAccountShadowInstall(
+          storageKeyUnits: reuseKey, mid: 9, generation: firstGen,
+          accessKeyUnits: nil, refreshTokenUnits: nil, persistedPurposes: [], activated: false,
+          jar: cleared)])
+        throw TransactionFixtureError.failed("G1→G2→G1 import reuse accepted")
+      } catch PiliAccountShadowTransactionError.staleGeneration { checks += 1 }
+      let afterReuseImport = try await reuseVault.loadShadowSnapshot()
+      try check(afterReuseImport?.transactionID == beforeReuseImport.transactionID &&
+        afterReuseImport?.envelope == beforeReuseImport.envelope,
+        "G1→G2→G1 import reuse never publishes")
+      let reopenedReuseVault = PiliAccountEnvelopeStagingStore(
+        secrets: PiliAccountKeychainSecretStore(stagingNamespace: reuseNamespace))
+      let reopenedReuseStore = PiliAccountEnvelopeTransactionStore(vault: reopenedReuseVault)
+      do {
+        _ = try await reopenedReuseStore.applyImport([PiliAccountShadowInstall(
+          storageKeyUnits: reuseKey, mid: 9, generation: firstGen,
+          accessKeyUnits: nil, refreshTokenUnits: nil, persistedPurposes: [], activated: false,
+          jar: cleared)])
+        throw TransactionFixtureError.failed("G1 reuse accepted after reopen")
+      } catch PiliAccountShadowTransactionError.staleGeneration { checks += 1 }
+      try await reopenedReuseVault.discardShadow()
+    } catch {
+      try? await reuseVault.discardShadow()
       throw error
     }
 
@@ -1146,10 +1296,8 @@ private actor TransactionFaultVault: PiliAccountSecretStore {
       try check(stripped.records[1].jar.domainBuckets.isEmpty &&
         stripped.records[1].jar.hostBuckets.isEmpty,
         "buvid fixture record is stripped")
-      // The oversized value must be exercised while buvid3 is still missing;
-      // after a successful seed the transaction is an idempotent no-op. The
-      // reducer's strict Set-Cookie parser rejects it as invalidField before
-      // the envelope ledger runs.
+      // The API length ceiling fails intentionally (resourceLimit) before any
+      // field construction; over-long values never reach the parser.
       guard let beforeBuvidBudget = try await buvidVault.loadShadowSnapshot() else {
         throw TransactionFixtureError.failed("missing buvid budget snapshot")
       }
@@ -1159,11 +1307,41 @@ private actor TransactionFaultVault: PiliAccountSecretStore {
           valueUnits: PiliCookieUTF16(units: Array(repeating: 0x61, count: 70000)),
           nowMicroseconds: now)
         throw TransactionFixtureError.failed("oversized buvid value accepted")
-      } catch PiliNativeCookieError.invalidField { checks += 1 }
+      } catch PiliAccountLiveMemoryShadowError.resourceLimit { checks += 1 }
+      do {
+        _ = try await buvidStore.applyBuvidSeed(
+          recordKeyUnits: key, expectedGeneration: record.generation,
+          valueUnits: PiliCookieUTF16(units: Array(
+            repeating: 0x61, count: PiliAccountEnvelopeTransactionStore.buvidMaximumValueUnits + 1)),
+          nowMicroseconds: now)
+        throw TransactionFixtureError.failed("buvid value one unit over the ceiling accepted")
+      } catch PiliAccountLiveMemoryShadowError.resourceLimit { checks += 1 }
       let afterBuvidBudget = try await buvidVault.loadShadowSnapshot()
       try check(afterBuvidBudget?.transactionID == beforeBuvidBudget.transactionID &&
         afterBuvidBudget?.envelope == beforeBuvidBudget.envelope,
-        "oversized buvid never publishes")
+        "length-ceiling buvid rejections never publish")
+      // A valid ordinary value whose addition exceeds a shrunk encoded-byte
+      // budget is rejected by the shared codec ledger with resourceLimit.
+      guard let beforeBuvidTight = try await buvidVault.loadShadowSnapshot() else {
+        throw TransactionFixtureError.failed("missing tight buvid snapshot")
+      }
+      let strippedBytes = try codec.encode(stripped).count
+      var tightBuvidLimits = PiliOrderedCookieArchiveLimits.standard
+      tightBuvidLimits.maximumEncodedBytes = strippedBytes
+      let tightBuvidStore = PiliAccountEnvelopeTransactionStore(
+        vault: buvidVault, limits: tightBuvidLimits)
+      do {
+        _ = try await tightBuvidStore.applyBuvidSeed(
+          recordKeyUnits: key, expectedGeneration: record.generation,
+          valueUnits: PiliCookieUTF16(
+            units: Array("11111111-2222-4333-8444-55555555555512345infoc".utf16)),
+          nowMicroseconds: now)
+        throw TransactionFixtureError.failed("buvid beyond the byte budget accepted")
+      } catch PiliAccountLiveMemoryShadowError.resourceLimit { checks += 1 }
+      let afterBuvidTight = try await buvidVault.loadShadowSnapshot()
+      try check(afterBuvidTight?.transactionID == beforeBuvidTight.transactionID &&
+        afterBuvidTight?.envelope == beforeBuvidTight.envelope,
+        "byte-budget buvid rejection publishes nothing")
       let buvidValue = PiliCookieUTF16(
         units: Array("11111111-2222-4333-8444-55555555555512345infoc".utf16))
       let seedReceipt = try await buvidStore.applyBuvidSeed(
@@ -1256,6 +1434,160 @@ private actor TransactionFaultVault: PiliAccountSecretStore {
       try await reopenedBuvidVault.discardShadow()
     } catch {
       try? await buvidVault.discardShadow()
+      throw error
+    }
+
+    // Exactly the documented ceiling is accepted; a one-unit-larger value is
+    // rejected with zero publication (already covered) — this proves the
+    // boundary itself is usable.
+    let capNamespace = UUID()
+    let capVault = PiliAccountEnvelopeStagingStore(
+      secrets: PiliAccountKeychainSecretStore(stagingNamespace: capNamespace))
+    let capStore = PiliAccountEnvelopeTransactionStore(vault: capVault)
+    do {
+      try await capVault.importShadow(codec.encode(base))
+      _ = try await capStore.adoptMissingIdentities()
+      _ = try await capStore.applyCookieDeleteAll(
+        recordKeyUnits: key, expectedGeneration: record.generation)
+      let capValue = PiliCookieUTF16(units: Array(
+        repeating: 0x61, count: PiliAccountEnvelopeTransactionStore.buvidMaximumValueUnits))
+      let capReceipt = try await capStore.applyBuvidSeed(
+        recordKeyUnits: key, expectedGeneration: record.generation,
+        valueUnits: capValue, nowMicroseconds: now)
+      try check(capReceipt.seeded, "the documented buvid ceiling itself is accepted")
+      let reopenedCapVault = PiliAccountEnvelopeStagingStore(
+        secrets: PiliAccountKeychainSecretStore(stagingNamespace: capNamespace))
+      guard let capShadow = try await reopenedCapVault.loadShadow() else {
+        throw TransactionFixtureError.failed("missing cap shadow")
+      }
+      let capDomain = PiliCookieUTF16(units: Array("bilibili.com".utf16))
+      let capPath = PiliCookieUTF16(units: Array("/".utf16))
+      let capName = PiliCookieUTF16(units: Array("buvid3".utf16))
+      try check(capShadow.records[1].jar.domainBuckets
+        .first(where: { $0.keyUnits == capDomain })?
+        .paths.first(where: { $0.keyUnits == capPath })?
+        .cookies.first(where: { $0.keyUnits == capName })?
+        .valueUnits == capValue,
+        "ceiling value survives real Keychain close/reopen")
+      try await reopenedCapVault.discardShadow()
+    } catch {
+      try? await capVault.discardShadow()
+      throw error
+    }
+
+    // Non-empty sibling cookies keep their order; a `buvid3` Cookie.name under
+    // a different map key does not satisfy presence; an expired buvid3 is
+    // still a map-key no-op.
+    let jarOrderNamespace = UUID()
+    let jarOrderVault = PiliAccountEnvelopeStagingStore(
+      secrets: PiliAccountKeychainSecretStore(stagingNamespace: jarOrderNamespace))
+    let jarOrderStore = PiliAccountEnvelopeTransactionStore(vault: jarOrderVault)
+    do {
+      func units(_ text: String) -> PiliCookieUTF16 {
+        PiliCookieUTF16(units: Array(text.utf16))
+      }
+      try await jarOrderVault.importShadow(codec.encode(base))
+      _ = try await jarOrderStore.adoptMissingIdentities()
+      let orderKey = units("buvid-order")
+      _ = try await jarOrderStore.applyInstall(PiliAccountShadowInstall(
+        storageKeyUnits: orderKey, mid: 999, generation: record.generation + 12000,
+        accessKeyUnits: nil, refreshTokenUnits: nil, persistedPurposes: [], activated: false,
+        jar: saved))
+      let orderSeed = try await jarOrderStore.applyBuvidSeed(
+        recordKeyUnits: orderKey, expectedGeneration: record.generation + 12000,
+        valueUnits: units("order-seed-value"), nowMicroseconds: now)
+      try check(orderSeed.seeded, "seed into a non-empty sibling jar publishes")
+      guard let orderShadow = try await jarOrderVault.loadShadow() else {
+        throw TransactionFixtureError.failed("missing jar order shadow")
+      }
+      guard let orderBucket = orderShadow.records[3].jar.domainBuckets.first(where: {
+        $0.keyUnits == units("bilibili.com")
+      }), let orderPath = orderBucket.paths.first(where: { $0.keyUnits == units("/") }) else {
+        throw TransactionFixtureError.failed("missing jar order bucket")
+      }
+      try check(orderPath.cookies.count == 2 &&
+        orderPath.cookies[0].keyUnits == units("txn-cookie") &&
+        orderPath.cookies[1].keyUnits == units("buvid3") &&
+        orderPath.cookies[0].valueUnits == units("txn-value"),
+        "buvid appends after existing sibling cookies without reordering them")
+
+      // A different map key whose Cookie.name is buvid3 must not satisfy the
+      // map-key presence check.
+      let aliasEntry = PiliOrderedCookieEntry(
+        keyUnits: units("buvid3-alias"), nameUnits: units("buvid3"),
+        valueUnits: units("aliased"), cookieDomainUnits: units(".bilibili.com"),
+        cookiePathUnits: units("/"), secure: false, httpOnly: false, sameSite: nil,
+        expiresMicroseconds: nil, maxAgeSeconds: nil, createdSeconds: 1)
+      let aliasJar = PiliOrderedCookieArchive(
+        schemaVersion: 2, ignoreExpires: true,
+        provenance: PiliOrderedCookieProvenance(
+          capture: "live", priorPersistence: .unknown,
+          legacyHiveAttributesIncomplete: true, currentBucketOrderComplete: true),
+        domainBuckets: [PiliOrderedCookieBucket(keyUnits: units("bilibili.com"),
+          paths: [PiliOrderedCookiePath(keyUnits: units("/"), cookies: [aliasEntry])])],
+        hostBuckets: [])
+      let aliasKey = units("buvid-alias")
+      _ = try await jarOrderStore.applyInstall(PiliAccountShadowInstall(
+        storageKeyUnits: aliasKey, mid: 1000, generation: record.generation + 13000,
+        accessKeyUnits: nil, refreshTokenUnits: nil, persistedPurposes: [], activated: false,
+        jar: aliasJar))
+      let aliasSeed = try await jarOrderStore.applyBuvidSeed(
+        recordKeyUnits: aliasKey, expectedGeneration: record.generation + 13000,
+        valueUnits: units("alias-seed-value"), nowMicroseconds: now)
+      try check(aliasSeed.seeded,
+                "a buvid3 Cookie.name under another map key does not satisfy presence")
+      guard let aliasShadow = try await jarOrderVault.loadShadow() else {
+        throw TransactionFixtureError.failed("missing alias shadow")
+      }
+      guard let aliasPath = aliasShadow.records[4].jar.domainBuckets.first(where: {
+        $0.keyUnits == units("bilibili.com")
+      })?.paths.first(where: { $0.keyUnits == units("/") }) else {
+        throw TransactionFixtureError.failed("missing alias path")
+      }
+      try check(aliasPath.cookies.count == 2 &&
+        aliasPath.cookies[0].keyUnits == units("buvid3-alias") &&
+        aliasPath.cookies[1].keyUnits == units("buvid3"),
+        "alias entry is kept and the real map key is appended")
+      let aliasSecond = try await jarOrderStore.applyBuvidSeed(
+        recordKeyUnits: aliasKey, expectedGeneration: record.generation + 13000,
+        valueUnits: units("alias-second"), nowMicroseconds: now + 1)
+      try check(!aliasSecond.seeded, "the appended map key makes the second seed a no-op")
+
+      // An expired buvid3 map key is still a no-op: presence follows the map
+      // key, not the expiry.
+      let expiredEntry = PiliOrderedCookieEntry(
+        keyUnits: units("buvid3"), nameUnits: units("buvid3"),
+        valueUnits: units("expired"), cookieDomainUnits: units(".bilibili.com"),
+        cookiePathUnits: units("/"), secure: false, httpOnly: false, sameSite: nil,
+        expiresMicroseconds: 1, maxAgeSeconds: nil, createdSeconds: 1)
+      let expiredJar = PiliOrderedCookieArchive(
+        schemaVersion: 2, ignoreExpires: true,
+        provenance: PiliOrderedCookieProvenance(
+          capture: "live", priorPersistence: .unknown,
+          legacyHiveAttributesIncomplete: true, currentBucketOrderComplete: true),
+        domainBuckets: [PiliOrderedCookieBucket(keyUnits: units("bilibili.com"),
+          paths: [PiliOrderedCookiePath(keyUnits: units("/"), cookies: [expiredEntry])])],
+        hostBuckets: [])
+      let expiredKey = units("buvid-expired")
+      _ = try await jarOrderStore.applyInstall(PiliAccountShadowInstall(
+        storageKeyUnits: expiredKey, mid: 1001, generation: record.generation + 14000,
+        accessKeyUnits: nil, refreshTokenUnits: nil, persistedPurposes: [], activated: false,
+        jar: expiredJar))
+      guard let beforeExpiredSeed = try await jarOrderVault.loadShadowSnapshot() else {
+        throw TransactionFixtureError.failed("missing expired seed snapshot")
+      }
+      let expiredReceipt = try await jarOrderStore.applyBuvidSeed(
+        recordKeyUnits: expiredKey, expectedGeneration: record.generation + 14000,
+        valueUnits: units("expired-seed"), nowMicroseconds: now)
+      try check(!expiredReceipt.seeded && expiredReceipt.transactionID == nil,
+                "an expired existing buvid3 is still a map-key no-op")
+      let afterExpiredSeed = try await jarOrderVault.loadShadowSnapshot()
+      try check(afterExpiredSeed?.transactionID == beforeExpiredSeed.transactionID &&
+        afterExpiredSeed?.envelope == beforeExpiredSeed.envelope,
+        "expired-buvid no-op publishes nothing")
+      try await jarOrderVault.discardShadow()
+    } catch {
+      try? await jarOrderVault.discardShadow()
       throw error
     }
 
