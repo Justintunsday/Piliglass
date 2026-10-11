@@ -2,6 +2,7 @@ import Foundation
 
 enum PiliAccountShadowTransactionError: Error, Sendable, Equatable {
   case operationInProgress, shadowUnavailable, unknownRecordKey, staleGeneration
+  case duplicateRecordKey, invalidInstall
 }
 
 struct PiliAccountShadowCookieSave: Sendable, Equatable {
@@ -9,6 +10,27 @@ struct PiliAccountShadowCookieSave: Sendable, Equatable {
   let representation: PiliNativeCookieFieldRepresentation
   let location: PiliOrderedCookieResponseLocation
   let nowMicroseconds: Int64
+}
+
+/// Complete login record appended by the install transaction. The transaction
+/// mints the durable identity itself; callers cannot supply one.
+struct PiliAccountShadowInstall: Sendable, Equatable {
+  let storageKeyUnits: PiliCookieUTF16
+  let mid: Int64
+  let generation: Int64
+  let accessKeyUnits: PiliCookieUTF16?
+  let refreshTokenUnits: PiliCookieUTF16?
+  let persistedPurposes: [PiliAccountPurpose]
+  let activated: Bool
+  let jar: PiliOrderedCookieArchive
+}
+
+struct PiliAccountShadowIdentityReceipt: Sendable, Equatable {
+  /// Nil when the envelope already carried identities (no publication).
+  let transactionID: UUID?
+  let adopted: Int
+  let nativeWritesAllowed: Bool
+  let authoritySwitchAllowed: Bool
 }
 
 struct PiliAccountShadowTransactionReceipt: Sendable, Equatable {
@@ -143,7 +165,7 @@ actor PiliAccountEnvelopeTransactionStore {
         record: record.record, generation: record.generation, storageKeyUnits: record.storageKeyUnits,
         mid: record.mid, isLogin: record.isLogin, accessKeyUnits: accessKeyUnits,
         refreshTokenUnits: refreshTokenUnits, persistedPurposes: record.persistedPurposes,
-        activated: record.activated, jar: record.jar)
+        activated: record.activated, jar: record.jar, durableIdentity: record.durableIdentity)
       return self.replace(current, records: records)
     }
   }
@@ -157,8 +179,104 @@ actor PiliAccountEnvelopeTransactionStore {
         record: record.record, generation: record.generation, storageKeyUnits: record.storageKeyUnits,
         mid: record.mid, isLogin: record.isLogin, accessKeyUnits: record.accessKeyUnits,
         refreshTokenUnits: record.refreshTokenUnits, persistedPurposes: record.persistedPurposes,
-        activated: activated, jar: record.jar)
+        activated: activated, jar: record.jar, durableIdentity: record.durableIdentity)
       return self.replace(current, records: records)
+    }
+  }
+
+  /// Upgrades a schema-2 envelope to schema 3 by minting one persisted identity
+  /// per login record. Already-adopted envelopes are a no-op receipt that does
+  /// not publish. Identities are minted exactly once here; nothing derives them
+  /// from MID, storage key or runtime generation, and nothing authorizes with
+  /// them.
+  func adoptMissingIdentities() async throws -> PiliAccountShadowIdentityReceipt {
+    try beginOperation()
+    defer { operationInProgress = false }
+    guard let snapshot = try await vault.loadShadowSnapshot() else {
+      throw PiliAccountShadowTransactionError.shadowUnavailable
+    }
+    let current = snapshot.envelope
+    guard current.schemaVersion == 2 else {
+      return .init(transactionID: nil, adopted: 0,
+                   nativeWritesAllowed: false, authoritySwitchAllowed: false)
+    }
+    var records = current.records
+    var identities = Set<PiliCookieUTF16>()
+    for record in records {
+      if let identity = record.durableIdentity { identities.insert(identity) }
+    }
+    var adopted = 0
+    for index in records.indices where index > 0 {
+      let identity = Self.mintIdentity(excluding: identities)
+      identities.insert(identity)
+      records[index] = Self.replacingIdentity(records[index], identity: identity)
+      adopted += 1
+    }
+    let candidate = replace(current, records: records, schemaVersion: 3)
+    _ = try candidate.validated(limits: codec.limits)
+    let publication = try await vault.importShadow(codec.encode(candidate),
+                                                   expectedTransactionID: snapshot.transactionID)
+    return .init(transactionID: publication.transactionID, adopted: adopted,
+                 nativeWritesAllowed: false, authoritySwitchAllowed: false)
+  }
+
+  /// Appends one complete login record to an adopted (schema-3) envelope. The
+  /// transaction mints the record identity and appends the matching stored/
+  /// owner order entries; selections, history, anonymous and every existing
+  /// record stay untouched.
+  func applyInstall(_ install: PiliAccountShadowInstall) async throws
+    -> PiliAccountShadowTransactionReceipt {
+    try beginOperation()
+    defer { operationInProgress = false }
+    guard let snapshot = try await vault.loadShadowSnapshot() else {
+      throw PiliAccountShadowTransactionError.shadowUnavailable
+    }
+    let current = snapshot.envelope
+    // Install is append-only on adopted envelopes; a schema-2 envelope must be
+    // adopted first so no existing record changes shape silently.
+    guard current.schemaVersion == 3,
+          !install.storageKeyUnits.units.isEmpty,
+          install.generation > 0,
+          Set(install.persistedPurposes).count == install.persistedPurposes.count,
+          current.records.count + 1 <= 256 else {
+      throw PiliAccountShadowTransactionError.invalidInstall
+    }
+    guard !current.records.contains(where: {
+      $0.record > 0 && $0.storageKeyUnits == install.storageKeyUnits
+    }) else {
+      throw PiliAccountShadowTransactionError.duplicateRecordKey
+    }
+    guard !current.records.contains(where: { $0.generation == install.generation }) else {
+      throw PiliAccountShadowTransactionError.staleGeneration
+    }
+    var identities = Set<PiliCookieUTF16>()
+    for record in current.records {
+      if let identity = record.durableIdentity { identities.insert(identity) }
+    }
+    let newIndex = current.records.count
+    let record = PiliAccountLiveMemoryRecord(
+      record: newIndex, generation: install.generation,
+      storageKeyUnits: install.storageKeyUnits, mid: install.mid, isLogin: true,
+      accessKeyUnits: install.accessKeyUnits, refreshTokenUnits: install.refreshTokenUnits,
+      persistedPurposes: install.persistedPurposes, activated: install.activated,
+      jar: install.jar, durableIdentity: Self.mintIdentity(excluding: identities))
+    let order = PiliAccountLiveMemoryOrderEntry(
+      keyUnits: install.storageKeyUnits, record: newIndex)
+    let candidate = replace(current,
+      records: current.records + [record],
+      storedOrder: current.storedOrder + [order],
+      ownerOrder: current.ownerOrder + [order])
+    _ = try candidate.validated(limits: codec.limits)
+    let publication = try await vault.importShadow(codec.encode(candidate),
+                                                   expectedTransactionID: snapshot.transactionID)
+    return .init(transactionID: publication.transactionID, record: newIndex,
+                 nativeWritesAllowed: false, authoritySwitchAllowed: false)
+  }
+
+  private static func mintIdentity(excluding existing: Set<PiliCookieUTF16>) -> PiliCookieUTF16 {
+    while true {
+      let candidate = PiliCookieUTF16(units: Array(UUID().uuidString.lowercased().utf16))
+      if !existing.contains(candidate) { return candidate }
     }
   }
 
@@ -210,7 +328,17 @@ actor PiliAccountEnvelopeTransactionStore {
       record: record.record, generation: record.generation, storageKeyUnits: record.storageKeyUnits,
       mid: record.mid, isLogin: record.isLogin, accessKeyUnits: record.accessKeyUnits,
       refreshTokenUnits: record.refreshTokenUnits, persistedPurposes: purposes,
-      activated: record.activated, jar: record.jar)
+      activated: record.activated, jar: record.jar, durableIdentity: record.durableIdentity)
+  }
+
+  private static func replacingIdentity(
+    _ record: PiliAccountLiveMemoryRecord, identity: PiliCookieUTF16
+  ) -> PiliAccountLiveMemoryRecord {
+    PiliAccountLiveMemoryRecord(
+      record: record.record, generation: record.generation, storageKeyUnits: record.storageKeyUnits,
+      mid: record.mid, isLogin: record.isLogin, accessKeyUnits: record.accessKeyUnits,
+      refreshTokenUnits: record.refreshTokenUnits, persistedPurposes: record.persistedPurposes,
+      activated: record.activated, jar: record.jar, durableIdentity: identity)
   }
 
   private func replaceJar(_ current: PiliAccountLiveMemoryShadow, index: Int,
@@ -221,22 +349,27 @@ actor PiliAccountEnvelopeTransactionStore {
       record: record.record, generation: record.generation, storageKeyUnits: record.storageKeyUnits,
       mid: record.mid, isLogin: record.isLogin, accessKeyUnits: record.accessKeyUnits,
       refreshTokenUnits: record.refreshTokenUnits, persistedPurposes: record.persistedPurposes,
-      activated: record.activated, jar: jar)
+      activated: record.activated, jar: jar, durableIdentity: record.durableIdentity)
     return replace(current, records: records)
   }
 
   private func replace(_ current: PiliAccountLiveMemoryShadow,
                        records: [PiliAccountLiveMemoryRecord]? = nil,
+                       storedOrder: [PiliAccountLiveMemoryOrderEntry]? = nil,
+                       ownerOrder: [PiliAccountLiveMemoryOrderEntry]? = nil,
                        selections: [Int]? = nil,
-                       history: Int? = nil) -> PiliAccountLiveMemoryShadow {
+                       history: Int? = nil,
+                       schemaVersion: Int? = nil) -> PiliAccountLiveMemoryShadow {
     PiliAccountLiveMemoryShadow(
-      schemaVersion: current.schemaVersion, scope: current.scope, identityScope: current.identityScope,
+      schemaVersion: schemaVersion ?? current.schemaVersion,
+      scope: current.scope, identityScope: current.identityScope,
       revision: current.revision, durableIdentityConfigured: current.durableIdentityConfigured,
       durabilityVerified: current.durabilityVerified,
       authoritySwitchAllowed: current.authoritySwitchAllowed,
       nativeWritesAllowed: current.nativeWritesAllowed,
-      records: records ?? current.records, storedOrder: current.storedOrder,
-      ownerOrder: current.ownerOrder, selectionPurposes: current.selectionPurposes,
+      records: records ?? current.records,
+      storedOrder: storedOrder ?? current.storedOrder,
+      ownerOrder: ownerOrder ?? current.ownerOrder, selectionPurposes: current.selectionPurposes,
       selections: selections ?? current.selections, history: history ?? current.history)
   }
 

@@ -8,7 +8,13 @@ import Foundation
 struct PiliAccountLiveMemoryShadowCodec: Sendable {
   var limits: PiliOrderedCookieArchiveLimits = .standard
   private typealias Value = OrderedCookieJSONValue
+  /// Schema-3 records carry the durable identity key; schema-2 legacy records
+  /// keep their exact old key shape. Nothing else is accepted.
   private static let recordKeys: Set<String> = [
+    "record", "generation", "storageKeyUnits", "mid", "isLogin", "accessKeyUnits",
+    "refreshTokenUnits", "persistedPurposes", "activated", "jar", "durableIdentity"
+  ]
+  private static let legacyRecordKeys: Set<String> = [
     "record", "generation", "storageKeyUnits", "mid", "isLogin", "accessKeyUnits",
     "refreshTokenUnits", "persistedPurposes", "activated", "jar"
   ]
@@ -28,9 +34,11 @@ struct PiliAccountLiveMemoryShadowCodec: Sendable {
         "durabilityVerified", "authoritySwitchAllowed", "nativeWritesAllowed", "records",
         "storedOrder", "ownerOrder", "selectionPurposes", "selections", "history"
       ])
-      guard try codec.integer(fields["schemaVersion"]) == 2 else {
+      let rawSchemaVersion = try codec.integer(fields["schemaVersion"])
+      guard rawSchemaVersion == 2 || rawSchemaVersion == 3 else {
         throw PiliAccountLiveMemoryShadowError.unsupportedSchema
       }
+      let schemaVersion = Int(rawSchemaVersion)
       let rawRecords = try codec.array(fields["records"])
       guard !rawRecords.isEmpty else { throw PiliAccountLiveMemoryShadowError.invalidEnvelope }
       guard rawRecords.count <= 256 else {
@@ -54,7 +62,8 @@ struct PiliAccountLiveMemoryShadowCodec: Sendable {
       // DTO unit/record/bucket arrays, independently bound projection resources.
       try preflight(fields, records: rawRecords, codec: codec)
       let records = try rawRecords.map { value in
-        let record = try codec.object(value, keys: Self.recordKeys)
+        let record = try recordFields(value, codec: codec)
+        let identity = try record["durableIdentity"].map { try codec.optionalUnits($0) } ?? nil
         return try PiliAccountLiveMemoryRecord(
           record: index(record["record"], codec: codec),
           generation: codec.integer(record["generation"]),
@@ -64,11 +73,12 @@ struct PiliAccountLiveMemoryShadowCodec: Sendable {
           refreshTokenUnits: codec.optionalUnits(record["refreshTokenUnits"]),
           persistedPurposes: purposes(record["persistedPurposes"], codec: codec),
           activated: codec.boolean(record["activated"]),
-          jar: codec.decodeValue(codec.required(record["jar"]))
+          jar: codec.decodeValue(codec.required(record["jar"])),
+          durableIdentity: identity
         )
       }
       let result = try PiliAccountLiveMemoryShadow(
-        schemaVersion: 2, scope: codec.ascii(fields["scope"]),
+        schemaVersion: schemaVersion, scope: codec.ascii(fields["scope"]),
         identityScope: codec.ascii(fields["identityScope"]), revision: revision,
         durableIdentityConfigured: durableIdentityConfigured,
         durabilityVerified: durabilityVerified,
@@ -121,9 +131,13 @@ struct PiliAccountLiveMemoryShadowCodec: Sendable {
     for value in records {
       // object() first requires exact ASCII field-key code units. Thus these
       // fixed *Units lookups cannot merge Unicode-canonical equivalent names.
-      let record = try codec.object(value, keys: Self.recordKeys)
+      let record = try recordFields(value, codec: codec)
       try countUnits(record["storageKeyUnits"], maximum: limits.maximumBucketKeyUnits,
                      nullable: true, codec: codec, budget: &budget)
+      if let identityValue = record["durableIdentity"] {
+        try countUnits(identityValue, maximum: PiliAccountLiveMemoryShadow.durableIdentityUnits,
+                       nullable: true, codec: codec, budget: &budget)
+      }
       for name in ["accessKeyUnits", "refreshTokenUnits"] {
         try countUnits(record[name], maximum: limits.maximumValueUnits,
                        nullable: true, codec: codec, budget: &budget)
@@ -170,6 +184,14 @@ struct PiliAccountLiveMemoryShadowCodec: Sendable {
                        codec: codec, budget: &budget)
       }
     }
+  }
+
+  /// Schema-3 records include the identity key; schema-2 legacy records keep
+  /// the exact old key shape. Both stay strict; anything else fails.
+  private func recordFields(_ value: Value,
+                            codec: PiliOrderedCookieArchiveCodec) throws -> [String: Value] {
+    if let modern = try? codec.object(value, keys: Self.recordKeys) { return modern }
+    return try codec.object(value, keys: Self.legacyRecordKeys)
   }
 
   private func countUnits(_ value: Value?, maximum: Int, nullable: Bool = false,

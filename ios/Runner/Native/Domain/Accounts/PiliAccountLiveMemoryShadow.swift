@@ -24,10 +24,16 @@ struct PiliAccountLiveMemoryRecord: Sendable, Equatable, Encodable {
   let persistedPurposes: [PiliAccountPurpose]
   let activated: Bool
   let jar: PiliOrderedCookieArchive
+  /// Stable per-record identity minted once by an explicit transaction and
+  /// persisted inside the envelope. It is never derived from MID, raw storage
+  /// key, runtime generation/epoch/owner token and never authorizes anything.
+  /// Schema-2 legacy records carry nil until `adoptMissingIdentities` runs.
+  let durableIdentity: PiliCookieUTF16?
 
   private enum CodingKeys: String, CodingKey {
     case record, generation, storageKeyUnits, mid, isLogin
     case accessKeyUnits, refreshTokenUnits, persistedPurposes, activated, jar
+    case durableIdentity
   }
 
   func encode(to encoder: any Encoder) throws {
@@ -45,6 +51,8 @@ struct PiliAccountLiveMemoryRecord: Sendable, Equatable, Encodable {
     else { try fields.encodeNil(forKey: .accessKeyUnits) }
     if let refreshTokenUnits { try fields.encode(refreshTokenUnits, forKey: .refreshTokenUnits) }
     else { try fields.encodeNil(forKey: .refreshTokenUnits) }
+    // Legacy schema-2 records keep their exact key shape (no key at all).
+    if let durableIdentity { try fields.encode(durableIdentity, forKey: .durableIdentity) }
   }
 }
 
@@ -64,6 +72,25 @@ struct PiliAccountLiveMemoryShadow: Sendable, Equatable, Encodable {
   let selections: [Int]
   let history: Int
 
+  static let durableIdentityUnits = 36
+
+  /// Canonical lowercase UUID text: 36 UTF-16 units, hyphens at 8/13/18/23.
+  static func isCanonicalDurableIdentity(_ identity: PiliCookieUTF16) -> Bool {
+    let units = identity.units
+    guard units.count == durableIdentityUnits else { return false }
+    for (offset, unit) in units.enumerated() {
+      switch offset {
+      case 8, 13, 18, 23:
+        guard unit == 0x2D else { return false }
+      default:
+        let isDigit = unit >= 0x30 && unit <= 0x39
+        let isLowerHex = unit >= 0x61 && unit <= 0x66
+        guard isDigit || isLowerHex else { return false }
+      }
+    }
+    return true
+  }
+
   func validated(limits: PiliOrderedCookieArchiveLimits = .standard) throws -> Self {
     do { return try validateContents(limits: limits) }
     catch let error as PiliOrderedCookieArchiveError {
@@ -78,7 +105,7 @@ struct PiliAccountLiveMemoryShadow: Sendable, Equatable, Encodable {
 
   private func validateContents(limits: PiliOrderedCookieArchiveLimits) throws -> Self {
     let limits = try limits.validated()
-    guard schemaVersion == 2 else { throw PiliAccountLiveMemoryShadowError.unsupportedSchema }
+    guard schemaVersion == 2 || schemaVersion == 3 else { throw PiliAccountLiveMemoryShadowError.unsupportedSchema }
     guard !records.isEmpty else { throw PiliAccountLiveMemoryShadowError.invalidEnvelope }
     guard records.count <= 256 else { throw PiliAccountLiveMemoryShadowError.resourceLimit }
     guard scope == "coherentLiveMemoryShadow", identityScope == "captureLocal",
@@ -95,6 +122,7 @@ struct PiliAccountLiveMemoryShadow: Sendable, Equatable, Encodable {
     try budget.reserveUnits(2048 + 512 * records.count)
     var generations = Set<Int64>()
     var keys = Set<PiliCookieUTF16>()
+    var identities = Set<PiliCookieUTF16>()
     for (index, account) in records.enumerated() {
       guard account.record == index, account.generation > 0,
             generations.insert(account.generation).inserted,
@@ -103,7 +131,8 @@ struct PiliAccountLiveMemoryShadow: Sendable, Equatable, Encodable {
       }
       if index == 0 {
         guard !account.isLogin, account.mid == 0, account.storageKeyUnits == nil,
-              account.accessKeyUnits == nil, account.refreshTokenUnits == nil else {
+              account.accessKeyUnits == nil, account.refreshTokenUnits == nil,
+              account.durableIdentity == nil else {
           throw PiliAccountLiveMemoryShadowError.invalidEnvelope
         }
         // AnonymousAccount.type is mutable and can contain actual purposes.
@@ -111,6 +140,19 @@ struct PiliAccountLiveMemoryShadow: Sendable, Equatable, Encodable {
         guard account.isLogin, let key = account.storageKeyUnits,
               keys.insert(key).inserted else { throw PiliAccountLiveMemoryShadowError.invalidEnvelope }
         // MID is captured profile data, not unique owner identity or raw key policy.
+        switch schemaVersion {
+        case 2:
+          guard account.durableIdentity == nil else {
+            throw PiliAccountLiveMemoryShadowError.invalidEnvelope
+          }
+        default:
+          guard let identity = account.durableIdentity,
+                Self.isCanonicalDurableIdentity(identity),
+                identities.insert(identity).inserted else {
+            throw PiliAccountLiveMemoryShadowError.invalidEnvelope
+          }
+          try budget.count(identity, maximum: Self.durableIdentityUnits)
+        }
       }
       try budget.count(account.storageKeyUnits, maximum: limits.maximumBucketKeyUnits)
       try budget.count(account.accessKeyUnits, maximum: limits.maximumValueUnits)
@@ -137,7 +179,8 @@ struct PiliAccountLiveMemoryShadow: Sendable, Equatable, Encodable {
       throw PiliAccountLiveMemoryShadowError.invalidEnvelope
     }
     // Full wire bytes / strict grammar / JSON nodes / depth belong to codec.
-    // No owner UUID, authorityEpoch, durable record or restart authorization.
+    // durableIdentity is a persisted record label only: no authorityEpoch,
+    // no restart authorization and no production caller consumes it.
     return self
   }
 }
