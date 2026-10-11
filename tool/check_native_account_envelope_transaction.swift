@@ -504,7 +504,11 @@ private actor TransactionFaultVault: PiliAccountSecretStore {
       throw error
     }
 
-    // Identity shape errors fail explicitly and publish nothing.
+    // Identity shape errors fail explicitly and publish nothing. The identity
+    // wire shape is a UTF-16 unit array, exactly like storageKeyUnits.
+    func identityUnits(_ text: String) -> [Int] {
+      Array(text.utf16).map { Int($0) }
+    }
     func expectRejectedIdentity(_ label: String, _ expected: PiliAccountLiveMemoryShadowError,
                                 _ mutate: @escaping (inout [String: Any]) -> Void) throws {
       let patched = try patchedEnvelope(data, mutate)
@@ -517,34 +521,34 @@ private actor TransactionFaultVault: PiliAccountSecretStore {
     }
     try expectRejectedIdentity("malformed identity accepted", .invalidEnvelope) { root in
       var records = root["records"] as? [[String: Any]] ?? []
-      records[1]["durableIdentity"] = "not-a-uuid"
+      records[1]["durableIdentity"] = [97, 98, 99]
       root["records"] = records
     }
     try expectRejectedIdentity("oversized identity accepted", .resourceLimit) { root in
       var records = root["records"] as? [[String: Any]] ?? []
-      records[1]["durableIdentity"] = String(repeating: "a", count: 4000)
+      records[1]["durableIdentity"] = Array(repeating: 97, count: 4000)
       root["records"] = records
     }
     try expectRejectedIdentity("anonymous identity accepted", .invalidEnvelope) { root in
       var records = root["records"] as? [[String: Any]] ?? []
-      records[0]["durableIdentity"] = "00000000-0000-4000-8000-000000000000"
+      records[0]["durableIdentity"] = identityUnits("00000000-0000-4000-8000-000000000000")
       root["records"] = records
     }
     try expectRejectedIdentity("unknown identity variant accepted", .invalidEnvelope) { root in
       var records = root["records"] as? [[String: Any]] ?? []
-      records[1]["durableIdentityx"] = "00000000-0000-4000-8000-000000000000"
+      records[1]["durableIdentityx"] = identityUnits("00000000-0000-4000-8000-000000000000")
       root["records"] = records
     }
     try expectRejectedIdentity("duplicate identities accepted under schema 3", .invalidEnvelope) { root in
       var records = root["records"] as? [[String: Any]] ?? []
-      records[1]["durableIdentity"] = "00000000-0000-4000-8000-000000000000"
-      records[2]["durableIdentity"] = "00000000-0000-4000-8000-000000000000"
+      records[1]["durableIdentity"] = identityUnits("00000000-0000-4000-8000-000000000000")
+      records[2]["durableIdentity"] = identityUnits("00000000-0000-4000-8000-000000000000")
       root["schemaVersion"] = 3
       root["records"] = records
     }
     try expectRejectedIdentity("schema 3 with a missing identity accepted", .invalidEnvelope) { root in
       var records = root["records"] as? [[String: Any]] ?? []
-      records[1]["durableIdentity"] = "00000000-0000-4000-8000-000000000001"
+      records[1]["durableIdentity"] = identityUnits("00000000-0000-4000-8000-000000000001")
       root["schemaVersion"] = 3
       root["records"] = records
     }
