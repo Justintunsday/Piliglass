@@ -1146,6 +1146,22 @@ private actor TransactionFaultVault: PiliAccountSecretStore {
       try check(stripped.records[1].jar.domainBuckets.isEmpty &&
         stripped.records[1].jar.hostBuckets.isEmpty,
         "buvid fixture record is stripped")
+      // The oversized value must be exercised while buvid3 is still missing;
+      // after a successful seed the transaction is an idempotent no-op.
+      guard let beforeBuvidBudget = try await buvidVault.loadShadowSnapshot() else {
+        throw TransactionFixtureError.failed("missing buvid budget snapshot")
+      }
+      do {
+        _ = try await buvidStore.applyBuvidSeed(
+          recordKeyUnits: key, expectedGeneration: record.generation,
+          valueUnits: PiliCookieUTF16(units: Array(repeating: 0x61, count: 70000)),
+          nowMicroseconds: now)
+        throw TransactionFixtureError.failed("oversized buvid value accepted")
+      } catch PiliAccountLiveMemoryShadowError.resourceLimit { checks += 1 }
+      let afterBuvidBudget = try await buvidVault.loadShadowSnapshot()
+      try check(afterBuvidBudget?.transactionID == beforeBuvidBudget.transactionID &&
+        afterBuvidBudget?.envelope == beforeBuvidBudget.envelope,
+        "oversized buvid never publishes")
       let buvidValue = PiliCookieUTF16(
         units: Array("11111111-2222-4333-8444-55555555555512345infoc".utf16))
       let seedReceipt = try await buvidStore.applyBuvidSeed(
@@ -1231,13 +1247,6 @@ private actor TransactionFaultVault: PiliAccountSecretStore {
           valueUnits: PiliCookieUTF16(units: [0x61, 0x3B, 0x62]), nowMicroseconds: now)
         throw TransactionFixtureError.failed("separator buvid value accepted")
       } catch PiliAccountShadowTransactionError.invalidBuvid { checks += 1 }
-      do {
-        _ = try await reopenedBuvidStore.applyBuvidSeed(
-          recordKeyUnits: key, expectedGeneration: record.generation,
-          valueUnits: PiliCookieUTF16(units: Array(repeating: 0x61, count: 70000)),
-          nowMicroseconds: now)
-        throw TransactionFixtureError.failed("oversized buvid value accepted")
-      } catch PiliAccountLiveMemoryShadowError.resourceLimit { checks += 1 }
       let afterBuvidRejects = try await reopenedBuvidVault.loadShadowSnapshot()
       try check(afterBuvidRejects?.transactionID == beforeSecondSeed.transactionID &&
         afterBuvidRejects?.envelope == beforeSecondSeed.envelope,
