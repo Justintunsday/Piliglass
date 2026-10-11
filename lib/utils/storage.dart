@@ -110,33 +110,46 @@ abstract final class GStorage {
   }
 
   static Future<List<void>> compact({AccountWriteBackCoordinator? coordinator}) async {
-    // Maintenance must not close/compact a box under an in-flight admitted
-    // account persistence chain; wait for the current chains to release first.
-    await (coordinator ?? accountWriteBackCoordinator).quiesce();
-    return Future.wait([
-      userInfo.compact(),
-      historyWord.compact(),
-      localCache.compact(),
-      setting.compact(),
-      video.compact(),
-      Accounts.account.compact(),
-      watchProgress.compact(),
-      ?reply?.compact(),
-    ]);
+    // Maintenance owns the exclusive barrier: no account write chain may be
+    // admitted while boxes are compacted, and in-flight chains drain first.
+    final maintenance = await (coordinator ?? accountWriteBackCoordinator)
+        .beginMaintenance();
+    if (maintenance == null) return <void>[];
+    try {
+      return await Future.wait([
+        userInfo.compact(),
+        historyWord.compact(),
+        localCache.compact(),
+        setting.compact(),
+        video.compact(),
+        Accounts.account.compact(),
+        watchProgress.compact(),
+        ?reply?.compact(),
+      ]);
+    } finally {
+      maintenance.end(permanent: false);
+    }
   }
 
   static Future<List<void>> close({AccountWriteBackCoordinator? coordinator}) async {
-    await (coordinator ?? accountWriteBackCoordinator).quiesce();
-    return Future.wait([
-      userInfo.close(),
-      historyWord.close(),
-      localCache.close(),
-      setting.close(),
-      video.close(),
-      Accounts.account.close(),
-      watchProgress.close(),
-      ?reply?.close(),
-    ]);
+    final maintenance = await (coordinator ?? accountWriteBackCoordinator)
+        .beginMaintenance();
+    if (maintenance == null) return <void>[];
+    try {
+      return await Future.wait([
+        userInfo.close(),
+        historyWord.close(),
+        localCache.close(),
+        setting.close(),
+        video.close(),
+        Accounts.account.close(),
+        watchProgress.close(),
+        ?reply?.close(),
+      ]);
+    } finally {
+      // Closing is permanent: after this no new account write may be admitted.
+      maintenance.end(permanent: true);
+    }
   }
 
   static Future<List<void>> clear() {
