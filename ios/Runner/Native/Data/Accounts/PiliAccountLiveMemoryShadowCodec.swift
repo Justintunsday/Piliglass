@@ -8,8 +8,19 @@ import Foundation
 struct PiliAccountLiveMemoryShadowCodec: Sendable {
   var limits: PiliOrderedCookieArchiveLimits = .standard
   private typealias Value = OrderedCookieJSONValue
-  /// Schema-3 records carry the durable identity key; schema-2 legacy records
-  /// keep their exact old key shape. Nothing else is accepted.
+  /// Schema-3 envelopes may carry the monotonic generation high-water; schema-2
+  /// envelopes keep their exact legacy shape. Both stay strict.
+  private static let shadowKeys: Set<String> = [
+    "schemaVersion", "scope", "identityScope", "revision", "durableIdentityConfigured",
+    "durabilityVerified", "authoritySwitchAllowed", "nativeWritesAllowed", "records",
+    "storedOrder", "ownerOrder", "selectionPurposes", "selections", "history",
+    "generationHighWater"
+  ]
+  private static let legacyShadowKeys: Set<String> = [
+    "schemaVersion", "scope", "identityScope", "revision", "durableIdentityConfigured",
+    "durabilityVerified", "authoritySwitchAllowed", "nativeWritesAllowed", "records",
+    "storedOrder", "ownerOrder", "selectionPurposes", "selections", "history"
+  ]
   private static let recordKeys: Set<String> = [
     "record", "generation", "storageKeyUnits", "mid", "isLogin", "accessKeyUnits",
     "refreshTokenUnits", "persistedPurposes", "activated", "jar", "durableIdentity"
@@ -29,16 +40,33 @@ struct PiliAccountLiveMemoryShadowCodec: Sendable {
       // validation below are separate passes over that bounded tree / DTO.
       var parser = OrderedCookieJSONParser(bytes: Array(data), limits: limits)
       let codec = PiliOrderedCookieArchiveCodec(limits: limits)
-      let fields = try codec.object(parser.parse(), keys: [
-        "schemaVersion", "scope", "identityScope", "revision", "durableIdentityConfigured",
-        "durabilityVerified", "authoritySwitchAllowed", "nativeWritesAllowed", "records",
-        "storedOrder", "ownerOrder", "selectionPurposes", "selections", "history"
-      ])
-      let rawSchemaVersion = try codec.integer(fields["schemaVersion"])
-      guard rawSchemaVersion == 2 || rawSchemaVersion == 3 else {
-        throw PiliAccountLiveMemoryShadowError.unsupportedSchema
+      let parsed = parser.parse()
+      // Envelope shape is schema-aware: schema 2 keeps the exact legacy key set;
+      // schema 3 may carry the monotonic generation high-water. A schema-2
+      // envelope with the extra key is rejected rather than silently losing it.
+      let schemaVersion: Int
+      let fields: [String: Value]
+      let generationHighWater: Int64?
+      if let modern = try? codec.object(parsed, keys: Self.shadowKeys) {
+        let version = try codec.integer(modern["schemaVersion"])
+        guard version == 3 else { throw PiliAccountLiveMemoryShadowError.invalidEnvelope }
+        schemaVersion = 3
+        fields = modern
+        if let raw = modern["generationHighWater"], case .null = raw {
+          generationHighWater = nil
+        } else {
+          generationHighWater = try codec.integer(modern["generationHighWater"])
+        }
+      } else {
+        let legacy = try codec.object(parsed, keys: Self.legacyShadowKeys)
+        let version = try codec.integer(legacy["schemaVersion"])
+        guard version == 2 || version == 3 else {
+          throw PiliAccountLiveMemoryShadowError.unsupportedSchema
+        }
+        schemaVersion = Int(version)
+        fields = legacy
+        generationHighWater = nil
       }
-      let schemaVersion = Int(rawSchemaVersion)
       let rawRecords = try codec.array(fields["records"])
       guard !rawRecords.isEmpty else { throw PiliAccountLiveMemoryShadowError.invalidEnvelope }
       guard rawRecords.count <= 256 else {
@@ -88,7 +116,8 @@ struct PiliAccountLiveMemoryShadowCodec: Sendable {
         ownerOrder: order(fields["ownerOrder"], codec: codec),
         selectionPurposes: purposes(fields["selectionPurposes"], codec: codec),
         selections: rawSelections.map { try index($0, codec: codec) },
-        history: index(fields["history"], codec: codec)
+        history: index(fields["history"], codec: codec),
+        generationHighWater: generationHighWater
       )
       return try result.validated(limits: limits)
     } catch let error as PiliOrderedCookieArchiveError {

@@ -71,6 +71,18 @@ struct PiliAccountLiveMemoryShadow: Sendable, Equatable, Encodable {
   let selectionPurposes: [PiliAccountPurpose]
   let selections: [Int]
   let history: Int
+  /// Monotonic generation high-water serialized with schema 3. Every newly
+  /// accepted generation must exceed it, so delete/reinstall and import cannot
+  /// reuse a historical generation after a restart. Schema-2 envelopes carry
+  /// nil; legacy schema-3 envelopes without the field fall back to the maximum
+  /// record generation for enforcement until the next write persists it.
+  let generationHighWater: Int64?
+
+  /// Effective enforcement value: the persisted high-water when present,
+  /// otherwise the maximum login-record generation.
+  var effectiveGenerationHighWater: Int64 {
+    generationHighWater ?? records.dropFirst().map(\.generation).max() ?? 0
+  }
 
   static let durableIdentityUnits = 36
 
@@ -106,6 +118,14 @@ struct PiliAccountLiveMemoryShadow: Sendable, Equatable, Encodable {
   private func validateContents(limits: PiliOrderedCookieArchiveLimits) throws -> Self {
     let limits = try limits.validated()
     guard schemaVersion == 2 || schemaVersion == 3 else { throw PiliAccountLiveMemoryShadowError.unsupportedSchema }
+    if schemaVersion == 2 {
+      guard generationHighWater == nil else { throw PiliAccountLiveMemoryShadowError.invalidEnvelope }
+    } else if let highWater = generationHighWater {
+      guard highWater >= 0,
+            highWater >= records.dropFirst().map(\.generation).max() ?? 0 else {
+        throw PiliAccountLiveMemoryShadowError.invalidEnvelope
+      }
+    }
     guard !records.isEmpty else { throw PiliAccountLiveMemoryShadowError.invalidEnvelope }
     guard records.count <= 256 else { throw PiliAccountLiveMemoryShadowError.resourceLimit }
     guard scope == "coherentLiveMemoryShadow", identityScope == "captureLocal",

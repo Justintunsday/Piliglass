@@ -236,7 +236,9 @@ actor PiliAccountEnvelopeTransactionStore {
       records[index] = Self.replacingIdentity(records[index], identity: identity)
       adopted += 1
     }
-    let candidate = replace(current, records: records, schemaVersion: 3)
+    let highWater = records.dropFirst().map(\.generation).max() ?? 0
+    let candidate = replace(current, records: records, schemaVersion: 3,
+                            generationHighWater: highWater)
     _ = try candidate.validated(limits: codec.limits)
     let publication = try await vault.importShadow(codec.encode(candidate),
                                                    expectedTransactionID: snapshot.transactionID)
@@ -270,7 +272,11 @@ actor PiliAccountEnvelopeTransactionStore {
     }) else {
       throw PiliAccountShadowTransactionError.duplicateRecordKey
     }
-    guard !current.records.contains(where: { $0.generation == install.generation }) else {
+    // A new generation is only accepted above the persisted monotonic
+    // high-water, so a generation removed by delete or replaced by import can
+    // never be reused, including after a restart.
+    let highWater = current.effectiveGenerationHighWater
+    guard install.generation > highWater else {
       throw PiliAccountShadowTransactionError.staleGeneration
     }
     var identities = Set<PiliCookieUTF16>()
@@ -289,7 +295,8 @@ actor PiliAccountEnvelopeTransactionStore {
     let candidate = replace(current,
       records: current.records + [record],
       storedOrder: current.storedOrder + [order],
-      ownerOrder: current.ownerOrder + [order])
+      ownerOrder: current.ownerOrder + [order],
+      generationHighWater: max(highWater, install.generation))
     _ = try candidate.validated(limits: codec.limits)
     let publication = try await vault.importShadow(codec.encode(candidate),
                                                    expectedTransactionID: snapshot.transactionID)
@@ -372,6 +379,7 @@ actor PiliAccountEnvelopeTransactionStore {
     guard !entries.isEmpty else { throw PiliAccountShadowTransactionError.invalidImport }
     var entryKeys = Set<PiliCookieUTF16>()
     var entryGenerations = Set<Int64>()
+    let highWater = current.effectiveGenerationHighWater
     for entry in entries {
       guard !entry.storageKeyUnits.units.isEmpty,
             entry.generation > 0,
@@ -381,17 +389,13 @@ actor PiliAccountEnvelopeTransactionStore {
       guard entryKeys.insert(entry.storageKeyUnits).inserted else {
         throw PiliAccountShadowTransactionError.duplicateRecordKey
       }
-      guard entryGenerations.insert(entry.generation).inserted else {
+      // Every imported generation must be genuinely new (above the persisted
+      // monotonic high-water) and unique inside the input, so replacement can
+      // never reuse a replaced or historically removed generation.
+      guard entry.generation > highWater,
+            entryGenerations.insert(entry.generation).inserted else {
         throw PiliAccountShadowTransactionError.staleGeneration
       }
-    }
-    // Reusing an existing generation is always rejected: a replaced record must
-    // get a genuinely new generation so an old request holding the replaced
-    // key+generation can never hit replacement credentials, and an untouched
-    // record must not collide either.
-    for record in current.records
-    where record.record > 0 && entryGenerations.contains(record.generation) {
-      throw PiliAccountShadowTransactionError.staleGeneration
     }
     var records = current.records
     var identities = Set<PiliCookieUTF16>()
@@ -454,13 +458,23 @@ actor PiliAccountEnvelopeTransactionStore {
     let history = records[heartbeat].isLogin ? heartbeat : selections[0]
     let candidate = replace(current, records: records,
       storedOrder: current.storedOrder + appendedOrder,
-      ownerOrder: ownerOrder, selections: selections, history: history)
+      ownerOrder: ownerOrder, selections: selections, history: history,
+      generationHighWater: max(highWater, entryGenerations.max() ?? highWater))
     _ = try candidate.validated(limits: codec.limits)
     let publication = try await vault.importShadow(codec.encode(candidate),
                                                    expectedTransactionID: snapshot.transactionID)
     return .init(transactionID: publication.transactionID, replaced: replaced, appended: appended,
                  nativeWritesAllowed: false, authoritySwitchAllowed: false)
   }
+
+  /// Maximum caller value accepted before the field is constructed. The raw
+  /// Set-Cookie parser ceiling is `maximumValueUnits` (65536) bytes for one
+  /// field; 64 units of `"buvid3="`/`"; Domain=.bilibili.com; Path=/"` headroom
+  /// stay below it, so this API fails intentionally (`resourceLimit`) instead
+  /// of surfacing a parser error. Length and domain are documented in
+  /// P05_DURABLE_BUVID_PLAN.md.
+  static let buvidMaximumValueUnits =
+    PiliOrderedCookieArchiveLimits.standard.maximumValueUnits - 64
 
   /// Seeds the missing `buvid3` cookie of one exact login record, mirroring
   /// Dart `BiliCookieJar.setBuvid3` (`domainCookies['bilibili.com']['/']
@@ -488,11 +502,16 @@ actor PiliAccountEnvelopeTransactionStore {
     guard record.generation == expectedGeneration, record.isLogin else {
       throw PiliAccountShadowTransactionError.staleGeneration
     }
-    // Printable ASCII without the field separator: the value is interpolated
-    // into a single Set-Cookie field, so CR/LF/';' or empty values are rejected.
+    // Printable ASCII without the field separator and inside the intentional
+    // API length ceiling: the value is interpolated into a single Set-Cookie
+    // field, so CR/LF/';'/empty values and over-long values fail before any
+    // field construction instead of surfacing a parser error.
     guard !valueUnits.units.isEmpty,
           valueUnits.units.allSatisfy({ $0 >= 0x21 && $0 < 0x7F && $0 != 0x3B }) else {
       throw PiliAccountShadowTransactionError.invalidBuvid
+    }
+    guard valueUnits.units.count <= Self.buvidMaximumValueUnits else {
+      throw PiliAccountLiveMemoryShadowError.resourceLimit
     }
     if Self.hasBuvid3(record.jar) {
       return .init(transactionID: nil, seeded: false,
@@ -621,7 +640,8 @@ actor PiliAccountEnvelopeTransactionStore {
                        ownerOrder: [PiliAccountLiveMemoryOrderEntry]? = nil,
                        selections: [Int]? = nil,
                        history: Int? = nil,
-                       schemaVersion: Int? = nil) -> PiliAccountLiveMemoryShadow {
+                       schemaVersion: Int? = nil,
+                       generationHighWater: Int64? = nil) -> PiliAccountLiveMemoryShadow {
     PiliAccountLiveMemoryShadow(
       schemaVersion: schemaVersion ?? current.schemaVersion,
       scope: current.scope, identityScope: current.identityScope,
@@ -632,7 +652,8 @@ actor PiliAccountEnvelopeTransactionStore {
       records: records ?? current.records,
       storedOrder: storedOrder ?? current.storedOrder,
       ownerOrder: ownerOrder ?? current.ownerOrder, selectionPurposes: current.selectionPurposes,
-      selections: selections ?? current.selections, history: history ?? current.history)
+      selections: selections ?? current.selections, history: history ?? current.history,
+      generationHighWater: generationHighWater ?? current.generationHighWater)
   }
 
   private func beginOperation() throws {
