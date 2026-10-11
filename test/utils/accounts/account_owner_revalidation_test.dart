@@ -74,6 +74,24 @@ class _ControlledAdapter implements HttpClientAdapter {
   void close({bool force = false}) {}
 }
 
+/// Answers immediately so fixture resets (clear triggers buvid activation)
+/// never wait on a test's controlled adapter left over from a previous case.
+class _ImmediateAdapter implements HttpClientAdapter {
+  @override
+  Future<ResponseBody> fetch(
+    RequestOptions options,
+    Stream<Uint8List>? requestStream,
+    Future<void>? cancelFuture,
+  ) => Future.value(ResponseBody.fromString(
+    '{}',
+    200,
+    headers: {Headers.contentTypeHeader: [Headers.jsonContentType]},
+  ));
+
+  @override
+  void close({bool force = false}) {}
+}
+
 void main() {
   late AccountTestStorage storage;
 
@@ -84,12 +102,15 @@ void main() {
     await storage.reset();
     await GStorage.localCache.delete(LocalCacheKey.historyPause);
   });
+  tearDown(() {
+    Request.dio.httpClientAdapter = _ImmediateAdapter();
+  });
   tearDownAll(() => storage.close());
 
   test('syncHistoryStatus awaits the real cache write of the current owner', () async {
     final account = _account(980001);
     await Accounts.installCredentials(account);
-    Accounts.selectTemporarily(AccountType.main, account);
+    Accounts.selectTemporarily(AccountType.heartbeat, account);
     final adapter = _ControlledAdapter();
     Request.dio.httpClientAdapter = adapter;
     final coordinator = AccountWriteBackCoordinator();
@@ -107,13 +128,13 @@ void main() {
     final b = _account(980003);
     await Accounts.installCredentials(a);
     await Accounts.installCredentials(b);
-    Accounts.selectTemporarily(AccountType.main, a);
+    Accounts.selectTemporarily(AccountType.heartbeat, a);
     final adapter = _ControlledAdapter();
     Request.dio.httpClientAdapter = adapter;
     final coordinator = AccountWriteBackCoordinator();
     final syncing = RequestUtils.syncHistoryStatus(coordinator: coordinator);
     final request = await adapter.nextRequest();
-    Accounts.selectTemporarily(AccountType.main, b);
+    Accounts.selectTemporarily(AccountType.heartbeat, b);
     request.complete('{"code":0,"data":true}');
     await syncing;
     expect(GStorage.localCache.get(LocalCacheKey.historyPause), isNull);
@@ -123,7 +144,7 @@ void main() {
   test('syncHistoryStatus drops the cache write after delete and reinstall', () async {
     final a = _account(980004);
     await Accounts.installCredentials(a);
-    Accounts.selectTemporarily(AccountType.main, a);
+    Accounts.selectTemporarily(AccountType.heartbeat, a);
     final adapter = _ControlledAdapter();
     Request.dio.httpClientAdapter = adapter;
     final coordinator = AccountWriteBackCoordinator();
