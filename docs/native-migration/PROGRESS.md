@@ -156,6 +156,28 @@ sourceSHA=workflowSHA=de2223a；`-swift-version 6 -strict-concurrency=complete` 
 durable identity，install/import/delete/buvid durable transaction、durable record identity、
 账号级队列与生产 composition 仍未交付；四能力 flag 保持 false，P05 未整体完成。
 
+**`98e6f9bf6223e90ed1416b78ff345ad36e4e2369` 已验收 Block 1 / B1d 切片（页面只读收口、延迟副作用 admission、Hive maintenance gate）**：
+同 SHA [release 38132428469](https://github.com/Justintunsday/Piliglass/actions/runs/38132428469)
+5/5 与 [preview 38132430663](https://github.com/Justintunsday/Piliglass/actions/runs/38132430663)
+4/4（首次 preview 的 `initial-top` render 阶段在慢 runner 30s 内未写 layout.json，同 SHA
+`rerun --failed` 后通过，非代码回归）；九个强制 outcome 全 success、BUILD SUCCEEDED、
+109.1MB、FFmpeg 顺序。计划见 [P05_B1D_PLAN.md](P05_B1D_PLAN.md)（`04f857d`）。内容：
+`Accounts.installedAccounts()` 纯只读 seam（box 顺序、零 activate/reconcile/refresh/网络），
+页面 `isEmpty/isNotEmpty` 切 `accountCredentialReader.visibleAccounts()`、
+`values/toMap` 切只读 seam（login/mine/setting/about，内容、顺序与读取时机不变）；
+`LoginUtils.setWebCookie`/`onLoginMain`/`onLogoutMain` 与 `RequestUtils.syncHistoryStatus`
+支持 admission 透传（链内单 token、独立调用自带 token、frozen 在任何 WK/网络/GetX 之前
+拒绝；`onLoginMain` 现 await 两个此前 fire-and-forget 的副作用以让外层 token 真正覆盖
+它们，启动顺序与 owner 目标不变）；coordinator 新增非冻结 `quiesce()`，
+`GStorage.compact/close` 先等待在途 admitted 链再执行（真实 Hive + Completer 覆盖）。
+提交：`ee58276`（实现）、`05433d5`/`3f56f01`（测试）、`98e6f9b`（测试夹具修复 `reply`
+未初始化）。账户 artifact analyze 无问题、实际 `+239: All tests passed!`（230→239）；
+envelope `status=passed` 108 oracle/10 观察/43 负例/40 staging/58 transaction/51 authority、
+sourceSHA=workflowSHA=98e6f9b；preview 20 tests 0 failures、压力 `failures=[]`。范围
+仅为页面读取与延迟副作用/maintenance 边界；仍未接 authority、未产生 durable identity，
+Block 2 的 install/import/delete/buvid durable transaction、账号级队列与生产 composition
+属后续切片；四能力 flag 保持 false，P05 未整体完成。
+
 当前阶段为 **P05**。`bedde36` 的原并行组与 `0527fb2` 的
 [CA1 jar-only shadow](P05_COOKIE_AUTHORITY_PLAN.md) 均已通过同 SHA release5 +
 preview4 jobs。`74101fa` 的 CA2 纯 Cookie mutation candidate 与 CA3 默认 Dart

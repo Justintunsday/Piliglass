@@ -6,6 +6,12 @@ preview 38130028273，transaction 58）。本文件是 B1d 的实施前可执行
 已验收结论。四能力 flag 保持 false；不接 authority/durable identity；不做 Block 2 的
 install/import/delete/buvid durable transaction、账号级队列或生产 composition。
 
+**已实现并验收（2026-10-11）**：实现 `ee58276`、测试 `05433d5`/`3f56f01`、夹具修复
+`98e6f9b`；同 SHA release 38132428469 5/5、preview 38132430663 4/4（首次
+`initial-top` render 为慢 runner 超时，rerun 通过）；账户 **+239** tests；envelope
+108/43/40/58/51、sourceSHA=workflowSHA=98e6f9b；九 outcome success。`close` 的测试
+边界：共享测试 Hive 上不执行真实 close，`close` 与 `compact` 共用同一 `quiesce` seam。
+
 ## 0. 盘点
 
 | 项 | 位置（现状） | 拟接入边界 | 测试方式 |

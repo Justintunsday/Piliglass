@@ -8,6 +8,13 @@
 （release 38127371993 5/5、preview 38127374136 4/4，账户 **+230** tests、envelope
 108/43/40/35/51）；B1d 与页面读取仍未完成，四 flag false。
 
+**验收记录（2026-10-11）**：B1d 完成并在 `98e6f9b` 同 SHA 验收（release 38132428469
+5/5、preview 38132430663 4/4；账户 **+239** tests；envelope 108/43/40/58/51；
+sourceSHA=workflowSHA=98e6f9b）。页面 `account.values/toMap/isEmpty` 已全部切换为
+`Accounts.installedAccounts()` 只读 seam 与 `visibleAccounts()` 摘要；延迟副作用
+（WK/平台删除/history 同步/userInfo）进入 admission 透传；`GStorage.compact/close`
+先经非冻结 `quiesce()`。四 flag false，P05 未整体完成。
+
 ## B1c：只读收口（csrf/accessKey/gRPC/header/页面）
 
 `csrf` 读取（`\.csrf`，共 122 处，16 个文件）：

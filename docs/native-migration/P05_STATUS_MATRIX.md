@@ -170,6 +170,18 @@ BUILD SUCCEEDED/109.1MB/FFmpeg。仍未接 authority、未产生 durable identit
 install/import/delete/buvid durable transaction、账号级队列与生产 composition 属后续
 切片；四 flag false。
 
+**Block 1 / B1d 切片（页面读取、延迟副作用、maintenance gate）已在 `98e6f9b` 验收**：
+`Accounts.installedAccounts()` 纯只读 seam + 页面 `isEmpty/isNotEmpty` 切
+`visibleAccounts()`（login/mine/setting/about，内容/顺序/读取时机不变、零
+activate/reconcile/refresh）；`setWebCookie`/`onLoginMain`/`onLogoutMain`/
+`syncHistoryStatus` 支持 admission 透传（链内单 token、独立调用自带 token、frozen 在
+WK/网络/GetX 前拒绝）；`coordinator.quiesce()`（非冻结排空）+ `GStorage.compact/close`
+先 quiesce 再执行。证据：release 38132428469 5/5、preview 38132430663 4/4（首次
+`initial-top` render 为慢 runner 超时，同 SHA rerun 通过）；账户 **+239** tests、
+analyze 无问题；envelope 108/43/40/58/51、sourceSHA=98e6f9b；九 outcome success、
+BUILD SUCCEEDED/109.1MB/FFmpeg、preview 20 tests/`failures=[]`。仍未接 authority/
+durable identity；四 flag false。
+
 仍直接读写、未进入统一 barrier 的路径：
 
 - `Accounts.set/selectTemporarily/temporary` 选择；`Accounts.refresh` 的 Hive 对账与
