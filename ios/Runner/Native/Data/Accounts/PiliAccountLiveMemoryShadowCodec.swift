@@ -60,9 +60,9 @@ struct PiliAccountLiveMemoryShadowCodec: Sendable {
       }
       // The parser has bounded its tree allocations. Before allocating any
       // DTO unit/record/bucket arrays, independently bound projection resources.
-      try preflight(fields, records: rawRecords, codec: codec)
+      try preflight(fields, records: rawRecords, schemaVersion: schemaVersion, codec: codec)
       let records = try rawRecords.map { value in
-        let record = try recordFields(value, codec: codec)
+        let record = try recordFields(value, schemaVersion: schemaVersion, codec: codec)
         let identity = try record["durableIdentity"].map { try codec.optionalUnits($0) } ?? nil
         return try PiliAccountLiveMemoryRecord(
           record: index(record["record"], codec: codec),
@@ -123,7 +123,7 @@ struct PiliAccountLiveMemoryShadowCodec: Sendable {
   /// Resource-only pass over the parsed tree. No UTF16 DTO, Cookie semantics,
   /// byte re-encoding, parser restart or per-account budget reset occurs here.
   /// Domain later uses a separate ledger to validate constructed DTOs as well.
-  private func preflight(_ fields: [String: Value], records: [Value],
+  private func preflight(_ fields: [String: Value], records: [Value], schemaVersion: Int,
                          codec: PiliOrderedCookieArchiveCodec) throws {
     let limits = codec.limits
     var budget = try PiliOrderedCookieArchiveBudget(limits: limits)
@@ -131,7 +131,7 @@ struct PiliAccountLiveMemoryShadowCodec: Sendable {
     for value in records {
       // object() first requires exact ASCII field-key code units. Thus these
       // fixed *Units lookups cannot merge Unicode-canonical equivalent names.
-      let record = try recordFields(value, codec: codec)
+      let record = try recordFields(value, schemaVersion: schemaVersion, codec: codec)
       try countUnits(record["storageKeyUnits"], maximum: limits.maximumBucketKeyUnits,
                      nullable: true, codec: codec, budget: &budget)
       if let identityValue = record["durableIdentity"] {
@@ -186,11 +186,16 @@ struct PiliAccountLiveMemoryShadowCodec: Sendable {
     }
   }
 
-  /// Schema-3 records include the identity key; schema-2 legacy records keep
-  /// the exact old key shape. Both stay strict; anything else fails.
-  private func recordFields(_ value: Value,
+  /// Field shape is schema-aware: schema-2 records must keep the exact legacy
+  /// ten-key shape (a `durableIdentity`, even null, is rejected and can never
+  /// be silently dropped); schema-3 records accept the identity key, with the
+  /// anonymous record falling back to the legacy shape because its identity is
+  /// omitted. Anything else fails.
+  private func recordFields(_ value: Value, schemaVersion: Int,
                             codec: PiliOrderedCookieArchiveCodec) throws -> [String: Value] {
-    if let modern = try? codec.object(value, keys: Self.recordKeys) { return modern }
+    if schemaVersion != 2, let modern = try? codec.object(value, keys: Self.recordKeys) {
+      return modern
+    }
     return try codec.object(value, keys: Self.legacyRecordKeys)
   }
 
