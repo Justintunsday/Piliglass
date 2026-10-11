@@ -93,6 +93,59 @@ void main() {
     expect(coordinator.liveOperationCount, 0);
   });
 
+  test('maintenance is exclusive immediately and releases on end', () async {
+    final coordinator = AccountWriteBackCoordinator();
+    final pending = coordinator.beginMaintenance();
+    // The token is claimed synchronously before the first await.
+    expect(coordinator.tryAdmit(), isNull);
+    final token = await pending;
+    expect(token, isNotNull);
+    expect(coordinator.isMaintenanceActive, true);
+    token!.end(permanent: false);
+    expect(coordinator.isMaintenanceActive, false);
+    final admitted = coordinator.tryAdmit();
+    expect(admitted, isNotNull);
+    admitted!.release();
+  });
+
+  test('maintenance blocks admissions at the last-release boundary', () async {
+    final coordinator = AccountWriteBackCoordinator();
+    final operation = coordinator.tryAdmit()!;
+    var acquired = false;
+    final pending = coordinator.beginMaintenance()
+      ..then((_) => acquired = true);
+    await Future<void>.value();
+    expect(acquired, false);
+    expect(coordinator.tryAdmit(), isNull);
+    operation.release();
+    final token = await pending;
+    expect(acquired, true);
+    expect(coordinator.tryAdmit(), isNull);
+    token!.end(permanent: false);
+    final admitted = coordinator.tryAdmit();
+    expect(admitted, isNotNull);
+    admitted!.release();
+  });
+
+  test('permanent maintenance close never reopens', () async {
+    final coordinator = AccountWriteBackCoordinator();
+    final token = (await coordinator.beginMaintenance())!;
+    token.end(permanent: true);
+    expect(coordinator.isClosed, true);
+    expect(coordinator.tryAdmit(), isNull);
+    expect(await coordinator.beginMaintenance(), isNull);
+  });
+
+  test('maintenance never clears an authority freeze', () async {
+    final coordinator = AccountWriteBackCoordinator();
+    await coordinator.freeze();
+    final token = await coordinator.beginMaintenance();
+    expect(token, isNotNull);
+    token!.end(permanent: false);
+    expect(coordinator.isFrozen, true);
+    expect(coordinator.tryAdmit(), isNull);
+  });
+
   test('compact waits for the admitted write chain before touching Hive', () async {
     final coordinator = AccountWriteBackCoordinator();
     final port = _GatedInstallPort();
@@ -109,12 +162,18 @@ void main() {
     await Future<void>.value();
     expect(compacted, false);
     expect(coordinator.liveOperationCount, 1);
+    // The maintenance barrier rejects admissions while it owns the boxes.
+    expect(coordinator.tryAdmit(), isNull);
     port.gate.complete();
     await installing;
     await compacting;
     expect(compacted, true);
     expect(Accounts.account.get('970001'), same(account));
     expect(Accounts.account.isOpen, true);
+    // Compaction resumes admissions after it ends.
+    final admitted = coordinator.tryAdmit();
+    expect(admitted, isNotNull);
+    admitted!.release();
   });
 
   test('delayed side effects reject before WK, network or GetX when frozen', () async {

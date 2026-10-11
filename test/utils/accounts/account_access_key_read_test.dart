@@ -44,4 +44,17 @@ void main() {
     final account = _account(960003);
     expect(Accounts.accessKeyOf(account), 'access-960003');
   });
+
+  test('boundAccessKey and accessKeyOf distinguish revocation from uninstalled fallback', () async {
+    final account = _account(960004);
+    await Accounts.installCredentials(account);
+    expect(Accounts.boundAccessKey(account), 'access-960004');
+    expect(Accounts.boundAccessKey(_account(960005)), isNull);
+    await account.delete();
+    expect(Accounts.boundAccessKey(account), isNull);
+    // A bound-but-revoked owner must not fall back to its stale direct field.
+    expect(Accounts.accessKeyOf(account), isNull);
+    // Uninstalled owners keep the legacy compatibility read.
+    expect(Accounts.accessKeyOf(_account(960006)), 'access-960006');
+  });
 }

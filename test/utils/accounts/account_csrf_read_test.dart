@@ -51,4 +51,19 @@ void main() {
     await account.delete();
     expect(Accounts.csrfOf(account), 'csrf-950004');
   });
+
+  test('boundCsrf distinguishes revoked from uninstalled while csrfOf keeps the legacy fallback', () async {
+    final account = _account(950005);
+    await Accounts.installCredentials(account);
+    final counter = CountingCredentialReader();
+    expect(Accounts.boundCsrf(account, reader: counter), 'csrf-950005');
+    expect(counter.csrfReads, 1);
+    expect(Accounts.boundCsrf(_account(950006)), isNull);
+    await account.delete();
+    expect(Accounts.boundCsrf(account, reader: counter), isNull);
+    // The revoked owner never reaches the reader: no stamp exists anymore.
+    expect(counter.csrfReads, 1);
+    // The legacy wrapper keeps the historical value for retired owners.
+    expect(Accounts.csrfOf(account), 'csrf-950005');
+  });
 }
