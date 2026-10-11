@@ -2,7 +2,12 @@
 
 2026-10-10（Asia/Hong_Kong）。前置为 credential reader 只读组（
 [P05_CREDENTIAL_READER_PLAN.md](P05_CREDENTIAL_READER_PLAN.md)，同 SHA 闭环完成后
-开始实施）。本文件是 B1a 的实施前计划，不是实现或验收证明。范围是用户指定的 Block 1（全部 reader/writer 与统一
+开始实施）。本文件是 B1a 的实施前计划，不是实现或验收证明。
+
+**已实现并验收（2026-10-10）**：实现 `220ebb6`、测试 `2507fdb`、coordinator seam 修复
+`536d8b5`；随 B1 切片同 SHA 验证 release 38127371993（5/5）与 preview 38127374136
+（4/4），账户 **+230** tests、envelope 108/43/40/35/51、sourceSHA=405dd5c。四 flag 保持
+false；写屏障只是 Block 1 的已验收切片，P05 未整体完成。范围是用户指定的 Block 1（全部 reader/writer 与统一
 屏障）的第一个有限切片：**只做 Port 支撑的生命周期 writer 边界**；不接启动 apply/
 NativeActive，四 flag 保持 false，不改写默认 Dart 行为（无 freeze 调用者时逐字节等价）。
 

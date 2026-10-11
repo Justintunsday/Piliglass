@@ -4,6 +4,10 @@
 （[P05_WRITE_BARRIER_PLAN.md](P05_WRITE_BARRIER_PLAN.md)，代码 `2507fdb` 待同 SHA
 验收）。本文件是实施前计划；范围是 Block 1 的第二个有限切片。
 
+**已实现并验收（2026-10-10）**：计划 `25c20f6`、实现 `1f41c1d`、测试 `f64e264`；
+随 B1 切片同 SHA 验证 release 38127371993 / preview 38127374136，账户 **+230** tests、
+envelope 108/43/40/35/51、sourceSHA=405dd5c。四 flag 保持 false。
+
 ## 范围与盘点
 
 | writer | 位置 | 现状 | 本组处理 |

@@ -111,6 +111,30 @@ LoginUtils 延迟副作用与 Hive close/compact 仍待后续切片。五项剩�
 [P05_REMAINING_SCOPE_PLAN.md](P05_REMAINING_SCOPE_PLAN.md)，下一切片计划见
 [P05_WRITE_BARRIER_PLAN.md](P05_WRITE_BARRIER_PLAN.md)。四 flag false，P05 未整体完成。
 
+**`405dd5c8f6472baa6a0b69f495540d1fdfdab189` 已验收 Block 1 有限切片（B1a/B1b/B1c）**：
+同 SHA [release 38127371993](https://github.com/Justintunsday/Piliglass/actions/runs/38127371993)
+5/5 与 [preview 38127374136](https://github.com/Justintunsday/Piliglass/actions/runs/38127374136)
+4/4 jobs success；九个强制 outcome 全 success、0 contract error；Runner BUILD SUCCEEDED、
+109.1MB、FFmpeg 顺序通过。内容：B1a 生命周期 Port 写入（install/import/deleteAll/clear 与
+直接 `LoginAccount`/`AnonymousAccount.delete`）接入共享 admission/drain，frozen 在任何
+revoke/字段/port 写入之前抛 `StateError('Account write-back is frozen')`，嵌套内部调用
+复用外层 token（[P05_WRITE_BARRIER_PLAN.md](P05_WRITE_BARRIER_PLAN.md)：`220ebb6`/`2507fdb`，
+coordinator seam 修复 `536d8b5`）；B1b 选择、refresh 与登录副作用（`set`/
+`selectTemporarily`/`refresh`，`LoginUtils.onLoginMain`→`deleteAll` 透传）接入同一屏障
+（[P05_SELECTION_BARRIER_PLAN.md](P05_SELECTION_BARRIER_PLAN.md)：`25c20f6`/`1f41c1d`/
+`f64e264`）；B1c 只读收口（`Accounts.csrfOf`/`accessKeyOf` + reader `accessKeyFor`，`lib/http`
+122 处 csrf 与 15 处 accessKey 读取全部经凭证 reader，缺 stamp 时保持原字段回退；
+[P05_READER_WRITER_INVENTORY.md](P05_READER_WRITER_INVENTORY.md)：`7344c07`/`673de05`/
+`4be39c4`/`fbf4835`/`2267c9f`/`b00e7d6`）。账户 artifact analyze 无问题、实际
+`+230: All tests passed!`（较 reader 组 +208 新增 22，含屏障与读写访问器测试）；envelope
+`status=passed` 108 oracle/10 观察/43 负例/40 staging/35 transaction/51 authority、
+sourceSHA=workflowSHA=405dd5c、runtimeEnabled=false；preview 20 tests 0 failures、压力
+`failures=0`。首轮真实失败为 `AccountWriteBackCoordinator` 作为默认参数不满足 const
+（`536d8b5` 改为可空参数 + 调用时解析），失败 run 取消后同 SHA 重跑。本切片边界：页面
+`Accounts.account.values/toMap` 读取、WK 镜像、LoginUtils 其它延迟副作用、Hive
+close/compact（B1d）与全部 durable/authority 切片仍未完成；四能力 flag 保持 false，
+生产 authority 仍为 Dart，P05 未整体完成。
+
 当前阶段为 **P05**。`bedde36` 的原并行组与 `0527fb2` 的
 [CA1 jar-only shadow](P05_COOKIE_AUTHORITY_PLAN.md) 均已通过同 SHA release5 +
 preview4 jobs。`74101fa` 的 CA2 纯 Cookie mutation candidate 与 CA3 默认 Dart

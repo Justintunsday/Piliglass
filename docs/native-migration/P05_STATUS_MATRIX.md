@@ -146,6 +146,19 @@ base/gRPC headers 与 accessKey 读取默认经只读 `accountCredentialReader`�
 全部 writer barrier 仍未收口。证据：release 38004792296 / preview 38004795029
 （账户 **+208**、envelope 108/43/40/35/51、九 outcome success）。
 
+**Block 1 有限切片（B1a/B1b/B1c）已在 `405dd5c` 验收**：B1a 生命周期 Port 写入
+（install/import/deleteAll/clear + 直接 delete）与 B1b 选择/refresh/登录副作用
+（set/selectTemporarily/refresh、`onLoginMain`→deleteAll 透传）接入同一
+admission/drain（frozen 在任何变更前拒绝、嵌套复用外层 token、drain 等真实写入）；
+B1c `Accounts.csrfOf`/`accessKeyOf` + reader `accessKeyFor` 收口 `lib/http` 全部
+122 处 csrf 与 15 处 accessKey 读取（缺 stamp 回退原字段，行为等价）。证据：
+release [38127371993](https://github.com/Justintunsday/Piliglass/actions/runs/38127371993)
+5/5、preview [38127374136](https://github.com/Justintunsday/Piliglass/actions/runs/38127374136)
+4/4；账户 analyze 无问题、实际 **+230** tests；envelope 108/43/40/35/51、
+sourceSHA=workflowSHA=405dd5c；九 outcome success、BUILD SUCCEEDED/109.1MB/FFmpeg。
+仍未收口：页面 `account.values/toMap` 读取、WK 镜像、LoginUtils 其它延迟副作用、
+Hive close/compact（B1d）；四 flag false，P05 未整体完成。
+
 仍直接读写、未进入统一 barrier 的路径：
 
 - `Accounts.set/selectTemporarily/temporary` 选择；`Accounts.refresh` 的 Hive 对账与

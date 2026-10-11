@@ -4,6 +4,10 @@
 数字来自当前分支实际 `Select-String` 统计（`lib/**`，2026-10-10），不是估算；本文件
 只是盘点与批次计划，不代表任何项已收口。
 
+**验收记录（2026-10-10）**：csrf/accessKey 收口随 B1 切片在 `405dd5c` 同 SHA 验证
+（release 38127371993 5/5、preview 38127374136 4/4，账户 **+230** tests、envelope
+108/43/40/35/51）；B1d 与页面读取仍未完成，四 flag false。
+
 ## B1c：只读收口（csrf/accessKey/gRPC/header/页面）
 
 `csrf` 读取（`\.csrf`，共 122 处，16 个文件）：
