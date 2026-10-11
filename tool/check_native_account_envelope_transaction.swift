@@ -47,6 +47,19 @@ private actor TransactionFaultVault: PiliAccountSecretStore {
 }
 
 @main private struct AccountEnvelopeTransactionChecks {
+  /// Patches the actual Dart envelope JSON for negative identity-shape cases.
+  /// Re-serialization keeps integer number tokens (all fixture magnitudes stay
+  /// inside JSONSerialization's exact integer range).
+  private static func patchedEnvelope(
+    _ data: Data, _ mutate: (inout [String: Any]) -> Void
+  ) throws -> Data {
+    guard var root = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+      throw TransactionFixtureError.failed("envelope JSON object expected")
+    }
+    mutate(&root)
+    return try JSONSerialization.data(withJSONObject: root, options: [.sortedKeys])
+  }
+
   static func main() async throws {
     guard CommandLine.arguments.count == 2 else {
       throw TransactionFixtureError.failed("fresh live actual Dart envelope golden required")
@@ -266,6 +279,13 @@ private actor TransactionFaultVault: PiliAccountSecretStore {
         previousKeyUnits: nil, previousExpectedGeneration: nil)
       throw TransactionFixtureError.failed("reentrant purpose change admitted")
     } catch PiliAccountShadowTransactionError.operationInProgress { checks += 1 }
+    do {
+      _ = try await fencedStore.applyInstall(PiliAccountShadowInstall(
+        storageKeyUnits: PiliCookieUTF16(units: Array("reentrant-install".utf16)),
+        mid: 1, generation: record.generation + 3000, accessKeyUnits: nil,
+        refreshTokenUnits: nil, persistedPurposes: [], activated: false, jar: cleared))
+      throw TransactionFixtureError.failed("reentrant install admitted")
+    } catch PiliAccountShadowTransactionError.operationInProgress { checks += 1 }
     // A second transaction actor has a distinct wrapper fence, but the shared
     // vault rejects its read while A's durable publication is in progress.
     let competingStore = PiliAccountEnvelopeTransactionStore(vault: fencedOuter)
@@ -423,6 +443,244 @@ private actor TransactionFaultVault: PiliAccountSecretStore {
       try await purposeVault.discardShadow()
     } catch {
       try? await purposeVault.discardShadow()
+      throw error
+    }
+
+    // Legacy captures carry no durable identity. Adoption mints one persisted
+    // canonical identity per login record, upgrades to schema 3, survives a
+    // real Keychain close/reopen and stays stable across existing transactions.
+    try check(base.schemaVersion == 2, "the actual Dart golden is a schema-2 envelope")
+    try check(base.records.allSatisfy { $0.durableIdentity == nil },
+              "legacy records carry no durable identity")
+    let identityNamespace = UUID()
+    let identityVault = PiliAccountEnvelopeStagingStore(
+      secrets: PiliAccountKeychainSecretStore(stagingNamespace: identityNamespace))
+    let identityStore = PiliAccountEnvelopeTransactionStore(vault: identityVault)
+    do {
+      try await identityVault.importShadow(codec.encode(base))
+      let adopted = try await identityStore.adoptMissingIdentities()
+      try check(adopted.adopted == base.records.count - 1,
+                "adoption mints one identity per login record")
+      try check(adopted.transactionID != nil, "adoption publishes once")
+      try check(adopted.nativeWritesAllowed == false && adopted.authoritySwitchAllowed == false,
+                "adoption never grants authority")
+      guard let adoptedShadow = try await identityVault.loadShadow() else {
+        throw TransactionFixtureError.failed("missing adopted shadow")
+      }
+      try check(adoptedShadow.schemaVersion == 3, "adoption upgrades to schema 3")
+      let identities = adoptedShadow.records.map { $0.durableIdentity }
+      try check(identities[0] == nil, "anonymous record keeps no identity")
+      let loginIdentities = identities.dropFirst()
+      try check(loginIdentities.allSatisfy { $0 != nil },
+                "every login record has an identity")
+      try check(Set(loginIdentities.compactMap { $0 }).count == loginIdentities.count,
+                "identities are unique")
+      try check(loginIdentities.allSatisfy {
+        $0.map(PiliAccountLiveMemoryShadow.isCanonicalDurableIdentity) == true
+      }, "identities are canonical lowercase UUID text")
+      let reopenedVault = PiliAccountEnvelopeStagingStore(
+        secrets: PiliAccountKeychainSecretStore(stagingNamespace: identityNamespace))
+      let reopened = try await reopenedVault.loadShadow()
+      try check(reopened?.records.map { $0.durableIdentity } == identities,
+                "identities survive real Keychain close/reopen")
+      let reopenedStore = PiliAccountEnvelopeTransactionStore(vault: reopenedVault)
+      _ = try await reopenedStore.applyActivated(
+        recordKeyUnits: key, expectedGeneration: record.generation, activated: true)
+      let afterMutation = try await reopenedVault.loadShadow()
+      try check(afterMutation?.records[1].durableIdentity == identities[1],
+                "existing transactions preserve the record identity")
+      guard let beforeSecond = try await reopenedVault.loadShadowSnapshot() else {
+        throw TransactionFixtureError.failed("missing adopted snapshot")
+      }
+      let secondAdopt = try await reopenedStore.adoptMissingIdentities()
+      try check(secondAdopt.adopted == 0 && secondAdopt.transactionID == nil,
+                "re-adoption is a no-op")
+      let afterSecond = try await reopenedVault.loadShadowSnapshot()
+      try check(afterSecond?.transactionID == beforeSecond.transactionID,
+                "no-op adoption keeps the pointer identity")
+      try await reopenedVault.discardShadow()
+    } catch {
+      try? await identityVault.discardShadow()
+      throw error
+    }
+
+    // Identity shape errors fail explicitly and publish nothing.
+    func expectRejectedIdentity(_ label: String, _ expected: PiliAccountLiveMemoryShadowError,
+                                _ mutate: @escaping (inout [String: Any]) -> Void) throws {
+      let patched = try patchedEnvelope(data, mutate)
+      do {
+        _ = try codec.decode(patched)
+        throw TransactionFixtureError.failed(label)
+      } catch let error as PiliAccountLiveMemoryShadowError {
+        try check(error == expected, label)
+      }
+    }
+    try expectRejectedIdentity("malformed identity accepted", .invalidEnvelope) { root in
+      var records = root["records"] as? [[String: Any]] ?? []
+      records[1]["durableIdentity"] = "not-a-uuid"
+      root["records"] = records
+    }
+    try expectRejectedIdentity("oversized identity accepted", .resourceLimit) { root in
+      var records = root["records"] as? [[String: Any]] ?? []
+      records[1]["durableIdentity"] = String(repeating: "a", count: 4000)
+      root["records"] = records
+    }
+    try expectRejectedIdentity("anonymous identity accepted", .invalidEnvelope) { root in
+      var records = root["records"] as? [[String: Any]] ?? []
+      records[0]["durableIdentity"] = "00000000-0000-4000-8000-000000000000"
+      root["records"] = records
+    }
+    try expectRejectedIdentity("unknown identity variant accepted", .invalidEnvelope) { root in
+      var records = root["records"] as? [[String: Any]] ?? []
+      records[1]["durableIdentityx"] = "00000000-0000-4000-8000-000000000000"
+      root["records"] = records
+    }
+    try expectRejectedIdentity("duplicate identities accepted under schema 3", .invalidEnvelope) { root in
+      var records = root["records"] as? [[String: Any]] ?? []
+      records[1]["durableIdentity"] = "00000000-0000-4000-8000-000000000000"
+      records[2]["durableIdentity"] = "00000000-0000-4000-8000-000000000000"
+      root["schemaVersion"] = 3
+      root["records"] = records
+    }
+    try expectRejectedIdentity("schema 3 with a missing identity accepted", .invalidEnvelope) { root in
+      var records = root["records"] as? [[String: Any]] ?? []
+      records[1]["durableIdentity"] = "00000000-0000-4000-8000-000000000001"
+      root["schemaVersion"] = 3
+      root["records"] = records
+    }
+
+    // Install appends one complete login record to an adopted envelope: next
+    // contiguous index, matching stored/owner order, untouched selections,
+    // anonymous and existing records, minted canonical identity.
+    let installNamespace = UUID()
+    let installVault = PiliAccountEnvelopeStagingStore(
+      secrets: PiliAccountKeychainSecretStore(stagingNamespace: installNamespace))
+    let installStore = PiliAccountEnvelopeTransactionStore(vault: installVault)
+    do {
+      try await installVault.importShadow(codec.encode(base))
+      _ = try await installStore.adoptMissingIdentities()
+      guard let adoptedShadow = try await installVault.loadShadow() else {
+        throw TransactionFixtureError.failed("missing install adoption shadow")
+      }
+      let newKey = PiliCookieUTF16(units: Array("install-target".utf16))
+      let install = PiliAccountShadowInstall(
+        storageKeyUnits: newKey, mid: 424242, generation: record.generation + 1000,
+        accessKeyUnits: PiliCookieUTF16(units: Array("install-access".utf16)),
+        refreshTokenUnits: nil, persistedPurposes: [.video], activated: true, jar: cleared)
+      let receipt = try await installStore.applyInstall(install)
+      try check(receipt.record == adoptedShadow.records.count,
+                "install appends the next contiguous record")
+      try check(receipt.nativeWritesAllowed == false && receipt.authoritySwitchAllowed == false,
+                "install never grants authority")
+      guard let installed = try await installVault.loadShadow() else {
+        throw TransactionFixtureError.failed("missing installed shadow")
+      }
+      try check(installed.records.count == adoptedShadow.records.count + 1,
+                "install adds exactly one record")
+      try check(installed.records.map { $0.record } == Array(0..<installed.records.count),
+                "install keeps contiguous record numbering")
+      let newRecord = installed.records[installed.records.count - 1]
+      try check(newRecord.storageKeyUnits == newKey && newRecord.mid == 424242 &&
+        newRecord.isLogin, "install stores the exact key and mid")
+      try check(newRecord.accessKeyUnits?.units == Array("install-access".utf16) &&
+        newRecord.refreshTokenUnits == nil && newRecord.activated &&
+        newRecord.persistedPurposes == [.video],
+        "install stores credentials, purposes and activation")
+      try check(newRecord.jar == cleared, "install stores the exact jar")
+      try check(newRecord.durableIdentity.map(PiliAccountLiveMemoryShadow.isCanonicalDurableIdentity) == true,
+                "install mints a canonical identity")
+      try check(installed.records.dropLast().map { $0.durableIdentity } ==
+        adoptedShadow.records.map { $0.durableIdentity },
+        "install leaves existing identities untouched")
+      try check(installed.records[0] == adoptedShadow.records[0] &&
+        installed.records[1] == adoptedShadow.records[1] &&
+        installed.records[2] == adoptedShadow.records[2],
+        "install leaves anonymous and existing records untouched")
+      let expectedOrder = PiliAccountLiveMemoryOrderEntry(
+        keyUnits: newKey, record: newRecord.record)
+      try check(installed.storedOrder == adoptedShadow.storedOrder + [expectedOrder],
+                "install appends the stored order entry")
+      try check(installed.ownerOrder == adoptedShadow.ownerOrder + [expectedOrder],
+                "install appends the owner order entry")
+      try check(installed.selections == adoptedShadow.selections &&
+        installed.history == adoptedShadow.history && installed.revision == adoptedShadow.revision,
+        "install keeps selections, history and revision")
+      let reopenedInstallVault = PiliAccountEnvelopeStagingStore(
+        secrets: PiliAccountKeychainSecretStore(stagingNamespace: installNamespace))
+      let reopenedInstall = try await reopenedInstallVault.loadShadow()
+      try check(reopenedInstall == installed, "installed envelope survives real Keychain close/reopen")
+      guard let beforeRejects = try await reopenedInstallVault.loadShadowSnapshot() else {
+        throw TransactionFixtureError.failed("missing install reject snapshot")
+      }
+      let reopenedInstallStore = PiliAccountEnvelopeTransactionStore(vault: reopenedInstallVault)
+      do {
+        _ = try await reopenedInstallStore.applyInstall(install)
+        throw TransactionFixtureError.failed("duplicate install accepted")
+      } catch PiliAccountShadowTransactionError.duplicateRecordKey { checks += 1 }
+      let secondKey = PiliCookieUTF16(units: Array("install-target-2".utf16))
+      do {
+        _ = try await reopenedInstallStore.applyInstall(PiliAccountShadowInstall(
+          storageKeyUnits: secondKey, mid: 1, generation: install.generation,
+          accessKeyUnits: nil, refreshTokenUnits: nil, persistedPurposes: [],
+          activated: false, jar: cleared))
+        throw TransactionFixtureError.failed("duplicate generation install accepted")
+      } catch PiliAccountShadowTransactionError.staleGeneration { checks += 1 }
+      do {
+        _ = try await reopenedInstallStore.applyInstall(PiliAccountShadowInstall(
+          storageKeyUnits: PiliCookieUTF16(units: []), mid: 1, generation: install.generation + 1,
+          accessKeyUnits: nil, refreshTokenUnits: nil, persistedPurposes: [],
+          activated: false, jar: cleared))
+        throw TransactionFixtureError.failed("empty key install accepted")
+      } catch PiliAccountShadowTransactionError.invalidInstall { checks += 1 }
+      do {
+        _ = try await reopenedInstallStore.applyInstall(PiliAccountShadowInstall(
+          storageKeyUnits: secondKey, mid: 1, generation: install.generation + 1,
+          accessKeyUnits: nil, refreshTokenUnits: nil, persistedPurposes: [.main, .main],
+          activated: false, jar: cleared))
+        throw TransactionFixtureError.failed("duplicate purpose install accepted")
+      } catch PiliAccountShadowTransactionError.invalidInstall { checks += 1 }
+      do {
+        _ = try await reopenedInstallStore.applyInstall(PiliAccountShadowInstall(
+          storageKeyUnits: secondKey, mid: 1, generation: install.generation + 1,
+          accessKeyUnits: PiliCookieUTF16(units: Array(repeating: 97, count: 65537)),
+          refreshTokenUnits: nil, persistedPurposes: [], activated: false, jar: cleared))
+        throw TransactionFixtureError.failed("oversized install accepted")
+      } catch PiliAccountLiveMemoryShadowError.resourceLimit { checks += 1 }
+      let afterRejects = try await reopenedInstallVault.loadShadowSnapshot()
+      try check(afterRejects?.transactionID == beforeRejects.transactionID &&
+        afterRejects?.envelope == beforeRejects.envelope,
+        "install rejections never publish a new candidate")
+      try await reopenedInstallVault.discardShadow()
+    } catch {
+      try? await installVault.discardShadow()
+      throw error
+    }
+
+    // A schema-2 envelope cannot be installed into directly: adoption is the
+    // explicit upgrade gate, so nothing changes shape silently.
+    let legacyInstallNamespace = UUID()
+    let legacyInstallVault = PiliAccountEnvelopeStagingStore(
+      secrets: PiliAccountKeychainSecretStore(stagingNamespace: legacyInstallNamespace))
+    let legacyInstallStore = PiliAccountEnvelopeTransactionStore(vault: legacyInstallVault)
+    do {
+      try await legacyInstallVault.importShadow(codec.encode(base))
+      guard let legacyBefore = try await legacyInstallVault.loadShadowSnapshot() else {
+        throw TransactionFixtureError.failed("missing legacy install snapshot")
+      }
+      do {
+        _ = try await legacyInstallStore.applyInstall(PiliAccountShadowInstall(
+          storageKeyUnits: PiliCookieUTF16(units: Array("legacy-install".utf16)),
+          mid: 1, generation: record.generation + 2000, accessKeyUnits: nil,
+          refreshTokenUnits: nil, persistedPurposes: [], activated: false, jar: cleared))
+        throw TransactionFixtureError.failed("schema-2 install accepted")
+      } catch PiliAccountShadowTransactionError.invalidInstall { checks += 1 }
+      let legacyAfter = try await legacyInstallVault.loadShadowSnapshot()
+      try check(legacyAfter?.transactionID == legacyBefore.transactionID &&
+        legacyAfter?.envelope == legacyBefore.envelope,
+        "schema-2 install never publishes")
+      try await legacyInstallVault.discardShadow()
+    } catch {
+      try? await legacyInstallVault.discardShadow()
       throw error
     }
 
