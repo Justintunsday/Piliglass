@@ -14,18 +14,19 @@ preview 38132430663，账户 +239）；B2a `applyPurposeChange` 已在 `de2223a`
 
 ## B2b-1：durable record identity
 
-- 存储位置/格式：形如 `PiliAccountLiveMemoryRecord.durableIdentity` 的可选字段，
-  持久化在 shadow envelope 的 record 内（Keychain vault 的已发布候选）。格式为
-  canonical lowercase UUID（36 UTF-16 units，8-4-4-4-12）；未赋值 = legacy record。
+- 存储位置/格式：`PiliAccountLiveMemoryRecord.durableIdentity` 可选字段，持久化在 shadow
+  envelope 的 record 内（Keychain vault 的已发布候选）。显式版本化：**schema 2 = legacy
+  （无 identity 字段、逐字节旧形状）；schema 3 = 每个 login record 必须携带 canonical
+  lowercase UUID（36 UTF-16 units，8-4-4-4-12），匿名 record 必须为 nil**。codec 按版本
+  严格选择 record key 形状，两种版本都拒绝未知/重复/多余字段。
 - 生命周期：仅由显式事务铸发一次并持久化；对既有记录永不重新生成；不来自 MID、
-  raw storageKey、runtime generation/epoch/ownerToken，也不作为授权身份。codec 严格
-  接受缺失（legacy 可读）但拒绝 malformed/重复；匿名 record 必须为 nil。
-- 升级路径：新增 `adoptMissingIdentities` 事务，为所有缺少 identity 的 login record
-  铸发唯一 UUID 并单次 CAS 发布；无可升级记录时返回 adopted=0 且**不发布**（指针身份
+  raw storageKey、runtime generation/epoch/ownerToken，也不作为授权身份。
+- 升级路径：`adoptMissingIdentities` 把 schema 2 升级为 schema 3，为所有 login record
+  铸发唯一 UUID 并单次 CAS 发布；已是 schema 3 时为 no-op（adopted=0、不发布、指针身份
   不变）；重复调用幂等。
-- 预算：identity 固定 36 units，先格式校验再计入共享累计 ledger。
-- 编码兼容：字段缺失时 encode 省略（不写 null），保证 legacy envelope 的既有
-  解码/重编码与 108 项比较不受影响。
+- 预算：identity 固定 36 units，先格式校验再计入共享累计 ledger；超长 identity 在
+  preflight 即 `resourceLimit`。
+- 兼容：legacy envelope 解码/重编码字节形状不变；108 项既有比较不受影响。
 
 ## B2b-2：install durable transaction
 
@@ -34,6 +35,8 @@ preview 38132430663，账户 +239）；B2a `applyPurposeChange` 已在 `de2223a`
 - 语义：在 envelope 末尾原子追加 record（`record == records.count`），同步追加
   `storedOrder`/`ownerOrder` 条目（keyUnits 与 record 匹配），selections/history 不变，
   匿名与既有记录逐字段不变，revision 不重编号；record 携带新铸发的 identity。
+- 前置：只接受已 adopt 的 schema 3 envelope；schema 2 → `invalidInstall`（adoption 是
+  显式升级门，不允许 install 静默改写既有记录形状）。
 - 验证：key 非空且未出现（重复 → 新错误 `duplicateRecordKey`）、shape/重复 purpose
   → `invalidInstall`、generation 非正或已用 → `staleGeneration`、records 上限与共享
   累计 ledger（越界 → `resourceLimit`）、CAS（`expectedTransactionID`）、
