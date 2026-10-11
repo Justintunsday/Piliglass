@@ -326,7 +326,10 @@ private struct NativeAccountEnvelopeFixture {
     try failure("invalid-utf8", Data([123, 34, 120, 34, 58, 34, 255, 34, 125]), .malformedJSON)
     try failure("unknown-field", Data(("{\"unknown\":null," + String(rootText.dropFirst())).utf8), .invalidEnvelope)
     try changed("missing-required-null", ordered, [.field("records"), .index(0), .field("storageKeyUnits")], nil)
-    try changed("unsupported-schema", ordered, [.field("schemaVersion")], .number("3"), .unsupportedSchema)
+    try changed("unsupported-schema", ordered, [.field("schemaVersion")], .number("4"), .unsupportedSchema)
+    // Schema 3 is a supported version now (durable record identities); the
+    // unchanged schema-2 records must be rejected, not silently upgraded.
+    try changed("schema3-without-identity", ordered, [.field("schemaVersion")], .number("3"))
     for (label, value) in [("bool-as-int", OracleJSON.bool(true)), ("decimal-int", .number("1.0")),
                            ("exponent-int", .number("1e0")), ("overflow-int", .number("9223372036854775808"))] {
       try changed(label, ordered, [.field("revision")], value)
