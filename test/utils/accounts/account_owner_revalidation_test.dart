@@ -116,7 +116,7 @@ void main() {
     priorPublish = LoginUtils.loginMainPublisher;
     LoginUtils.webCookieMirrorWriter =
         (account, cookies, isCurrent) => Future<void>.value();
-    LoginUtils.webCookieClearer = () => Future<void>.value();
+    LoginUtils.webCookieClearer = Future<void>.value;
     LoginUtils.loginMainPublisher = (response) => Future<void>.value();
   });
   tearDown(() {
