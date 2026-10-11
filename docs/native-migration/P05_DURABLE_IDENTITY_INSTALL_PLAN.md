@@ -6,6 +6,15 @@ preview 38132430663，账户 +239）；B2a `applyPurposeChange` 已在 `de2223a`
 不接 authority、不产生生产 caller、不做 import/delete/buvid durable transaction、不做
 账号级队列；四能力 flag 保持 false。
 
+**已实现并验收（2026-10-11）**：计划 `d6fa5f3`/`03c4fae`、实现 `d5abca9`、driver
+`563bdaf`、负例修复 `b8cc9cf`/`1aa3513`；同 SHA
+[release 38136462609](https://github.com/Justintunsday/Piliglass/actions/runs/38136462609)
+5/5、[preview 38136464878](https://github.com/Justintunsday/Piliglass/actions/runs/38136464878)
+4/4（无 rerun）；envelope `status=passed` 109/44/40/**101**/51、sourceSHA=1aa3513；
+账户 +239 tests；九 outcome success、BUILD SUCCEEDED/109.1MB/FFmpeg。失败与修复：driver
+的 unsupported-schema 负例改用版本 4 并新增 schema3-without-identity 负例（109/44）；
+transaction driver 的 identity 负例改为 unit 数组 wire 形状（`1aa3513`）。
+
 ## 分片与顺序
 
 1. **B2b-1 durable record identity 起点**：记录级稳定 ID 的格式/校验/升级路径。

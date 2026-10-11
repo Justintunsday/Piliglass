@@ -178,6 +178,29 @@ sourceSHA=workflowSHA=98e6f9b；preview 20 tests 0 failures、压力 `failures=[
 Block 2 的 install/import/delete/buvid durable transaction、账号级队列与生产 composition
 属后续切片；四能力 flag 保持 false，P05 未整体完成。
 
+**`1aa351312b2351d99cbe14ae0eedbf01f595ef02` 已验收 Block 2 / B2b 切片（durable record identity 起点 + install durable transaction）**：
+同 SHA [release 38136462609](https://github.com/Justintunsday/Piliglass/actions/runs/38136462609)
+5/5 与 [preview 38136464878](https://github.com/Justintunsday/Piliglass/actions/runs/38136464878)
+4/4 jobs success（preview 无 rerun）；九个强制 outcome 全 success、BUILD SUCCEEDED、
+109.1MB、FFmpeg 顺序。计划见
+[P05_DURABLE_IDENTITY_INSTALL_PLAN.md](P05_DURABLE_IDENTITY_INSTALL_PLAN.md)
+（`d6fa5f3`/`03c4fae`）。内容：`PiliAccountLiveMemoryRecord.durableIdentity` +
+显式 schema 3（schema 2 = legacy 旧形状可读；schema 3 要求每个 login record 携带
+canonical lowercase UUID、匿名必须 nil，codec 按版本严格选择 key 形状）；
+`adoptMissingIdentities` 一次性把 schema 2 升级为 schema 3（已 adopt 时 adopted=0 不发布、
+指针身份不变）；`applyInstall` 仅在 schema 3 上原子追加完整 login record（连续 record
+序号、storedOrder/ownerOrder 追加、selections/history/匿名/既有记录不变、identity 铸发、
+共享 ledger、CAS、重入拒绝；重复 key/generation、空 key、重复 purpose、超预算分别以
+`duplicateRecordKey`/`staleGeneration`/`invalidInstall`/`resourceLimit` 拒绝且零发布；
+receipt 两门恒 false）。提交：`d5abca9`（实现）、`563bdaf`（driver）、`b8cc9cf`/`1aa3513`
+（负例修复）。envelope artifact `status=passed`：**109** envelope checks（108→109）、
+negativeCases **44**（43→44）、40 staging、transaction checks **101**（58→101）、
+51 authority，sourceSHA=workflowSHA=1aa3513；`-swift-version 6 -strict-concurrency=complete`
+编译无诊断；账户 artifact analyze 无问题、`+239: All tests passed!`；preview 20 tests
+0 failures、压力 `failures=[]`。范围仅为 shadow 组件：未接 authority、无生产 caller，
+import/delete/buvid durable transaction、durable identity 消费方与账号级队列属后续；
+四能力 flag 保持 false，P05 未整体完成。
+
 当前阶段为 **P05**。`bedde36` 的原并行组与 `0527fb2` 的
 [CA1 jar-only shadow](P05_COOKIE_AUTHORITY_PLAN.md) 均已通过同 SHA release5 +
 preview4 jobs。`74101fa` 的 CA2 纯 Cookie mutation candidate 与 CA3 默认 Dart

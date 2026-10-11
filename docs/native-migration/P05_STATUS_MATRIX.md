@@ -170,6 +170,18 @@ BUILD SUCCEEDED/109.1MB/FFmpeg。仍未接 authority、未产生 durable identit
 install/import/delete/buvid durable transaction、账号级队列与生产 composition 属后续
 切片；四 flag false。
 
+**Block 2 / B2b 切片（durable record identity + install 事务）已在 `1aa3513` 验收**：
+显式 schema 3（schema 2 legacy 可读；schema 3 要求 login record canonical UUID、
+匿名 nil，codec 按版本严格选择 key 形状）；`adoptMissingIdentities`（schema 2→3 一次性
+升级，已 adopt 时 no-op 不发布）；`applyInstall` 仅 schema 3 原子追加完整 login record
+（连续序号、storedOrder/ownerOrder 追加、selections/history/匿名/既有记录不变、identity
+铸发、共享 ledger、CAS、重入拒绝；`duplicateRecordKey`/`staleGeneration`/`invalidInstall`/
+`resourceLimit` 拒绝零发布；receipt 两门恒 false）。证据：release 38136462609 5/5、
+preview 38136464878 4/4（无 rerun）；账户 **+239** tests、analyze 无问题；envelope
+`status=passed` 109/44/40/**101**/51、sourceSHA=1aa3513；九 outcome success、
+BUILD SUCCEEDED/109.1MB/FFmpeg、preview 20 tests/`failures=[]`。仍未接 authority、
+无生产 caller；import/delete/buvid durable transaction、账号级队列属后续；四 flag false。
+
 **Block 1 / B1d 切片（页面读取、延迟副作用、maintenance gate）已在 `98e6f9b` 验收**：
 `Accounts.installedAccounts()` 纯只读 seam + 页面 `isEmpty/isNotEmpty` 切
 `visibleAccounts()`（login/mine/setting/about，内容/顺序/读取时机不变、零
