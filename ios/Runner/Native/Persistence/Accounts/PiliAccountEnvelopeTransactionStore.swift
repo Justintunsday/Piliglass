@@ -5,6 +5,12 @@ enum PiliAccountShadowTransactionError: Error, Sendable, Equatable {
   case duplicateRecordKey, invalidInstall
   case invalidDelete, invalidImport
   case invalidBuvid
+  /// The bounded account write FIFO is full; nothing was admitted and nothing
+  /// was dropped silently. The caller may retry after the queue drains.
+  case writeQueueOverflow
+  /// Bounded contention retries (cross-store fence/CAS) were exhausted. No
+  /// receipt is fabricated; the caller must read back before deciding.
+  case publicationConflict
 }
 
 struct PiliAccountShadowCookieSave: Sendable, Equatable {
@@ -27,10 +33,48 @@ struct PiliAccountShadowInstall: Sendable, Equatable {
   let jar: PiliOrderedCookieArchive
 }
 
+/// One durable write for the account-level bounded FIFO. Every case names the
+/// exact record (storage key + capture-local generation) it requires; the queue
+/// revalidates against a fresh snapshot on every attempt, so a queued write can
+/// never publish from a snapshot that stopped being current.
+enum PiliAccountShadowQueuedWrite: Sendable, Equatable {
+  case adoptIdentities
+  case install(PiliAccountShadowInstall)
+  case importRecords([PiliAccountShadowInstall])
+  case delete(recordKey: PiliCookieUTF16, generation: Int64)
+  case cookieSave(recordKey: PiliCookieUTF16, generation: Int64,
+                  save: PiliAccountShadowCookieSave)
+  case cookieDelete(recordKey: PiliCookieUTF16, generation: Int64, host: String,
+                    withDomainSharedCookie: Bool)
+  case cookieDeleteAll(recordKey: PiliCookieUTF16, generation: Int64)
+  case temporarySelection(recordKey: PiliCookieUTF16, generation: Int64,
+                          purpose: PiliAccountPurpose)
+  case purposeChange(recordKey: PiliCookieUTF16, generation: Int64,
+                     purpose: PiliAccountPurpose, previousKey: PiliCookieUTF16?,
+                     previousGeneration: Int64?)
+  case credentials(recordKey: PiliCookieUTF16, generation: Int64,
+                   accessKey: PiliCookieUTF16?, refreshToken: PiliCookieUTF16?)
+  case activated(recordKey: PiliCookieUTF16, generation: Int64, activated: Bool)
+  case buvidSeed(recordKey: PiliCookieUTF16, generation: Int64,
+                 value: PiliCookieUTF16, nowMicroseconds: Int64)
+}
+
+/// Tagged result of one queued durable write. Every case carries the underlying
+/// transaction receipt with both authority gates false; no case fabricates
+/// success for an unknown publication.
+enum PiliAccountShadowWriteOutcome: Sendable, Equatable {
+  case record(PiliAccountShadowTransactionReceipt)
+  case importReceipt(PiliAccountShadowImportReceipt)
+  case buvid(PiliAccountShadowBuvidReceipt)
+  case identity(PiliAccountShadowIdentityReceipt)
+}
+
 struct PiliAccountShadowIdentityReceipt: Sendable, Equatable {
   /// Nil when the envelope already carried identities (no publication).
   let transactionID: UUID?
   let adopted: Int
+  /// Identities minted by this adoption in record order (empty on no-op).
+  let adoptedIdentities: [PiliCookieUTF16]
   let nativeWritesAllowed: Bool
   let authoritySwitchAllowed: Bool
 }
@@ -39,6 +83,9 @@ struct PiliAccountShadowImportReceipt: Sendable, Equatable {
   let transactionID: UUID
   let replaced: Int
   let appended: Int
+  /// Result identities in input order: a replacement keeps the existing
+  /// identity, an append carries the freshly minted one.
+  let identities: [PiliCookieUTF16]
   let nativeWritesAllowed: Bool
   let authoritySwitchAllowed: Bool
 }
@@ -47,6 +94,9 @@ struct PiliAccountShadowBuvidReceipt: Sendable, Equatable {
   /// Nil when the record already carried buvid3 (idempotent no-op).
   let transactionID: UUID?
   let seeded: Bool
+  /// The target record's durable identity (nil only for legacy schema-2 input
+  /// without one). A durable label, never an authorization.
+  let durableIdentity: PiliCookieUTF16?
   let nativeWritesAllowed: Bool
   let authoritySwitchAllowed: Bool
 }
@@ -54,6 +104,9 @@ struct PiliAccountShadowBuvidReceipt: Sendable, Equatable {
 struct PiliAccountShadowTransactionReceipt: Sendable, Equatable {
   let transactionID: UUID
   let record: Int
+  /// The exact record's persisted identity (nil only for a schema-2/anonymous
+  /// target without one). A durable label, never an authorization.
+  let durableIdentity: PiliCookieUTF16?
   let nativeWritesAllowed: Bool
   let authoritySwitchAllowed: Bool
 }
@@ -71,14 +124,161 @@ actor PiliAccountEnvelopeTransactionStore {
   private let codec: PiliAccountLiveMemoryShadowCodec
   private var reducer: PiliNativeOrderedCookieReducer
   private var operationInProgress = false
+  private let maxPendingWrites: Int
+  private let maxQueueAttempts: Int
+  private let retryDelayNanoseconds: UInt64
+  private var writerActive = false
+  private var pendingWrites = 0
+  private var waitingTurns: [CheckedContinuation<Void, Never>] = []
   var nativeWritesAllowed: Bool { false }
   var authoritySwitchAllowed: Bool { false }
 
+  /// Waiting (not yet executing) writes in the bounded FIFO. Observability for
+  /// tests/telemetry; it never admits or drops a write.
+  var pendingWriteCount: Int { pendingWrites }
+  var writeQueueIdle: Bool { !writerActive && pendingWrites == 0 }
+
   init(vault: PiliAccountEnvelopeStagingStore,
-       limits: PiliOrderedCookieArchiveLimits = .standard) {
+       limits: PiliOrderedCookieArchiveLimits = .standard,
+       maxPendingWrites: Int = 32,
+       maxQueueAttempts: Int = 40,
+       retryDelayNanoseconds: UInt64 = 25_000_000) {
     self.vault = vault
     codec = PiliAccountLiveMemoryShadowCodec(limits: limits)
     reducer = PiliNativeOrderedCookieReducer(limits: limits)
+    self.maxPendingWrites = max(1, maxPendingWrites)
+    self.maxQueueAttempts = max(1, maxQueueAttempts)
+    self.retryDelayNanoseconds = max(0, retryDelayNanoseconds)
+  }
+
+  /// Account-level write coordination: one bounded FIFO around the
+  /// single-publisher vault. Same-key submissions keep submission order; every
+  /// attempt loads a fresh snapshot and revalidates key+generation, so a queued
+  /// write can neither lose an intervening update nor publish from a snapshot
+  /// that stopped being current (bounded fence/CAS retry; exhausted retries
+  /// throw `publicationConflict`). A full queue throws `writeQueueOverflow`
+  /// immediately and never silently drops the write. Cancellation before
+  /// publication publishes nothing and the FIFO keeps draining.
+  /// `publicationUnknown` always propagates: recovery is by read-back
+  /// (`loadShadowSnapshot`/`lookupRecord`), never by replay.
+  func enqueue(_ write: PiliAccountShadowQueuedWrite) async throws
+    -> PiliAccountShadowWriteOutcome {
+    try Task.checkCancellation()
+    if writerActive {
+      guard pendingWrites < maxPendingWrites else {
+        throw PiliAccountShadowTransactionError.writeQueueOverflow
+      }
+      pendingWrites += 1
+      await withCheckedContinuation { waitingTurns.append($0) }
+      pendingWrites -= 1
+      do {
+        try Task.checkCancellation()
+      } catch {
+        passTurn()
+        throw error
+      }
+    }
+    writerActive = true
+    do {
+      let outcome = try await executeQueuedWrite(write)
+      passTurn()
+      return outcome
+    } catch {
+      passTurn()
+      throw error
+    }
+  }
+
+  /// Read-only durable identity lookup over the current published envelope. No
+  /// activation, reconciliation, network or write; nil means the current
+  /// candidate has no such identity. Compare with the vault transactionID from
+  /// `loadShadowSnapshot()` for cross-restart confirmation.
+  func lookupRecord(durableIdentity: PiliCookieUTF16) async throws
+    -> PiliAccountLiveMemoryRecord? {
+    guard let snapshot = try await vault.loadShadowSnapshot() else { return nil }
+    return snapshot.envelope.records.first { $0.durableIdentity == durableIdentity }
+  }
+
+  /// Read-only snapshot passthrough used for unknown-publication recovery
+  /// decisions (write-after-error means published; write-before-error means
+  /// not published).
+  func loadShadowSnapshot() async throws -> PiliAccountEnvelopeSnapshot? {
+    try await vault.loadShadowSnapshot()
+  }
+
+  private func passTurn() {
+    writerActive = false
+    while !waitingTurns.isEmpty {
+      writerActive = true
+      waitingTurns.removeFirst().resume()
+      return
+    }
+  }
+
+  private func executeQueuedWrite(_ write: PiliAccountShadowQueuedWrite) async throws
+    -> PiliAccountShadowWriteOutcome {
+    var attempt = 0
+    while true {
+      attempt += 1
+      do {
+        return try await performQueuedWrite(write)
+      } catch let error as PiliAccountShadowTransactionError
+        where error == .operationInProgress {
+        guard attempt < maxQueueAttempts else {
+          throw PiliAccountShadowTransactionError.publicationConflict
+        }
+        try await Task.sleep(nanoseconds: retryDelayNanoseconds)
+      } catch let error as PiliAccountEnvelopeStagingError
+        where error == .operationInProgress || error == .staleTransaction {
+        guard attempt < maxQueueAttempts else {
+          throw PiliAccountShadowTransactionError.publicationConflict
+        }
+        try await Task.sleep(nanoseconds: retryDelayNanoseconds)
+      }
+    }
+  }
+
+  private func performQueuedWrite(_ write: PiliAccountShadowQueuedWrite) async throws
+    -> PiliAccountShadowWriteOutcome {
+    switch write {
+    case .adoptIdentities:
+      return .identity(try await adoptMissingIdentities())
+    case .install(let install):
+      return .record(try await applyInstall(install))
+    case .importRecords(let entries):
+      return .importReceipt(try await applyImport(entries))
+    case .delete(let recordKey, let generation):
+      return .record(try await applyDelete(recordKeyUnits: recordKey,
+                                           expectedGeneration: generation))
+    case .cookieSave(let recordKey, let generation, let save):
+      return .record(try await applyCookieSave(recordKeyUnits: recordKey,
+                                               expectedGeneration: generation, save))
+    case .cookieDelete(let recordKey, let generation, let host, let shared):
+      return .record(try await applyCookieDelete(recordKeyUnits: recordKey,
+        expectedGeneration: generation, host: host, withDomainSharedCookie: shared))
+    case .cookieDeleteAll(let recordKey, let generation):
+      return .record(try await applyCookieDeleteAll(recordKeyUnits: recordKey,
+                                                    expectedGeneration: generation))
+    case .temporarySelection(let recordKey, let generation, let purpose):
+      return .record(try await applyTemporarySelection(recordKeyUnits: recordKey,
+        expectedGeneration: generation, purpose: purpose))
+    case .purposeChange(let recordKey, let generation, let purpose, let previousKey,
+                        let previousGeneration):
+      return .record(try await applyPurposeChange(recordKeyUnits: recordKey,
+        expectedGeneration: generation, purpose: purpose, previousKeyUnits: previousKey,
+        previousExpectedGeneration: previousGeneration))
+    case .credentials(let recordKey, let generation, let accessKey, let refreshToken):
+      return .record(try await applyCredentials(recordKeyUnits: recordKey,
+        expectedGeneration: generation, accessKeyUnits: accessKey,
+        refreshTokenUnits: refreshToken))
+    case .activated(let recordKey, let generation, let activated):
+      return .record(try await applyActivated(recordKeyUnits: recordKey,
+                                              expectedGeneration: generation,
+                                              activated: activated))
+    case .buvidSeed(let recordKey, let generation, let value, let now):
+      return .buvid(try await applyBuvidSeed(recordKeyUnits: recordKey,
+        expectedGeneration: generation, valueUnits: value, nowMicroseconds: now))
+    }
   }
 
   func applyCookieSave(recordKeyUnits: PiliCookieUTF16, expectedGeneration: Int64,
@@ -221,7 +421,7 @@ actor PiliAccountEnvelopeTransactionStore {
     }
     let current = snapshot.envelope
     guard current.schemaVersion == 2 else {
-      return .init(transactionID: nil, adopted: 0,
+      return .init(transactionID: nil, adopted: 0, adoptedIdentities: [],
                    nativeWritesAllowed: false, authoritySwitchAllowed: false)
     }
     var records = current.records
@@ -230,10 +430,12 @@ actor PiliAccountEnvelopeTransactionStore {
       if let identity = record.durableIdentity { identities.insert(identity) }
     }
     var adopted = 0
+    var adoptedIdentities: [PiliCookieUTF16] = []
     for index in records.indices where index > 0 {
       let identity = Self.mintIdentity(excluding: identities)
       identities.insert(identity)
       records[index] = Self.replacingIdentity(records[index], identity: identity)
+      adoptedIdentities.append(identity)
       adopted += 1
     }
     let highWater = records.dropFirst().map(\.generation).max() ?? 0
@@ -243,6 +445,7 @@ actor PiliAccountEnvelopeTransactionStore {
     let publication = try await vault.importShadow(codec.encode(candidate),
                                                    expectedTransactionID: snapshot.transactionID)
     return .init(transactionID: publication.transactionID, adopted: adopted,
+                 adoptedIdentities: adoptedIdentities,
                  nativeWritesAllowed: false, authoritySwitchAllowed: false)
   }
 
@@ -301,6 +504,7 @@ actor PiliAccountEnvelopeTransactionStore {
     let publication = try await vault.importShadow(codec.encode(candidate),
                                                    expectedTransactionID: snapshot.transactionID)
     return .init(transactionID: publication.transactionID, record: newIndex,
+                 durableIdentity: record.durableIdentity,
                  nativeWritesAllowed: false, authoritySwitchAllowed: false)
   }
 
@@ -355,6 +559,7 @@ actor PiliAccountEnvelopeTransactionStore {
     let publication = try await vault.importShadow(codec.encode(candidate),
                                                    expectedTransactionID: snapshot.transactionID)
     return .init(transactionID: publication.transactionID, record: index,
+                 durableIdentity: deleted.durableIdentity,
                  nativeWritesAllowed: false, authoritySwitchAllowed: false)
   }
 
@@ -408,6 +613,7 @@ actor PiliAccountEnvelopeTransactionStore {
     var replaced = 0
     var appended = 0
     var appendedOrder: [PiliAccountLiveMemoryOrderEntry] = []
+    var resolvedIdentities: [PiliCookieUTF16] = []
     for entry in entries {
       if let index = records.firstIndex(where: {
         $0.record > 0 && $0.storageKeyUnits == entry.storageKeyUnits
@@ -418,6 +624,10 @@ actor PiliAccountEnvelopeTransactionStore {
           accessKeyUnits: entry.accessKeyUnits, refreshTokenUnits: entry.refreshTokenUnits,
           persistedPurposes: entry.persistedPurposes, activated: entry.activated,
           jar: entry.jar, durableIdentity: records[index].durableIdentity)
+        guard let identity = records[index].durableIdentity else {
+          throw PiliAccountShadowTransactionError.invalidImport
+        }
+        resolvedIdentities.append(identity)
         replaced += 1
         continue
       }
@@ -433,6 +643,7 @@ actor PiliAccountEnvelopeTransactionStore {
         accessKeyUnits: entry.accessKeyUnits, refreshTokenUnits: entry.refreshTokenUnits,
         persistedPurposes: entry.persistedPurposes, activated: entry.activated,
         jar: entry.jar, durableIdentity: identity))
+      resolvedIdentities.append(identity)
       appendedOrder.append(PiliAccountLiveMemoryOrderEntry(
         keyUnits: entry.storageKeyUnits, record: newIndex))
       appended += 1
@@ -467,6 +678,7 @@ actor PiliAccountEnvelopeTransactionStore {
     let publication = try await vault.importShadow(codec.encode(candidate),
                                                    expectedTransactionID: snapshot.transactionID)
     return .init(transactionID: publication.transactionID, replaced: replaced, appended: appended,
+                 identities: resolvedIdentities,
                  nativeWritesAllowed: false, authoritySwitchAllowed: false)
   }
 
@@ -518,6 +730,7 @@ actor PiliAccountEnvelopeTransactionStore {
     }
     if Self.hasBuvid3(record.jar) {
       return .init(transactionID: nil, seeded: false,
+                   durableIdentity: record.durableIdentity,
                    nativeWritesAllowed: false, authoritySwitchAllowed: false)
     }
     let value = String(decoding: valueUnits.units, as: UTF16.self)
@@ -532,6 +745,7 @@ actor PiliAccountEnvelopeTransactionStore {
     let publication = try await vault.importShadow(codec.encode(candidate),
                                                    expectedTransactionID: snapshot.transactionID)
     return .init(transactionID: publication.transactionID, seeded: true,
+                 durableIdentity: record.durableIdentity,
                  nativeWritesAllowed: false, authoritySwitchAllowed: false)
   }
 
@@ -592,6 +806,7 @@ actor PiliAccountEnvelopeTransactionStore {
     let publication = try await vault.importShadow(codec.encode(candidate),
                                                    expectedTransactionID: snapshot.transactionID)
     return .init(transactionID: publication.transactionID, record: record.record,
+                 durableIdentity: record.durableIdentity,
                  nativeWritesAllowed: false, authoritySwitchAllowed: false)
   }
 
