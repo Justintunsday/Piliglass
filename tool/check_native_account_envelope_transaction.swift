@@ -761,6 +761,13 @@ private actor TransactionFaultVault: PiliAccountSecretStore {
           refreshTokenUnits: nil, persistedPurposes: [], activated: false, jar: cleared))
         throw TransactionFixtureError.failed("oversized install accepted")
       } catch PiliAccountLiveMemoryShadowError.resourceLimit { checks += 1 }
+      do {
+        _ = try await reopenedInstallStore.applyInstall(PiliAccountShadowInstall(
+          storageKeyUnits: secondKey, mid: 1, generation: 0,
+          accessKeyUnits: nil, refreshTokenUnits: nil, persistedPurposes: [],
+          activated: false, jar: cleared))
+        throw TransactionFixtureError.failed("zero generation install accepted")
+      } catch PiliAccountShadowTransactionError.invalidInstall { checks += 1 }
       let afterRejects = try await reopenedInstallVault.loadShadowSnapshot()
       try check(afterRejects?.transactionID == beforeRejects.transactionID &&
         afterRejects?.envelope == beforeRejects.envelope,
@@ -926,6 +933,120 @@ private actor TransactionFaultVault: PiliAccountSecretStore {
     } catch {
       try? await compatVault.discardShadow()
       throw error
+    }
+
+    // Lossy legacy sequence (Codex R11): a supported omitted/null high-water
+    // combined with deleting the maximum or the last login used to lower the
+    // effective water, so an identical key/generation could be reused after a
+    // reopen. Every schema-3 publication now persists the pre-transform
+    // effective value; this matrix exercises the actual lossy sequence.
+    guard let legacySecondKey = base.records[2].storageKeyUnits else {
+      throw TransactionFixtureError.failed("missing legacy second key")
+    }
+    let legacySecondGeneration = base.records[2].generation
+    for legacyShape in ["omitted", "null"] {
+      for deleteMode in ["maximum", "last"] {
+        let legacyNamespace = UUID()
+        let legacyVault = PiliAccountEnvelopeStagingStore(
+          secrets: PiliAccountKeychainSecretStore(stagingNamespace: legacyNamespace))
+        let legacyStore = PiliAccountEnvelopeTransactionStore(vault: legacyVault)
+        do {
+          try await legacyVault.importShadow(codec.encode(base))
+          _ = try await legacyStore.adoptMissingIdentities()
+          guard let adoptedLegacy = try await legacyVault.loadShadow() else {
+            throw TransactionFixtureError.failed("missing legacy adopted shadow")
+          }
+          let legacyWire = try patchedEnvelope(codec.encode(adoptedLegacy)) { root in
+            if legacyShape == "omitted" {
+              root.removeValue(forKey: "generationHighWater")
+            } else {
+              root["generationHighWater"] = NSNull()
+            }
+          }
+          let decodedLegacy = try codec.decode(legacyWire)
+          try check(decodedLegacy.generationHighWater == nil &&
+            decodedLegacy.effectiveGenerationHighWater ==
+              max(record.generation, legacySecondGeneration),
+            "legacy \(legacyShape) water decodes as the live derivation")
+          try await legacyVault.importShadow(legacyWire)
+          let lossyStore = PiliAccountEnvelopeTransactionStore(vault: legacyVault)
+          let preDeleteWater = max(record.generation, legacySecondGeneration)
+          _ = try await lossyStore.applyDelete(
+            recordKeyUnits: key, expectedGeneration: record.generation)
+          if deleteMode == "last" {
+            _ = try await lossyStore.applyDelete(
+              recordKeyUnits: legacySecondKey, expectedGeneration: legacySecondGeneration)
+          }
+          guard let deletedLegacy = try await legacyVault.loadShadow() else {
+            throw TransactionFixtureError.failed("missing legacy deleted shadow")
+          }
+          try check(deletedLegacy.generationHighWater == preDeleteWater,
+                    "legacy \(legacyShape) \(deleteMode) delete persists the pre-transform water")
+          let reopenedLegacyVault = PiliAccountEnvelopeStagingStore(
+            secrets: PiliAccountKeychainSecretStore(stagingNamespace: legacyNamespace))
+          let reopenedLegacyStore = PiliAccountEnvelopeTransactionStore(vault: reopenedLegacyVault)
+          guard let reopenedLegacy = try await reopenedLegacyVault.loadShadow() else {
+            throw TransactionFixtureError.failed("missing legacy reopened shadow")
+          }
+          try check(reopenedLegacy.generationHighWater == preDeleteWater,
+                    "legacy \(legacyShape) \(deleteMode) water survives reopen")
+          guard let beforeLegacyReuse = try await reopenedLegacyVault.loadShadowSnapshot() else {
+            throw TransactionFixtureError.failed("missing legacy reuse snapshot")
+          }
+          do {
+            _ = try await reopenedLegacyStore.applyInstall(PiliAccountShadowInstall(
+              storageKeyUnits: key, mid: record.mid, generation: record.generation,
+              accessKeyUnits: nil, refreshTokenUnits: nil, persistedPurposes: [],
+              activated: false, jar: cleared))
+            throw TransactionFixtureError.failed(
+              "legacy \(legacyShape) \(deleteMode) identical generation reuse accepted")
+          } catch PiliAccountShadowTransactionError.staleGeneration { checks += 1 }
+          let afterLegacyReuse = try await reopenedLegacyVault.loadShadowSnapshot()
+          try check(afterLegacyReuse?.transactionID == beforeLegacyReuse.transactionID &&
+            afterLegacyReuse?.envelope == beforeLegacyReuse.envelope,
+            "legacy \(legacyShape) \(deleteMode) reuse publishes nothing")
+          for contextCheck in ["cookie", "credentials"] {
+            do {
+              if contextCheck == "cookie" {
+                _ = try await reopenedLegacyStore.applyCookieDeleteAll(
+                  recordKeyUnits: key, expectedGeneration: record.generation)
+              } else {
+                _ = try await reopenedLegacyStore.applyCredentials(
+                  recordKeyUnits: key, expectedGeneration: record.generation,
+                  accessKeyUnits: nil, refreshTokenUnits: nil)
+              }
+              throw TransactionFixtureError.failed(
+                "legacy \(legacyShape) \(deleteMode) old \(contextCheck) context accepted")
+            } catch PiliAccountShadowTransactionError.unknownRecordKey { checks += 1 }
+          }
+          _ = try await reopenedLegacyStore.applyInstall(PiliAccountShadowInstall(
+            storageKeyUnits: key, mid: record.mid, generation: record.generation + 1,
+            accessKeyUnits: nil, refreshTokenUnits: nil, persistedPurposes: [],
+            activated: false, jar: cleared))
+          guard let legitLegacy = try await reopenedLegacyVault.loadShadow() else {
+            throw TransactionFixtureError.failed("missing legacy legitimate shadow")
+          }
+          try check(legitLegacy.generationHighWater == record.generation + 1,
+                    "legacy \(legacyShape) \(deleteMode) larger generation persists")
+          do {
+            _ = try await reopenedLegacyStore.applyCookieDeleteAll(
+              recordKeyUnits: key, expectedGeneration: record.generation)
+            throw TransactionFixtureError.failed(
+              "legacy \(legacyShape) \(deleteMode) old context matched the new identity")
+          } catch PiliAccountShadowTransactionError.staleGeneration { checks += 1 }
+          do {
+            _ = try await reopenedLegacyStore.applyCredentials(
+              recordKeyUnits: key, expectedGeneration: record.generation,
+              accessKeyUnits: nil, refreshTokenUnits: nil)
+            throw TransactionFixtureError.failed(
+              "legacy \(legacyShape) \(deleteMode) old credentials matched the new identity")
+          } catch PiliAccountShadowTransactionError.staleGeneration { checks += 1 }
+          try await reopenedLegacyVault.discardShadow()
+        } catch {
+          try? await legacyVault.discardShadow()
+          throw error
+        }
+      }
     }
 
     // Import G1→G2→G1: a replaced generation cannot be re-imported, including
@@ -1230,6 +1351,23 @@ private actor TransactionFaultVault: PiliAccountSecretStore {
           refreshTokenUnits: nil, persistedPurposes: [], activated: false, jar: cleared)])
         throw TransactionFixtureError.failed("oversized import accepted")
       } catch PiliAccountLiveMemoryShadowError.resourceLimit { checks += 1 }
+      // The cb00312 key-first ordering classifies generation <= 0 as
+      // staleGeneration on import (install keeps invalidInstall); pinned so the
+      // documented classification cannot drift silently.
+      do {
+        _ = try await reopenedImportStore.applyImport([PiliAccountShadowInstall(
+          storageKeyUnits: PiliCookieUTF16(units: Array("import-zero".utf16)), mid: 1,
+          generation: 0, accessKeyUnits: nil, refreshTokenUnits: nil,
+          persistedPurposes: [], activated: false, jar: cleared)])
+        throw TransactionFixtureError.failed("zero import generation accepted")
+      } catch PiliAccountShadowTransactionError.staleGeneration { checks += 1 }
+      do {
+        _ = try await reopenedImportStore.applyImport([PiliAccountShadowInstall(
+          storageKeyUnits: PiliCookieUTF16(units: Array("import-negative".utf16)), mid: 1,
+          generation: -1, accessKeyUnits: nil, refreshTokenUnits: nil,
+          persistedPurposes: [], activated: false, jar: cleared)])
+        throw TransactionFixtureError.failed("negative import generation accepted")
+      } catch PiliAccountShadowTransactionError.staleGeneration { checks += 1 }
       let afterImportRejects = try await reopenedImportVault.loadShadowSnapshot()
       try check(afterImportRejects?.transactionID == beforeImportRejects.transactionID &&
         afterImportRejects?.envelope == beforeImportRejects.envelope,

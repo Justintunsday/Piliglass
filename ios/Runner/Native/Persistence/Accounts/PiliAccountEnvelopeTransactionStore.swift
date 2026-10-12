@@ -645,8 +645,18 @@ actor PiliAccountEnvelopeTransactionStore {
                        history: Int? = nil,
                        schemaVersion: Int? = nil,
                        generationHighWater: Int64? = nil) -> PiliAccountLiveMemoryShadow {
-    PiliAccountLiveMemoryShadow(
-      schemaVersion: schemaVersion ?? current.schemaVersion,
+    let version = schemaVersion ?? current.schemaVersion
+    let carried = generationHighWater ?? current.generationHighWater
+    // Schema 3 must never lose the monotonic high-water: legacy envelopes that
+    // omitted/nulled the field persist the pre-transform effective value on
+    // every publication, so deleting the maximum or last login cannot lower
+    // the water that later guards reused generations against. Schema 2 keeps
+    // its strict nil shape.
+    let resolvedHighWater: Int64? = version == 3
+      ? max(carried ?? 0, current.effectiveGenerationHighWater)
+      : nil
+    return PiliAccountLiveMemoryShadow(
+      schemaVersion: version,
       scope: current.scope, identityScope: current.identityScope,
       revision: current.revision, durableIdentityConfigured: current.durableIdentityConfigured,
       durabilityVerified: current.durabilityVerified,
@@ -656,7 +666,7 @@ actor PiliAccountEnvelopeTransactionStore {
       storedOrder: storedOrder ?? current.storedOrder,
       ownerOrder: ownerOrder ?? current.ownerOrder, selectionPurposes: current.selectionPurposes,
       selections: selections ?? current.selections, history: history ?? current.history,
-      generationHighWater: generationHighWater ?? current.generationHighWater)
+      generationHighWater: resolvedHighWater)
   }
 
   private func beginOperation() throws {
