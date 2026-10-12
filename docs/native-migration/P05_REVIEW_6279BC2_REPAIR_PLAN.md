@@ -72,3 +72,34 @@
   preview 20/`failures=[]`）。
 - 通过后输出 **P05_READY_FOR_INDEPENDENT_REVIEW** 并等待 Codex；不自行宣称 PASS、
   不进入下一组。四 flag false；不接 authority；不碰 UI/Aether/`youtube/`。
+
+## 闭环记录（2026-10-12，最终代码 SHA `672e216`）
+
+- R11（`c6fa375`）：`replace` 对 schema 3 一律解析
+  `max(carried ?? 0, current.effectiveGenerationHighWater)`，任何发布（delete/cookie/
+  credentials/purpose/buvid/install/import/adopt）都持久化**变换前**有效水位；schema 2
+  严格 nil 不变。driver 新增 matrix：{省略, 显式 null} × {删最大, 删最后两个 login}，
+  真实 Keychain reopen 后水位保持、`install(K,G)` 实际复用拒 `staleGeneration` 且零发布、
+  旧 K/G cookie/credentials 拒 `unknownRecordKey`、更大的 G+1 安装成功并持久、随后旧
+  K/G 上下文仍 `staleGeneration`；另固定 `generation<=0` 分类（install `invalidInstall`、
+  import `staleGeneration`，cb00312 key-first 排序的既有契约）。checks 202→**245**。
+- R10（`c38f15b` + `4d046a7`）：`setWebCookie` 入口 `stamp ?? captureRequest(owner)`，
+  `bound == null` 直接返回、`isCurrent` 只认 tracker 代际 + ownership（删除
+  `ownsCredentials` 回退）。测试改用真正 logged-in 响应（`isLogin:true`+face+MID）：
+  WK 换主断言 publisher 0 / cache 空 / **history 请求数 0**；history 竞态用成功 data
+  断言请求发出但 cache 不写、publish 0；正对照断言 mirror 1 / history 1 / cache 写入 /
+  publish 1；logout 测试改为 gate 中换主 + logout，顺序 mirror-end→clear 且 publish 0；
+  新增同对象 reset（`begin/completeAnonymousReset`）覆盖 `onLoginMain` 与 direct
+  `setWebCookie` 的 incarnation 失效；抛错精确释放保留。账户测试 256→**258**。
+- 编译超时修复（`672e216`）：首轮 `4d046a7` 的 transaction 工具在 `swiftc` 编译 180s
+  超时（staging 同刻快速通过、上轮 step 13 全量仅 174s），判定为巨型 `main()` 类型检查
+  膨胀；将 legacy matrix 抽为独立 `checkLegacyWaterMatrix` 静态函数后编译通过（无参数/
+  断言/门禁变化）。
+- 同 SHA 验证（`672e216`）：release
+  [38188706831](https://github.com/Justintunsday/Piliglass/actions/runs/38188706831)
+  5/5、九 outcome 全 success、BUILD SUCCEEDED/109.1MB/FFmpeg；preview
+  [38188709339](https://github.com/Justintunsday/Piliglass/actions/runs/38188709339)
+  4/4、20 tests 0 failures、压力 `failures=[]`；账户 artifact analyze 无问题、`+258`；
+  envelope `status=passed` 109/44/40/**245**/51、sourceSHA=workflowSHA=672e216。
+- 状态：代码与同 SHA CI 证据已交付，**等待 Codex 独立复核**；PASS 前不进入下一组、不
+  写"已验收"。四 flag false；不接 authority。

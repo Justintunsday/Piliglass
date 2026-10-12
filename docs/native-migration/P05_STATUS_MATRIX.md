@@ -214,14 +214,17 @@ tests/`failures=[]`。特别说明：9724ddb 的超长用例只证明 parser 上
 ledger 预算验证（R12 退修补齐主动长度上限、边界值与真实预算回归）。仍未接 authority、
 无生产 caller；durable identity 消费/恢复语义与账号级队列属后续；四 flag false。
 
-**R10/R11/R12 退修在 `6279bc2` 的 CI 已被独立核实（release 38185057809 5/5、preview
-38185059780 4/4；账户 **+256** tests、analyze 无问题；envelope `status=passed`
-109/44/40/**202**/51、sourceSHA=6279bc2；九 outcome success、BUILD
-SUCCEEDED/109.1MB/FFmpeg、preview 20 tests/`failures=[]`），但 Codex 独立复审结论为
-CHANGES_REQUESTED**：R11 legacy 省略/null 水位在删除最大/最后 login 后丢失、R10 负例空转
-（isLogin=false）/同对象 revoke-reactivate/direct setWebCookie stamp 未闭合；R12 组件已
-被复审核实通过。详见
-[P05_REVIEW_53AED63_R12_REPAIR_PLAN.md](P05_REVIEW_53AED63_R12_REPAIR_PLAN.md) 与修复计划
+**R10/R11/R12 退修在 `6279bc2` 的 CI 已被独立核实，但 Codex 独立复审结论为
+CHANGES_REQUESTED（release 38185057809 5/5、preview 38185059780 4/4；账户 **+256**
+tests、analyze 无问题；envelope `status=passed` 109/44/40/**202**/51、sourceSHA=6279bc2；
+九 outcome success、BUILD SUCCEEDED/109.1MB/FFmpeg、preview 20 tests/`failures=[]`）**：
+R11 legacy 省略/null 水位在删除最大/最后 login 后丢失、R10 负例空转（isLogin=false）/
+同对象 revoke-reactivate/direct setWebCookie stamp、以及 `4d046a7` 的 transaction 编译
+180s 超时；R12 组件已被复审核实通过。**修复已在 `672e216` 完成并同 SHA CI 全绿**
+（release 38188706831 5/5、preview 38188709339 4/4、账户 **+258**、envelope
+109/44/40/**245**/51、sourceSHA=workflowSHA=672e216；九 outcome success、BUILD
+SUCCEEDED/109.1MB/FFmpeg、20 tests/`failures=[]`），**等待 Codex 再复核**。详见
+[P05_REVIEW_53AED63_R12_REPAIR_PLAN.md](P05_REVIEW_53AED63_R12_REPAIR_PLAN.md) 与
 [P05_REVIEW_6279BC2_REPAIR_PLAN.md](P05_REVIEW_6279BC2_REPAIR_PLAN.md)。Codex PASS 前不
 进入下一组、不写"已验收"；四 flag false。
 
