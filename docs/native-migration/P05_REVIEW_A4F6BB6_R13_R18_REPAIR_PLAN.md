@@ -117,6 +117,28 @@ R13 unknown fence、R14 unknownA/B 顺序、R15 队列失败/CAS/receipt 覆盖�
   `cleared`。保留 B 的中间状态、最终快照、publication 计数 5、overflow、pending/idle、
   取消断言；baseline 245 checks 与 180/90 预算、严格 Swift 6 不变。
 
+## CI 编译预算：transaction phase 结构拆分（不削弱测试）
+
+2026-10-12 下午实际 Actions 证据：`33d1922` 与本退修 `db90260` 的 release（含 job
+重跑）**三次**均在 `check-native-account-envelope-transaction` 的 `xcrun swiftc` 编译上
+命中 **180s 超时**（`transaction-compile.log` 只有 "Command timed out after 180
+seconds"，无诊断输出；同一 transaction 源码 `672e216` 早前已成功编译并运行 245
+checks），queue/authority 阶段因脚本中止而未执行。这属于编译预算问题，不是断言/语义
+问题；按 reviewer 指引 "preserve all 180/90 budgets and strictness, structurally
+split/explicitly type/measure the driver if needed" 处理：
+
+- 把 1795 行 driver 按**逐行内容不变**的方式拆成两个编译单元：原文件保留 fixture +
+  vault/CAS/gate/cancellation/purpose 前段；新增
+  `tool/check_native_account_envelope_transaction_identity.swift` 承载
+  identity/install/delete/import/buvid 后段（含 `patchedEnvelope`/water matrix helper）。
+  拆分由脚本按行区间生成，已做 "原始行集合 = 两文件行集合（样板除外）" 的内容保持校验。
+- Python gate 对两段分别使用**原有 180s 编译 / 90s 运行预算**与同一 Swift 6
+  strict-concurrency 参数；两段计数之和必须 `>= 245`（门槛只增不减）；source
+  hash / clean check / 清理列表 / `summary.json`（`transactionChecks` 总和 +
+  `transactionIdentityChecks`）同步覆盖新文件。
+- 该拆分只是编译单元降载，不改任何检查、断言、fixture 或生产代码语义；queue phase
+  的失败/竞争覆盖保持不变。
+
 ## 文档与验收
 
 - 更新 `P05_DURABLE_IDENTITY_QUEUE_PLAN.md`（unknown fence / 入口策略 / B2e-2 边界）、

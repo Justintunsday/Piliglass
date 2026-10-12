@@ -67,6 +67,23 @@ TRANSACTION_SOURCES = [
     "ios/Runner/Native/Persistence/Accounts/PiliAccountEnvelopeTransactionStore.swift",
     "tool/check_native_account_envelope_transaction.swift",
 ]
+# Durable identity/install/delete/import/buvid transactions live in their own
+# compilation unit: the same strict-concurrency flags and 180/90 budgets, split
+# so neither transaction phase exceeds the compiler budget on a slow runner.
+# The two phases together must still report the baseline transaction count.
+TRANSACTION_IDENTITY_SOURCES = [
+    "ios/Runner/Native/Domain/Accounts/PiliAccountRepository.swift",
+    "ios/Runner/Native/Domain/Accounts/PiliOrderedCookieArchive.swift",
+    "ios/Runner/Native/Data/Accounts/PiliOrderedCookieArchiveCodec.swift",
+    "ios/Runner/Native/Domain/Accounts/PiliAccountLiveMemoryShadow.swift",
+    "ios/Runner/Native/Data/Accounts/PiliAccountLiveMemoryShadowCodec.swift",
+    "ios/Runner/Native/Data/Accounts/PiliNativeOrderedCookieReducer.swift",
+    "ios/Runner/Native/Persistence/Accounts/PiliNativeCookieParser.swift",
+    "ios/Runner/Native/Persistence/Accounts/PiliAccountSecretStore.swift",
+    "ios/Runner/Native/Persistence/Accounts/PiliAccountEnvelopeStagingStore.swift",
+    "ios/Runner/Native/Persistence/Accounts/PiliAccountEnvelopeTransactionStore.swift",
+    "tool/check_native_account_envelope_transaction_identity.swift",
+]
 # Durable authority marker and two-phase handoff/revert. Native-only machinery
 # with real Keychain crash/fault recovery; no Dart runtime caller is installed.
 AUTHORITY_SOURCES = [
@@ -122,6 +139,7 @@ CONTRACT_INPUTS = [
 
 def source_hashes():
     paths = {ROOT / path for path in [*SOURCES, *STAGING_SOURCES, *TRANSACTION_SOURCES,
+                                      *TRANSACTION_IDENTITY_SOURCES,
                                       *AUTHORITY_SOURCES, *QUEUE_SOURCES, *PRODUCERS,
                                       *ANALYSIS, *CONTRACT_INPUTS]}
     files = set()
@@ -142,7 +160,8 @@ def clean_contract_sources(log):
     # patches unrelated lib/pubspec/Runner inputs. Require only this contract's
     # analyzed/compiled sources to match HEAD; hash the actual resolved inputs
     # separately, including those already prepared by the build workflow.
-    paths = sorted({*SOURCES, *STAGING_SOURCES, *TRANSACTION_SOURCES, *AUTHORITY_SOURCES,
+    paths = sorted({*SOURCES, *STAGING_SOURCES, *TRANSACTION_SOURCES,
+                    *TRANSACTION_IDENTITY_SOURCES, *AUTHORITY_SOURCES,
                     *QUEUE_SOURCES, *PRODUCERS, *ANALYSIS,
                     Path(__file__).resolve().relative_to(ROOT).as_posix()})
     run(["git", "diff", "--quiet", "HEAD", "--", *paths], log)
@@ -238,7 +257,9 @@ def main():
         for name in ["live-memory.json", "hive-reopened.json", "check-native-account-envelopes",
                      "check-native-account-envelope-staging", "staging-compile.log", "staging-result.log",
                      "check-native-account-envelope-transaction", "transaction-compile.log",
-                     "transaction-result.log", "check-native-account-envelope-queue",
+                     "transaction-result.log", "check-native-account-envelope-transaction-identity",
+                     "transaction-identity-compile.log", "transaction-identity-result.log",
+                     "check-native-account-envelope-queue",
                      "queue-compile.log", "queue-result.log", "check-native-account-authority",
                      "authority-compile.log", "authority-result.log",
                      "analyze.log", "dart-test.log", "compile.log", "result.log",
@@ -318,6 +339,23 @@ def main():
         if not transaction_matched or int(transaction_matched[1]) < 35:
             raise RuntimeError("Durable account envelope transaction evidence incomplete")
         verify_golden_hashes(hashes)
+        identity_binary = OUTPUT / "check-native-account-envelope-transaction-identity"
+        run(["xcrun", "swiftc", "-swift-version", "6", "-strict-concurrency=complete",
+             "-parse-as-library", "-o", str(identity_binary),
+             *(str(ROOT / path) for path in TRANSACTION_IDENTITY_SOURCES)],
+            "transaction-identity-compile.log")
+        verify_golden_hashes(hashes)
+        identity_output = run([str(identity_binary), str(OUTPUT / "live-memory.json")],
+                              "transaction-identity-result.log", timeout=90)
+        print(identity_output, end="")
+        identity_matched = re.search(
+            r"(\d+) native account envelope identity transaction checks passed", identity_output)
+        if not identity_matched:
+            raise RuntimeError("Durable account envelope identity transaction evidence incomplete")
+        transaction_checks = int(transaction_matched[1]) + int(identity_matched[1])
+        if transaction_checks < 245:
+            raise RuntimeError("Split transaction phases lost baseline checks")
+        verify_golden_hashes(hashes)
         queue = OUTPUT / "check-native-account-envelope-queue"
         run(["xcrun", "swiftc", "-swift-version", "6", "-strict-concurrency=complete",
              "-parse-as-library", "-o", str(queue), *(str(ROOT / path) for path in QUEUE_SOURCES)],
@@ -350,7 +388,8 @@ def main():
                        actualDartGoldens=2, goldenSHA256=hashes, nativeChecks=int(matched[1]),
                        negativeCases=int(matched[3]), syntheticIntegerCases=1,
                        stagingChecks=int(staging_matched[1]),
-                       transactionChecks=int(transaction_matched[1]),
+                       transactionChecks=transaction_checks,
+                       transactionIdentityChecks=int(identity_matched[1]),
                        queueChecks=int(queue_matched[1]),
                        authorityChecks=int(authority_matched[1]), sourceSHA256=source_digests)
     except (OSError, RuntimeError, ValueError, subprocess.TimeoutExpired) as error:
