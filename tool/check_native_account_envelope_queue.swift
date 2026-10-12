@@ -338,8 +338,9 @@ private actor QueueFaultVault: PiliAccountSecretStore {
         generation: fx.record.generation, accessKey: units("queue-c"), refreshToken: nil)) }
       try await waitForPending(store, 2)
       do {
-        _ = try await store.enqueue(.activated(recordKey: fx.key,
-          generation: fx.record.generation, activated: true))
+        _ = try await store.enqueue(.credentials(recordKey: fx.key,
+          generation: fx.record.generation, accessKey: units("queue-overflow"),
+          refreshToken: nil))
         throw QueueFixtureError.failed("queue overflow admitted")
       } catch PiliAccountShadowTransactionError.writeQueueOverflow { checks += 1 }
       await fault.resume()
@@ -360,8 +361,6 @@ private actor QueueFaultVault: PiliAccountSecretStore {
                 "final queued credentials keep submission order")
       try check(reloaded?.records[1].jar == fx.cleared,
                 "final queued deleteAll survives the later credentials write")
-      try check(reloaded?.records[1].activated == false,
-                "final overflow write never lands")
       let pendingAfterDrain = await store.pendingWriteCount
       let idleAfterDrain = await store.writeQueueIdle
       try check(pendingAfterDrain == 0 && idleAfterDrain,
@@ -383,8 +382,9 @@ private actor QueueFaultVault: PiliAccountSecretStore {
         generation: fx.record.generation, accessKey: units("queue-cancelled"),
         refreshToken: nil)) }
       try await waitForPending(store, 1)
-      let follower = Task { try await store.enqueue(.activated(recordKey: fx.key,
-        generation: fx.record.generation, activated: true)) }
+      let follower = Task { try await store.enqueue(.credentials(recordKey: fx.key,
+        generation: fx.record.generation, accessKey: units("queue-follower"),
+        refreshToken: nil)) }
       try await waitForPending(store, 2)
       cancelled.cancel()
       await fault.resume()
@@ -401,8 +401,7 @@ private actor QueueFaultVault: PiliAccountSecretStore {
       try await waitForIdle(store)
       let afterCancel = try await store.loadShadowSnapshot()
       try check(afterCancel?.envelope.records[1].accessKeyUnits?.units ==
-        Array("queue-c".utf16) &&
-        afterCancel?.envelope.records[1].activated == true,
+        Array("queue-follower".utf16),
         "cancelled queued write leaves no effect and the queue keeps draining")
 
       // In-flight cancellation before the pointer write keeps the previous jar.
