@@ -81,6 +81,23 @@ AUTHORITY_SOURCES = [
     "ios/Runner/Native/Persistence/Accounts/PiliAccountAuthorityCoordinator.swift",
     "tool/check_native_account_authority.swift",
 ]
+# Account-level bounded write FIFO and durable identity consumption. Same
+# strict-concurrency flags and compile/run budgets as the other phases; this is
+# the Block 2 queue/identity contract, kept in its own compilation unit so the
+# large transaction driver stays inside the unchanged compile budget.
+QUEUE_SOURCES = [
+    "ios/Runner/Native/Domain/Accounts/PiliAccountRepository.swift",
+    "ios/Runner/Native/Domain/Accounts/PiliOrderedCookieArchive.swift",
+    "ios/Runner/Native/Data/Accounts/PiliOrderedCookieArchiveCodec.swift",
+    "ios/Runner/Native/Domain/Accounts/PiliAccountLiveMemoryShadow.swift",
+    "ios/Runner/Native/Data/Accounts/PiliAccountLiveMemoryShadowCodec.swift",
+    "ios/Runner/Native/Data/Accounts/PiliNativeOrderedCookieReducer.swift",
+    "ios/Runner/Native/Persistence/Accounts/PiliNativeCookieParser.swift",
+    "ios/Runner/Native/Persistence/Accounts/PiliAccountSecretStore.swift",
+    "ios/Runner/Native/Persistence/Accounts/PiliAccountEnvelopeStagingStore.swift",
+    "ios/Runner/Native/Persistence/Accounts/PiliAccountEnvelopeTransactionStore.swift",
+    "tool/check_native_account_envelope_queue.swift",
+]
 LIVE_IDS = [
     "anonymous-empty-jar",
     "stored-10-2-owner-2-10",
@@ -105,7 +122,8 @@ CONTRACT_INPUTS = [
 
 def source_hashes():
     paths = {ROOT / path for path in [*SOURCES, *STAGING_SOURCES, *TRANSACTION_SOURCES,
-                                      *AUTHORITY_SOURCES, *PRODUCERS, *ANALYSIS, *CONTRACT_INPUTS]}
+                                      *AUTHORITY_SOURCES, *QUEUE_SOURCES, *PRODUCERS,
+                                      *ANALYSIS, *CONTRACT_INPUTS]}
     files = set()
     for path in paths:
         if path.is_dir():
@@ -125,7 +143,7 @@ def clean_contract_sources(log):
     # analyzed/compiled sources to match HEAD; hash the actual resolved inputs
     # separately, including those already prepared by the build workflow.
     paths = sorted({*SOURCES, *STAGING_SOURCES, *TRANSACTION_SOURCES, *AUTHORITY_SOURCES,
-                    *PRODUCERS, *ANALYSIS,
+                    *QUEUE_SOURCES, *PRODUCERS, *ANALYSIS,
                     Path(__file__).resolve().relative_to(ROOT).as_posix()})
     run(["git", "diff", "--quiet", "HEAD", "--", *paths], log)
 
@@ -220,7 +238,8 @@ def main():
         for name in ["live-memory.json", "hive-reopened.json", "check-native-account-envelopes",
                      "check-native-account-envelope-staging", "staging-compile.log", "staging-result.log",
                      "check-native-account-envelope-transaction", "transaction-compile.log",
-                     "transaction-result.log", "check-native-account-authority",
+                     "transaction-result.log", "check-native-account-envelope-queue",
+                     "queue-compile.log", "queue-result.log", "check-native-account-authority",
                      "authority-compile.log", "authority-result.log",
                      "analyze.log", "dart-test.log", "compile.log", "result.log",
                      "source-revision.log", "source-revision-after.log",
@@ -299,6 +318,18 @@ def main():
         if not transaction_matched or int(transaction_matched[1]) < 35:
             raise RuntimeError("Durable account envelope transaction evidence incomplete")
         verify_golden_hashes(hashes)
+        queue = OUTPUT / "check-native-account-envelope-queue"
+        run(["xcrun", "swiftc", "-swift-version", "6", "-strict-concurrency=complete",
+             "-parse-as-library", "-o", str(queue), *(str(ROOT / path) for path in QUEUE_SOURCES)],
+            "queue-compile.log")
+        verify_golden_hashes(hashes)
+        queue_output = run([str(queue), str(OUTPUT / "live-memory.json")],
+                           "queue-result.log", timeout=90)
+        print(queue_output, end="")
+        queue_matched = re.search(r"(\d+) native account envelope queue checks passed", queue_output)
+        if not queue_matched or int(queue_matched[1]) < 40:
+            raise RuntimeError("Account write queue/identity evidence incomplete")
+        verify_golden_hashes(hashes)
         authority = OUTPUT / "check-native-account-authority"
         run(["xcrun", "swiftc", "-swift-version", "6", "-strict-concurrency=complete",
              "-parse-as-library", "-o", str(authority), *(str(ROOT / path) for path in AUTHORITY_SOURCES)],
@@ -320,6 +351,7 @@ def main():
                        negativeCases=int(matched[3]), syntheticIntegerCases=1,
                        stagingChecks=int(staging_matched[1]),
                        transactionChecks=int(transaction_matched[1]),
+                       queueChecks=int(queue_matched[1]),
                        authorityChecks=int(authority_matched[1]), sourceSHA256=source_digests)
     except (OSError, RuntimeError, ValueError, subprocess.TimeoutExpired) as error:
         summary["reason"] = str(error)
