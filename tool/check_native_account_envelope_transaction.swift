@@ -472,6 +472,7 @@ private actor TransactionFaultVault: PiliAccountSecretStore {
       await fault.waitUntilPaused()
       let fifoB = Task { try await store.enqueue(.cookieDeleteAll(
         recordKey: fx.key, generation: fx.record.generation)) }
+      try await waitForPending(store, 1)
       let fifoC = Task { try await store.enqueue(.credentials(recordKey: fx.key,
         generation: fx.record.generation, accessKey: units("queue-c"), refreshToken: nil)) }
       try await waitForPending(store, 2)
@@ -493,15 +494,36 @@ private actor TransactionFaultVault: PiliAccountSecretStore {
         receiptB.transactionID != receiptC.transactionID,
         "queued publications keep distinct pointer identities")
       try await waitForIdle(store)
+      func accessText(_ record: PiliAccountLiveMemoryRecord) -> String {
+        record.accessKeyUnits.map { String(decoding: $0.units, as: UTF16.self) } ?? "nil"
+      }
+      let candidateA = try await vault.loadPublishedCandidate(transactionID: receiptA.transactionID)
+      let candidateB = try await vault.loadPublishedCandidate(transactionID: receiptB.transactionID)
+      let candidateC = try await vault.loadPublishedCandidate(transactionID: receiptC.transactionID)
+      let candidateAAccess = accessText(candidateA.records[1])
+      let candidateBAccess = accessText(candidateB.records[1])
+      let candidateCAccess = accessText(candidateC.records[1])
+      try check(candidateAAccess == "queue-a",
+                "first queued publication carries its own credentials (got \(candidateAAccess))")
+      try check(candidateB.records[1].jar == fx.cleared && candidateBAccess == "queue-a",
+                "second queued publication applied deleteAll on the first result")
+      try check(candidateCAccess == "queue-c" && candidateC.records[1].jar == fx.cleared,
+                "third queued publication built on the second (got \(candidateCAccess))")
       let reloaded = try await PiliAccountEnvelopeStagingStore(secrets: fault).loadShadow()
-      try check(reloaded?.records[1].accessKeyUnits?.units == Array("queue-c".utf16) &&
-        reloaded?.records[1].jar == fx.cleared &&
-        reloaded?.records[1].activated == false,
-        "same-key queue preserves submission order; the overflow write never lands")
-      let middle = try await vault.loadPublishedCandidate(transactionID: receiptB.transactionID)
-      try check(middle.records[1].accessKeyUnits?.units == Array("queue-a".utf16) &&
-        middle.records[1].jar == fx.cleared,
-        "the middle queued write built on the previous publication")
+      let finalAccess = reloaded.map { accessText($0.records[1]) } ?? "nil"
+      try check(reloaded?.records[1].jar == fx.cleared,
+                "the queued deleteAll survives the later credentials write")
+      try check(finalAccess == "queue-c",
+                "same-key queue preserves submission order (got \(finalAccess))")
+      try check(reloaded?.records[1].activated == false,
+                "the overflow write never lands")
+      let pendingAfterDrain = await store.pendingWriteCount
+      let idleAfterDrain = await store.writeQueueIdle
+      try check(pendingAfterDrain == 0 && idleAfterDrain,
+                "the FIFO releases every turn after draining")
+      let publishedRecords = await fault.recordCount()
+      try check(publishedRecords == 5,
+                "the queue publishes exactly one record per admitted write (got \(publishedRecords))")
 
       // Cancellation while queued: no publication and the FIFO keeps draining.
       await fault.pauseWrite()
@@ -511,6 +533,7 @@ private actor TransactionFaultVault: PiliAccountSecretStore {
       let cancelled = Task { try await store.enqueue(.credentials(recordKey: fx.key,
         generation: fx.record.generation, accessKey: units("queue-cancelled"),
         refreshToken: nil)) }
+      try await waitForPending(store, 1)
       let follower = Task { try await store.enqueue(.activated(recordKey: fx.key,
         generation: fx.record.generation, activated: true)) }
       try await waitForPending(store, 2)
