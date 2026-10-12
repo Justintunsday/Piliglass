@@ -42,6 +42,7 @@ private actor QueueFaultVault: PiliAccountSecretStore {
     manifestReadSuspended = nil
   }
   func isManifestReadPaused() -> Bool { manifestReadSuspended != nil }
+  func isWritePaused() -> Bool { suspended != nil }
   /// Fails the pointer read that follows `skip` further pointer reads. The
   /// publish-time acknowledgment read is the second read of one attempt, so
   /// skip 1 targets exactly the unreadable-ack boundary.
@@ -162,6 +163,14 @@ private actor QueueFaultVault: PiliAccountSecretStore {
       try await Task.sleep(nanoseconds: 5_000_000)
     }
     throw QueueFixtureError.failed("manifest read pause did not arrive")
+  }
+
+  private static func waitForWritePause(_ fault: QueueFaultVault) async throws {
+    for _ in 0..<400 {
+      if await fault.isWritePaused() { return }
+      try await Task.sleep(nanoseconds: 5_000_000)
+    }
+    throw QueueFixtureError.failed("write pause did not arrive")
   }
 
   private static func waitForRetrySleep(
@@ -546,7 +555,7 @@ private actor QueueFaultVault: PiliAccountSecretStore {
         mid: 99, generation: fx.record.generation + 900, accessKeyUnits: nil,
         refreshTokenUnits: nil, persistedPurposes: [], activated: false, jar: fx.cleared)
       let unknownA = Task { try await store.enqueue(.install(unknownInstall)) }
-      await fault.waitUntilPaused()
+      try await waitForWritePause(fault)
       let unknownB = Task { try await store.enqueue(.cookieSave(
         recordKey: fx.key, generation: fx.record.generation, save: fx.save)) }
       try await waitForPending(store, 1)
