@@ -149,3 +149,15 @@ split/explicitly type/measure the driver if needed" 处理：
   actual 计数（queue 只增）、严格分析、BUILD SUCCEEDED/大小/FFmpeg、preview 压力。
 - 不重跑 `33d1922`（只读其在途结果作对照）；不取消用户已派发的 run；修复完成后交
   Codex 独立复审，不自审 PASS、不进入 B2e-2/Block 3、不升级 authority。
+
+### 实际证据（2026-10-12，代码 SHA `0ea82b1`）
+
+release
+[38263993936](https://github.com/Justintunsday/Piliglass/actions/runs/38263993936)
+5/5（九强制 outcome success、BUILD SUCCEEDED、109.1MB、FFmpeg 顺序）、preview
+[38264008966](https://github.com/Justintunsday/Piliglass/actions/runs/38264008966)
+4/4（20 tests 0 failures、fixture `"failures": []`）、envelope `status=passed`
+109/44/40/**245**(68+177)/**104**/51、sourceSHA=workflowSHA=`0ea82b1`、87 源码 hash；
+账户 `+258`/runtime 72/analyze 无问题；queue 104 首次实际执行、无 FATAL；修复过程
+（223c5ef 的 queue 编译错误与预算计数 bug）已由同 SHA 前后两轮实际日志定位修复。
+等待 Codex 独立复审；未获 PASS 前不进入 B2e-2。

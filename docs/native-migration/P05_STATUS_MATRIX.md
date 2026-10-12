@@ -228,6 +228,31 @@ SUCCEEDED/109.1MB/FFmpeg、20 tests/`failures=[]`），**等待 Codex 再复核*
 [P05_REVIEW_6279BC2_REPAIR_PLAN.md](P05_REVIEW_6279BC2_REPAIR_PLAN.md)。Codex PASS 前不
 进入下一组、不写"已验收"；四 flag false。
 
+**Block 2 / B2e-1（durable identity 消费 + 账号写入队列/receipt/unknown 语义）+ R13–R18 退修在 `0ea82b1` 同 SHA 双 CI 全绿；等待 Codex 独立复审（非 PASS）**：
+按 [P05_DURABLE_IDENTITY_QUEUE_PLAN.md](P05_DURABLE_IDENTITY_QUEUE_PLAN.md) 实现有界全局
+FIFO（`enqueue`、`writeQueueOverflow`、排队/发布前取消释放、每次尝试新快照重校验）、
+全事务 receipt identity（adopt/install/delete/import/cookie/purpose/credentials/
+activated/buvid）、只读 `lookupRecord`、A/B/C receipt→immutable candidate 关联。
+R13 unknown 为 fail-closed：不可变未决证据 `{previousTransactionID,
+attemptedCandidateSHA256, kind}` + 冻结后续写（queued/direct 均 `unresolvedPublication`）
++ `resolveUnresolvedPublication()` 读回释放（不重放、不从 payload 推断、不伪造 receipt）；
+R14 unknownA/B 显式 admission 屏障；R15 queued `resourceLimit`/maxQueueAttempts 耗尽
+→typed 拒绝后合法 follower、真实 queued purpose 读变换发布竞争与 previous-holder 失效
+`staleGeneration` 零副作用；R16 retry back-off/预约等待者期间 direct public 入口
+fail closed；R17 实际 activated 基线取反溢出证明；R18 A/B/C candidate 关联恢复；无
+全局 purpose 唯一性约束。CI 编译预算：transaction driver 三次 180s 纯超时（无诊断、同
+源码早前通过），按逐行内容不变拆为 core 68 + identity 177 = **245** 两个编译单元，预算/
+严格性/断言不变。实际证据：release
+[38263993936](https://github.com/Justintunsday/Piliglass/actions/runs/38263993936) 5/5
+（九强制 outcome 全 success、BUILD SUCCEEDED、Runner.app 109.1MB、Aether FFmpeg 先于
+media-kit 载入）、preview
+[38264008966](https://github.com/Justintunsday/Piliglass/actions/runs/38264008966) 4/4
+（20 tests 0 failures、fixture `"failures": []`）、envelope `status=passed`
+109/44/40/**245**(68+177)/**104**/51、sourceSHA=workflowSHA=0ea82b1、87 源码 hash、
+账户 `+258`/runtime 72、queue logs 无 FATAL。仍 shadow、无生产 caller/authority；B2e-2
+（unknown 持久恢复面/启动 recovery）与 B2e-3（生产 composition 接线）未做；四 flag
+false，Codex PASS 前不进入下一组。
+
 **Block 1 / B1d 切片（页面读取、延迟副作用、maintenance gate）已在 `98e6f9b` 验收**：
 `Accounts.installedAccounts()` 纯只读 seam + 页面 `isEmpty/isNotEmpty` 切
 `visibleAccounts()`（login/mine/setting/about，内容/顺序/读取时机不变、零

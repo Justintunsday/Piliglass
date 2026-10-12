@@ -207,3 +207,26 @@ adapter，见 §10）、Hive compaction/close、LoginUtils 副作用。
   生命周期 writer barrier、WK 镜像、LoginUtils 延迟副作用、Hive close/compact 仍待后续
   切片（[P05_REMAINING_SCOPE_PLAN.md](P05_REMAINING_SCOPE_PLAN.md)、
   [P05_WRITE_BARRIER_PLAN.md](P05_WRITE_BARRIER_PLAN.md)）。四 flag false，P05 未整体完成。
+
+## 11. 2026-10-12 Block 2 / B2e-1 队列与 unknown 语义退修（`0ea82b1`；等待 Codex 独立复审）
+
+- 同代码 SHA `0ea82b138b5e2ad63f867e7466fb31a08a42cbef` 的 release
+  [38263993936](https://github.com/Justintunsday/Piliglass/actions/runs/38263993936)
+  5/5 与 preview
+  [38264008966](https://github.com/Justintunsday/Piliglass/actions/runs/38264008966)
+  4/4 jobs success；九个强制 outcome 全 success、Runner `BUILD SUCCEEDED`、Runner.app
+  109.1MB、Aether FFmpeg 先于 media-kit FFmpeg；preview 20 tests 0 failures、压力
+  `"failures": []`（含 `returned-top-dark` 报告）。
+- envelope `status=passed`：109 oracle/10 观察/44 负例/40 staging/**245**（core 68 +
+  identity 177）/queue **104**/51 authority；sourceSHA=workflowSHA=`0ea82b1`、87 源码
+  hash、7 项声明 build-preparation diff、golden `a9e6…`/`57e5…`；账户
+  `+258: All tests passed!`、runtime 72、analyze `No issues found!`。
+- 内容：R13 fail-closed unknown fence + `resolveUnresolvedPublication` 读回；R14
+  unknownA/B admission 屏障；R15 queued 预算/竞争耗尽释放→合法 follower、真实 queued
+  purpose 竞争与 previous-holder 失效拒绝、purpose/temporarySelection/activated/buvid
+  receipt identity；R16 入口协调策略；R17 实际 activated 基线的取反溢出证明；R18
+  A/B/C receipt→candidate 关联。transaction phase 因三次 180s 纯编译超时，按逐行内容
+  不变拆成两个编译单元（预算/严格性/断言不变）。
+- 边界：仍 shadow、无生产 caller/authority；B2e-2（unknown 持久恢复面/启动 recovery）
+  与 B2e-3（生产 composition 接线）未做；四 flag false。**本组尚未获 Codex 独立
+  PASS，不构成 P05 完成或账号级队列生产接入。**

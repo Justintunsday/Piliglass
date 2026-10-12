@@ -243,6 +243,41 @@ sourceSHA=workflowSHA=9724ddb；preview 20 tests 0 failures、压力 `failures=[
 shadow 组件：未接 authority、无生产 caller，durable identity 消费/恢复语义、账号级队列与
 receipt/unknown ack、Block 3/4/5 仍未交付；四能力 flag 保持 false，P05 未整体完成。
 
+**B2e-1 账号写入队列 / durable identity 消费 + R13–R18 退修在 `0ea82b1` 同 SHA 双 CI 全绿；等待 Codex 独立复审（非 PASS）**：
+实现沿革：`887ad9a` 计划、`f9fb4de` 有界 FIFO/receipt、`4944557` driver、`c007c8c`
+candidate 断言、`a4f6bb6` 独立 queue phase、`33d1922`（用户侧）可观察 witness。Codex 对
+`a4f6bb6` 复审 CHANGES_REQUESTED（R13–R18），本退修（`a5ce478`/`4ab437b`/`8fefb98`/
+`db90260`/`223c5ef`/`046f2b5`/`0ea82b1`）：
+- R13 fail-closed unknown：生产 `publicationUnknown` 记录不可变未决证据
+  `{expectedPreviousTransactionID, attemptedCandidateSHA256, kind}` 并冻结后续所有写
+  （queued + direct 均 `unresolvedPublication`），仅 `resolveUnresolvedPublication()`
+  读回后释放；不重放、不伪造 receipt、不以匹配 payload 推断成功；回归覆盖写前/写后
+  错误 + 不可读 ack、同 key overwriting follower、持续读回失败、reopen 边界、取消/释放。
+- R14 unknownA/B 显式 pause/admission 屏障（有界等待，无新增固定 sleep）；R15 queued
+  `resourceLimit`→合法 follower（指针逐字节不变、相对计数）、maxQueueAttempts 耗尽→
+  `publicationConflict`→follower（零发布/无伪 receipt）、真实 queued purpose
+  读→变换→发布竞争 + previous-holder 失效 `staleGeneration` 零副作用、
+  purpose/temporarySelection/activated/buvid receipt identity；R16 queued turn 持有
+  writer 角色（执行/back-off/预约）时 direct public 入口 `operationInProgress` 拒绝；
+  R17 捕获实际 activated 基线 + 取反溢出请求 + typed rejection + 指针/计数不变；
+  R18 A/B/C receipt→immutable candidate 关联恢复；无全局 purpose 唯一性约束。
+- CI 编译预算：同一 transaction driver 在 `33d1922`/`db90260`（含 job 重跑）三次
+  180s 纯超时（无诊断；同源码早前已编译通过），按逐行内容不拆成两个编译单元
+  （core 68 + identity 177 = 245），180/90 预算、严格 Swift 6 与断言不变；queue phase
+  的 104 checks 首次实际执行。
+- 实际证据（`sourceSHA=workflowSHA=0ea82b138b5e2ad63f867e7466fb31a08a42cbef`）：
+  release [38263993936](https://github.com/Justintunsday/Piliglass/actions/runs/38263993936)
+  5/5、九强制 outcome 全 success、`BUILD SUCCEEDED`、Runner.app 109.1MB、
+  "Verified Aether FFmpeg precedes media-kit FFmpeg in Mach-O load order"；preview
+  [38264008966](https://github.com/Justintunsday/Piliglass/actions/runs/38264008966)
+  4/4、20 tests 0 failures、fixture `"failures": []`（含 `returned-top-dark` 报告）；
+  envelope `status=passed` 109/44/40/**245**(68+177)/**104**/51、87 源码 hash、
+  7 项声明 build-preparation diff、golden `a9e6…`/`57e5…`；账户 `+258: All tests
+  passed!`、runtime 72、analyze `No issues found!`；queue logs 无 FATAL。
+- 边界：仍 shadow、无生产 caller、未接 authority，四 flag false；B2e-2（unknown 持久
+  恢复面/启动 recovery）与 B2e-3（生产 composition 统一走队列）未做；**不得写账号级
+  队列已接入生产或 P05 整体完成**；Codex PASS 前不进入下一组。
+
 **R10/R11/R12 退修在 `6279bc2` 的 CI 已被独立核实，但 Codex 结论为 CHANGES_REQUESTED（非 PASS）；遗留两项已在 `672e216` 修复并同 SHA 双 CI 全绿，等待 Codex 再复核**：
 首轮计划见 [P05_REVIEW_53AED63_R12_REPAIR_PLAN.md](P05_REVIEW_53AED63_R12_REPAIR_PLAN.md)，
 未闭合项与修复记录见
