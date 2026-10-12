@@ -32,6 +32,15 @@ LoginAccount _account(int mid) => LoginAccount(
   'refresh-$mid',
 )..activated = true;
 
+/// A genuinely logged-in response: the post-success guard must be provable, so
+/// the negative controls cannot pass merely because `isLogin` is false.
+UserInfoData _loggedInUserInfo({int mid = 4242, String? face}) =>
+    UserInfoData.fromJson({
+      'isLogin': true,
+      'mid': mid,
+      'face': face ?? 'https://example.invalid/face-$mid.png',
+    });
+
 class _PendingResponse {
   _PendingResponse(this.options);
 
@@ -52,6 +61,10 @@ class _ControlledAdapter implements HttpClientAdapter {
   final Queue<Completer<_PendingResponse>> _waiters =
       Queue<Completer<_PendingResponse>>();
 
+  /// Actual request count, so a guard can be proven by "no network was even
+  /// started" instead of an inferred empty cache.
+  int issued = 0;
+
   Future<_PendingResponse> nextRequest() {
     if (_requests.isNotEmpty) return Future.value(_requests.removeFirst());
     final waiter = Completer<_PendingResponse>();
@@ -65,6 +78,7 @@ class _ControlledAdapter implements HttpClientAdapter {
     Stream<Uint8List>? requestStream,
     Future<void>? cancelFuture,
   ) {
+    issued++;
     final pending = _PendingResponse(options);
     if (_waiters.isNotEmpty) {
       _waiters.removeFirst().complete(pending);
@@ -218,6 +232,8 @@ void main() {
       return Future<void>.value();
     };
     final gate = Completer<LoadingState<UserInfoData>>();
+    final adapter = _ControlledAdapter();
+    Request.dio.httpClientAdapter = adapter;
     final coordinator = AccountWriteBackCoordinator();
     final running = LoginUtils.onLoginMain(
       coordinator: coordinator,
@@ -226,10 +242,11 @@ void main() {
     await Future<void>.value();
     expect(coordinator.liveOperationCount, 1);
     Accounts.selectTemporarily(AccountType.main, b);
-    gate.complete(Success(UserInfoData.fromJson(const {})));
+    gate.complete(Success(_loggedInUserInfo(mid: 980005)));
     await running;
     expect(mirrored, false);
     expect(published, false);
+    expect(adapter.issued, 0);
     expect(coordinator.liveOperationCount, 0);
     expect(GStorage.localCache.get(LocalCacheKey.historyPause), isNull);
   });
@@ -253,10 +270,12 @@ void main() {
       published = true;
       return Future<void>.value();
     };
+    final adapter = _ControlledAdapter();
+    Request.dio.httpClientAdapter = adapter;
     final coordinator = AccountWriteBackCoordinator();
     final running = LoginUtils.onLoginMain(
       coordinator: coordinator,
-      userInfo: () => Future.value(Success(UserInfoData.fromJson(const {}))),
+      userInfo: () => Future.value(Success(_loggedInUserInfo(mid: 980007))),
     );
     await mirrorStarted.future;
     Accounts.selectTemporarily(AccountType.main, b);
@@ -264,6 +283,7 @@ void main() {
     await running;
     expect(staleAtResume, true);
     expect(published, false);
+    expect(adapter.issued, 0);
     expect(GStorage.localCache.get(LocalCacheKey.historyPause), isNull);
     expect(coordinator.liveOperationCount, 0);
   });
@@ -282,15 +302,17 @@ void main() {
     final coordinator = AccountWriteBackCoordinator();
     final running = LoginUtils.onLoginMain(
       coordinator: coordinator,
-      userInfo: () => Future.value(Success(UserInfoData.fromJson(const {'isLogin': true}))),
+      userInfo: () => Future.value(Success(_loggedInUserInfo(mid: 980009))),
     );
     final request = await adapter.nextRequest();
+    expect(adapter.issued, 1);
     await a.delete();
     final reinstalled = _account(980009);
     await Accounts.installCredentials(reinstalled);
     request.complete('{"code":0,"data":true}');
     await running;
     expect(published, false);
+    expect(GStorage.localCache.get(LocalCacheKey.historyPause), isNull);
     expect(coordinator.liveOperationCount, 0);
   });
 
@@ -323,13 +345,16 @@ void main() {
     expect(coordinator.liveOperationCount, 0);
   });
 
-  test('a logout clear runs after an in-flight login mirror', () async {
+  test('a logout clear runs last while a stale login mirror is refused', () async {
     final a = _account(980012);
+    final b = _account(980013);
     await Accounts.installCredentials(a);
+    await Accounts.installCredentials(b);
     Accounts.selectTemporarily(AccountType.main, a);
     final calls = <String>[];
     final mirrorStarted = Completer<void>();
     final mirrorGate = Completer<void>();
+    var published = false;
     LoginUtils.webCookieMirrorWriter = (account, cookies, isCurrent) async {
       calls.add('mirror-start');
       if (!mirrorStarted.isCompleted) mirrorStarted.complete();
@@ -340,18 +365,25 @@ void main() {
       calls.add('clear');
       return Future<void>.value();
     };
+    LoginUtils.loginMainPublisher = (response) {
+      published = true;
+      return Future<void>.value();
+    };
     final coordinator = AccountWriteBackCoordinator();
     final running = LoginUtils.onLoginMain(
       coordinator: coordinator,
-      userInfo: () => Future.value(Success(UserInfoData.fromJson(const {}))),
+      userInfo: () => Future.value(Success(_loggedInUserInfo(mid: 980012))),
     );
     await mirrorStarted.future;
+    Accounts.selectTemporarily(AccountType.main, b);
     final loggingOut = LoginUtils.onLogoutMain(coordinator: coordinator);
     await Future<void>.value();
     expect(calls, ['mirror-start']);
     mirrorGate.complete();
     await Future.wait([running, loggingOut]);
     expect(calls, ['mirror-start', 'mirror-end', 'clear']);
+    expect(published, false);
+    expect(GStorage.localCache.get(LocalCacheKey.historyPause), isNull);
     expect(coordinator.liveOperationCount, 0);
   });
 
@@ -366,14 +398,14 @@ void main() {
     await expectLater(
       LoginUtils.onLoginMain(
         coordinator: coordinator,
-        userInfo: () => Future.value(Success(UserInfoData.fromJson(const {}))),
+        userInfo: () => Future.value(Success(_loggedInUserInfo(mid: 980015))),
       ),
       throwsA(isA<StateError>()),
     );
     expect(coordinator.liveOperationCount, 0);
   });
 
-  test('the current owner completes mirror and publication exactly once', () async {
+  test('the current owner completes mirror, history and publication exactly once', () async {
     final a = _account(980014);
     await Accounts.installCredentials(a);
     Accounts.selectTemporarily(AccountType.main, a);
@@ -388,13 +420,76 @@ void main() {
       publishCalls++;
       return Future<void>.value();
     };
+    final adapter = _ControlledAdapter();
+    Request.dio.httpClientAdapter = adapter;
     final coordinator = AccountWriteBackCoordinator();
-    await LoginUtils.onLoginMain(
+    final running = LoginUtils.onLoginMain(
       coordinator: coordinator,
-      userInfo: () => Future.value(Success(UserInfoData.fromJson(const {'isLogin': true}))),
+      userInfo: () => Future.value(Success(_loggedInUserInfo(mid: 980014))),
     );
+    final request = await adapter.nextRequest();
+    expect(adapter.issued, 1);
+    request.complete('{"code":0,"data":true}');
+    await running;
     expect(mirrorCalls, 1);
     expect(publishCalls, 1);
+    expect(GStorage.localCache.get(LocalCacheKey.historyPause), true);
+    expect(coordinator.liveOperationCount, 0);
+  });
+
+  test('onLoginMain refuses publication after the same main owner is reset and re-activated', () async {
+    final anonymous = AnonymousAccount();
+    Accounts.ownsCredentials(anonymous);
+    Accounts.selectTemporarily(AccountType.main, anonymous);
+    final mirrorStarted = Completer<void>();
+    final mirrorGate = Completer<void>();
+    var staleAtResume = false;
+    LoginUtils.webCookieMirrorWriter = (account, cookies, isCurrent) async {
+      if (!mirrorStarted.isCompleted) mirrorStarted.complete();
+      await mirrorGate.future;
+      staleAtResume = !isCurrent();
+    };
+    var published = false;
+    LoginUtils.loginMainPublisher = (response) {
+      published = true;
+      return Future<void>.value();
+    };
+    final coordinator = AccountWriteBackCoordinator();
+    final running = LoginUtils.onLoginMain(
+      coordinator: coordinator,
+      userInfo: () => Future.value(Success(_loggedInUserInfo())),
+    );
+    await mirrorStarted.future;
+    final reset = Accounts.beginAnonymousReset(anonymous);
+    Accounts.completeAnonymousReset(anonymous, reset);
+    mirrorGate.complete();
+    await running;
+    expect(staleAtResume, true);
+    expect(published, false);
+    expect(GStorage.localCache.get(LocalCacheKey.historyPause), isNull);
+    expect(coordinator.liveOperationCount, 0);
+  });
+
+  test('a direct setWebCookie mirror is bound to the entry incarnation of the same object', () async {
+    final anonymous = AnonymousAccount();
+    Accounts.ownsCredentials(anonymous);
+    Accounts.selectTemporarily(AccountType.main, anonymous);
+    final mirrorStarted = Completer<void>();
+    final mirrorGate = Completer<void>();
+    var staleAtResume = false;
+    LoginUtils.webCookieMirrorWriter = (account, cookies, isCurrent) async {
+      if (!mirrorStarted.isCompleted) mirrorStarted.complete();
+      await mirrorGate.future;
+      staleAtResume = !isCurrent();
+    };
+    final coordinator = AccountWriteBackCoordinator();
+    final running = LoginUtils.setWebCookie(coordinator: coordinator);
+    await mirrorStarted.future;
+    final reset = Accounts.beginAnonymousReset(anonymous);
+    Accounts.completeAnonymousReset(anonymous, reset);
+    mirrorGate.complete();
+    await running;
+    expect(staleAtResume, true);
     expect(coordinator.liveOperationCount, 0);
   });
 }
