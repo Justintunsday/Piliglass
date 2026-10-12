@@ -515,6 +515,7 @@ private actor QueueFaultVault: PiliAccountSecretStore {
       guard let beforeBudget = try await store.loadShadowSnapshot() else {
         throw QueueFixtureError.failed("missing pre-budget snapshot")
       }
+      let preBudgetRecords = await fault.recordCount()
       do {
         _ = try await store.enqueue(.buvidSeed(recordKey: fx.key,
           generation: fx.record.generation,
@@ -523,6 +524,8 @@ private actor QueueFaultVault: PiliAccountSecretStore {
           nowMicroseconds: fx.now))
         throw QueueFixtureError.failed("queued over-budget buvid accepted")
       } catch PiliAccountLiveMemoryShadowError.resourceLimit { checks += 1 }
+      try check(await fault.recordCount() == preBudgetRecords,
+                "the rejected queued budget write adds no record")
       guard let afterBudget = try await store.loadShadowSnapshot() else {
         throw QueueFixtureError.failed("missing post-budget snapshot")
       }
@@ -542,7 +545,7 @@ private actor QueueFaultVault: PiliAccountSecretStore {
       try check(afterBudgetFollower.envelope.records[1].accessKeyUnits?.units ==
         Array("queue-after-budget".utf16),
         "the queue keeps draining after a resource-budget rejection")
-      try check(await fault.recordCount() == 6,
+      try check(await fault.recordCount() == preBudgetRecords + 1,
                 "the budget rejection adds no record beyond its follower")
 
       // Unknown install: A is admitted and paused before B exists, so the
