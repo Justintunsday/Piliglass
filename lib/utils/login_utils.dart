@@ -129,12 +129,14 @@ abstract final class LoginUtils {
     }
     try {
       final owner = account ?? Accounts.main;
+      // Entry incarnation stamp, not current ownership: a same-object
+      // revoke/re-activate (anonymous reset) would make ownsCredentials true
+      // again, so queued mirror work must be bound to the generation captured
+      // at entry.
+      final bound = stamp ?? Accounts.captureRequest(owner);
+      if (bound == null || !identical(bound.account, owner)) return;
       bool isCurrent() =>
-          identical(Accounts.main, owner) &&
-          (stamp == null
-              ? Accounts.ownsCredentials(owner)
-              : identical(stamp.account, owner) &&
-                  Accounts.isCurrentRequest(stamp));
+          identical(Accounts.main, owner) && Accounts.isCurrentRequest(bound);
       if (!isCurrent()) return;
       final cookies = owner.cookieJar.toList();
       await _runWebCookieExclusive(
