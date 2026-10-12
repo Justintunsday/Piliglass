@@ -866,7 +866,9 @@ private actor QueueFaultVault: PiliAccountSecretStore {
       do {
         _ = try await store.resolveUnresolvedPublication()
       } catch { readbackFailed = true }
-      try check(readbackFailed && await store.pendingUnresolvedPublication != nil,
+      let fenceStillHeld: PiliAccountShadowUnresolvedPublication? =
+        await store.pendingUnresolvedPublication
+      try check(readbackFailed && fenceStillHeld != nil,
                 "a failed read-back keeps the fence armed")
       var fencedWrite = false
       do {
