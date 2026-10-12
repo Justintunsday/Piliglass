@@ -214,6 +214,13 @@ tests/`failures=[]`。特别说明：9724ddb 的超长用例只证明 parser 上
 ledger 预算验证（R12 退修补齐主动长度上限、边界值与真实预算回归）。仍未接 authority、
 无生产 caller；durable identity 消费/恢复语义与账号级队列属后续；四 flag false。
 
+**R10/R11/R12 退修在最终代码 SHA `6279bc2` 完成并通过同 SHA CI（等待 Codex 独立复核）**：
+release 38185057809 5/5、preview 38185059780 4/4；账户 **+256** tests、analyze 无问题；
+envelope `status=passed` 109/44/40/**202**/51、sourceSHA=6279bc2；九 outcome success、
+BUILD SUCCEEDED/109.1MB/FFmpeg、preview 20 tests/`failures=[]`。详见
+[P05_REVIEW_53AED63_R12_REPAIR_PLAN.md](P05_REVIEW_53AED63_R12_REPAIR_PLAN.md)。Codex
+PASS 前不进入下一组；四 flag false。
+
 **Block 1 / B1d 切片（页面读取、延迟副作用、maintenance gate）已在 `98e6f9b` 验收**：
 `Accounts.installedAccounts()` 纯只读 seam + 页面 `isEmpty/isNotEmpty` 切
 `visibleAccounts()`（login/mine/setting/about，内容/顺序/读取时机不变、零

@@ -90,18 +90,29 @@
 - 边界：不接 authority、无生产 caller、不改 Dart authority；四 flag false；不碰
   UI/Aether/`youtube/`。
 
-## 闭环记录（2026-10-12，代码 SHA `01cac75`，CI 待跑）
+## 闭环记录（2026-10-12，最终代码 SHA `6279bc2`）
 
 - R10：`login_utils.dart` 捕获 owner+stamp，userInfo/WK mirror/history 每个 await 后、
   下一共享效应前复核；WK mirror 与 logout clear 走同一 FIFO 队列、执行期逐 cookie
   复核；新增 `webCookieMirrorWriter`/`webCookieClearer`/`loginMainPublisher` 测试 seam。
   测试：WK 期间换主、history 期间 delete/reinstall、mirror 排序（新 mirror/logout clear
-  最后）、mirror 抛错精确释放、current owner 正路径。
+  最后）、mirror 抛错精确释放、current owner 正路径。账户测试 250→**256**。
 - R11：schema 3 envelope 持久 `generationHighWater`（monotonic）；install/import 要求
-  `generation > effectiveHighWater` 并持久新高水位；枚举所有历史复用拒绝（delete→同 G
-  install、G1→G2→G1、跨 Keychain reopen、旧 schema 3 无字段回退、Int64.max 溢出）。
-- R12：`applyBuvidSeed` 主动长度上限（`buvidMaximumValueUnits`）→ `resourceLimit`
-  先于 field 构造；driver 保留 parser/值域负例，新增上限边界、真实编码字节预算回归、
-  非空 jar 顺序、map-key≠Cookie.name、expired no-op；计划值域/错误分类已修正。
-- 待办：同最终代码 SHA 双 CI（release5+preview4）实际证据；通过后交 Codex 复审，
-  期间不进入下一组。
+  `generation > effectiveGenerationHighWater` 并持久新高水位；覆盖 delete→同 G install、
+  G1→G2→G1、跨 Keychain reopen、旧 schema 3 无字段回退、Int64.max 溢出、以及旧
+  key+G 的 cookie/credentials 写入拒绝；import 重复 key 先于 generation 判定。
+- R12：`applyBuvidSeed` 主动长度上限（`buvidMaximumValueUnits` = 65536−64）→
+  `resourceLimit` 先于 field 构造；driver 新增上限+1 拒绝、恰在上限成功、真实编码字节
+  预算回归（有效普通值、当前 envelope 可编码、加值超预算 → `resourceLimit` 零发布）、
+  非空 jar 顺序、map-key≠Cookie.name、expired no-op；parser 上限拒绝保留在 reducer
+  套件；计划值域/错误分类已修正。
+- 同 SHA 验证：release [38185057809](https://github.com/Justintunsday/Piliglass/actions/runs/38185057809)
+  5/5、preview [38185059780](https://github.com/Justintunsday/Piliglass/actions/runs/38185059780)
+  4/4；账户 analyze 无问题、`+256`；envelope `status=passed`
+  109/44/40/**202**/51、sourceSHA=workflowSHA=6279bc2；九强制 outcome success、
+  BUILD SUCCEEDED/109.1MB/FFmpeg、preview 20 tests/`failures=[]`。
+- 修复过程：analyze cascade/extra-positional/unnecessary-async/body-might-complete、
+  setUpAll 的 `userInfo` late box、codec `try`、import 重复 key 次序、非空 jar fixture；
+  每轮失败均取消后在**新 SHA**重跑两条。
+- 状态：代码与 CI 证据已交付，**等待 Codex 独立复核**；在 PASS 之前不进入下一组、
+  不写"已验收"。四 flag false；不接 authority。
