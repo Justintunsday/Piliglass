@@ -243,15 +243,20 @@ sourceSHA=workflowSHA=9724ddb；preview 20 tests 0 failures、压力 `failures=[
 shadow 组件：未接 authority、无生产 caller，durable identity 消费/恢复语义、账号级队列与
 receipt/unknown ack、Block 3/4/5 仍未交付；四能力 flag 保持 false，P05 未整体完成。
 
-**R10/R11/R12 退修已在最终代码 SHA `6279bc23545ceeb91c43a0e223c994df1568bbc1` 完成并通过同 SHA CI（等待 Codex 独立复核，非自行验收）**：
-计划见 [P05_REVIEW_53AED63_R12_REPAIR_PLAN.md](P05_REVIEW_53AED63_R12_REPAIR_PLAN.md)。
+**R10/R11/R12 退修在 `6279bc23545ceeb91c43a0e223c994df1568bbc1` 的 CI 已被独立核实，但 Codex 结论为 CHANGES_REQUESTED（非 PASS）**：
+计划见 [P05_REVIEW_53AED63_R12_REPAIR_PLAN.md](P05_REVIEW_53AED63_R12_REPAIR_PLAN.md)，
+未闭合项与修复计划见
+[P05_REVIEW_6279BC2_REPAIR_PLAN.md](P05_REVIEW_6279BC2_REPAIR_PLAN.md)。
 同 SHA [release 38185057809](https://github.com/Justintunsday/Piliglass/actions/runs/38185057809)
 5/5 与 [preview 38185059780](https://github.com/Justintunsday/Piliglass/actions/runs/38185059780)
 4/4 success；九个强制 outcome 全 success、BUILD SUCCEEDED、109.1MB、FFmpeg 顺序。
-内容：R10 owner+stamp 逐阶段复核与 WK FIFO 排序（测试 seam；256 tests）；
-R11 schema 3 持久 monotonic `generationHighWater`（delete→同 G、G1→G2→G1、reopen、
-旧 schema 3 回退、溢出全部拒绝，import 重复 key 先于 generation 判定）；
-R12 buvid 主动长度上限与真实字节预算回归、非空 jar/map-key/expired 覆盖。
+**CI 已证明的组件子集**：R10 owner+stamp 逐阶段复核与 WK FIFO 排序（256 tests）；
+R11 schema 3 持久 monotonic `generationHighWater` 的删除前用例、G1→G2→G1、reopen、
+溢出与旧 key+G 拒绝（import 重复 key 先于 generation 判定）；R12 buvid 主动长度上限、
+真实字节预算回归、非空 jar/map-key/expired 覆盖。**独立未闭合**：R11 legacy 省略/null
+水位在删除最大/最后 login 后丢失（同 K/G 可在 reopen 后复用）；R10 负例使用
+`isLogin=false` 空转、缺少同对象 revoke/reactivate 与 direct `setWebCookie` incarnation
+证明。文档旧表述"旧 schema 3 回退、溢出全部拒绝"已按此更正。
 账户 artifact analyze 无问题、`+256: All tests passed!`；envelope `status=passed`
 109/44/40/**202**/51、sourceSHA=workflowSHA=6279bc2；preview 20 tests 0 failures、
 压力 `failures=[]`。修复过程：cascade/extra-positional/unnecessary-async/

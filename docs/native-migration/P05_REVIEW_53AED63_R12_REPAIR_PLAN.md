@@ -92,20 +92,29 @@
 
 ## 闭环记录（2026-10-12，最终代码 SHA `6279bc2`）
 
-- R10：`login_utils.dart` 捕获 owner+stamp，userInfo/WK mirror/history 每个 await 后、
-  下一共享效应前复核；WK mirror 与 logout clear 走同一 FIFO 队列、执行期逐 cookie
-  复核；新增 `webCookieMirrorWriter`/`webCookieClearer`/`loginMainPublisher` 测试 seam。
-  测试：WK 期间换主、history 期间 delete/reinstall、mirror 排序（新 mirror/logout clear
-  最后）、mirror 抛错精确释放、current owner 正路径。账户测试 250→**256**。
-- R11：schema 3 envelope 持久 `generationHighWater`（monotonic）；install/import 要求
-  `generation > effectiveGenerationHighWater` 并持久新高水位；覆盖 delete→同 G install、
-  G1→G2→G1、跨 Keychain reopen、旧 schema 3 无字段回退、Int64.max 溢出、以及旧
-  key+G 的 cookie/credentials 写入拒绝；import 重复 key 先于 generation 判定。
-- R12：`applyBuvidSeed` 主动长度上限（`buvidMaximumValueUnits` = 65536−64）→
-  `resourceLimit` 先于 field 构造；driver 新增上限+1 拒绝、恰在上限成功、真实编码字节
-  预算回归（有效普通值、当前 envelope 可编码、加值超预算 → `resourceLimit` 零发布）、
-  非空 jar 顺序、map-key≠Cookie.name、expired no-op；parser 上限拒绝保留在 reducer
-  套件；计划值域/错误分类已修正。
+> **2026-10-12 08:07/08:18 复审更正**：本节的"覆盖/全部拒绝"仅描述 **CI 已证明的组件子集**。
+> Codex 独立复审结论为 CHANGES_REQUESTED，明确未闭合：R11 的 legacy 省略/null 水位在
+> **删除最大/最后 login 后**丢失（既有用例只在删除前复用，未覆盖丢失序列）；R10 的 WK
+> 负例使用 `isLogin=false` 输入（空转）、缺少同对象 revoke/reactivate 代际证明、direct
+> `setWebCookie` 未传 stamp 时仅查 `ownsCredentials`。R12 组件（109/44/40/202/51 里的
+> 新增用例）已被复审核实通过，不需重做。修复计划见
+> [P05_REVIEW_6279BC2_REPAIR_PLAN.md](P05_REVIEW_6279BC2_REPAIR_PLAN.md)。
+
+- R10（CI 证明子集）：`login_utils.dart` 捕获 owner+stamp，userInfo/WK mirror/history 每个
+  await 后、下一共享效应前复核；WK mirror 与 logout clear 走同一 FIFO 队列、执行期逐
+  cookie 复核；新增 `webCookieMirrorWriter`/`webCookieClearer`/`loginMainPublisher` 测试
+  seam。测试：WK 期间换主、history 期间 delete/reinstall、mirror 排序（新 mirror/logout
+  clear 最后）、mirror 抛错精确释放、current owner 正路径。账户测试 250→**256**。
+- R11（CI 证明子集）：schema 3 envelope 持久 `generationHighWater`（monotonic）；
+  install/import 要求 `generation > effectiveGenerationHighWater` 并持久新高水位；覆盖
+  delete→同 G install、G1→G2→G1、跨 Keychain reopen、Int64.max 溢出、以及旧 key+G 的
+  cookie/credentials 写入拒绝；import 重复 key 先于 generation 判定。**删除前**的
+  legacy 省略/null 回退用例通过，但删除丢失序列见上方更正。
+- R12（CI 证明，保留）：`applyBuvidSeed` 主动长度上限（`buvidMaximumValueUnits` =
+  65536−64）→ `resourceLimit` 先于 field 构造；driver 新增上限+1 拒绝、恰在上限成功、
+  真实编码字节预算回归（有效普通值、当前 envelope 可编码、加值超预算 → `resourceLimit`
+  零发布）、非空 jar 顺序、map-key≠Cookie.name、expired no-op；parser 上限拒绝保留在
+  reducer 套件；计划值域/错误分类已修正。
 - 同 SHA 验证：release [38185057809](https://github.com/Justintunsday/Piliglass/actions/runs/38185057809)
   5/5、preview [38185059780](https://github.com/Justintunsday/Piliglass/actions/runs/38185059780)
   4/4；账户 analyze 无问题、`+256`；envelope `status=passed`
@@ -114,5 +123,6 @@
 - 修复过程：analyze cascade/extra-positional/unnecessary-async/body-might-complete、
   setUpAll 的 `userInfo` late box、codec `try`、import 重复 key 次序、非空 jar fixture；
   每轮失败均取消后在**新 SHA**重跑两条。
-- 状态：代码与 CI 证据已交付，**等待 Codex 独立复核**；在 PASS 之前不进入下一组、
-  不写"已验收"。四 flag false；不接 authority。
+- 状态：CI 证据已核实；**独立复审 CHANGES_REQUESTED**，R11 legacy 删除 ABA 与 R10
+  回归/incarnation 未闭合，修复后需新 SHA 双 CI 再复审；在 PASS 之前不进入下一组、不写
+  "已验收"。四 flag false；不接 authority。
