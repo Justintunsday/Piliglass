@@ -1,11 +1,13 @@
 # P05 Block 2 / B2e：durable identity 消费、账号写入队列与 receipt/unknown 语义
 
-2026-10-12（Asia/Hong_Kong，复审后重写）。**当前基线：验证代码 `672e216`（transaction
-driver 245 checks；release 38188706831 / preview 38188709339 双 CI 5+4，Codex 已对该
-有限退修组 PASS）**。上一版本文件写的"B2d 已在 `9724ddb` 验收 / 178 checks"是过时前置，
-已更正；当时承诺的"账号级排队"与"完整 durable 消费者"也不能由
-`operationInProgress` 拒绝或单加 receipt 标签/`lookup` 代替。四能力 flag 保持 false；
-不接 authority；本组只做 shadow。
+2026-10-12（Asia/Hong_Kong，复审后重写；R13–R18 退修后更新）。**本轮基线：`33d1922`
+（其上实现 queue/identity：`887ad9a` plan、`f9fb4de` 队列/receipt、`4944557` driver、
+`c007c8c` candidate 断言、`a4f6bb6` 独立 queue phase；transaction driver 245 checks 为
+已通过基线）**。Codex 对 `a4f6bb6` 复审 CHANGES_REQUESTED（R13–R18），本计划与
+[P05_REVIEW_A4F6BB6_R13_R18_REPAIR_PLAN.md](P05_REVIEW_A4F6BB6_R13_R18_REPAIR_PLAN.md)
+配套：R13 未决发布 fail-closed fence + 读回 resolution，R14/R15/R17/R18 driver 覆盖，
+R16 直接入口协调策略。上一版本写的"unknown 后队列继续/预算拒绝即释放"等表述已按
+fail-closed 语义更正。四能力 flag 保持 false；不接 authority；本组只做 shadow。
 
 数据与发布约束（沿用已验收组件，不改语义）：strict codec + 共享累计 ledger；schema 3 的
 `generationHighWater` 单调且任何发布都持久化变换前有效水位；单一 vault actor 是唯一
@@ -29,24 +31,43 @@ driver 245 checks；release 38188706831 / preview 38188709339 双 CI 5+4，Codex
      `writeQueueOverflow`（丢弃即拒绝，不静默），取消（排队中/发布前）不得发布，队列
      必须继续排空；每次尝试都基于**新快照**重校验 key+generation（同 key 顺序 = 提交
      顺序；不同 key 无丢更新）。
-  d. 竞争与 CAS：同 store FIFO 串行、store 级 fence 拒绝直接并发入口；跨 store（共享
-     同一 vault actor）以有界重试吞并 `operationInProgress`/`staleTransaction`，重试
-     基于新快照重新变换（无丢更新），重试耗尽 → `publicationConflict`（不伪成功）。
-  e. unknown 结果 fence：`publicationUnknown` 原样上抛且**不自动重试**；后续队列项从
-     读回后的持久真值继续；恢复判定 = `loadShadowSnapshot`/`lookupRecord` 读回核对
-     （写后错误=已发布、写前错误=未发布），并提供"再次提交同请求必须被既有身份/代际
-     拒绝（如 duplicateRecordKey/已存在 no-op）"的测试，证明未把 unknown 当未写。
+  d. 竞争与 CAS（R16 入口策略）：同 store FIFO 串行；直接 public 入口是**仅空闲期**
+     legacy/primitive 入口——queued turn 执行中、retry back-off 中或预约等待者存在时
+     （`writerActive`）一律 `operationInProgress` 拒绝，未决发布 fence 期间一律
+     `unresolvedPublication`；queued 执行自身以 `executingQueuedTurn` 只包住每次
+     attempt 的实际执行。跨 store（共享同一 vault actor）以有界重试吞并
+     `operationInProgress`/`staleTransaction`，重试基于新快照重新变换（无丢更新），
+     重试耗尽 → `publicationConflict`（不伪成功）。生产 composition 统一走 `enqueue`
+     （B2e-3）。
+  e. unknown 结果 fence（R13 fail-closed）：`publicationUnknown` 原样上抛且**不自动
+     重试**，同时把未决发布记录为不可变证据 `{expectedPreviousTransactionID,
+     attemptedCandidateSHA256, kind}` 并**冻结后续所有写**（队列项与直接 public 入口
+     均 `unresolvedPublication`）；只有 `resolveUnresolvedPublication()` 完成读回后才
+     释放 fence，返回 `{observedTransactionID, observedCandidateSHA256,
+     observedMatchedAttempt}`。判定基于"实际提交候选的 SHA-256 与当前 manifest 候选
+     SHA-256 是否一致"（vault manifest 的同一 sha256 域），不是语义 payload 猜测；
+     读回失败时 fence 保持。测试覆盖写前错误/写后错误 + 不可读 ack、同 key
+     overwriting follower 被冻结、持续读回失败、reopen 边界、取消/释放，以及
+     "landed unknown 重提交 → duplicateRecordKey / buvid no-op"（未把 unknown 当未写、
+     不重放、不伪造 receipt）。
   f. 测试矩阵（driver，真实 Keychain staging + 受控 fault vault）：receipt 身份与
-     lookup 命中/未命中/不改变指针；同 key FIFO（后项快照包含前项）；不同 key 双效应；
-     队满溢出零副作用；排队中取消、发布前取消（不发布且队列继续）；queue-unknown
-     （install + buvid：上抛、读回、重放被拒/no-op）；跨 store fence 竞争（重试后两效应
-     都在）；CAS `staleTransaction` 干预（第二 vault 实例介入发布后，队列项重试并保留
-     干预效应）；delete 重编号后按身份寻址；import 代际替换后旧代际拒绝/新代际成功；
-     reopen 后队列可用；预算拒绝后队列继续释放（不泄漏 turn）；generation 溢出沿用
-     R11 用例。
-- **B2e-2（下一组）**：unknown 的**持久恢复面**（identity 读回 + 消费方：snapshot
-  bridge / reverse import 的 identity 对齐）与队列在其余写路径的接线；buvid/install/
-  import 的 unknown 语义补测。依赖 B2e-1 的 outcome/identity 不变量。
+     lookup 命中/未命中/不改变指针；同 key FIFO（后项快照包含前项）+ A/B/C receipt→
+     immutable candidate 逐一关联；不同 key 双效应；队满溢出两次 typed 拒绝
+     （credentials + activated 取实际捕获基线的相反值），指针/基线/计数不变；排队中
+     取消、发布前取消（不发布且队列继续）；queued 预算 `resourceLimit` 后合法 follower
+     且指针逐字节不变；maxQueueAttempts 耗尽 → `publicationConflict`（无 receipt、
+     零发布、follower 可继续）；retry back-off 窗口内的直接入口被拒且零发布；真实
+     queued purpose 读→变换→发布竞争（stale 重试重读重算、保留干预效应、previous
+     失效时 `staleGeneration` 零副作用）；queue-unknown（install + buvid：fence、读回
+     resolution、重放被拒/no-op）；写前/写后错误 + 不可读 ack、持续读回失败、reopen
+     边界；跨 store fence 竞争（重试后两效应都在）；CAS `staleTransaction` 干预（第二
+     vault 实例介入发布后，队列项重试并保留干预效应）；delete 重编号后按身份寻址；
+     import 代际替换后旧代际拒绝/新代际成功；reopen 后队列可用；generation 溢出沿用
+     R11 用例；receipt identity 覆盖 purpose/temporarySelection/activated/buvid。
+- **B2e-2（下一组）**：unknown 的**持久恢复面**（跨进程/重启的未决 fence 与启动
+  recovery、identity 读回 + 消费方：snapshot bridge / reverse import 的 identity 对齐）
+  与队列在其余写路径的接线；buvid/install/import 的 unknown 语义补测。依赖 B2e-1 的
+  outcome/identity 不变量与进程内 fail-closed fence。
 - **B2e-3（随 Block 3 composition）**：生产调用方统一改走队列（一个 namespace 一个
   vault/store 实例）、handoff/revert 期间的冻结-排空-未知恢复策略、GC 引用安全。**在
   B2e-3 完成前不得宣称"账号级队列已接入生产"**；Block 2 的完成声明必须保留此边界。
@@ -67,9 +88,16 @@ driver 245 checks；release 38188706831 / preview 38188709339 双 CI 5+4，Codex
   record/descriptor 并抛 `CancellationError`），已发布则不得回滚（未知按读回判定）。
 - 每次尝试（含重试）都重新 `loadShadowSnapshot` 并重校验 key+generation；`staleTransaction`
   与 vault `operationInProgress` 有界重试（默认 40 次 × 25ms），耗尽
-  `publicationConflict`；其余错误（含 `resourceLimit`、`staleGeneration`、
-  `publicationUnknown`）立即上抛，释放 turn。
-- 单发布者不变：队列不并行发布，不引入多写者；跨 store 正确性由 CAS + 重试保证。
+  `publicationConflict`；其余错误（含 `resourceLimit`、`staleGeneration`）立即上抛，
+  释放 turn。
+- `publicationUnknown` 例外且 fail closed：上抛 + 记录不可变未决证据 + 冻结所有后续写，
+  直到 `resolveUnresolvedPublication()` 记录读回（读回失败保持冻结）；不自动重试、
+  不重放、不伪造 receipt、不从匹配 payload 推断成功。
+- 入口策略（R16）：queued turn 持有 writer 角色（执行/back-off/预约等待者）或未决
+  fence 存在时，直接 public 写入口拒绝（`operationInProgress`/`unresolvedPublication`）；
+  直接 API 仅空闲期 legacy/primitive，生产统一走队列（B2e-3）。
+- 单发布者不变：队列不并行发布，不引入多写者；跨 store 正确性由 CAS + 重试保证；
+  未决 fence 目前为进程内（持久恢复面 B2e-2），文档不得宣称跨重启 fence。
 
 ## 3. 验收流程
 
