@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 enum PiliAccountShadowTransactionError: Error, Sendable, Equatable {
@@ -11,6 +12,12 @@ enum PiliAccountShadowTransactionError: Error, Sendable, Equatable {
   /// Bounded contention retries (cross-store fence/CAS) were exhausted. No
   /// receipt is fabricated; the caller must read back before deciding.
   case publicationConflict
+  /// A previous publication returned `publicationUnknown` and its outcome has
+  /// not been resolved by an explicit read-back. Every later durable write
+  /// fails closed with this error until `resolveUnresolvedPublication()`
+  /// records the read-back; an unknown outcome is never replayed or inferred
+  /// from a later payload.
+  case unresolvedPublication
 }
 
 struct PiliAccountShadowCookieSave: Sendable, Equatable {
@@ -111,6 +118,36 @@ struct PiliAccountShadowTransactionReceipt: Sendable, Equatable {
   let authoritySwitchAllowed: Bool
 }
 
+/// Compact diagnostics for the exact attempted write whose publication result
+/// is unknown. It carries no payload for replay.
+enum PiliAccountShadowUnresolvedWriteKind: Sendable, Equatable {
+  case adoptIdentities, install, importRecords, delete, cookieSave, cookieDelete
+  case cookieDeleteAll, temporarySelection, purposeChange, credentials, activated, buvidSeed
+}
+
+/// Immutable evidence retained for one unresolved publication: the exact pointer
+/// the write tried to replace and the SHA-256 of the exact encoded candidate the
+/// vault attempted. The digest shares the vault manifest's `sha256` domain, so
+/// read-back resolution correlates the attempted publication identity instead
+/// of inferring operation success from a semantically similar payload.
+struct PiliAccountShadowUnresolvedPublication: Sendable, Equatable {
+  let expectedPreviousTransactionID: UUID?
+  let attemptedCandidateSHA256: String
+  let kind: PiliAccountShadowUnresolvedWriteKind
+}
+
+/// Recorded read-back outcome that releases the unresolved-publication fence.
+/// `observedMatchedAttempt` is true only when the current published candidate
+/// is byte-identical to the attempted candidate. It records evidence; it never
+/// fabricates a write receipt for the unknown operation and never replays it.
+struct PiliAccountShadowPublicationResolution: Sendable, Equatable {
+  let expectedPreviousTransactionID: UUID?
+  let attemptedCandidateSHA256: String
+  let observedTransactionID: UUID?
+  let observedCandidateSHA256: String?
+  let observedMatchedAttempt: Bool
+}
+
 /// Durable single-account transaction over the capture-local shadow. It mutates
 /// one exact record (ordered jar, temporary selection, credentials, activated)
 /// through production values, revalidates the whole envelope with the shared
@@ -130,6 +167,14 @@ actor PiliAccountEnvelopeTransactionStore {
   private var writerActive = false
   private var pendingWrites = 0
   private var waitingTurns: [CheckedContinuation<Void, Never>] = []
+  /// True only while a queued turn is actively executing one attempt. Direct
+  /// public entry is rejected whenever `writerActive` holds the turn (including
+  /// bounded retry back-off and reserved waiters), so a public bypass can never
+  /// enter ahead of admitted queue work; queued attempts pass through because
+  /// they run inside this flag.
+  private var executingQueuedTurn = false
+  private var queueRetrySleeps = 0
+  private var unresolved: PiliAccountShadowUnresolvedPublication?
   var nativeWritesAllowed: Bool { false }
   var authoritySwitchAllowed: Bool { false }
 
@@ -137,6 +182,15 @@ actor PiliAccountEnvelopeTransactionStore {
   /// tests/telemetry; it never admits or drops a write.
   var pendingWriteCount: Int { pendingWrites }
   var writeQueueIdle: Bool { !writerActive && pendingWrites == 0 }
+  /// Bounded contention retries that backed off in this store's lifetime.
+  /// Observability only; it never admits or drops a write.
+  var retrySleepCount: Int { queueRetrySleeps }
+  /// Immutable evidence of a `publicationUnknown` whose read-back resolution
+  /// has not been recorded yet. While non-nil every durable write fails closed
+  /// with `unresolvedPublication`.
+  var pendingUnresolvedPublication: PiliAccountShadowUnresolvedPublication? {
+    unresolved
+  }
 
   init(vault: PiliAccountEnvelopeStagingStore,
        limits: PiliOrderedCookieArchiveLimits = .standard,
@@ -159,11 +213,16 @@ actor PiliAccountEnvelopeTransactionStore {
   /// throw `publicationConflict`). A full queue throws `writeQueueOverflow`
   /// immediately and never silently drops the write. Cancellation before
   /// publication publishes nothing and the FIFO keeps draining.
-  /// `publicationUnknown` always propagates: recovery is by read-back
-  /// (`loadShadowSnapshot`/`lookupRecord`), never by replay.
+  ///
+  /// `publicationUnknown` always propagates and arms a fail-closed
+  /// unresolved-publication fence: no later write, queued or direct, publishes
+  /// until `resolveUnresolvedPublication()` records the read-back, so a
+  /// same-key follower can never cover the unknown operation's evidence. The
+  /// unknown operation itself is never replayed.
   func enqueue(_ write: PiliAccountShadowQueuedWrite) async throws
     -> PiliAccountShadowWriteOutcome {
     try Task.checkCancellation()
+    try requireResolvedPublication()
     if writerActive {
       guard pendingWrites < maxPendingWrites else {
         throw PiliAccountShadowTransactionError.writeQueueOverflow
@@ -173,6 +232,8 @@ actor PiliAccountEnvelopeTransactionStore {
       pendingWrites -= 1
       do {
         try Task.checkCancellation()
+        // A previous turn may have armed the fence while this write waited.
+        try requireResolvedPublication()
       } catch {
         passTurn()
         throw error
@@ -215,24 +276,89 @@ actor PiliAccountEnvelopeTransactionStore {
     }
   }
 
+  /// Single publication choke point. Any `publicationUnknown` first records the
+  /// immutable attempted-candidate evidence and the fail-closed fence, then
+  /// propagates unchanged. The attempted SHA-256 shares the vault manifest's
+  /// `sha256` domain, so read-back correlates the exact attempted publication.
+  private func publishCandidate(_ candidate: PiliAccountLiveMemoryShadow,
+                                expectedTransactionID: UUID,
+                                kind: PiliAccountShadowUnresolvedWriteKind) async throws
+    -> PiliAccountEnvelopeStagingReceipt {
+    let data = try codec.encode(candidate)
+    do {
+      return try await vault.importShadow(data, expectedTransactionID: expectedTransactionID)
+    } catch PiliAccountEnvelopeStagingError.publicationUnknown {
+      if unresolved == nil {
+        unresolved = PiliAccountShadowUnresolvedPublication(
+          expectedPreviousTransactionID: expectedTransactionID,
+          attemptedCandidateSHA256: Self.digest(data), kind: kind)
+      }
+      throw PiliAccountEnvelopeStagingError.publicationUnknown
+    }
+  }
+
+  /// Fail-closed gate: a durable write may only proceed while no unresolved
+  /// publication is waiting for its recorded read-back resolution.
+  private func requireResolvedPublication() throws {
+    guard unresolved == nil else {
+      throw PiliAccountShadowTransactionError.unresolvedPublication
+    }
+  }
+
+  /// Mandatory read-back for a prior `publicationUnknown`, and the only way the
+  /// fence is released. It never replays the unknown write and never fabricates
+  /// a receipt for it: it records the observed pointer identity and whether the
+  /// exact attempted candidate is the one currently published. A failed
+  /// read-back throws and keeps the fence armed. Persistent cross-restart
+  /// recovery is deliberately out of this B2e-1 slice.
+  func resolveUnresolvedPublication() async throws
+    -> PiliAccountShadowPublicationResolution? {
+    guard let unresolved else { return nil }
+    let snapshot = try await vault.loadShadowSnapshot()
+    let observedDigest: String?
+    if let snapshot {
+      observedDigest = Self.digest(try codec.encode(snapshot.envelope))
+    } else {
+      observedDigest = nil
+    }
+    let resolution = PiliAccountShadowPublicationResolution(
+      expectedPreviousTransactionID: unresolved.expectedPreviousTransactionID,
+      attemptedCandidateSHA256: unresolved.attemptedCandidateSHA256,
+      observedTransactionID: snapshot?.transactionID,
+      observedCandidateSHA256: observedDigest,
+      observedMatchedAttempt: observedDigest == unresolved.attemptedCandidateSHA256)
+    self.unresolved = nil
+    return resolution
+  }
+
+  private static func digest(_ data: Data) -> String {
+    SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+  }
+
   private func executeQueuedWrite(_ write: PiliAccountShadowQueuedWrite) async throws
     -> PiliAccountShadowWriteOutcome {
     var attempt = 0
     while true {
       attempt += 1
       do {
+        // Only the active attempt counts as queued execution: direct public
+        // entry stays rejected during the retry back-off below.
+        executingQueuedTurn = true
+        defer { executingQueuedTurn = false }
         return try await performQueuedWrite(write)
       } catch let error as PiliAccountShadowTransactionError
         where error == .operationInProgress {
         guard attempt < maxQueueAttempts else {
           throw PiliAccountShadowTransactionError.publicationConflict
         }
+        queueRetrySleeps += 1
         try await Task.sleep(nanoseconds: retryDelayNanoseconds)
       } catch let error as PiliAccountEnvelopeStagingError
         where error == .operationInProgress || error == .staleTransaction {
         guard attempt < maxQueueAttempts else {
           throw PiliAccountShadowTransactionError.publicationConflict
         }
+        queueRetrySleeps += 1
         try await Task.sleep(nanoseconds: retryDelayNanoseconds)
       }
     }
@@ -284,7 +410,8 @@ actor PiliAccountEnvelopeTransactionStore {
   func applyCookieSave(recordKeyUnits: PiliCookieUTF16, expectedGeneration: Int64,
                        _ save: PiliAccountShadowCookieSave) async throws
     -> PiliAccountShadowTransactionReceipt {
-    try await transaction(recordKeyUnits: recordKeyUnits, expectedGeneration: expectedGeneration) { current, index in
+    try await transaction(recordKeyUnits: recordKeyUnits, expectedGeneration: expectedGeneration,
+                          kind: .cookieSave) { current, index in
       let jar = try self.reducer.save(current.records[index].jar, fields: save.fields,
                                       representation: save.representation, location: save.location,
                                       nowMicroseconds: save.nowMicroseconds)
@@ -295,7 +422,8 @@ actor PiliAccountEnvelopeTransactionStore {
   func applyCookieDelete(recordKeyUnits: PiliCookieUTF16, expectedGeneration: Int64,
                          host: String, withDomainSharedCookie: Bool) async throws
     -> PiliAccountShadowTransactionReceipt {
-    try await transaction(recordKeyUnits: recordKeyUnits, expectedGeneration: expectedGeneration) { current, index in
+    try await transaction(recordKeyUnits: recordKeyUnits, expectedGeneration: expectedGeneration,
+                          kind: .cookieDelete) { current, index in
       let jar = try self.reducer.delete(current.records[index].jar, host: host,
                                         withDomainSharedCookie: withDomainSharedCookie)
       return self.replaceJar(current, index: index, jar: jar)
@@ -304,7 +432,8 @@ actor PiliAccountEnvelopeTransactionStore {
 
   func applyCookieDeleteAll(recordKeyUnits: PiliCookieUTF16, expectedGeneration: Int64) async throws
     -> PiliAccountShadowTransactionReceipt {
-    try await transaction(recordKeyUnits: recordKeyUnits, expectedGeneration: expectedGeneration) { current, index in
+    try await transaction(recordKeyUnits: recordKeyUnits, expectedGeneration: expectedGeneration,
+                          kind: .cookieDeleteAll) { current, index in
       let jar = try self.reducer.deleteAll(current.records[index].jar)
       return self.replaceJar(current, index: index, jar: jar)
     }
@@ -318,7 +447,8 @@ actor PiliAccountEnvelopeTransactionStore {
     -> PiliAccountShadowTransactionReceipt {
     // The source order is fixed: main, heartbeat, recommend, video.
     let slot = slotIndex(purpose)
-    return try await transaction(recordKeyUnits: recordKeyUnits, expectedGeneration: expectedGeneration) { current, index in
+    return try await transaction(recordKeyUnits: recordKeyUnits, expectedGeneration: expectedGeneration,
+                                 kind: .temporarySelection) { current, index in
       var selections = current.selections
       selections[slot] = current.records[index].record
       let heartbeat = selections[1]
@@ -346,7 +476,8 @@ actor PiliAccountEnvelopeTransactionStore {
                           previousKeyUnits: PiliCookieUTF16?,
                           previousExpectedGeneration: Int64?) async throws
     -> PiliAccountShadowTransactionReceipt {
-    try await transaction(recordKeyUnits: recordKeyUnits, expectedGeneration: expectedGeneration) { current, index in
+    try await transaction(recordKeyUnits: recordKeyUnits, expectedGeneration: expectedGeneration,
+                          kind: .purposeChange) { current, index in
       var records = current.records
       let selected = records[index]
       if !selected.persistedPurposes.contains(purpose) {
@@ -382,7 +513,8 @@ actor PiliAccountEnvelopeTransactionStore {
   func applyCredentials(recordKeyUnits: PiliCookieUTF16, expectedGeneration: Int64,
                         accessKeyUnits: PiliCookieUTF16?, refreshTokenUnits: PiliCookieUTF16?) async throws
     -> PiliAccountShadowTransactionReceipt {
-    try await transaction(recordKeyUnits: recordKeyUnits, expectedGeneration: expectedGeneration) { current, index in
+    try await transaction(recordKeyUnits: recordKeyUnits, expectedGeneration: expectedGeneration,
+                          kind: .credentials) { current, index in
       let record = current.records[index]
       var records = current.records
       records[index] = PiliAccountLiveMemoryRecord(
@@ -396,7 +528,8 @@ actor PiliAccountEnvelopeTransactionStore {
 
   func applyActivated(recordKeyUnits: PiliCookieUTF16, expectedGeneration: Int64,
                       activated: Bool) async throws -> PiliAccountShadowTransactionReceipt {
-    try await transaction(recordKeyUnits: recordKeyUnits, expectedGeneration: expectedGeneration) { current, index in
+    try await transaction(recordKeyUnits: recordKeyUnits, expectedGeneration: expectedGeneration,
+                          kind: .activated) { current, index in
       let record = current.records[index]
       var records = current.records
       records[index] = PiliAccountLiveMemoryRecord(
@@ -442,8 +575,9 @@ actor PiliAccountEnvelopeTransactionStore {
     let candidate = replace(current, records: records, schemaVersion: 3,
                             generationHighWater: highWater)
     _ = try candidate.validated(limits: codec.limits)
-    let publication = try await vault.importShadow(codec.encode(candidate),
-                                                   expectedTransactionID: snapshot.transactionID)
+    let publication = try await publishCandidate(candidate,
+                                                 expectedTransactionID: snapshot.transactionID,
+                                                 kind: .adoptIdentities)
     return .init(transactionID: publication.transactionID, adopted: adopted,
                  adoptedIdentities: adoptedIdentities,
                  nativeWritesAllowed: false, authoritySwitchAllowed: false)
@@ -501,8 +635,9 @@ actor PiliAccountEnvelopeTransactionStore {
       ownerOrder: current.ownerOrder + [order],
       generationHighWater: max(highWater, install.generation))
     _ = try candidate.validated(limits: codec.limits)
-    let publication = try await vault.importShadow(codec.encode(candidate),
-                                                   expectedTransactionID: snapshot.transactionID)
+    let publication = try await publishCandidate(candidate,
+                                                 expectedTransactionID: snapshot.transactionID,
+                                                 kind: .install)
     return .init(transactionID: publication.transactionID, record: newIndex,
                  durableIdentity: record.durableIdentity,
                  nativeWritesAllowed: false, authoritySwitchAllowed: false)
@@ -556,8 +691,9 @@ actor PiliAccountEnvelopeTransactionStore {
     let candidate = replace(current, records: records, storedOrder: storedOrder,
                             ownerOrder: ownerOrder, selections: selections, history: history)
     _ = try candidate.validated(limits: codec.limits)
-    let publication = try await vault.importShadow(codec.encode(candidate),
-                                                   expectedTransactionID: snapshot.transactionID)
+    let publication = try await publishCandidate(candidate,
+                                                 expectedTransactionID: snapshot.transactionID,
+                                                 kind: .delete)
     return .init(transactionID: publication.transactionID, record: index,
                  durableIdentity: deleted.durableIdentity,
                  nativeWritesAllowed: false, authoritySwitchAllowed: false)
@@ -675,8 +811,9 @@ actor PiliAccountEnvelopeTransactionStore {
       ownerOrder: ownerOrder, selections: selections, history: history,
       generationHighWater: max(highWater, entryGenerations.max() ?? highWater))
     _ = try candidate.validated(limits: codec.limits)
-    let publication = try await vault.importShadow(codec.encode(candidate),
-                                                   expectedTransactionID: snapshot.transactionID)
+    let publication = try await publishCandidate(candidate,
+                                                 expectedTransactionID: snapshot.transactionID,
+                                                 kind: .importRecords)
     return .init(transactionID: publication.transactionID, replaced: replaced, appended: appended,
                  identities: resolvedIdentities,
                  nativeWritesAllowed: false, authoritySwitchAllowed: false)
@@ -742,8 +879,9 @@ actor PiliAccountEnvelopeTransactionStore {
       nowMicroseconds: nowMicroseconds)
     let candidate = replaceJar(current, index: index, jar: jar)
     _ = try candidate.validated(limits: codec.limits)
-    let publication = try await vault.importShadow(codec.encode(candidate),
-                                                   expectedTransactionID: snapshot.transactionID)
+    let publication = try await publishCandidate(candidate,
+                                                 expectedTransactionID: snapshot.transactionID,
+                                                 kind: .buvidSeed)
     return .init(transactionID: publication.transactionID, seeded: true,
                  durableIdentity: record.durableIdentity,
                  nativeWritesAllowed: false, authoritySwitchAllowed: false)
@@ -779,6 +917,7 @@ actor PiliAccountEnvelopeTransactionStore {
   }
 
   private func transaction(recordKeyUnits: PiliCookieUTF16, expectedGeneration: Int64,
+                           kind: PiliAccountShadowUnresolvedWriteKind,
                            _ transform: (PiliAccountLiveMemoryShadow, Int) throws
                              -> PiliAccountLiveMemoryShadow) async throws
     -> PiliAccountShadowTransactionReceipt {
@@ -803,8 +942,9 @@ actor PiliAccountEnvelopeTransactionStore {
     // The wrapper gate cannot fence other callers of the shared vault. Publish
     // only if the exact pointer used for this transform is still current; the
     // vault owns comparison and publication under one operation fence.
-    let publication = try await vault.importShadow(codec.encode(candidate),
-                                                   expectedTransactionID: snapshot.transactionID)
+    let publication = try await publishCandidate(candidate,
+                                                 expectedTransactionID: snapshot.transactionID,
+                                                 kind: kind)
     return .init(transactionID: publication.transactionID, record: record.record,
                  durableIdentity: record.durableIdentity,
                  nativeWritesAllowed: false, authoritySwitchAllowed: false)
@@ -886,8 +1026,16 @@ actor PiliAccountEnvelopeTransactionStore {
 
   private func beginOperation() throws {
     // Actor methods can reenter across awaits; fence the load/transform/publish
-    // transaction until its durable publication has finished.
+    // transaction until its durable publication has finished. Direct public
+    // entry is a legacy primitive that fails closed while a queued turn holds
+    // the writer role (executing, retrying or reserved) and while an unresolved
+    // publication awaits its recorded read-back resolution. Queued attempts
+    // pass because they execute inside `executingQueuedTurn`.
     guard !operationInProgress else {
+      throw PiliAccountShadowTransactionError.operationInProgress
+    }
+    try requireResolvedPublication()
+    guard !writerActive || executingQueuedTurn else {
       throw PiliAccountShadowTransactionError.operationInProgress
     }
     operationInProgress = true
