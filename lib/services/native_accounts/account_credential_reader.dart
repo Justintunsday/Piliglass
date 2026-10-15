@@ -45,6 +45,39 @@ final class AccountCredentialSummary {
   final bool activated;
 }
 
+/// Three-way binding of one credential read.
+///
+/// [notInstalled] means the owner has no captured stamp at all (never installed
+/// or uninstalled): only this explicit legacy case may fall back to a historical
+/// direct field. [rejected] means a stamp exists but the reader no longer
+/// accepts it (revoked, retired, restore/recovery window, closed storage or a
+/// foreign stamp): callers must fail closed and must never convert this into a
+/// raw owner-field read. [bound] carries the real value, and a null [value] of
+/// a bound nullable credential (for example a missing access key) is legitimate
+/// data, not a rejection.
+enum AccountCredentialBinding { notInstalled, rejected, bound }
+
+/// Tagged result of one bound credential read.
+final class AccountBoundCredential<T> {
+  const AccountBoundCredential._(this.binding, this.value);
+
+  const AccountBoundCredential.notInstalled()
+      : this._(AccountCredentialBinding.notInstalled, null);
+
+  const AccountBoundCredential.rejected()
+      : this._(AccountCredentialBinding.rejected, null);
+
+  const AccountBoundCredential.bound(T value)
+      : this._(AccountCredentialBinding.bound, value);
+
+  final AccountCredentialBinding binding;
+  final T? value;
+
+  bool get isNotInstalled => binding == AccountCredentialBinding.notInstalled;
+  bool get isRejected => binding == AccountCredentialBinding.rejected;
+  bool get isBound => binding == AccountCredentialBinding.bound;
+}
+
 /// Read-only credential adapter. It never installs, activates, revokes, writes
 /// a jar/Hive box or performs network I/O. A null result means the bound
 /// owner/stamp is no longer installed and the caller must keep its existing
@@ -55,8 +88,29 @@ abstract interface class AccountCredentialReader {
     AccountRequestStamp<Account> stamp,
   );
 
+  /// Tagged csrf read for an already captured stamp. A stamp the reader no
+  /// longer accepts returns [AccountCredentialBinding.rejected] and must never
+  /// be replaced by a raw owner field. A bound owner returns the real jar value
+  /// with the historical throw semantics when the jar entry is absent.
+  AccountBoundCredential<String> boundCsrfFor(
+    Account owner,
+    AccountRequestStamp<Account> stamp,
+  );
+
+  /// Tagged access-key read. A bound value may be null: a nullable credential
+  /// that is legitimately absent is bound data, not a rejection.
+  AccountBoundCredential<String?> boundAccessKeyFor(
+    Account owner,
+    AccountRequestStamp<Account> stamp,
+  );
+
+  /// Legacy nullable wrapper: null when the reader rejects the stamp. csrf is
+  /// non-null whenever bound, so null here is always a rejection.
   String? csrfFor(Account owner, AccountRequestStamp<Account> stamp);
 
+  /// Legacy nullable wrapper: null when the reader rejects the stamp or when
+  /// the bound access key is legitimately absent. It cannot distinguish the
+  /// two; use [boundAccessKeyFor] when the distinction matters.
   String? accessKeyFor(Account owner, AccountRequestStamp<Account> stamp);
 
   List<AccountCredentialSummary> visibleAccounts();
@@ -86,15 +140,35 @@ final class DartAccountCredentialReader implements AccountCredentialReader {
   }
 
   @override
+  AccountBoundCredential<String> boundCsrfFor(
+    Account owner,
+    AccountRequestStamp<Account> stamp,
+  ) {
+    if (!_isBound(owner, stamp)) return const AccountBoundCredential.rejected();
+    // Bound contexts keep the historical getter semantics: a missing jar entry
+    // throws exactly like the direct field, it never becomes a rejection.
+    return AccountBoundCredential.bound(owner.csrf);
+  }
+
+  @override
+  AccountBoundCredential<String?> boundAccessKeyFor(
+    Account owner,
+    AccountRequestStamp<Account> stamp,
+  ) {
+    if (!_isBound(owner, stamp)) return const AccountBoundCredential.rejected();
+    return AccountBoundCredential.bound(owner.accessKey);
+  }
+
+  @override
   String? csrfFor(Account owner, AccountRequestStamp<Account> stamp) {
-    if (!_isBound(owner, stamp)) return null;
-    return owner.csrf;
+    final bound = boundCsrfFor(owner, stamp);
+    return bound.isBound ? bound.value : null;
   }
 
   @override
   String? accessKeyFor(Account owner, AccountRequestStamp<Account> stamp) {
-    if (!_isBound(owner, stamp)) return null;
-    return owner.accessKey;
+    final bound = boundAccessKeyFor(owner, stamp);
+    return bound.isBound ? bound.value : null;
   }
 
   @override

@@ -55,42 +55,55 @@ abstract final class Accounts {
   static bool isCurrentRequest(AccountRequestStamp<Account> stamp) =>
       _requestState.isCurrent(stamp) && ownsCredentials(stamp.account);
 
-  /// Bound csrf for an installed owner, routed through the credential reader.
-  /// Null means the owner is not installed in the tracker (legacy/uninstalled
-  /// compatibility) or the reader rejected the bound stamp (revoked). Use this
-  /// when the distinction matters; [csrfOf] is the legacy-compatible wrapper.
-  static String? boundCsrf(
+  /// Tagged bound csrf for one owner. [AccountCredentialBinding.notInstalled]
+  /// means no stamp is captured at all: this is the explicit no-stamp legacy
+  /// compatibility path and only there may a caller fall back to the historical
+  /// direct field. [AccountCredentialBinding.rejected] means a stamp exists but
+  /// the reader no longer accepts it; callers must fail closed and must never
+  /// reread the raw owner credential. [AccountCredentialBinding.bound] carries
+  /// the real jar value (throws exactly like the direct field when the jar
+  /// entry is absent, matching historical Dart semantics).
+  static AccountBoundCredential<String> boundCsrf(
     Account owner, {
     AccountCredentialReader reader = accountCredentialReader,
   }) {
     final stamp = _requestState.capture(owner);
-    if (stamp == null) return null;
-    return reader.csrfFor(owner, stamp);
+    if (stamp == null) return const AccountBoundCredential.notInstalled();
+    return reader.boundCsrfFor(owner, stamp);
   }
 
-  /// Bound access key for an installed owner, routed through the credential
-  /// reader. Null covers "not installed", "reader rejected the stamp" and the
-  /// legitimate "no access key"; callers own that ambiguity.
-  static String? boundAccessKey(
+  /// Tagged bound access key for one owner. A bound value may be null: a
+  /// legitimately absent nullable access key is bound data, not a rejection.
+  static AccountBoundCredential<String?> boundAccessKey(
     Account owner, {
     AccountCredentialReader reader = accountCredentialReader,
   }) {
     final stamp = _requestState.capture(owner);
-    if (stamp == null) return null;
-    return reader.accessKeyFor(owner, stamp);
+    if (stamp == null) return const AccountBoundCredential.notInstalled();
+    return reader.boundAccessKeyFor(owner, stamp);
   }
 
-  /// Legacy-compatible csrf read: uninstalled owners fall back to the direct
-  /// field, and so does a bound owner that the reader rejects, so existing
-  /// endpoint call sites keep their historical value.
+  /// Legacy-compatible csrf read. A not-installed owner keeps the historical
+  /// direct field (including its throw when the jar entry is absent); a stamp
+  /// the reader rejects throws a [StateError] instead of falling back to a raw
+  /// credential, and a bound owner returns the real value.
   static String csrfOf(
     Account owner, {
     AccountCredentialReader reader = accountCredentialReader,
-  }) => boundCsrf(owner, reader: reader) ?? owner.csrf;
+  }) {
+    final stamp = _requestState.capture(owner);
+    if (stamp == null) return owner.csrf;
+    final value = reader.csrfFor(owner, stamp);
+    if (value != null) return value;
+    throw StateError(
+      'csrf is unavailable for a non-current credential context',
+    );
+  }
 
   /// Legacy-compatible access key read. A bound owner's reader result is used
-  /// as-is, a revoked owner returns null so its stale direct field is never
-  /// resurrected, and only an uninstalled owner falls back to the direct field.
+  /// as-is (its nullable value is data), a rejected stamp returns null so its
+  /// stale direct field is never resurrected, and only an uninstalled
+  /// non-retired owner falls back to the direct field.
   static String? accessKeyOf(
     Account owner, {
     AccountCredentialReader reader = accountCredentialReader,
