@@ -259,17 +259,16 @@ actor PiliAccountEnvelopeTransactionStore {
     recoveryReadDeliveryHook = hook
   }
 
-  /// Bounded retrying cold load for the read-only recovery entry points and
-  /// the direct primitive entries. Queued writes do NOT use this wrapper:
-  /// their recovery initialization runs inside the single queued attempt
-  /// budget (`executeQueuedWrite`), so one queued write can never spend two
-  /// separate contention allowances. The cold load reads the shared vault
-  /// under the same operation fence as publications, so a legitimately busy
-  /// shared vault is retried here within the configured bounded
-  /// attempt/backoff values instead of leaking `operationInProgress` to the
-  /// caller. Only that definite pre-publication contention is retryable; a
-  /// persistent unknown publication, a corrupt or unreadable journal and
-  /// every other failure still fail closed immediately.
+  /// Bounded retrying cold load for the READ-ONLY recovery entry points
+  /// (`loadPersistentRecovery`, `resolveUnresolvedPublication`) only. Queued
+  /// writes carry their own single retried allowance inside
+  /// `executeQueuedWrite`; the public direct write primitives intentionally
+  /// fail fast with the established immediate vault `operationInProgress`
+  /// (single attempt, no retry loop and no new terminal-error policy), so R33
+  /// restores exactly that policy: only explicit read-only recovery uses this
+  /// wrapper. Only the definite pre-publication vault contention is retryable
+  /// here; a persistent unknown publication, a corrupt or unreadable journal
+  /// and every other failure still fail closed immediately.
   private func loadRecoveryIfNeeded() async throws {
     var attempt = 0
     while true {
@@ -761,7 +760,7 @@ actor PiliAccountEnvelopeTransactionStore {
   /// them.
   func adoptMissingIdentities() async throws -> PiliAccountShadowIdentityReceipt {
     try requireDirectEntryAllowed()
-    try await loadRecoveryIfNeeded()
+    try await loadRecoveryOnce()
     try beginOperation()
     defer { operationInProgress = false }
     guard let snapshot = try await vault.loadShadowSnapshot() else {
@@ -805,7 +804,7 @@ actor PiliAccountEnvelopeTransactionStore {
   func applyInstall(_ install: PiliAccountShadowInstall) async throws
     -> PiliAccountShadowTransactionReceipt {
     try requireDirectEntryAllowed()
-    try await loadRecoveryIfNeeded()
+    try await loadRecoveryOnce()
     try beginOperation()
     defer { operationInProgress = false }
     guard let snapshot = try await vault.loadShadowSnapshot() else {
@@ -868,7 +867,7 @@ actor PiliAccountEnvelopeTransactionStore {
   func applyDelete(recordKeyUnits: PiliCookieUTF16, expectedGeneration: Int64) async throws
     -> PiliAccountShadowTransactionReceipt {
     try requireDirectEntryAllowed()
-    try await loadRecoveryIfNeeded()
+    try await loadRecoveryOnce()
     try beginOperation()
     defer { operationInProgress = false }
     guard let snapshot = try await vault.loadShadowSnapshot() else {
@@ -928,7 +927,7 @@ actor PiliAccountEnvelopeTransactionStore {
   func applyImport(_ entries: [PiliAccountShadowInstall]) async throws
     -> PiliAccountShadowImportReceipt {
     try requireDirectEntryAllowed()
-    try await loadRecoveryIfNeeded()
+    try await loadRecoveryOnce()
     try beginOperation()
     defer { operationInProgress = false }
     guard let snapshot = try await vault.loadShadowSnapshot() else {
@@ -1058,7 +1057,7 @@ actor PiliAccountEnvelopeTransactionStore {
                       valueUnits: PiliCookieUTF16, nowMicroseconds: Int64) async throws
     -> PiliAccountShadowBuvidReceipt {
     try requireDirectEntryAllowed()
-    try await loadRecoveryIfNeeded()
+    try await loadRecoveryOnce()
     try beginOperation()
     defer { operationInProgress = false }
     guard let snapshot = try await vault.loadShadowSnapshot() else {
@@ -1145,7 +1144,7 @@ actor PiliAccountEnvelopeTransactionStore {
                              -> PiliAccountLiveMemoryShadow) async throws
     -> PiliAccountShadowTransactionReceipt {
     try requireDirectEntryAllowed()
-    try await loadRecoveryIfNeeded()
+    try await loadRecoveryOnce()
     try beginOperation()
     defer { operationInProgress = false }
     guard let snapshot = try await vault.loadShadowSnapshot() else {
