@@ -130,3 +130,23 @@ R14–R18，不改生产接线，不升级 authority。依据：
   envelope/queue/transaction/account 计数、严格分析、BUILD/FFmpeg、preview 压力）。
 - 通过后交 Codex 独立复审（不自审 PASS）；未获 PASS 前不进入 B2e-2/Block 3，不升级
   authority，不写账号级队列生产接入或 P05 完成。生产接线/B2e-2 持久恢复面仍是显式未做项。
+
+### 实际证据与 Codex 有限 PASS（2026-10-15，代码 SHA `b7f6692`）
+
+- release
+  [38746975413](https://github.com/Justintunsday/Piliglass/actions/runs/38746975413)
+  success 5/5（attempt1，九强制 outcome 全 success、BUILD SUCCEEDED、109.1MB、Aether
+  FFmpeg 先于 media-kit）；preview
+  [38746988047](https://github.com/Justintunsday/Piliglass/actions/runs/38746988047)
+  attempt1 仅 `preview` job 因 `last-row` 30s poll 无 layout report 失败（其余 3 jobs
+  11 tests 通过；原因未被证明为 flake/源码缺陷，preview 输入不在本退修 delta 内），
+  保留 attempt1 证据后仅对失败 job 同 SHA 单次重试 → attempt2 success 4/4（navigation
+  9 + 同 SHA account6/image3/player2 = 20 tests 0 failures；`failures=[]`；last-row/
+  returned-top-dark JSON 齐全）。
+- envelope `status=passed`（sourceSHA=workflowSHA=b7f6692）：109/44/40/**245**(68+177)/
+  **148**/51、87 源 hash（85 匹配 + 2 声明 pubspec）、golden `bff67a…`/`2337a9…`；
+  账户 `+258`/runtime 72/analyze 无问题；queue **104→148**（R19–R22 回归实际执行通过）。
+- Codex FINAL DISPOSITION：**PASS 仅限 B2e-1 in-process queue/receipt/
+  unknown-resolution R13–R22 组件**；跨重启持久恢复（B2e-2）、生产接线（B2e-3/Block3）、
+  53aed63 tagged-bound-reader 保留项、CA5/CA6 真机与 authority 仍未闭合；四 flag false。
+  下一步按复审授权先做 tagged-bound credential reader 区分与真实消费者盘点。

@@ -230,3 +230,30 @@ adapter，见 §10）、Hive compaction/close、LoginUtils 副作用。
 - 边界：仍 shadow、无生产 caller/authority；B2e-2（unknown 持久恢复面/启动 recovery）
   与 B2e-3（生产 composition 接线）未做；四 flag false。**本组尚未获 Codex 独立
   PASS，不构成 P05 完成或账号级队列生产接入。**
+
+## 12. 2026-10-15 Block 2 / B2e-1 R19–R22 退修（`b7f6692`；Codex 有限 PASS，仅该 shadow 组件）
+
+- 同代码 SHA `b7f66928cbe9a02cb78d0be83bdc40b7319c4b20`：
+  - release [38746975413](https://github.com/Justintunsday/Piliglass/actions/runs/38746975413)
+    success 5/5（attempt1）：九强制 outcome 全 success、`BUILD SUCCEEDED`、Runner.app
+    109.1MB、Aether FFmpeg 先于 media-kit；envelope `status=passed`
+    109/44/40/**245**(68+177)/**148**/51；87 源码 hash（85 匹配 + 2 声明 pubspec 构建
+    准备差异）；golden `bff67a…`/`2337a9…`；账户 `+258: All tests passed!`、runtime 72、
+    analyze `No issues found!`。
+  - preview [38746988047](https://github.com/Justintunsday/Piliglass/actions/runs/38746988047)：
+    attempt1 仅 `preview` job 失败（`last-row` 30s poll 无 layout report；其余 3 jobs
+    11 tests 通过；原因未被证明为 flake，也无源码缺陷证据，preview 输入不在该退修
+    delta 内）；保留 attempt1 证据、仅对失败 job 同 SHA 单次重试 → attempt2 success
+    4/4：navigation 9 tests 0 failures + attempt1 同 SHA 的 account6/image3/player2
+    （不重复计入重试执行），合计 20 tests 0 failures；`last-row`/`returned-top-dark`
+    JSON 齐全、压力 `failures=[]`（100000 danmaku/1000 comments）。
+- 内容：R19 以 caller-minted `candidateTransactionID`（无碰撞）把 unknown 关联到
+  attempted operation ID，resolution 三态 + 内容旁证字段（非操作证明）；R20 单飞 +
+  post-await token 复核 + 取消不释放 fence；R21 取消回归改用非覆盖式 jar witness +
+  精确计数；R22 修正 raw retained candidate 与 published pointer 混淆（真实基线 +
+  retained `loadPublishedCandidate` + 精确 ±计数）。未删断言、未放宽预算/门禁、
+  未过早清理未知候选。
+- Codex FINAL DISPOSITION：**PASS 仅限 B2e-1 in-process queue/receipt/
+  unknown-resolution R13–R22 组件**。明确不是 Block1/2/P05 完成、不是跨重启持久恢复
+  （B2e-2）、不是生产接线（B2e-3/Block3）、不是真机/账户验收、不授权 authority；
+  53aed63 tagged-bound-reader 保留项仍开放。四 flag false。

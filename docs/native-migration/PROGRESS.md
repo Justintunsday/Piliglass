@@ -243,6 +243,38 @@ sourceSHA=workflowSHA=9724ddb；preview 20 tests 0 failures、压力 `failures=[
 shadow 组件：未接 authority、无生产 caller，durable identity 消费/恢复语义、账号级队列与
 receipt/unknown ack、Block 3/4/5 仍未交付；四能力 flag 保持 false，P05 未整体完成。
 
+**B2e-1 R19–R22 退修在 `b7f6692` 获 Codex 有限 PASS（仅该 shadow 组件）；preview attempt1 失败保留 + 同 SHA 单 job 重试成功**：
+- `0ea82b1` 复审 R19–R21：vault 支持 caller-minted `candidateTransactionID`（无碰撞校验），
+  unresolved 证据含 `attemptedTransactionID`；resolution 单飞（并发 `resolutionInProgress`）、
+  每个 await 后 token 复核（`staleResolution` 不清 fence）、读回前后 `checkCancellation`
+  取消不释放；三态 `attemptCommitted`/`attemptNotCommitted`/`ambiguousObservedCandidate`，
+  内容相等仅作 `observedContentMatchesAttempt` 旁证；取消回归改用 jar witness +
+  精确 holder+follower 计数。`9669fa7` 运行暴露 R22（raw retained candidate ≠ published
+  pointer 的 `recordCount()==2` fixture 错误），`b7f6692` 以"基线 pointer/envelope/计数
+  2 + unknownA 后 pointer 不变/attempted ID 区别于 pointer/`loadPublishedCandidate`
+  可读 retained + raw 恰 +1 + resolution 后 `.attemptNotCommitted`/observed 不变/保留
+  与计数不变 + unknownB +2 + 显式 follower 新 manifest +3 + 同值 helper 区分 retained
+  orphan 与 committed published"逐项替换，未删断言、未放宽预算/门禁、未过早清理未知候选。
+- 实际证据（`sourceSHA=workflowSHA=b7f6692`，Codex 独立下载核实）：
+  - release [38746975413](https://github.com/Justintunsday/Piliglass/actions/runs/38746975413)
+    success 5/5（attempt1）；九强制 outcome 全 success；`BUILD SUCCEEDED`、Runner.app
+    109.1MB、Aether FFmpeg 先于 media-kit；envelope `status=passed`
+    109/44/40/**245**(68+177)/**148**/51；87 源码 hash（85 匹配 + 2 声明 pubspec 构建
+    准备差异）；golden `bff67a…`/`2337a9…`；账户 `+258: All tests passed!`、runtime 72、
+    analyze No issues found。
+  - preview [38746988047](https://github.com/Justintunsday/Piliglass/actions/runs/38746988047)：
+    attempt1 `preview` job 失败（`last-row` 30s poll 内无 layout report；其余 3 jobs
+    11 tests 通过；失败原因未被证明为 flake、也无源码缺陷证据，preview 输入不在
+    R22 delta 内）；保留 attempt1 证据后仅对失败 job 同 SHA 单次重试 → attempt2
+    success 4/4：navigation 9 tests 0 failures + attempt1 同 SHA 的 account6/image3/
+    player2 成功（不重复计数），合计 20 tests 0 failures；`last-row`/`returned-top-dark`
+    JSON 齐全；压力报告 `failures=[]`（100000 danmaku/1000 comments）。
+  - Codex FINAL DISPOSITION：**PASS 仅限 B2e-1 in-process queue/receipt/unknown-resolution
+    R13–R22 组件**；跨重启持久恢复（B2e-2）、生产接线（B2e-3/Block3）、53aed63
+    tagged-bound-reader 保留项、CA5/CA6 真机与四 flag authority 仍未闭合。
+- 下一步（授权内）：tagged-bound credential reader 区分与真实消费者盘点（B2e-2/B2e-3 之前），
+  再 B2e-2/B2e-3；文档-only commit 不代表代码 CI SHA。
+
 **B2e-1 账号写入队列 / durable identity 消费 + R13–R18 退修在 `0ea82b1` 同 SHA 双 CI 全绿；等待 Codex 独立复审（非 PASS）**：
 实现沿革：`887ad9a` 计划、`f9fb4de` 有界 FIFO/receipt、`4944557` driver、`c007c8c`
 candidate 断言、`a4f6bb6` 独立 queue phase、`33d1922`（用户侧）可观察 witness。Codex 对

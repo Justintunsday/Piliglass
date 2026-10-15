@@ -253,6 +253,26 @@ media-kit 载入）、preview
 （unknown 持久恢复面/启动 recovery）与 B2e-3（生产 composition 接线）未做；四 flag
 false，Codex PASS 前不进入下一组。
 
+**B2e-1 R19–R22（attempt-identity resolution / concurrent fence / cancellation witness / raw-vs-published fixture）在 `b7f6692` 获 Codex 有限 PASS（仅该 shadow 组件）**：
+R19 以 caller-minted `candidateTransactionID`（无碰撞校验）把 unknown 关联到 attempted
+operation ID，resolution 三态 `attemptCommitted`/`attemptNotCommitted`/
+`ambiguousObservedCandidate` + `observedContentMatchesAttempt` 内容旁证（明确非操作证明）；
+R20 resolution 单飞 + post-await token 复核 + 取消不释放 fence；R21 取消回归改用
+非覆盖式 jar witness + 精确 holder+follower 计数；R22 修正 raw retained candidate 与
+published pointer 混淆（真实基线捕获 + retained `loadPublishedCandidate` + 精确
+±计数，未删/未放宽断言）。实际证据：release
+[38746975413](https://github.com/Justintunsday/Piliglass/actions/runs/38746975413)
+success5/5（九强制 outcome 全 success、BUILD SUCCEEDED、Runner.app 109.1MB、FFmpeg
+顺序；envelope `status=passed` 109/44/40/**245**(68+177)/**148**/51、87 源 hash
+（85+2 声明 pubspec）、golden `bff67a…`/`2337a9…`、账户258/72）；preview
+[38746988047](https://github.com/Justintunsday/Piliglass/actions/runs/38746988047)
+attempt1 `preview` job `last-row` 无 report 失败保留，仅该失败 job 同 SHA 单次重试 →
+attempt2 success4/4（navigation9 + attempt1 同 SHA account6/image3/player2 = 20 tests
+0 failures；`failures=[]` 100000 danmaku/1000 comments；last-row/returned-top-dark JSON
+齐全）。**边界**：仅为 B2e-1 in-process queue/receipt/unknown-resolution 组件 PASS；
+非 Block1/2/P05 完成；B2e-2 跨重启恢复、B2e-3/Block3 生产接线、53aed63
+tagged-bound-reader 保留项、CA5/CA6 真机与 authority 均未闭合；四 flag false。
+
 **Block 1 / B1d 切片（页面读取、延迟副作用、maintenance gate）已在 `98e6f9b` 验收**：
 `Accounts.installedAccounts()` 纯只读 seam + 页面 `isEmpty/isNotEmpty` 切
 `visibleAccounts()`（login/mine/setting/about，内容/顺序/读取时机不变、零
