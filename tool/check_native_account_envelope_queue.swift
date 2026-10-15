@@ -21,6 +21,8 @@ private actor QueueFaultVault: PiliAccountSecretStore {
   private var pointerReadFailures = 0
   private var pointerReadFailSkip = 0
   private var journalReadFailures = 0
+  private var journalReadFailSkip = 0
+  private var journalRemoveFailures = 0
   private let pointer = "account-envelope-shadow-manifest-v2"
   private let recoveryJournalKey = "account-envelope-recovery-journal-v1"
 
@@ -65,16 +67,37 @@ private actor QueueFaultVault: PiliAccountSecretStore {
   }
   /// Persistent journal read failure: recovery metadata must be unreadable
   /// without ever being treated as absent.
-  func failJournalReadsForever() { journalReadFailures = Int.max }
-  func allowJournalReads() { journalReadFailures = 0 }
+  func failJournalReadsForever() {
+    journalReadFailSkip = 0
+    journalReadFailures = Int.max
+  }
+  func allowJournalReads() {
+    journalReadFailSkip = 0
+    journalReadFailures = 0
+  }
+  /// Fails the journal read that follows `skip` further reads (or `failures`
+  /// consecutive reads after the skip), so the entry pre-check read can pass
+  /// and the post-write verification or clear-verification read can fail on
+  /// its own without the pre-check masking it.
+  func failJournalReadAfter(_ skip: Int, failures: Int = 1) {
+    journalReadFailSkip = skip
+    journalReadFailures = failures
+  }
+  /// Fails the next journal removals, so a journal that cannot be removed must
+  /// keep its evidence and fail closed instead of being claimed clean.
+  func failNextJournalRemovals(_ count: Int) { journalRemoveFailures = count }
   func recordCount() -> Int {
     values.keys.filter { $0.hasPrefix("account-envelope-shadow-v2.") }.count
   }
 
   func read(_ key: String) async throws -> Data? {
     if key == recoveryJournalKey, journalReadFailures > 0 {
-      if journalReadFailures != Int.max { journalReadFailures -= 1 }
-      throw QueueFixtureError.injected
+      if journalReadFailSkip > 0 {
+        journalReadFailSkip -= 1
+      } else {
+        if journalReadFailures != Int.max { journalReadFailures -= 1 }
+        throw QueueFixtureError.injected
+      }
     }
     if key == pointer {
       if pauseManifestRead {
@@ -130,7 +153,13 @@ private actor QueueFaultVault: PiliAccountSecretStore {
       if fault == .pointerWriteAfter { fault = nil; throw QueueFixtureError.injected }
     }
   }
-  func remove(_ key: String) { values.removeValue(forKey: key) }
+  func remove(_ key: String) throws {
+    if key == recoveryJournalKey, journalRemoveFailures > 0 {
+      journalRemoveFailures -= 1
+      throw QueueFixtureError.injected
+    }
+    values.removeValue(forKey: key)
+  }
 }
 
 /// B2e-1 account write queue and durable identity consumption contract. Runs
@@ -1412,6 +1441,9 @@ private actor QueueFaultVault: PiliAccountSecretStore {
           refreshToken: baselineRefresh))
         throw QueueFixtureError.failed("ambiguity attempt fabricated success")
       } catch PiliAccountEnvelopeStagingError.publicationUnknown { checks += 1 }
+      guard let ambiguousPending = await store.pendingUnresolvedPublication else {
+        throw QueueFixtureError.failed("ambiguity attempt left no pending operation")
+      }
       // The namespace journal blocks every second correlated publisher, so the
       // out-of-contract foreign byte-identical candidate is produced by the raw
       // uncorrelated import primitive: the journal survives and the read-back
@@ -1421,14 +1453,76 @@ private actor QueueFaultVault: PiliAccountSecretStore {
         throw QueueFixtureError.failed("missing fenced snapshot for the foreign candidate")
       }
       _ = try await foreignVault.importShadow(fx.codec.encode(currentWhileFenced.envelope))
-      guard let ambiguous = try await store.resolveUnresolvedPublication() else {
+      // R24: an ambiguous read-back is never auto-resolved. The default
+      // resolution must fail closed with the durable journal and the fence
+      // both intact; otherwise a crash after the default resolution would lose
+      // the only correlation evidence for this attempt.
+      var ambiguousBlocked = false
+      do {
+        _ = try await store.resolveUnresolvedPublication()
+      } catch PiliAccountShadowTransactionError.ambiguousRecovery { ambiguousBlocked = true }
+      try check(ambiguousBlocked,
+        "an ambiguous read-back keeps the durable evidence until an explicit acknowledgment")
+      guard let retainedJournal = try await vault.loadRecoveryJournal() else {
+        throw QueueFixtureError.failed("default ambiguity resolution deleted the durable journal")
+      }
+      try check(retainedJournal.attemptedTransactionID == ambiguousPending.attemptedTransactionID &&
+        retainedJournal.expectedPreviousTransactionID == ambiguousPending.expectedPreviousTransactionID,
+        "the retained journal still names the ambiguous attempted operation")
+      var stillFenced = false
+      do {
+        _ = try await store.enqueue(.credentials(recordKey: fx.key,
+          generation: fx.record.generation, accessKey: units("must-not-cross-ambiguity"),
+          refreshToken: nil))
+      } catch PiliAccountShadowTransactionError.unresolvedPublication { stillFenced = true }
+      try check(stillFenced, "the ambiguous operation still fences every later write")
+      // A fresh store over the same persistent journal must see the same
+      // unresolved evidence: an empty in-memory state never erases it.
+      let ambiguousRestarted = PiliAccountEnvelopeTransactionStore(
+        vault: PiliAccountEnvelopeStagingStore(secrets: fault))
+      guard let restartedPending = try await ambiguousRestarted.loadPersistentRecovery() else {
+        throw QueueFixtureError.failed("reopen lost the ambiguous pending operation")
+      }
+      try check(restartedPending.attemptedTransactionID == ambiguousPending.attemptedTransactionID,
+        "reopen keeps the ambiguous attempted operation identity")
+      // A cancelled explicit acknowledgment keeps both journal and fence.
+      await fault.pauseManifestReadAfter(0)
+      let cancelledAck = Task { try await store.resolveUnresolvedPublication(allowAmbiguous: true) }
+      try await waitForManifestReadPaused(fault)
+      cancelledAck.cancel()
+      await fault.resumeManifestRead()
+      var cancelledAcknowledgment = false
+      do {
+        _ = try await cancelledAck.value
+      } catch is CancellationError { cancelledAcknowledgment = true }
+      try check(cancelledAcknowledgment,
+        "a cancelled ambiguity acknowledgment resolves nothing")
+      guard try await vault.loadRecoveryJournal() != nil else {
+        throw QueueFixtureError.failed("a cancelled ambiguity acknowledgment deleted the journal")
+      }
+      guard await store.pendingUnresolvedPublication != nil else {
+        throw QueueFixtureError.failed("a cancelled ambiguity acknowledgment released the fence")
+      }
+      // Only the explicit acknowledgment records the ambiguity in the returned
+      // receipt and durably clears the journal before releasing the fence.
+      guard let ambiguous = try await store.resolveUnresolvedPublication(allowAmbiguous: true) else {
         throw QueueFixtureError.failed("identical-byte foreign candidate left no resolution")
       }
       try check(ambiguous.outcome == .ambiguousObservedCandidate &&
         ambiguous.observedContentMatchesAttempt &&
         ambiguous.observedTransactionID != ambiguous.attemptedTransactionID &&
-        ambiguous.observedTransactionID != ambiguous.expectedPreviousTransactionID,
+        ambiguous.observedTransactionID != ambiguous.expectedPreviousTransactionID &&
+        ambiguous.attemptedTransactionID == ambiguousPending.attemptedTransactionID,
         "an identical-byte foreign candidate is ambiguous, never claimed as this attempt")
+      guard try await vault.loadRecoveryJournal() == nil else {
+        throw QueueFixtureError.failed("the explicit ambiguity acknowledgment did not clear the journal")
+      }
+      guard let unchangedPointer = try await store.loadShadowSnapshot(),
+            unchangedPointer.transactionID == ambiguous.observedTransactionID,
+            unchangedPointer.envelope == currentWhileFenced.envelope else {
+        throw QueueFixtureError.failed("the ambiguity acknowledgment replayed or moved the foreign pointer")
+      }
+      checks += 1
       guard case .record = try await store.enqueue(.credentials(recordKey: fx.key,
         generation: fx.record.generation, accessKey: units("after-ambiguity"),
         refreshToken: nil)) else {
@@ -1882,6 +1976,463 @@ private actor QueueFaultVault: PiliAccountSecretStore {
       try? await vault5.discardShadow()
       throw error
     }
+
+    // Part 6 (R23): a failed journal verification read is never treated as
+    // journal absence. An unverifiable write keeps its evidence for
+    // arm/resolution, and the definite pre-publication cleanup only concludes
+    // after a successful nil read.
+    let fault6 = QueueFaultVault()
+    let vault6 = PiliAccountEnvelopeStagingStore(secrets: fault6)
+    let store6 = PiliAccountEnvelopeTransactionStore(vault: vault6)
+    do {
+      try await vault6.importShadow(fx.codec.encode(fx.base))
+      _ = try await store6.enqueue(.adoptIdentities)
+      let baseline6 = await fault6.recordCount()
+
+      // (a) The journal write commits but its verification read fails: the
+      // store keeps the fail-closed fence from the retained journal and never
+      // reports a definite (clean) verification failure.
+      await fault6.failJournalReadAfter(1)
+      var verificationReadFailed = false
+      do {
+        _ = try await store6.enqueue(.credentials(recordKey: fx.key,
+          generation: fx.record.generation, accessKey: units("journal-verify-fail"),
+          refreshToken: nil))
+        throw QueueFixtureError.failed("unverifiable journal verification accepted")
+      } catch PiliAccountEnvelopeStagingError.unresolvedRecovery { verificationReadFailed = true }
+      try check(verificationReadFailed,
+        "a failed journal verification read never becomes a definite result")
+      guard let retained6 = try await vault6.loadRecoveryJournal() else {
+        throw QueueFixtureError.failed("failed verification read deleted the committed journal")
+      }
+      let armed6 = await store6.pendingUnresolvedPublication
+      try check(armed6?.attemptedTransactionID == retained6.attemptedTransactionID,
+        "the store arms the exact retained journal identity after a verification read failure")
+      let restarted6 = PiliAccountEnvelopeTransactionStore(
+        vault: PiliAccountEnvelopeStagingStore(secrets: fault6))
+      guard let restartedPending6 = try await restarted6.loadPersistentRecovery() else {
+        throw QueueFixtureError.failed("reopen lost the verification-failure journal")
+      }
+      try check(restartedPending6.attemptedTransactionID == retained6.attemptedTransactionID,
+        "reopen keeps the verification-failure journal identity")
+      try check(await fault6.recordCount() == baseline6,
+        "the verification-read failure published no candidate")
+      var fenced6 = false
+      do {
+        _ = try await store6.enqueue(.credentials(recordKey: fx.key,
+          generation: fx.record.generation, accessKey: units("must-not-cross-verify-failure"),
+          refreshToken: nil))
+      } catch PiliAccountShadowTransactionError.unresolvedPublication { fenced6 = true }
+      try check(fenced6, "the verification-read failure fence rejects later writes")
+      guard let resolved6 = try await store6.resolveUnresolvedPublication() else {
+        throw QueueFixtureError.failed("retained verification-failure journal did not resolve")
+      }
+      try check(resolved6.outcome == .attemptNotCommitted,
+        "the retained verification-failure journal classifies the never-published attempt")
+      guard try await vault6.loadRecoveryJournal() == nil else {
+        throw QueueFixtureError.failed("the resolved verification-failure journal was not cleared")
+      }
+      guard case .record = try await store6.enqueue(.credentials(recordKey: fx.key,
+        generation: fx.record.generation, accessKey: units("after-verify-failure"),
+        refreshToken: nil)) else {
+        throw QueueFixtureError.failed("follower after verification-read failure expected")
+      }
+      try check(await fault6.recordCount() == baseline6 + 1,
+        "the follower after a verification-read failure publishes exactly once")
+
+      // (b) A journal write failure whose read-back is also unreadable fails
+      // closed as unresolved recovery (never as the raw write error, never as
+      // absence), and the definite cleanup only concludes after a successful
+      // nil read.
+      await fault6.arm(.journalWriteBefore)
+      await fault6.failJournalReadAfter(1)
+      var writeReadUnverifiable = false
+      do {
+        _ = try await store6.enqueue(.credentials(recordKey: fx.key,
+          generation: fx.record.generation, accessKey: units("journal-unreadable-write"),
+          refreshToken: nil))
+        throw QueueFixtureError.failed("unreadable journal write outcome accepted")
+      } catch PiliAccountEnvelopeStagingError.unresolvedRecovery { writeReadUnverifiable = true }
+      try check(writeReadUnverifiable,
+        "an unreadable journal write outcome fails closed as unresolved recovery")
+      try check(await fault6.recordCount() == baseline6 + 1,
+        "the unreadable journal write outcome published no candidate")
+      try check(await store6.pendingUnresolvedPublication == nil,
+        "the strictly re-read absent journal leaves no fence")
+      guard case .record = try await store6.enqueue(.credentials(recordKey: fx.key,
+        generation: fx.record.generation, accessKey: units("after-unreadable-write"),
+        refreshToken: nil)) else {
+        throw QueueFixtureError.failed("follower after unreadable journal write expected")
+      }
+      try check(await fault6.recordCount() == baseline6 + 2,
+        "the follower after an unreadable journal write publishes exactly once")
+
+      // (c) A journal write that commits and then throws, with an unreadable
+      // read-back, keeps the committed evidence and resolves by identity.
+      await fault6.arm(.journalWriteAfter)
+      await fault6.failJournalReadAfter(1)
+      var afterUnverifiable = false
+      do {
+        _ = try await store6.enqueue(.credentials(recordKey: fx.key,
+          generation: fx.record.generation, accessKey: units("journal-after-unreadable"),
+          refreshToken: nil))
+        throw QueueFixtureError.failed("unreadable after-commit journal outcome accepted")
+      } catch PiliAccountEnvelopeStagingError.unresolvedRecovery { afterUnverifiable = true }
+      try check(afterUnverifiable,
+        "an unreadable after-commit journal outcome fails closed as unresolved recovery")
+      guard let retained6c = try await vault6.loadRecoveryJournal() else {
+        throw QueueFixtureError.failed("after-commit unreadable journal removed the evidence")
+      }
+      let armed6c = await store6.pendingUnresolvedPublication
+      try check(armed6c?.attemptedTransactionID == retained6c.attemptedTransactionID,
+        "the after-commit unreadable journal arms the exact retained identity")
+      guard let resolved6c = try await store6.resolveUnresolvedPublication() else {
+        throw QueueFixtureError.failed("after-commit unreadable journal did not resolve")
+      }
+      try check(resolved6c.outcome == .attemptNotCommitted,
+        "the after-commit unreadable journal classifies the never-published attempt")
+      guard case .record = try await store6.enqueue(.credentials(recordKey: fx.key,
+        generation: fx.record.generation, accessKey: units("after-after-unreadable"),
+        refreshToken: nil)) else {
+        throw QueueFixtureError.failed("follower after after-commit unreadable journal expected")
+      }
+      try check(await fault6.recordCount() == baseline6 + 3,
+        "the follower after an after-commit unreadable journal publishes exactly once")
+
+      // (e) The journal commits and its removal fails while the write error
+      // surfaces: the failed removal must keep the evidence and fail closed as
+      // unresolved recovery instead of claiming a clean namespace.
+      await fault6.arm(.journalWriteAfter)
+      await fault6.failNextJournalRemovals(1)
+      var removeFailed = false
+      do {
+        _ = try await store6.enqueue(.credentials(recordKey: fx.key,
+          generation: fx.record.generation, accessKey: units("journal-remove-failure"),
+          refreshToken: nil))
+        throw QueueFixtureError.failed("failed journal removal accepted")
+      } catch PiliAccountEnvelopeStagingError.unresolvedRecovery { removeFailed = true }
+      try check(removeFailed,
+        "a failed journal removal keeps the evidence and fails closed")
+      guard let retained6e = try await vault6.loadRecoveryJournal() else {
+        throw QueueFixtureError.failed("failed journal removal lost the evidence")
+      }
+      let armed6e = await store6.pendingUnresolvedPublication
+      try check(armed6e?.attemptedTransactionID == retained6e.attemptedTransactionID,
+        "the failed journal removal arms the exact retained identity")
+      guard let resolved6e = try await store6.resolveUnresolvedPublication() else {
+        throw QueueFixtureError.failed("failed journal removal did not resolve")
+      }
+      try check(resolved6e.outcome == .attemptNotCommitted,
+        "the failed-removal journal classifies the never-published attempt")
+      guard case .record = try await store6.enqueue(.credentials(recordKey: fx.key,
+        generation: fx.record.generation, accessKey: units("after-remove-failure"),
+        refreshToken: nil)) else {
+        throw QueueFixtureError.failed("follower after failed journal removal expected")
+      }
+      try check(await fault6.recordCount() == baseline6 + 4,
+        "the follower after a failed journal removal publishes exactly once")
+
+      // (d) Persistent verification-read failure cannot erase evidence: after
+      // reads recover, the vault pre-check still refuses correlated writes
+      // until the retained journal is resolved, and the backstop arms the
+      // exact persisted identity instead of inventing one.
+      await fault6.failJournalReadAfter(1, failures: Int.max)
+      var persistentVerifyFailure = false
+      do {
+        _ = try await store6.enqueue(.credentials(recordKey: fx.key,
+          generation: fx.record.generation, accessKey: units("journal-persistent-fail"),
+          refreshToken: nil))
+      } catch { persistentVerifyFailure = true }
+      try check(persistentVerifyFailure,
+        "a persistently unreadable verification read fails closed")
+      await fault6.allowJournalReads()
+      guard let retained6d = try await vault6.loadRecoveryJournal() else {
+        throw QueueFixtureError.failed("persistent verification failure removed the journal")
+      }
+      var backstop6d = false
+      do {
+        _ = try await store6.enqueue(.credentials(recordKey: fx.key,
+          generation: fx.record.generation, accessKey: units("journal-backstop"),
+          refreshToken: nil))
+      } catch PiliAccountEnvelopeStagingError.unresolvedRecovery { backstop6d = true }
+      try check(backstop6d,
+        "the recovered journal still fences correlated writes through the vault pre-check")
+      let armed6d = await store6.pendingUnresolvedPublication
+      try check(armed6d?.attemptedTransactionID == retained6d.attemptedTransactionID,
+        "the vault backstop arms the exact retained journal identity")
+      guard let resolved6d = try await store6.resolveUnresolvedPublication() else {
+        throw QueueFixtureError.failed("backstop journal did not resolve")
+      }
+      try check(resolved6d.outcome == .attemptNotCommitted,
+        "the backstop journal classifies the never-published attempt")
+      guard case .record = try await store6.enqueue(.credentials(recordKey: fx.key,
+        generation: fx.record.generation, accessKey: units("after-persistent-failure"),
+        refreshToken: nil)) else {
+        throw QueueFixtureError.failed("follower after persistent verification failure expected")
+      }
+      try check(await fault6.recordCount() == baseline6 + 5,
+        "the follower after a persistent verification failure publishes exactly once")
+      try await vault6.discardShadow()
+    } catch {
+      try? await vault6.discardShadow()
+      throw error
+    }
+    return checks
+  }
+
+  /// R25: actual isolated Keychain persistence for a pending recovery journal.
+  /// Each phase materializes a distinct crash prefix directly in the real
+  /// Keychain (journal-only; journal + retained raw candidate; journal +
+  /// committed pointer; journal + foreign/ambiguous pointer) and reads it back
+  /// with fresh secret-store/vault/store clients over the same namespace. This
+  /// proves Keychain persistence across a client reopen; it does not simulate
+  /// a process kill and makes no such claim. Injected read/removal failures
+  /// have no seam in the real Keychain, so those boundaries stay covered by
+  /// the fault-vault scheduler phases (including R23 cleanup reads). Raw
+  /// retained candidate bytes are never treated as proof of a committed
+  /// manifest.
+  private static func checkPersistentRecoveryKeychain(_ fx: QueueFixture) async throws -> Int {
+    var checks = 0
+    func check(_ condition: Bool, _ label: String) throws {
+      guard condition else { throw QueueFixtureError.failed(label) }
+      checks += 1
+    }
+    let namespace = UUID()
+    func freshStore() -> PiliAccountEnvelopeTransactionStore {
+      PiliAccountEnvelopeTransactionStore(
+        vault: PiliAccountEnvelopeStagingStore(
+          secrets: PiliAccountKeychainSecretStore(stagingNamespace: namespace)))
+    }
+    func freshSecrets() -> PiliAccountKeychainSecretStore {
+      PiliAccountKeychainSecretStore(stagingNamespace: namespace)
+    }
+    let journalKey = PiliAccountEnvelopeRecoveryJournal.journalKey
+    let vault = PiliAccountEnvelopeStagingStore(secrets: freshSecrets())
+    do {
+      try await vault.importShadow(fx.codec.encode(fx.base))
+      guard let baseline = try await vault.loadShadowSnapshot() else {
+        throw QueueFixtureError.failed("keychain recovery baseline missing")
+      }
+
+      // Crash prefix 1: the journal committed, no candidate was written and
+      // the pointer never moved.
+      let attempt1 = UUID()
+      try await freshSecrets().write(
+        try PiliAccountEnvelopeRecoveryJournal.encode(PiliAccountEnvelopeRecoveryJournal(
+          attemptedTransactionID: attempt1,
+          expectedPreviousTransactionID: baseline.transactionID,
+          attemptedCandidateSHA256: String(repeating: "a", count: 64),
+          kind: "credentials")),
+        key: journalKey)
+      let client1 = freshStore()
+      guard let pending1 = try await client1.loadPersistentRecovery() else {
+        throw QueueFixtureError.failed("journal-only crash prefix lost across client reopen")
+      }
+      try check(pending1.attemptedTransactionID == attempt1 &&
+        pending1.expectedPreviousTransactionID == baseline.transactionID,
+        "a fresh client over the real Keychain reads the journal-only crash prefix")
+      var fenced1 = false
+      do {
+        _ = try await client1.enqueue(.credentials(recordKey: fx.key,
+          generation: fx.record.generation, accessKey: units("keychain-must-not-cross"),
+          refreshToken: nil))
+      } catch PiliAccountShadowTransactionError.unresolvedPublication { fenced1 = true }
+      try check(fenced1, "the reopened journal fence rejects an overwriting follower")
+      guard let resolved1 = try await client1.resolveUnresolvedPublication() else {
+        throw QueueFixtureError.failed("journal-only crash prefix did not resolve")
+      }
+      try check(resolved1.outcome == .attemptNotCommitted &&
+        resolved1.observedTransactionID == baseline.transactionID,
+        "the journal-only crash prefix classifies not-committed by pointer identity")
+      guard try await freshSecrets().read(journalKey) == nil else {
+        throw QueueFixtureError.failed("journal-only crash prefix was not durably cleared")
+      }
+      guard case .record = try await client1.enqueue(.credentials(recordKey: fx.key,
+        generation: fx.record.generation, accessKey: units("keychain-after-prefix1"),
+        refreshToken: nil)) else {
+        throw QueueFixtureError.failed("keychain follower after prefix 1 expected")
+      }
+      guard let afterPrefix1 = try await client1.loadShadowSnapshot() else {
+        throw QueueFixtureError.failed("missing keychain snapshot after prefix 1")
+      }
+      try check(afterPrefix1.envelope.records[1].accessKeyUnits?.units ==
+        Array("keychain-after-prefix1".utf16),
+        "the reopened client publishes after the journal-only prefix is resolved")
+
+      // Crash prefix 2: the journal committed and raw candidate bytes were
+      // written, but the pointer never moved. Resolution must keep the retained
+      // candidate bytes and publish the follower exactly once.
+      let attempt2 = UUID()
+      let recordKey2 = "account-envelope-shadow-v2.\(attempt2.uuidString.lowercased())"
+      let secrets2 = freshSecrets()
+      try await secrets2.write(
+        try PiliAccountEnvelopeRecoveryJournal.encode(PiliAccountEnvelopeRecoveryJournal(
+          attemptedTransactionID: attempt2,
+          expectedPreviousTransactionID: afterPrefix1.transactionID,
+          attemptedCandidateSHA256: String(repeating: "b", count: 64),
+          kind: "credentials")),
+        key: journalKey)
+      try await secrets2.write(Data("retained-keychain-candidate".utf8), key: recordKey2)
+      let client2 = freshStore()
+      guard let pending2 = try await client2.loadPersistentRecovery() else {
+        throw QueueFixtureError.failed("journal+candidate crash prefix lost across client reopen")
+      }
+      try check(pending2.attemptedTransactionID == attempt2,
+        "a fresh client reads the journal+candidate crash prefix")
+      guard let resolved2 = try await client2.resolveUnresolvedPublication() else {
+        throw QueueFixtureError.failed("journal+candidate crash prefix did not resolve")
+      }
+      try check(resolved2.outcome == .attemptNotCommitted,
+        "the journal+candidate crash prefix classifies not-committed")
+      guard let retained2 = try await freshSecrets().read(recordKey2) else {
+        throw QueueFixtureError.failed("resolution prematurely deleted the retained candidate")
+      }
+      try check(retained2 == Data("retained-keychain-candidate".utf8),
+        "the retained candidate bytes survive resolution untouched")
+      guard let pointerAfterPrefix2 = try await client2.loadShadowSnapshot(),
+            pointerAfterPrefix2.transactionID == afterPrefix1.transactionID else {
+        throw QueueFixtureError.failed("the journal+candidate prefix moved the pointer")
+      }
+      checks += 1
+      guard case .record = try await client2.enqueue(.credentials(recordKey: fx.key,
+        generation: fx.record.generation, accessKey: units("keychain-after-prefix2"),
+        refreshToken: nil)) else {
+        throw QueueFixtureError.failed("keychain follower after prefix 2 expected")
+      }
+
+      // Crash prefix 3: the candidate committed (the pointer names the
+      // attempted transaction) while the journal was left behind. Resolution
+      // must prove the commit by exact identity and never replay the write.
+      guard let beforePrefix3 = try await client2.loadShadowSnapshot() else {
+        throw QueueFixtureError.failed("missing keychain snapshot before prefix 3")
+      }
+      let publisherVault = PiliAccountEnvelopeStagingStore(secrets: freshSecrets())
+      _ = try await publisherVault.importShadow(fx.codec.encode(beforePrefix3.envelope))
+      guard let publisherSnapshot = try await publisherVault.loadShadowSnapshot() else {
+        throw QueueFixtureError.failed("missing raw keychain publication for prefix 3")
+      }
+      let attempt3 = publisherSnapshot.transactionID
+      try await freshSecrets().write(
+        try PiliAccountEnvelopeRecoveryJournal.encode(PiliAccountEnvelopeRecoveryJournal(
+          attemptedTransactionID: attempt3,
+          expectedPreviousTransactionID: beforePrefix3.transactionID,
+          attemptedCandidateSHA256: String(repeating: "c", count: 64),
+          kind: "credentials")),
+        key: journalKey)
+      let client3 = freshStore()
+      guard let pending3 = try await client3.loadPersistentRecovery() else {
+        throw QueueFixtureError.failed("committed crash prefix lost across client reopen")
+      }
+      try check(pending3.attemptedTransactionID == attempt3 &&
+        pending3.expectedPreviousTransactionID == beforePrefix3.transactionID,
+        "a fresh client reads the committed-with-journal crash prefix")
+      guard let resolved3 = try await client3.resolveUnresolvedPublication() else {
+        throw QueueFixtureError.failed("committed crash prefix did not resolve")
+      }
+      try check(resolved3.outcome == .attemptCommitted &&
+        resolved3.observedTransactionID == resolved3.attemptedTransactionID &&
+        resolved3.attemptedTransactionID == attempt3,
+        "the committed crash prefix classifies by exact operation identity")
+      guard try await freshSecrets().read(journalKey) == nil else {
+        throw QueueFixtureError.failed("committed crash prefix was not durably cleared")
+      }
+      guard let unchanged3 = try await client3.loadShadowSnapshot(),
+            unchanged3.transactionID == attempt3 else {
+        throw QueueFixtureError.failed("resolution replayed or moved the committed pointer")
+      }
+      checks += 1
+      guard case .record = try await client3.enqueue(.credentials(recordKey: fx.key,
+        generation: fx.record.generation, accessKey: units("keychain-after-prefix3"),
+        refreshToken: nil)) else {
+        throw QueueFixtureError.failed("keychain follower after prefix 3 expected")
+      }
+      guard let afterPrefix3 = try await client3.loadShadowSnapshot() else {
+        throw QueueFixtureError.failed("missing keychain snapshot after prefix 3")
+      }
+      try check(afterPrefix3.transactionID != attempt3 &&
+        afterPrefix3.envelope.records.count == 3 &&
+        afterPrefix3.envelope.records[1].accessKeyUnits?.units ==
+          Array("keychain-after-prefix3".utf16),
+        "the reopened client publishes exactly one follower from the committed prefix")
+
+      // Crash prefix 4: a foreign pointer committed while the journal named an
+      // unresolved attempt. Startup must fence, classify explicitly ambiguous,
+      // keep the journal and fence until an explicit acknowledgment, and never
+      // replay or cover the foreign publication.
+      guard let beforePrefix4 = try await client3.loadShadowSnapshot() else {
+        throw QueueFixtureError.failed("missing keychain snapshot before prefix 4")
+      }
+      _ = try await publisherVault.importShadow(fx.codec.encode(beforePrefix4.envelope))
+      guard let foreignSnapshot = try await publisherVault.loadShadowSnapshot() else {
+        throw QueueFixtureError.failed("missing foreign keychain publication for prefix 4")
+      }
+      let attempt4 = UUID()
+      try await freshSecrets().write(
+        try PiliAccountEnvelopeRecoveryJournal.encode(PiliAccountEnvelopeRecoveryJournal(
+          attemptedTransactionID: attempt4,
+          expectedPreviousTransactionID: beforePrefix4.transactionID,
+          attemptedCandidateSHA256: String(repeating: "d", count: 64),
+          kind: "credentials")),
+        key: journalKey)
+      let client4 = freshStore()
+      guard let pending4 = try await client4.loadPersistentRecovery() else {
+        throw QueueFixtureError.failed("ambiguous crash prefix lost across client reopen")
+      }
+      try check(pending4.attemptedTransactionID == attempt4,
+        "a fresh client reads the ambiguous-with-journal crash prefix")
+      var fenced4 = false
+      do {
+        _ = try await client4.enqueue(.credentials(recordKey: fx.key,
+          generation: fx.record.generation, accessKey: units("keychain-must-not-cover"),
+          refreshToken: nil))
+      } catch PiliAccountShadowTransactionError.unresolvedPublication { fenced4 = true }
+      try check(fenced4, "the reopened ambiguous prefix fences an overwriting follower")
+      var blocked4 = false
+      do {
+        _ = try await client4.resolveUnresolvedPublication()
+      } catch PiliAccountShadowTransactionError.ambiguousRecovery { blocked4 = true }
+      try check(blocked4,
+        "the ambiguous prefix keeps its durable evidence until an explicit acknowledgment")
+      guard try await freshSecrets().read(journalKey) != nil else {
+        throw QueueFixtureError.failed("the default ambiguity resolution deleted the keychain journal")
+      }
+      try check(await client4.pendingUnresolvedPublication != nil,
+        "the ambiguous prefix keeps the reopened fence")
+      guard let acknowledged4 = try await client4.resolveUnresolvedPublication(allowAmbiguous: true) else {
+        throw QueueFixtureError.failed("the ambiguous crash prefix left no acknowledged resolution")
+      }
+      try check(acknowledged4.outcome == .ambiguousObservedCandidate &&
+        acknowledged4.observedTransactionID == foreignSnapshot.transactionID &&
+        acknowledged4.attemptedTransactionID == attempt4 &&
+        acknowledged4.expectedPreviousTransactionID == beforePrefix4.transactionID &&
+        !acknowledged4.observedContentMatchesAttempt,
+        "the acknowledged foreign candidate is ambiguous by identity, never claimed by content")
+      guard try await freshSecrets().read(journalKey) == nil else {
+        throw QueueFixtureError.failed("the acknowledged ambiguity did not clear the keychain journal")
+      }
+      guard let unchanged4 = try await client4.loadShadowSnapshot(),
+            unchanged4.transactionID == foreignSnapshot.transactionID,
+            unchanged4.envelope == beforePrefix4.envelope else {
+        throw QueueFixtureError.failed("the ambiguity acknowledgment replayed or moved the foreign pointer")
+      }
+      checks += 1
+      guard case .record = try await client4.enqueue(.credentials(recordKey: fx.key,
+        generation: fx.record.generation, accessKey: units("keychain-after-prefix4"),
+        refreshToken: nil)) else {
+        throw QueueFixtureError.failed("keychain follower after prefix 4 expected")
+      }
+      guard let afterPrefix4 = try await client4.loadShadowSnapshot() else {
+        throw QueueFixtureError.failed("missing keychain snapshot after prefix 4")
+      }
+      try check(afterPrefix4.transactionID != foreignSnapshot.transactionID &&
+        afterPrefix4.envelope.records[1].accessKeyUnits?.units ==
+          Array("keychain-after-prefix4".utf16),
+        "the reopened client publishes exactly one follower after the acknowledged ambiguity")
+      try await publisherVault.discardShadow()
+    } catch {
+      try? await vault.discardShadow()
+      throw error
+    }
     return checks
   }
 
@@ -1935,6 +2486,7 @@ private actor QueueFaultVault: PiliAccountSecretStore {
     checks += try await checkSameValueResolutionIdentity(fixture)
     checks += try await checkResolutionSerialization(fixture)
     checks += try await checkPersistentRecoveryJournal(fixture)
+    checks += try await checkPersistentRecoveryKeychain(fixture)
     checks += try await checkQueueRetryExhaustion(fixture)
     checks += try await checkQueuedPurposeInterference(fixture)
     checks += try await checkQueueContention(fixture)
