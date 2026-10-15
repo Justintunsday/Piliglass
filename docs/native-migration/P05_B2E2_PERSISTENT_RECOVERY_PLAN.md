@@ -121,6 +121,13 @@ recovery 与 identity-consumer 计划**，并把 tagged-reader 计划中未执�
   tracker token 与 durable identity 不得混用。
 - 依赖：Block3 freeze→drain→export→publish composition 与启动 apply 政策；因此本计划把
   2b 明确列为**未实施子组**，避免"改名的内存 fixture 冒充持久化 identity"。
+- **B2e-2b-1（2026-10-16 实施，可独立执行切片）**：revert 方向 schema-3 durable-identity
+  严格解码已加入 `NativeAccountReverseImport`（镜像 Swift codec：schema 2 exact legacy
+  形状 / schema 3 顶层可带 `generationHighWater`、login record 必须携带 canonical
+  36-unit 小写 UUID 文本且唯一、anonymous 必须 null、四 flag 恒 false、tracker map/字符串
+  假冒拒绝、pure decode 零写），并以 `recordDurableIdentities` 只读暴露供后续 Block3 消费；
+  见 `P05_B2E2B_IDENTITY_CARRIAGE_PLAN.md`。bridge export 携带 durable identity、
+  frozen-revision handoff/启动 apply、revert 幂等映射与 GC 仍属 Block3，**未实施、不得声称**。
 
 ## 4. captured-window reader 回归（B2e-2c，本组必做）
 
