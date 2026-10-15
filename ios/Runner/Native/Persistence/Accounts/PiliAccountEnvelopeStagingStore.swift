@@ -303,23 +303,34 @@ actor PiliAccountEnvelopeStagingStore {
     }
   }
 
+  /// Strict journal-presence check: only a successful nil read proves
+  /// absence. Any unreadable journal state fails closed as unresolved recovery
+  /// instead of being collapsed into a clean namespace.
+  private func recoveryJournalAbsentVerified() async throws -> Bool {
+    do {
+      return try await secrets.read(PiliAccountEnvelopeRecoveryJournal.journalKey) == nil
+    } catch {
+      throw PiliAccountEnvelopeStagingError.unresolvedRecovery
+    }
+  }
+
   /// Writes the single-slot journal and verifies the exact bytes. Any
   /// uncertainty (a failed write whose read-back is present or unreadable, or a
   /// mismatched read-back) is classified as unresolved recovery, never as a
-  /// clean namespace; only a verified clear restores the definite state.
+  /// clean namespace; only a successful nil read after a removal restores the
+  /// definite state.
   private func writeRecoveryJournalVerifying(_ bytes: Data) async throws {
     let key = PiliAccountEnvelopeRecoveryJournal.journalKey
     do {
       try await secrets.write(bytes, key: key)
     } catch {
-      var observed: Data?
+      let observed: Data?
       do { observed = try await secrets.read(key) }
       catch {
-        try? await secrets.remove(key)
-        guard (try? await secrets.read(key)) == nil else {
-          throw PiliAccountEnvelopeStagingError.unresolvedRecovery
-        }
-        throw error
+        // The write outcome is unverifiable and a failed read never proves
+        // absence: leave any journal evidence exactly as it is for
+        // arm/resolution and fail closed instead of removing it unverified.
+        throw PiliAccountEnvelopeStagingError.unresolvedRecovery
       }
       guard observed != nil else {
         // Definite: the journal never committed and no publication started.
@@ -328,14 +339,22 @@ actor PiliAccountEnvelopeStagingStore {
       // The journal may exist despite the failed write; publication has not
       // started, but the evidence must be resolved before later writes.
       try? await secrets.remove(key)
-      guard (try? await secrets.read(key)) == nil else {
+      guard try await recoveryJournalAbsentVerified() else {
         throw PiliAccountEnvelopeStagingError.unresolvedRecovery
       }
       throw error
     }
-    guard let copied = try? await secrets.read(key), copied == bytes else {
+    let copied: Data?
+    do { copied = try await secrets.read(key) }
+    catch {
+      // A failed verification read never proves absence: keep any journal
+      // evidence exactly as written for arm/resolution and fail closed instead
+      // of removing it unverified.
+      throw PiliAccountEnvelopeStagingError.unresolvedRecovery
+    }
+    guard copied == bytes else {
       try? await secrets.remove(key)
-      guard (try? await secrets.read(key)) == nil else {
+      guard try await recoveryJournalAbsentVerified() else {
         throw PiliAccountEnvelopeStagingError.unresolvedRecovery
       }
       throw PiliAccountEnvelopeStagingError.verificationFailed

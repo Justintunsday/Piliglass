@@ -27,6 +27,11 @@ enum PiliAccountShadowTransactionError: Error, Sendable, Equatable {
   /// The durable recovery journal could not be interpreted as a known attempted
   /// write kind; the store fails closed instead of guessing.
   case invalidRecovery
+  /// The recorded read-back observed an ambiguous/foreign pointer: the durable
+  /// journal and the fence stay armed until an explicit
+  /// `resolveUnresolvedPublication(allowAmbiguous: true)` acknowledgment
+  /// records the ambiguity as the resolution.
+  case ambiguousRecovery
 }
 
 struct PiliAccountShadowCookieSave: Sendable, Equatable {
@@ -410,7 +415,14 @@ actor PiliAccountEnvelopeTransactionStore {
   /// unchanged previous pointer or an explicit ambiguity; content equality is
   /// reported separately and is never operation proof. It never replays the
   /// unknown write and never fabricates a receipt for it.
-  func resolveUnresolvedPublication() async throws
+  ///
+  /// An ambiguous/foreign pointer is never resolved automatically: with the
+  /// default `allowAmbiguous == false` the durable journal and the in-memory
+  /// fence both stay armed and `ambiguousRecovery` is thrown, so a recreated
+  /// store still sees the unresolved evidence. Only an explicit
+  /// `allowAmbiguous == true` call records the ambiguity in the returned
+  /// receipt and durably clears the journal before releasing the fence.
+  func resolveUnresolvedPublication(allowAmbiguous: Bool = false) async throws
     -> PiliAccountShadowPublicationResolution? {
     try await loadRecoveryIfNeeded()
     guard let pending = unresolved else { return nil }
@@ -455,9 +467,13 @@ actor PiliAccountEnvelopeTransactionStore {
       observedContentMatchesAttempt: observedDigest == pending.attemptedCandidateSHA256)
     // Record the resolution durably before releasing the in-memory fence: the
     // journal is the only durable evidence, so a failed or cancelled clear
-    // keeps both the journal and the fence armed. Ambiguous/foreign pointers
-    // are recorded in the returned receipt and release the fence with the same
-    // honest classification instead of guessing an outcome.
+    // keeps both the journal and the fence armed. An ambiguous/foreign pointer
+    // is a distinct outcome that must not be auto-resolved: the journal and the
+    // fence stay intact and only an explicit `allowAmbiguous: true`
+    // acknowledgment may record that ambiguity as the resolution.
+    if outcome == .ambiguousObservedCandidate, !allowAmbiguous {
+      throw PiliAccountShadowTransactionError.ambiguousRecovery
+    }
     try await vault.clearRecoveryJournal(
       expectedAttemptedTransactionID: pending.attemptedTransactionID)
     unresolved = nil
