@@ -94,6 +94,35 @@ R14–R18，不改生产接线，不升级 authority。依据：
   4. 预算段：`preBudgetRecords` 相对断言保留，并钉住其绝对值（等于取消段结束计数），
      使"取消段多发布的候选"无法混入基线。
 
+## R22（P2）：raw retained candidate 不是 published pointer（fixture 修正）
+
+- Codex 对 `9669fa7` 的运行证据：queue phase 编译通过、runtime FAILED，fatal 为
+  `checkResolutionSerialization` 的 `fault.recordCount() == 2`。原因：`QueueFaultVault.
+  recordCount` 统计 raw `account-envelope-shadow-v2.*` 候选；import+adopt=2 之后，
+  `pointerWriteBefore` + 不可读 ack 会先写入并验证候选 record+descriptor、再无法判定
+  pointer 写入，vault 为未知发布**有意保留**第 3 个孤儿候选/descriptor（过早删除可能
+  破坏真正 committed 的 unknown）。因此"raw 3 / published pointer 未变"是正确行为，
+  原断言把 raw 候选与 published manifest 混为一谈。
+- 修正（不删断言、不等价放宽）：
+  1. 在 unknown A 前捕获真实基线：`originalPointer`（transactionID + envelope）与
+     `baselineRecords == 2`；
+  2. unknown A 后分别证明：published pointer/envelope 逐字节未变；attempted
+     transaction ID 与 pointer 不同；`loadPublishedCandidate(attemptedID)` 可读出被保留
+     的候选；`recordCount == baselineRecords + 1`（恰好一个额外 raw 候选）；
+  3. resolution 后证明 `.attemptNotCommitted`、observed == original pointer、envelope
+     不变、保留候选仍在且计数仍为 `baselineRecords + 1`（无重放/无 follower 发布）；
+  4. unknown B 重复同型证明（`baselineRecords + 2`）；B 的 resolution 后 follower 显式
+     发布 → pointer 指向新 manifest、`recordCount == baselineRecords + 3`（只新增一个
+     published 候选，不重放任何 retained candidate）；
+  5. 同值 R19 helper 亦补充：写前 attempt → `baselineRecords + 1`（保留孤儿）；写后
+     committed attempt → pointer == attempted ID 且 `baselineRecords + 2`（保留孤儿 +
+     已发布候选并存），显式区分 raw retained 与 published。
+- 等价假设审计：逐条核对 queue driver 全部 `recordCount()` 断言（FIFO5、取消±2、
+  in-flight0、预算0/+1、retry 4、chaos 5、purpose 4/4）与其时点状态，均为 stale-在写前
+  /成功路径；transaction driver 的 `unknownVault.recordCount()==2` 位于已提交的
+  `pointerReadAfter` unknown 之后，语义正确。唯一错误即 R22 处，已按上修正。
+- 不删除任何 unknown 候选、不降预算/断言；新增断言只增不减。
+
 ## 验收
 
 - 小 commit/push；同一最终代码 SHA 显式 dispatch `ios.yml`(release5) +

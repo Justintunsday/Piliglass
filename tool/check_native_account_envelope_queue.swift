@@ -1275,6 +1275,7 @@ private actor QueueFaultVault: PiliAccountSecretStore {
       guard let baseline = try await store.loadShadowSnapshot() else {
         throw QueueFixtureError.failed("missing same-value baseline")
       }
+      let baselineRecords = await fault.recordCount()
       let baselineAccess = baseline.envelope.records[1].accessKeyUnits
       let baselineRefresh = baseline.envelope.records[1].refreshTokenUnits
       let baselineActivated = baseline.envelope.records[1].activated
@@ -1300,6 +1301,8 @@ private actor QueueFaultVault: PiliAccountSecretStore {
         notCommitted.observedContentMatchesAttempt &&
         notCommitted.attemptedTransactionID == unresolvedBefore.attemptedTransactionID,
         "a byte-identical write-before attempt is not committed, never matched by content")
+      try check(await fault.recordCount() == baselineRecords + 1,
+        "the byte-identical write-before attempt leaves one retained raw candidate")
 
       // Same-value credentials, write-after error + unreadable acknowledgment:
       // the pointer committed under the exact attempted ID although the bytes
@@ -1324,6 +1327,13 @@ private actor QueueFaultVault: PiliAccountSecretStore {
         committed.observedTransactionID == committed.attemptedTransactionID &&
         committed.observedContentMatchesAttempt,
         "a committed byte-identical attempt is proven by exact operation identity")
+      guard let pointerAfterCommitted = try await store.loadShadowSnapshot() else {
+        throw QueueFixtureError.failed("missing post-committed pointer")
+      }
+      try check(pointerAfterCommitted.transactionID == committed.attemptedTransactionID,
+        "the committed candidate is the actual published manifest, not a raw orphan")
+      try check(await fault.recordCount() == baselineRecords + 2,
+        "the committed attempt adds its raw candidate alongside the retained one")
 
       // Same-value activation on both sides of the failure boundary.
       await fault.arm(.pointerWriteBefore)
@@ -1415,8 +1425,18 @@ private actor QueueFaultVault: PiliAccountSecretStore {
     do {
       try await vault.importShadow(fx.codec.encode(fx.base))
       _ = try await store.enqueue(.adoptIdentities)
+      guard let originalPointer = try await store.loadShadowSnapshot() else {
+        throw QueueFixtureError.failed("missing serialization baseline pointer")
+      }
+      let baselineRecords = await fault.recordCount()
+      try check(baselineRecords == 2,
+                "the immutable baseline holds only the imported and adopted candidates")
 
-      // Undecided unknown A: write-before + unreadable acknowledgment.
+      // Undecided unknown A: write-before + unreadable acknowledgment. The vault
+      // writes and verifies the candidate record + descriptor first and then
+      // cannot decide the pointer write, so it intentionally RETAINS that raw
+      // candidate while the publication stays unknown. A retained raw candidate
+      // is not a published pointer; prove the two separately.
       await fault.arm(.pointerWriteBefore)
       await fault.failPointerReadAfter(2)
       do {
@@ -1428,6 +1448,20 @@ private actor QueueFaultVault: PiliAccountSecretStore {
       guard let pendingA = await store.pendingUnresolvedPublication else {
         throw QueueFixtureError.failed("resolution A left no fence")
       }
+      guard let pointerAfterUnknownA = try await store.loadShadowSnapshot() else {
+        throw QueueFixtureError.failed("missing post-unknown-A pointer")
+      }
+      try check(pointerAfterUnknownA.transactionID == originalPointer.transactionID &&
+        pointerAfterUnknownA.envelope == originalPointer.envelope,
+        "the write-before unknown leaves the published manifest unchanged")
+      try check(pendingA.attemptedTransactionID != originalPointer.transactionID,
+                "the attempted operation ID is distinct from the unchanged pointer")
+      let retainedA = try await vault.loadPublishedCandidate(
+        transactionID: pendingA.attemptedTransactionID)
+      try check(retainedA.records[1].accessKeyUnits?.units == Array("resolution-a".utf16),
+                "the attempted immutable candidate is retained but not published")
+      try check(await fault.recordCount() == baselineRecords + 1,
+                "exactly one raw attempted candidate is retained beyond the baseline")
 
       // Hold resolver one inside its read-back; resolver two must fail closed
       // and must not clear the still-pending fence.
@@ -1443,8 +1477,6 @@ private actor QueueFaultVault: PiliAccountSecretStore {
         await store.pendingUnresolvedPublication
       try check(inFlightFence?.attemptedTransactionID == pendingA.attemptedTransactionID,
                 "an in-flight resolver never clears its fence early")
-      try check(await fault.recordCount() == 2,
-                "the unknown attempt itself published no record")
       await fault.resumeManifestRead()
       guard let firstResolution = try await resolverOne.value else {
         throw QueueFixtureError.failed("resolver one returned no resolution")
@@ -1454,6 +1486,20 @@ private actor QueueFaultVault: PiliAccountSecretStore {
       try check(firstResolution.outcome == .attemptNotCommitted &&
         fenceClearedAfterFirst == nil,
         "the first resolver records its read-back and releases only its own fence")
+      try check(firstResolution.observedTransactionID == originalPointer.transactionID,
+                "the correlated resolution observes the unchanged original pointer")
+      guard let pointerAfterResolutionA = try await store.loadShadowSnapshot() else {
+        throw QueueFixtureError.failed("missing post-resolution-A pointer")
+      }
+      try check(pointerAfterResolutionA.transactionID == originalPointer.transactionID &&
+        pointerAfterResolutionA.envelope == originalPointer.envelope,
+        "not-committed resolution records read-back without replay or publication")
+      let retainedAStillThere = try await vault.loadPublishedCandidate(
+        transactionID: pendingA.attemptedTransactionID)
+      let recordsAfterResolutionA = await fault.recordCount()
+      try check(retainedAStillThere == retainedA &&
+        recordsAfterResolutionA == baselineRecords + 1,
+        "the retained attempt and its exact raw count survive the recorded resolution")
 
       // A new unknown B after A resolved: new immutable ID, fenced followers,
       // and survival of a cancelled stale resolver.
@@ -1470,6 +1516,18 @@ private actor QueueFaultVault: PiliAccountSecretStore {
       }
       try check(pendingB.attemptedTransactionID != pendingA.attemptedTransactionID,
                 "a new unknown keeps a new immutable ID")
+      guard let pointerAfterUnknownB = try await store.loadShadowSnapshot() else {
+        throw QueueFixtureError.failed("missing post-unknown-B pointer")
+      }
+      try check(pointerAfterUnknownB.transactionID == originalPointer.transactionID &&
+        pointerAfterUnknownB.envelope == originalPointer.envelope,
+        "the second write-before unknown also leaves the published manifest unchanged")
+      let retainedB = try await vault.loadPublishedCandidate(
+        transactionID: pendingB.attemptedTransactionID)
+      try check(retainedB.records[1].accessKeyUnits?.units == Array("resolution-b".utf16),
+                "the second attempted immutable candidate is retained but not published")
+      try check(await fault.recordCount() == baselineRecords + 2,
+                "both retained attempts keep distinct raw candidates")
       var followerFenced = false
       do {
         _ = try await store.enqueue(.credentials(recordKey: fx.key,
@@ -1500,6 +1558,8 @@ private actor QueueFaultVault: PiliAccountSecretStore {
       try check(secondResolution.outcome == .attemptNotCommitted &&
         secondResolution.attemptedTransactionID == pendingB.attemptedTransactionID,
         "resolution B classifies its own immutable token after the cancelled resolver")
+      try check(secondResolution.observedTransactionID == originalPointer.transactionID,
+                "resolution B also observes the unchanged original pointer")
       guard case .record = try await store.enqueue(.credentials(recordKey: fx.key,
         generation: fx.record.generation, accessKey: units("after-b"),
         refreshToken: nil)) else {
@@ -1511,6 +1571,11 @@ private actor QueueFaultVault: PiliAccountSecretStore {
       try check(afterB.envelope.records[1].accessKeyUnits?.units ==
         Array("after-b".utf16),
         "the queue drains normally after resolution B")
+      try check(afterB.transactionID != pendingA.attemptedTransactionID &&
+        afterB.transactionID != pendingB.attemptedTransactionID,
+        "the follower publishes a new manifest, never a replayed retained candidate")
+      try check(await fault.recordCount() == baselineRecords + 3,
+        "only the explicit follower added a published candidate beyond the retained attempts")
       try await vault.discardShadow()
     } catch {
       try? await vault.discardShadow()
