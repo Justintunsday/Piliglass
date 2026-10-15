@@ -28,6 +28,27 @@ Map<String, Object?> _normalized(Map<String, Object?> value) {
   return copy;
 }
 
+List<int> _identityUnits(String identity) => identity.codeUnits;
+
+/// Builds a schema-3 envelope from a real schema-2 capture: per-record durable
+/// identities in record order and the monotonic generation high-water at the
+/// current maximum login generation.
+Map<String, Object?> _schemaThreeEnvelope(
+    Map<String, Object?> capture, List<String?> identities) {
+  final value = _copy(capture);
+  final records = _records(value);
+  for (var index = 0; index < records.length; index++) {
+    records[index]['durableIdentity'] =
+        identities[index] == null ? null : _identityUnits(identities[index]!);
+  }
+  value['schemaVersion'] = 3;
+  final generations = [for (final record in records.skip(1)) record['generation']! as int];
+  value['generationHighWater'] = generations.isEmpty
+      ? 0
+      : generations.reduce((left, right) => left > right ? left : right);
+  return value;
+}
+
 /// Deterministic empty-target fixture: delete/reset only, with no clear()'s
 /// fire-and-forget buvid activation. All actual Hive/jar deletes are awaited.
 Future<void> _prepareEmptyTarget() async {
@@ -289,6 +310,86 @@ void main() {
     }
     expect(() => NativeAccountReverseImport.decode(value),
       throwsA(isA<NativeAccountReverseImportException>().having((error) => error.code, 'code', 'resourceLimit')));
+    expect(identical(Accounts.account.get('777'), account), true);
+  });
+
+  test('schema 3 durable identities decode, expose in order and keep apply fidelity', () async {
+    final first = envelopeFixtureAccount('2', purposes: {AccountType.main, AccountType.video});
+    addEnvelopeFixtureAttributes(first.cookieJar);
+    final second = envelopeFixtureAccount('10', purposes: {AccountType.main});
+    await Accounts.installCredentials(first);
+    await Accounts.installCredentials(second);
+    final capture = Accounts.captureLiveMemoryShadow().value;
+    final identities = <String?>[
+      null,
+      '11111111-1111-4111-8111-111111111111',
+      '22222222-2222-4222-8222-222222222222',
+    ];
+    final schemaThree = _schemaThreeEnvelope(capture, identities);
+    final decoded = NativeAccountReverseImport.decode(schemaThree);
+    expect(decoded.recordDurableIdentities, identities);
+    await _prepareEmptyTarget();
+    await const NativeAccountReverseImportService().apply(decoded);
+    expect(_normalized(Accounts.captureLiveMemoryShadow().value), _normalized(capture));
+  });
+
+  test('schema 3 durable identity shape, uniqueness, high-water and namespace negatives', () async {
+    final first = envelopeFixtureAccount('2', purposes: {AccountType.main});
+    final second = envelopeFixtureAccount('10', purposes: {AccountType.main});
+    await Accounts.installCredentials(first);
+    await Accounts.installCredentials(second);
+    final capture = Accounts.captureLiveMemoryShadow().value;
+    const identityA = '11111111-1111-4111-8111-111111111111';
+    const identityB = '22222222-2222-4222-8222-222222222222';
+    final valid = _schemaThreeEnvelope(capture, [null, identityA, identityB]);
+    expect(NativeAccountReverseImport.decode(valid).recordDurableIdentities,
+      [null, identityA, identityB]);
+    // Schema 3 may also omit the optional generation high-water entirely.
+    final noHighWater = _copy(valid)..remove('generationHighWater');
+    expect(NativeAccountReverseImport.decode(noHighWater).recordDurableIdentities,
+      [null, identityA, identityB]);
+    // Duplicate identities across login records are rejected before any write.
+    expect(() => NativeAccountReverseImport.decode(
+        _schemaThreeEnvelope(capture, [null, identityA, identityA])),
+      throwsA(isA<NativeAccountReverseImportException>()));
+    final mutations = <void Function(Map<String, Object?>)>[
+      (value) => _records(value)[1].remove('durableIdentity'),
+      (value) => _records(value)[1]['durableIdentity'] = null,
+      (value) => (_records(value)[1]['durableIdentity'] as List)[0] = 0x41,
+      (value) => _records(value)[1]['durableIdentity'] = identityA.substring(0, 35).codeUnits,
+      (value) => (_records(value)[1]['durableIdentity'] as List)[8] = 0x31,
+      (value) => (_records(value)[1]['durableIdentity'] as List)[0] = 0x67,
+      (value) => _records(value)[0]['durableIdentity'] = identityA.codeUnits,
+      (value) => _records(value)[1]['durableIdentity'] =
+        {'ownerToken': identityA, 'generation': 1},
+      (value) => _records(value)[1]['durableIdentity'] = identityA,
+      (value) => value['durableIdentityConfigured'] = true,
+      (value) => value['generationHighWater'] = -1,
+      (value) => value['generationHighWater'] = 0,
+    ];
+    for (final mutate in mutations) {
+      final value = _copy(valid);
+      mutate(value);
+      expect(() => NativeAccountReverseImport.decode(value),
+        throwsA(isA<NativeAccountReverseImportException>()));
+    }
+  });
+
+  test('schema 2 rejects durable identity and generation high-water keys', () async {
+    final account = envelopeFixtureAccount('777');
+    await Accounts.installCredentials(account);
+    final capture = Accounts.captureLiveMemoryShadow().value;
+    final withNullIdentity = _copy(capture);
+    _records(withNullIdentity)[1]['durableIdentity'] = null;
+    final withIdentity = _copy(capture);
+    _records(withIdentity)[1]['durableIdentity'] =
+      _identityUnits('11111111-1111-4111-8111-111111111111');
+    final withHighWaterNull = _copy(capture)..['generationHighWater'] = null;
+    final withHighWaterValue = _copy(capture)..['generationHighWater'] = 1;
+    for (final value in [withNullIdentity, withIdentity, withHighWaterNull, withHighWaterValue]) {
+      expect(() => NativeAccountReverseImport.decode(value),
+        throwsA(isA<NativeAccountReverseImportException>()));
+    }
     expect(identical(Accounts.account.get('777'), account), true);
   });
 }
