@@ -231,19 +231,32 @@ private actor QueueFaultVault: PiliAccountSecretStore {
     throw QueueFixtureError.failed("queue retry back-off did not start")
   }
 
-  /// Like `waitForRetrySleep`, but with a bounded window shorter than the
-  /// configured back-off of the observed store, so a retry event can be
-  /// attributed to a specific cold submission whose predecessor is provably
-  /// still sleeping. Missing the window fails the fixture instead of passing.
-  private static func waitForRetrySleepWithin(
-    _ store: PiliAccountEnvelopeTransactionStore, _ expected: Int, attempts: Int = 30
-  ) async throws {
-    for _ in 0..<attempts {
-      if await store.retrySleepCount >= expected { return }
+  /// One-shot test gate wired into the store's real cold-read delivery seam:
+  /// the first `pause()` suspends, later calls return immediately, and
+  /// `release()` delivers the captured result.
+  private actor DeliveryGate {
+    private var armed = true
+    private var suspended = false
+    private var continuation: CheckedContinuation<Void, Never>?
+    func pause() async {
+      guard armed else { return }
+      armed = false
+      suspended = true
+      await withCheckedContinuation { continuation = $0 }
+    }
+    func isSuspended() -> Bool { suspended }
+    func release() {
+      continuation?.resume()
+      continuation = nil
+    }
+  }
+
+  private static func waitForDeliveryGate(_ gate: DeliveryGate) async throws {
+    for _ in 0..<400 {
+      if await gate.isSuspended() { return }
       try await Task.sleep(nanoseconds: 5_000_000)
     }
-    throw QueueFixtureError.failed(
-      "cold preflight retry \(expected) did not arrive inside the attribution window")
+    throw QueueFixtureError.failed("cold recovery read delivery gate did not suspend")
   }
 
   private static func accessText(_ record: PiliAccountLiveMemoryRecord) -> String {
@@ -849,18 +862,18 @@ private actor QueueFaultVault: PiliAccountSecretStore {
       checks += 1
     }
 
-    // Concurrent same-store first use: two cold same-key submissions on one
-    // fresh store while a third shared-vault publisher is paused. Both
-    // submissions must provably reach the preflight (staged attribution
-    // barriers; the second inside a window shorter than the first's
-    // configured back-off), then serialize in admission order with the later
-    // candidate carrying both effects and exactly one publication each.
+    // Concurrent same-store first use, identity attributed: cold A is the only
+    // live submission when its recovery load observes the genuinely held
+    // shared-vault fence, so the retry barrier belongs to A alone; B is
+    // submitted afterwards and its participation is proven by the sole FIFO
+    // reservation it holds. Publication follows the observed enqueue-entry
+    // order with the later candidate carrying both effects.
     let fault1 = QueueFaultVault()
     let vault1 = PiliAccountEnvelopeStagingStore(secrets: fault1)
     let holder1 = PiliAccountEnvelopeTransactionStore(
       vault: vault1, maxQueueAttempts: 800, retryDelayNanoseconds: 5_000_000)
     let cold1 = PiliAccountEnvelopeTransactionStore(
-      vault: vault1, maxQueueAttempts: 800, retryDelayNanoseconds: 400_000_000)
+      vault: vault1, maxQueueAttempts: 800, retryDelayNanoseconds: 5_000_000)
     var held1: Task<Void, Error>?
     var coldA: Task<PiliAccountShadowWriteOutcome, Error>?
     var coldB: Task<PiliAccountShadowWriteOutcome, Error>?
@@ -875,21 +888,18 @@ private actor QueueFaultVault: PiliAccountSecretStore {
       try await waitForRetrySleep(cold1, 1)
       coldB = Task { try await cold1.enqueue(.credentials(recordKey: fx.key,
         generation: fx.record.generation, accessKey: units("cold-b"), refreshToken: nil)) }
-      // The second retry event must arrive inside the attribution window: the
-      // first submission is already in its 400 ms back-off, so only the second
-      // cold submission can produce it.
-      try await waitForRetrySleepWithin(cold1, 2)
+      try await waitForPending(cold1, 1)
       await fault1.resume()
       try await held1?.value
       held1 = nil
       guard let coldAValue = try await coldA?.value,
             case .record(let receiptA) = coldAValue else {
-        throw QueueFixtureError.failed("first cold submission expected a record receipt")
+        throw QueueFixtureError.failed("cold owner expected a record receipt")
       }
       coldA = nil
       guard let coldBValue = try await coldB?.value,
             case .record(let receiptB) = coldBValue else {
-        throw QueueFixtureError.failed("second cold submission expected a record receipt")
+        throw QueueFixtureError.failed("cold waiter expected a record receipt")
       }
       coldB = nil
       try await waitForIdle(cold1)
@@ -897,28 +907,23 @@ private actor QueueFaultVault: PiliAccountSecretStore {
         throw QueueFixtureError.failed("missing concurrent cold first-use snapshot")
       }
       try check(receiptA.transactionID != receiptB.transactionID,
-        "the two cold same-key submissions publish distinct immutable candidates")
-      let lastReceipt = snapshot1.transactionID == receiptA.transactionID ? receiptA : receiptB
-      let firstReceipt = snapshot1.transactionID == receiptA.transactionID ? receiptB : receiptA
-      try check(lastReceipt.transactionID == snapshot1.transactionID &&
-        firstReceipt.transactionID != lastReceipt.transactionID,
-        "the final pointer names the later of the two cold same-key publications")
-      let lastCandidate = try await vault1.loadPublishedCandidate(
-        transactionID: lastReceipt.transactionID)
-      let firstCandidate = try await vault1.loadPublishedCandidate(
-        transactionID: firstReceipt.transactionID)
-      try check(accessText(lastCandidate.records[1]) == "cold-b" &&
-        lastCandidate.records[1].jar == fx.cleared,
-        "the later cold publisher built on the earlier one and carries both effects")
-      let firstState = firstCandidate.records[1]
-      try check((accessText(firstState) == "cold-holder" && firstState.jar == fx.cleared) ||
-        (accessText(firstState) == "cold-b" && firstState.jar == fx.record.jar),
-        "the earlier cold publisher's candidate carries exactly one of the two effects")
-      try check(snapshot1.envelope.records[1].accessKeyUnits?.units == Array("cold-b".utf16) &&
+        "the cold owner and waiter publish distinct immutable candidates")
+      let ownerCandidate = try await vault1.loadPublishedCandidate(
+        transactionID: receiptA.transactionID)
+      let waiterCandidate = try await vault1.loadPublishedCandidate(
+        transactionID: receiptB.transactionID)
+      try check(accessText(ownerCandidate.records[1]) == "cold-holder" &&
+        ownerCandidate.records[1].jar == fx.cleared,
+        "the cold owner's deleteAll candidate carries only the earlier holder state")
+      try check(accessText(waiterCandidate.records[1]) == "cold-b" &&
+        waiterCandidate.records[1].jar == fx.cleared,
+        "the admitted waiter was built on the owner's publication and carries both effects")
+      try check(snapshot1.transactionID == receiptB.transactionID &&
+        snapshot1.envelope.records[1].accessKeyUnits?.units == Array("cold-b".utf16) &&
         snapshot1.envelope.records[1].jar == fx.cleared,
-        "concurrent cold same-key serialization loses no effect")
+        "enqueue-entry order serializes the cold owner before the admitted waiter")
       try check(await fault1.recordCount() == 4,
-        "concurrent cold first use publishes exactly one record per admitted write")
+        "cold first use publishes exactly one record per admitted write")
       try await vault1.discardShadow()
     } catch {
       await fault1.resume()
@@ -929,8 +934,8 @@ private actor QueueFaultVault: PiliAccountSecretStore {
       throw error
     }
 
-    // Bounded exhaustion: a cold store with a tiny shared budget fails the
-    // preflight with the typed publicationConflict (never a raw
+    // Bounded exhaustion: a cold store with a tiny configured budget fails the
+    // recovery preflight with the typed publicationConflict (never a raw
     // operationInProgress), publishes nothing, and a follower on the same
     // store succeeds once the contention clears.
     let fault2 = QueueFaultVault()
@@ -1191,6 +1196,362 @@ private actor QueueFaultVault: PiliAccountSecretStore {
       if let held5 { _ = try? await held5.value }
       if let corruptWrite5 { _ = try? await corruptWrite5.value }
       try? await vault5.discardShadow()
+      throw error
+    }
+    return checks
+  }
+
+  /// R28–R30: coordinated cold initialization and admission. The cold owner
+  /// reserves the turn first and pays for its recovery load inside the single
+  /// queued attempt budget; waiters are counted against the capacity; direct
+  /// entry stays excluded during the back-off; and a delayed stale cold read
+  /// can never overwrite newer unresolved evidence installed through the real
+  /// store seam.
+  private static func checkCoordinatedColdAdmission(_ fx: QueueFixture) async throws -> Int {
+    var checks = 0
+    func check(_ condition: Bool, _ label: String) throws {
+      guard condition else { throw QueueFixtureError.failed(label) }
+      checks += 1
+    }
+
+    // Cold capacity, overflow, cancellation/drain and order: the cold owner
+    // holds the turn while retrying its recovery load, the single admitted
+    // waiter occupies the configured capacity, a further cold submission
+    // overflows immediately, and cancelling the waiter publishes nothing.
+    let fault6 = QueueFaultVault()
+    let vault6 = PiliAccountEnvelopeStagingStore(secrets: fault6)
+    let holder6 = PiliAccountEnvelopeTransactionStore(
+      vault: vault6, maxQueueAttempts: 800, retryDelayNanoseconds: 5_000_000)
+    let admit6 = PiliAccountEnvelopeTransactionStore(
+      vault: vault6, maxPendingWrites: 1, maxQueueAttempts: 800,
+      retryDelayNanoseconds: 5_000_000)
+    var held6: Task<Void, Error>?
+    var admitA: Task<PiliAccountShadowWriteOutcome, Error>?
+    var admitB: Task<PiliAccountShadowWriteOutcome, Error>?
+    do {
+      try await vault6.importShadow(fx.codec.encode(fx.base))
+      await fault6.pauseWrite()
+      held6 = Task { _ = try await holder6.enqueue(.credentials(recordKey: fx.key,
+        generation: fx.record.generation, accessKey: units("admit-holder"), refreshToken: nil)) }
+      await fault6.waitUntilPaused()
+      admitA = Task { try await admit6.enqueue(.cookieDeleteAll(
+        recordKey: fx.key, generation: fx.record.generation)) }
+      try await waitForRetrySleep(admit6, 1)
+      admitB = Task { try await admit6.enqueue(.credentials(recordKey: fx.key,
+        generation: fx.record.generation, accessKey: units("admit-b"), refreshToken: nil)) }
+      try await waitForPending(admit6, 1)
+      let idleWhileWaiting = await admit6.writeQueueIdle
+      try check(!idleWhileWaiting,
+        "the cold owner's back-off holds the turn while its waiter is counted")
+      var overflowed = false
+      do {
+        _ = try await admit6.enqueue(.credentials(recordKey: fx.key,
+          generation: fx.record.generation, accessKey: units("admit-overflow"),
+          refreshToken: nil))
+        throw QueueFixtureError.failed("full cold queue admitted a write")
+      } catch PiliAccountShadowTransactionError.writeQueueOverflow { overflowed = true }
+      try check(overflowed,
+        "a waiting cold submission counts against maxPendingWrites with immediate overflow")
+      let pausedCount = await fault6.recordCount()
+      try check(pausedCount == 1,
+        "only the base candidate is committed while the shared publisher is paused")
+      admitB?.cancel()
+      await fault6.resume()
+      try await held6?.value
+      held6 = nil
+      guard let admitAValue = try await admitA?.value,
+            case .record(let admitReceiptA) = admitAValue else {
+        throw QueueFixtureError.failed("cold owner admission expected a record receipt")
+      }
+      admitA = nil
+      var waiterCancelled = false
+      do {
+        _ = try await admitB?.value
+      } catch is CancellationError { waiterCancelled = true }
+      try check(waiterCancelled,
+        "a cancelled cold waiter publishes nothing and drains its turn")
+      admitB = nil
+      guard case .record(let admitReceiptD) = try await admit6.enqueue(.credentials(
+        recordKey: fx.key, generation: fx.record.generation,
+        accessKey: units("admit-d"), refreshToken: nil)) else {
+        throw QueueFixtureError.failed("follower after the cancelled cold waiter expected")
+      }
+      try await waitForIdle(admit6)
+      guard let admitSnapshot = try await admit6.loadShadowSnapshot() else {
+        throw QueueFixtureError.failed("missing cold admission snapshot")
+      }
+      try check(admitReceiptA.transactionID != admitReceiptD.transactionID &&
+        admitSnapshot.transactionID == admitReceiptD.transactionID &&
+        admitSnapshot.envelope.records[1].accessKeyUnits?.units == Array("admit-d".utf16) &&
+        admitSnapshot.envelope.records[1].jar == fx.cleared,
+        "cold admission keeps enqueue-entry order and publishes only admitted writes")
+      try check(await fault6.recordCount() == pausedCount + 3,
+        "the overflow and cancelled submissions publish nothing")
+      try await vault6.discardShadow()
+    } catch {
+      await fault6.resume()
+      if let held6 { _ = try? await held6.value }
+      if let admitA { _ = try? await admitA.value }
+      if let admitB {
+        admitB.cancel()
+        _ = try? await admitB.value
+      }
+      try? await vault6.discardShadow()
+      throw error
+    }
+
+    // Direct-entry exclusion during the cold-load back-off: the turn stays
+    // reserved while the owner retries and a direct primitive fails with the
+    // typed store-level operationInProgress without publishing. The store is
+    // warmed through the read-only recovery entry (no publication) so this
+    // block isolates the direct-entry policy; the cold-load path itself is
+    // covered by the cold blocks.
+    let fault7 = QueueFaultVault()
+    let vault7 = PiliAccountEnvelopeStagingStore(secrets: fault7)
+    let holder7 = PiliAccountEnvelopeTransactionStore(
+      vault: vault7, maxQueueAttempts: 800, retryDelayNanoseconds: 5_000_000)
+    let warm7 = PiliAccountEnvelopeTransactionStore(
+      vault: vault7, maxQueueAttempts: 800, retryDelayNanoseconds: 300_000_000)
+    var held7: Task<Void, Error>?
+    var warmOwner7: Task<PiliAccountShadowWriteOutcome, Error>?
+    do {
+      try await vault7.importShadow(fx.codec.encode(fx.base))
+      _ = try await warm7.loadPersistentRecovery()
+      await fault7.pauseWrite()
+      held7 = Task { _ = try await holder7.enqueue(.credentials(recordKey: fx.key,
+        generation: fx.record.generation, accessKey: units("warm-holder"), refreshToken: nil)) }
+      await fault7.waitUntilPaused()
+      warmOwner7 = Task { try await warm7.enqueue(.credentials(recordKey: fx.key,
+        generation: fx.record.generation, accessKey: units("warm-owner"), refreshToken: nil)) }
+      try await waitForRetrySleep(warm7, 1)
+      let pausedCount7 = await fault7.recordCount()
+      var directExcluded = false
+      do {
+        _ = try await warm7.applyCredentials(recordKeyUnits: fx.key,
+          expectedGeneration: fx.record.generation, accessKeyUnits: units("warm-direct"),
+          refreshTokenUnits: nil)
+      } catch PiliAccountShadowTransactionError.operationInProgress { directExcluded = true }
+      try check(directExcluded,
+        "direct entry is excluded with the typed store error during the back-off")
+      try check(await fault7.recordCount() == pausedCount7,
+        "the excluded direct entry publishes nothing")
+      await fault7.resume()
+      try await held7?.value
+      held7 = nil
+      guard let warmOwnerValue = try await warmOwner7?.value,
+            case .record = warmOwnerValue else {
+        throw QueueFixtureError.failed("warm owner expected a record receipt")
+      }
+      warmOwner7 = nil
+      guard case .record = try await warm7.enqueue(.credentials(recordKey: fx.key,
+        generation: fx.record.generation, accessKey: units("warm-follower"),
+        refreshToken: nil)) else {
+        throw QueueFixtureError.failed("follower after the warm owner expected")
+      }
+      try await waitForIdle(warm7)
+      guard let warmSnapshot = try await warm7.loadShadowSnapshot() else {
+        throw QueueFixtureError.failed("missing warm owner snapshot")
+      }
+      try check(warmSnapshot.envelope.records[1].accessKeyUnits?.units ==
+        Array("warm-follower".utf16),
+        "the warm store drains its owner and follower after the back-off")
+      try check(await fault7.recordCount() == pausedCount7 + 3,
+        "the warm owner and its follower publish exactly once each")
+      try await vault7.discardShadow()
+    } catch {
+      await fault7.resume()
+      if let held7 { _ = try? await held7.value }
+      if let warmOwner7 { _ = try? await warmOwner7.value }
+      try? await vault7.discardShadow()
+      throw error
+    }
+
+    // Mixed preflight+publication contention consumes ONE shared allowance:
+    // the cold load retries once, the publication then observes a stale CAS
+    // inside the same attempt budget, and exhaustion throws the typed
+    // publicationConflict; the follower then loads and publishes exactly once.
+    let fault8 = QueueFaultVault()
+    let vault8 = PiliAccountEnvelopeStagingStore(secrets: fault8)
+    let holder8 = PiliAccountEnvelopeTransactionStore(
+      vault: vault8, maxQueueAttempts: 800, retryDelayNanoseconds: 5_000_000)
+    let mixed8 = PiliAccountEnvelopeTransactionStore(
+      vault: vault8, maxQueueAttempts: 2, retryDelayNanoseconds: 500_000_000)
+    var held8: Task<Void, Error>?
+    var mixedWrite8: Task<PiliAccountShadowWriteOutcome, Error>?
+    do {
+      try await vault8.importShadow(fx.codec.encode(fx.base))
+      await fault8.pauseWrite()
+      held8 = Task { _ = try await holder8.enqueue(.credentials(recordKey: fx.key,
+        generation: fx.record.generation, accessKey: units("mixed-holder"), refreshToken: nil)) }
+      await fault8.waitUntilPaused()
+      mixedWrite8 = Task { try await mixed8.enqueue(.credentials(recordKey: fx.key,
+        generation: fx.record.generation, accessKey: units("mixed-must-conflict"),
+        refreshToken: nil)) }
+      try await waitForRetrySleep(mixed8, 1)
+      // Manifest reads after this point: the holder acknowledgement (#1), the
+      // mixed snapshot (#2) and the mixed CAS comparison (#3, paused).
+      await fault8.pauseManifestReadAfter(2)
+      await fault8.resume()
+      try await held8?.value
+      held8 = nil
+      try await waitForManifestReadPaused(fault8)
+      _ = try await holder8.applyCredentials(recordKeyUnits: fx.key,
+        expectedGeneration: fx.record.generation, accessKeyUnits: units("mixed-intervening"),
+        refreshTokenUnits: nil)
+      await fault8.resumeManifestRead()
+      var mixedExhausted = false
+      do {
+        _ = try await mixedWrite8?.value
+        throw QueueFixtureError.failed("mixed contention fabricated a receipt")
+      } catch PiliAccountShadowTransactionError.publicationConflict { mixedExhausted = true }
+      try check(mixedExhausted,
+        "mixed cold-load and stale-CAS contention exhausts the single typed allowance")
+      try check(await mixed8.retrySleepCount == 1,
+        "the cold load and the publication retry share one attempt budget")
+      let mixedExhaustedCount = await fault8.recordCount()
+      try check(mixedExhaustedCount == 3,
+        "the exhausted mixed write publishes nothing")
+      try check(await mixed8.pendingUnresolvedPublication == nil,
+        "the exhausted mixed write leaves no fence")
+      guard case .record = try await mixed8.enqueue(.credentials(recordKey: fx.key,
+        generation: fx.record.generation, accessKey: units("after-mixed-conflict"),
+        refreshToken: nil)) else {
+        throw QueueFixtureError.failed("follower after mixed exhaustion expected")
+      }
+      try await waitForIdle(mixed8)
+      guard let mixedSnapshot = try await mixed8.loadShadowSnapshot() else {
+        throw QueueFixtureError.failed("missing post-mixed snapshot")
+      }
+      let mixedFinalCount = await fault8.recordCount()
+      try check(mixedSnapshot.envelope.records[1].accessKeyUnits?.units ==
+        Array("after-mixed-conflict".utf16) && mixedFinalCount == 4,
+        "the follower after mixed exhaustion publishes exactly once")
+      try await vault8.discardShadow()
+    } catch {
+      await fault8.resume()
+      await fault8.resumeManifestRead()
+      if let held8 { _ = try? await held8.value }
+      if let mixedWrite8 { _ = try? await mixedWrite8.value }
+      try? await vault8.discardShadow()
+      throw error
+    }
+
+    // R28: a delayed cold read captured before a resolution and a newer
+    // unknown must never overwrite the newer exact evidence. The delivery gate
+    // controls the real store installation boundary after the vault fence was
+    // released.
+    let fault9 = QueueFaultVault()
+    let vault9 = PiliAccountEnvelopeStagingStore(secrets: fault9)
+    let stale9 = PiliAccountEnvelopeTransactionStore(
+      vault: vault9, maxQueueAttempts: 800, retryDelayNanoseconds: 5_000_000)
+    let gate9 = DeliveryGate()
+    var staleWrite9: Task<PiliAccountShadowWriteOutcome, Error>?
+    do {
+      try await vault9.importShadow(fx.codec.encode(fx.base))
+      guard let baseline9 = try await vault9.loadShadowSnapshot() else {
+        throw QueueFixtureError.failed("stale delivery baseline missing")
+      }
+      let pendingAttempt9 = UUID()
+      try await fault9.write(
+        try PiliAccountEnvelopeRecoveryJournal.encode(PiliAccountEnvelopeRecoveryJournal(
+          attemptedTransactionID: pendingAttempt9,
+          expectedPreviousTransactionID: baseline9.transactionID,
+          attemptedCandidateSHA256: String(repeating: "f", count: 64),
+          kind: "credentials")),
+        key: PiliAccountEnvelopeRecoveryJournal.journalKey)
+      let hook: @Sendable () async -> Void = { await gate9.pause() }
+      await stale9.setRecoveryReadDeliveryHook(hook)
+      staleWrite9 = Task { try await stale9.enqueue(.credentials(recordKey: fx.key,
+        generation: fx.record.generation, accessKey: units("stale-write"),
+        refreshToken: nil)) }
+      // The cold owner captured journal A and is suspended after its vault
+      // read returned; the vault operation fence is already released.
+      try await waitForDeliveryGate(gate9)
+      var installerFenced = false
+      do {
+        _ = try await stale9.applyCredentials(recordKeyUnits: fx.key,
+          expectedGeneration: fx.record.generation, accessKeyUnits: units("stale-installer"),
+          refreshTokenUnits: nil)
+      } catch PiliAccountShadowTransactionError.unresolvedPublication { installerFenced = true }
+      try check(installerFenced,
+        "the first completed cold read installs the persisted pending fence")
+      guard let armedA = await stale9.pendingUnresolvedPublication,
+            armedA.attemptedTransactionID == pendingAttempt9 else {
+        throw QueueFixtureError.failed("the persisted pending evidence was not installed")
+      }
+      guard let resolvedA = try await stale9.resolveUnresolvedPublication() else {
+        throw QueueFixtureError.failed("the persisted pending evidence did not resolve")
+      }
+      try check(resolvedA.outcome == .attemptNotCommitted &&
+        resolvedA.attemptedTransactionID == pendingAttempt9,
+        "the persisted pending evidence resolves by exact identity before the stale delivery")
+      await fault9.arm(.pointerReadAfter)
+      var bUnknown = false
+      do {
+        _ = try await stale9.applyCredentials(recordKeyUnits: fx.key,
+          expectedGeneration: fx.record.generation, accessKeyUnits: units("stale-b"),
+          refreshTokenUnits: nil)
+        throw QueueFixtureError.failed("newer unknown fabricated a receipt")
+      } catch PiliAccountEnvelopeStagingError.publicationUnknown { bUnknown = true }
+      try check(bUnknown, "the newer unknown publication arms its exact evidence")
+      guard let armedB = await stale9.pendingUnresolvedPublication,
+            armedB.attemptedTransactionID != pendingAttempt9,
+            try await vault9.loadRecoveryJournal()?.attemptedTransactionID ==
+              armedB.attemptedTransactionID else {
+        throw QueueFixtureError.failed("the newer unknown evidence was not persisted exactly")
+      }
+      checks += 1
+      let countBeforeRelease = await fault9.recordCount()
+      await gate9.release()
+      var staleFenced = false
+      do {
+        _ = try await staleWrite9?.value
+        throw QueueFixtureError.failed("the delayed stale cold read fabricated success")
+      } catch PiliAccountShadowTransactionError.unresolvedPublication { staleFenced = true }
+      try check(staleFenced,
+        "the delayed stale cold read hits the newer fence instead of overwriting it")
+      staleWrite9 = nil
+      guard let survivedB = await stale9.pendingUnresolvedPublication else {
+        throw QueueFixtureError.failed("the newer exact evidence was overwritten by the stale read")
+      }
+      try check(survivedB.attemptedTransactionID == armedB.attemptedTransactionID &&
+        survivedB.expectedPreviousTransactionID == armedB.expectedPreviousTransactionID &&
+        survivedB.attemptedCandidateSHA256 == armedB.attemptedCandidateSHA256 &&
+        survivedB.kind == armedB.kind,
+        "the newer exact evidence survives the stale delivery unchanged")
+      try check(await fault9.recordCount() == countBeforeRelease,
+        "the stale delivery and the fenced write publish nothing")
+      guard let resolvedB = try await stale9.resolveUnresolvedPublication() else {
+        throw QueueFixtureError.failed("the newer evidence did not independently resolve")
+      }
+      try check(resolvedB.outcome == .attemptCommitted &&
+        resolvedB.attemptedTransactionID == armedB.attemptedTransactionID,
+        "the newer evidence resolves independently by its own exact identity")
+      guard try await vault9.loadRecoveryJournal() == nil else {
+        throw QueueFixtureError.failed("the newer evidence was not durably cleared")
+      }
+      guard case .record = try await stale9.enqueue(.credentials(recordKey: fx.key,
+        generation: fx.record.generation, accessKey: units("after-stale-b"),
+        refreshToken: nil)) else {
+        throw QueueFixtureError.failed("follower after the stale delivery expected")
+      }
+      try await waitForIdle(stale9)
+      guard let staleSnapshot = try await stale9.loadShadowSnapshot() else {
+        throw QueueFixtureError.failed("missing post-stale snapshot")
+      }
+      let staleFinalCount = await fault9.recordCount()
+      try check(staleSnapshot.envelope.records[1].accessKeyUnits?.units ==
+        Array("after-stale-b".utf16) &&
+        staleSnapshot.envelope.records.count == 3 &&
+        staleFinalCount == 3,
+        "the store continues from the newer resolution and publishes exactly once")
+      await stale9.setRecoveryReadDeliveryHook(nil)
+      try await vault9.discardShadow()
+    } catch {
+      await gate9.release()
+      await stale9.setRecoveryReadDeliveryHook(nil)
+      if let staleWrite9 { _ = try? await staleWrite9.value }
+      try? await vault9.discardShadow()
       throw error
     }
     return checks
@@ -2889,6 +3250,7 @@ private actor QueueFaultVault: PiliAccountSecretStore {
     checks += try await checkQueuedPurposeInterference(fixture)
     checks += try await checkQueueContention(fixture)
     checks += try await checkColdRecoveryContention(fixture)
+    checks += try await checkCoordinatedColdAdmission(fixture)
     print("\(checks) native account envelope queue checks passed")
   }
 }
