@@ -231,6 +231,21 @@ private actor QueueFaultVault: PiliAccountSecretStore {
     throw QueueFixtureError.failed("queue retry back-off did not start")
   }
 
+  /// Like `waitForRetrySleep`, but with a bounded window shorter than the
+  /// configured back-off of the observed store, so a retry event can be
+  /// attributed to a specific cold submission whose predecessor is provably
+  /// still sleeping. Missing the window fails the fixture instead of passing.
+  private static func waitForRetrySleepWithin(
+    _ store: PiliAccountEnvelopeTransactionStore, _ expected: Int, attempts: Int = 30
+  ) async throws {
+    for _ in 0..<attempts {
+      if await store.retrySleepCount >= expected { return }
+      try await Task.sleep(nanoseconds: 5_000_000)
+    }
+    throw QueueFixtureError.failed(
+      "cold preflight retry \(expected) did not arrive inside the attribution window")
+  }
+
   private static func accessText(_ record: PiliAccountLiveMemoryRecord) -> String {
     record.accessKeyUnits.map { String(decoding: $0.units, as: UTF16.self) } ?? "nil"
   }
@@ -734,27 +749,31 @@ private actor QueueFaultVault: PiliAccountSecretStore {
       vault: fenceVault, maxQueueAttempts: 800, retryDelayNanoseconds: 5_000_000)
     let storeB = PiliAccountEnvelopeTransactionStore(
       vault: fenceVault, maxQueueAttempts: 800, retryDelayNanoseconds: 5_000_000)
+    var writeA: Task<PiliAccountShadowWriteOutcome, Error>?
+    var writeB: Task<PiliAccountShadowWriteOutcome, Error>?
     do {
       try await fenceVault.importShadow(fx.codec.encode(fx.base))
       _ = try await storeA.enqueue(.adoptIdentities)
       await fenceFault.pauseWrite()
-      let writeA = Task { try await storeA.enqueue(.credentials(recordKey: fx.key,
+      writeA = Task { try await storeA.enqueue(.credentials(recordKey: fx.key,
         generation: fx.record.generation, accessKey: units("store-a"), refreshToken: nil)) }
       await fenceFault.waitUntilPaused()
-      let writeB = Task { try await storeB.enqueue(.cookieDeleteAll(
+      writeB = Task { try await storeB.enqueue(.cookieDeleteAll(
         recordKey: fx.key2, generation: fx.generation2)) }
-      // R26: storeB is a genuinely cold store. Its recovery preflight reads the
-      // shared vault under the same operation fence as storeA's paused write,
-      // so it must show bounded retry evidence before storeA resumes instead
-      // of leaking operationInProgress out of enqueue.
+      // R26: storeB is a genuinely cold store sharing this vault actor. Its
+      // recovery preflight reads the vault under the same operation fence as
+      // storeA's paused write, so it must show bounded retry evidence before
+      // storeA resumes instead of leaking operationInProgress out of enqueue.
       try await waitForRetrySleep(storeB, 1)
       await fenceFault.resume()
-      guard case .record = try await writeA.value else {
+      guard let writeAValue = try await writeA?.value, case .record = writeAValue else {
         throw QueueFixtureError.failed("storeA contention write expected a record receipt")
       }
-      guard case .record = try await writeB.value else {
+      writeA = nil
+      guard let writeBValue = try await writeB?.value, case .record = writeBValue else {
         throw QueueFixtureError.failed("cold storeB contention write expected a record receipt")
       }
+      writeB = nil
       try await waitForIdle(storeA)
       try await waitForIdle(storeB)
       let reloaded = try await PiliAccountEnvelopeStagingStore(secrets: fenceFault).loadShadow()
@@ -765,6 +784,9 @@ private actor QueueFaultVault: PiliAccountSecretStore {
         "the cold contention preflight publishes exactly one record per admitted write")
       try await fenceVault.discardShadow()
     } catch {
+      await fenceFault.resume()
+      if let writeA { _ = try? await writeA.value }
+      if let writeB { _ = try? await writeB.value }
       try? await fenceVault.discardShadow()
       throw error
     }
@@ -775,21 +797,23 @@ private actor QueueFaultVault: PiliAccountSecretStore {
     let queuedStore = PiliAccountEnvelopeTransactionStore(
       vault: vault1, maxQueueAttempts: 200, retryDelayNanoseconds: 5_000_000)
     let interveningStore = PiliAccountEnvelopeTransactionStore(vault: vault2)
+    var queued: Task<PiliAccountShadowWriteOutcome, Error>?
     do {
       try await vault1.importShadow(fx.codec.encode(fx.base))
       _ = try await queuedStore.enqueue(.adoptIdentities)
       await casFault.pauseManifestReadAfter(1)
-      let queued = Task { try await queuedStore.enqueue(.cookieDeleteAll(
+      queued = Task { try await queuedStore.enqueue(.cookieDeleteAll(
         recordKey: fx.key, generation: fx.record.generation)) }
       await casFault.waitUntilManifestReadPaused()
       _ = try await interveningStore.applyCredentials(recordKeyUnits: fx.key,
         expectedGeneration: fx.record.generation, accessKeyUnits: units("intervening"),
         refreshTokenUnits: nil)
       await casFault.resumeManifestRead()
-      let queuedOutcome = try await queued.value
-      guard case .record(let queuedReceipt) = queuedOutcome else {
+      guard let queuedOutcome = try await queued?.value,
+            case .record(let queuedReceipt) = queuedOutcome else {
         throw QueueFixtureError.failed("CAS-retried outcome is not a record receipt")
       }
+      queued = nil
       try await waitForIdle(queuedStore)
       let final = try await PiliAccountEnvelopeStagingStore(secrets: casFault).loadShadow()
       try check(final?.records[1].jar == fx.cleared &&
@@ -802,16 +826,22 @@ private actor QueueFaultVault: PiliAccountSecretStore {
         "the retried queued transform re-read the fresh snapshot")
       try await vault1.discardShadow()
     } catch {
+      await casFault.resumeManifestRead()
+      if let queued { _ = try? await queued.value }
       try? await vault1.discardShadow()
       throw error
     }
     return checks
   }
 
-  /// R26: a cold recovery preflight against a legitimately busy shared vault
-  /// is retried inside the same bounded store budget with typed exhaustion,
-  /// while unknown/corrupt journal states stay fail-closed and are never
-  /// retried into a clean namespace.
+  /// R26/R27: a cold recovery preflight against a legitimately busy shared
+  /// vault actor is retried inside the same configured bounded budget with
+  /// typed exhaustion, while unknown/corrupt journal states stay fail-closed
+  /// and are never retried into a clean namespace. Contention phases share ONE
+  /// live vault actor (the documented one-composer-per-namespace contract);
+  /// fresh-vault/client reopen is exercised separately without contention
+  /// expectations, and every injected paused task is resumed and settled on
+  /// failure as well as success.
   private static func checkColdRecoveryContention(_ fx: QueueFixture) async throws -> Int {
     var checks = 0
     func check(_ condition: Bool, _ label: String) throws {
@@ -819,44 +849,82 @@ private actor QueueFaultVault: PiliAccountSecretStore {
       checks += 1
     }
 
-    // Concurrent same-store first use: two cold enqueues on one fresh store
-    // while a third shared-vault publisher is paused. Both must retry, then
-    // succeed with both effects and exactly one publication each.
+    // Concurrent same-store first use: two cold same-key submissions on one
+    // fresh store while a third shared-vault publisher is paused. Both
+    // submissions must provably reach the preflight (staged attribution
+    // barriers; the second inside a window shorter than the first's
+    // configured back-off), then serialize in admission order with the later
+    // candidate carrying both effects and exactly one publication each.
     let fault1 = QueueFaultVault()
     let vault1 = PiliAccountEnvelopeStagingStore(secrets: fault1)
     let holder1 = PiliAccountEnvelopeTransactionStore(
       vault: vault1, maxQueueAttempts: 800, retryDelayNanoseconds: 5_000_000)
     let cold1 = PiliAccountEnvelopeTransactionStore(
-      vault: vault1, maxQueueAttempts: 800, retryDelayNanoseconds: 5_000_000)
+      vault: vault1, maxQueueAttempts: 800, retryDelayNanoseconds: 400_000_000)
+    var held1: Task<Void, Error>?
+    var coldA: Task<PiliAccountShadowWriteOutcome, Error>?
+    var coldB: Task<PiliAccountShadowWriteOutcome, Error>?
     do {
       try await vault1.importShadow(fx.codec.encode(fx.base))
       await fault1.pauseWrite()
-      let holderWrite = Task { try await holder1.enqueue(.credentials(recordKey: fx.key,
+      held1 = Task { _ = try await holder1.enqueue(.credentials(recordKey: fx.key,
         generation: fx.record.generation, accessKey: units("cold-holder"), refreshToken: nil)) }
       await fault1.waitUntilPaused()
-      let coldA = Task { try await cold1.enqueue(.credentials(recordKey: fx.key,
-        generation: fx.record.generation, accessKey: units("cold-a"), refreshToken: nil)) }
-      let coldB = Task { try await cold1.enqueue(.cookieDeleteAll(
-        recordKey: fx.key2, generation: fx.generation2)) }
+      coldA = Task { try await cold1.enqueue(.cookieDeleteAll(
+        recordKey: fx.key, generation: fx.record.generation)) }
       try await waitForRetrySleep(cold1, 1)
+      coldB = Task { try await cold1.enqueue(.credentials(recordKey: fx.key,
+        generation: fx.record.generation, accessKey: units("cold-b"), refreshToken: nil)) }
+      // The second retry event must arrive inside the attribution window: the
+      // first submission is already in its 400 ms back-off, so only the second
+      // cold submission can produce it.
+      try await waitForRetrySleepWithin(cold1, 2)
       await fault1.resume()
-      guard case .record = try await holderWrite.value else {
-        throw QueueFixtureError.failed("cold-holder write expected a record receipt")
+      try await held1?.value
+      held1 = nil
+      guard let coldAValue = try await coldA?.value,
+            case .record(let receiptA) = coldAValue else {
+        throw QueueFixtureError.failed("first cold submission expected a record receipt")
       }
-      guard case .record = try await coldA.value, case .record = try await coldB.value else {
-        throw QueueFixtureError.failed("concurrent cold first-use writes expected record receipts")
+      coldA = nil
+      guard let coldBValue = try await coldB?.value,
+            case .record(let receiptB) = coldBValue else {
+        throw QueueFixtureError.failed("second cold submission expected a record receipt")
       }
+      coldB = nil
       try await waitForIdle(cold1)
       guard let snapshot1 = try await cold1.loadShadowSnapshot() else {
         throw QueueFixtureError.failed("missing concurrent cold first-use snapshot")
       }
-      try check(snapshot1.envelope.records[1].accessKeyUnits?.units == Array("cold-a".utf16) &&
-        snapshot1.envelope.records[2].jar == fx.cleared,
-        "concurrent cold first use keeps both effects under shared-vault contention")
+      try check(receiptA.transactionID != receiptB.transactionID,
+        "the two cold same-key submissions publish distinct immutable candidates")
+      let lastReceipt = snapshot1.transactionID == receiptA.transactionID ? receiptA : receiptB
+      let firstReceipt = snapshot1.transactionID == receiptA.transactionID ? receiptB : receiptA
+      try check(lastReceipt.transactionID == snapshot1.transactionID &&
+        firstReceipt.transactionID != lastReceipt.transactionID,
+        "the final pointer names the later of the two cold same-key publications")
+      let lastCandidate = try await vault1.loadPublishedCandidate(
+        transactionID: lastReceipt.transactionID)
+      let firstCandidate = try await vault1.loadPublishedCandidate(
+        transactionID: firstReceipt.transactionID)
+      try check(accessText(lastCandidate.records[1]) == "cold-b" &&
+        lastCandidate.records[1].jar == fx.cleared,
+        "the later cold publisher built on the earlier one and carries both effects")
+      let firstState = firstCandidate.records[1]
+      try check((accessText(firstState) == "cold-holder" && firstState.jar == fx.cleared) ||
+        (accessText(firstState) == "cold-b" && firstState.jar == fx.record.jar),
+        "the earlier cold publisher's candidate carries exactly one of the two effects")
+      try check(snapshot1.envelope.records[1].accessKeyUnits?.units == Array("cold-b".utf16) &&
+        snapshot1.envelope.records[1].jar == fx.cleared,
+        "concurrent cold same-key serialization loses no effect")
       try check(await fault1.recordCount() == 4,
         "concurrent cold first use publishes exactly one record per admitted write")
       try await vault1.discardShadow()
     } catch {
+      await fault1.resume()
+      if let held1 { _ = try? await held1.value }
+      if let coldA { _ = try? await coldA.value }
+      if let coldB { _ = try? await coldB.value }
       try? await vault1.discardShadow()
       throw error
     }
@@ -871,10 +939,11 @@ private actor QueueFaultVault: PiliAccountSecretStore {
       vault: vault2, maxQueueAttempts: 800, retryDelayNanoseconds: 5_000_000)
     let bound2 = PiliAccountEnvelopeTransactionStore(
       vault: vault2, maxQueueAttempts: 3, retryDelayNanoseconds: 1_000_000)
+    var held2: Task<Void, Error>?
     do {
       try await vault2.importShadow(fx.codec.encode(fx.base))
       await fault2.pauseWrite()
-      let holderWrite2 = Task { try await holder2.enqueue(.credentials(recordKey: fx.key,
+      held2 = Task { _ = try await holder2.enqueue(.credentials(recordKey: fx.key,
         generation: fx.record.generation, accessKey: units("bound-holder"), refreshToken: nil)) }
       await fault2.waitUntilPaused()
       var bounded = false
@@ -887,15 +956,14 @@ private actor QueueFaultVault: PiliAccountSecretStore {
       try check(bounded,
         "an exhausted cold recovery preflight fails closed with the typed bounded error")
       try check(await bound2.retrySleepCount == 2,
-        "the cold recovery preflight consumes exactly the shared bounded attempts")
+        "the cold recovery preflight consumes exactly its configured bounded attempts")
       try check(await fault2.recordCount() == 1,
         "the exhausted cold recovery preflight publishes nothing")
       try check(await bound2.pendingUnresolvedPublication == nil,
         "the exhausted cold recovery preflight leaves no fence")
       await fault2.resume()
-      guard case .record = try await holderWrite2.value else {
-        throw QueueFixtureError.failed("bound-holder write expected a record receipt")
-      }
+      try await held2?.value
+      held2 = nil
       guard case .record = try await bound2.enqueue(.credentials(recordKey: fx.key,
         generation: fx.record.generation, accessKey: units("cold-after-bound"),
         refreshToken: nil)) else {
@@ -912,6 +980,8 @@ private actor QueueFaultVault: PiliAccountSecretStore {
         "the follower after cold preflight exhaustion publishes exactly once")
       try await vault2.discardShadow()
     } catch {
+      await fault2.resume()
+      if let held2 { _ = try? await held2.value }
       try? await vault2.discardShadow()
       throw error
     }
@@ -924,13 +994,15 @@ private actor QueueFaultVault: PiliAccountSecretStore {
       vault: vault3, maxQueueAttempts: 800, retryDelayNanoseconds: 5_000_000)
     let cancelled3 = PiliAccountEnvelopeTransactionStore(
       vault: vault3, maxQueueAttempts: 800, retryDelayNanoseconds: 20_000_000)
+    var held3: Task<Void, Error>?
+    var cancelledWrite: Task<PiliAccountShadowWriteOutcome, Error>?
     do {
       try await vault3.importShadow(fx.codec.encode(fx.base))
       await fault3.pauseWrite()
-      let holderWrite3 = Task { try await holder3.enqueue(.credentials(recordKey: fx.key,
+      held3 = Task { _ = try await holder3.enqueue(.credentials(recordKey: fx.key,
         generation: fx.record.generation, accessKey: units("cancel-holder"), refreshToken: nil)) }
       await fault3.waitUntilPaused()
-      let cancelledWrite = Task { try await cancelled3.enqueue(.credentials(recordKey: fx.key,
+      cancelledWrite = Task { try await cancelled3.enqueue(.credentials(recordKey: fx.key,
         generation: fx.record.generation, accessKey: units("must-not-publish-cancelled"),
         refreshToken: nil)) }
       try await waitForRetrySleep(cancelled3, 1)
@@ -947,9 +1019,8 @@ private actor QueueFaultVault: PiliAccountSecretStore {
       try check(await cancelled3.pendingWriteCount == 0 && idleAfterCancel,
         "a cancelled cold recovery preflight never occupies the FIFO")
       await fault3.resume()
-      guard case .record = try await holderWrite3.value else {
-        throw QueueFixtureError.failed("cancel-holder write expected a record receipt")
-      }
+      try await held3?.value
+      held3 = nil
       guard case .record = try await cancelled3.enqueue(.credentials(recordKey: fx.key,
         generation: fx.record.generation, accessKey: units("after-cold-cancel"),
         refreshToken: nil)) else {
@@ -966,16 +1037,28 @@ private actor QueueFaultVault: PiliAccountSecretStore {
         "the write after cold preflight cancellation publishes exactly once")
       try await vault3.discardShadow()
     } catch {
+      await fault3.resume()
+      if let held3 { _ = try? await held3.value }
+      if let cancelledWrite {
+        cancelledWrite.cancel()
+        _ = try? await cancelledWrite.value
+      }
       try? await vault3.discardShadow()
       throw error
     }
 
-    // Pending journal on a cold reopen with contention: the preflight retries
-    // the definite shared-vault contention, then arms the exact persisted
-    // fence; the journal survives and the ambiguous pointer is released only
-    // by the explicit acknowledgment without replay.
+    // Pending journal on a SHARED vault with real contention: the paused raw
+    // publisher and the cold transaction store use the same vault actor, as
+    // the one-composer-per-namespace contract requires, so the cold preflight
+    // genuinely observes the operation fence, retries, then arms the exact
+    // persisted fence. A separate fresh vault reopens the same pending
+    // evidence after the publisher is settled (no contention expectation);
+    // the ambiguous pointer is released only by the explicit acknowledgment
+    // without replay.
     let fault4 = QueueFaultVault()
     let vault4 = PiliAccountEnvelopeStagingStore(secrets: fault4)
+    var held4: Task<Void, Error>?
+    var contendedWrite4: Task<PiliAccountShadowWriteOutcome, Error>?
     do {
       try await vault4.importShadow(fx.codec.encode(fx.base))
       guard let baseline4 = try await vault4.loadShadowSnapshot() else {
@@ -990,86 +1073,109 @@ private actor QueueFaultVault: PiliAccountSecretStore {
           kind: "credentials")),
         key: PiliAccountEnvelopeRecoveryJournal.journalKey)
       await fault4.pauseWrite()
-      let rawHolder4 = Task { try await vault4.importShadow(fx.codec.encode(fx.base)) }
+      held4 = Task { _ = try await vault4.importShadow(fx.codec.encode(fx.base)) }
       await fault4.waitUntilPaused()
-      let reopenedVault4 = PiliAccountEnvelopeStagingStore(secrets: fault4)
-      let reopened4 = PiliAccountEnvelopeTransactionStore(
-        vault: reopenedVault4, maxQueueAttempts: 800, retryDelayNanoseconds: 5_000_000)
-      let reopenedWrite4 = Task { try await reopened4.enqueue(.credentials(recordKey: fx.key,
+      let contended4 = PiliAccountEnvelopeTransactionStore(
+        vault: vault4, maxQueueAttempts: 800, retryDelayNanoseconds: 5_000_000)
+      contendedWrite4 = Task { try await contended4.enqueue(.credentials(recordKey: fx.key,
         generation: fx.record.generation, accessKey: units("must-not-cross-reopened"),
         refreshToken: nil)) }
-      try await waitForRetrySleep(reopened4, 1)
+      try await waitForRetrySleep(contended4, 1)
       await fault4.resume()
-      _ = try await rawHolder4.value
+      try await held4?.value
+      held4 = nil
       var fencedAfterContention = false
       do {
-        _ = try await reopenedWrite4.value
+        _ = try await contendedWrite4?.value
       } catch PiliAccountShadowTransactionError.unresolvedPublication {
         fencedAfterContention = true
       }
       try check(fencedAfterContention,
-        "a reopened pending journal still fences after cold-preflight contention")
-      guard try await reopenedVault4.loadRecoveryJournal() != nil else {
+        "a shared-vault cold preflight still fences on the reopened pending journal")
+      guard try await vault4.loadRecoveryJournal() != nil else {
         throw QueueFixtureError.failed("the reopened pending journal was lost during contention")
+      }
+      // Fresh-vault client reopen after the publisher settled: the same
+      // persisted evidence fences a genuinely new vault actor too, without
+      // any contention expectation on this leg.
+      let freshVault4 = PiliAccountEnvelopeStagingStore(secrets: fault4)
+      let freshReopen4 = PiliAccountEnvelopeTransactionStore(
+        vault: freshVault4, maxQueueAttempts: 800, retryDelayNanoseconds: 5_000_000)
+      var freshFenced4 = false
+      do {
+        _ = try await freshReopen4.enqueue(.credentials(recordKey: fx.key,
+          generation: fx.record.generation, accessKey: units("must-not-cross-fresh"),
+          refreshToken: nil))
+      } catch PiliAccountShadowTransactionError.unresolvedPublication { freshFenced4 = true }
+      try check(freshFenced4,
+        "a fresh client vault reopens the same pending evidence and fences")
+      guard try await freshVault4.loadRecoveryJournal() != nil else {
+        throw QueueFixtureError.failed("the fresh-vault reopen lost the pending journal")
       }
       var blocked4 = false
       do {
-        _ = try await reopened4.resolveUnresolvedPublication()
+        _ = try await contended4.resolveUnresolvedPublication()
       } catch PiliAccountShadowTransactionError.ambiguousRecovery { blocked4 = true }
       try check(blocked4,
         "the reopened ambiguous journal keeps its evidence until acknowledged")
-      guard let acknowledged4 = try await reopened4.resolveUnresolvedPublication(
+      guard let acknowledged4 = try await contended4.resolveUnresolvedPublication(
         allowAmbiguous: true) else {
         throw QueueFixtureError.failed("reopened pending journal left no acknowledged resolution")
       }
       try check(acknowledged4.outcome == .ambiguousObservedCandidate &&
         acknowledged4.attemptedTransactionID == pendingAttempt4,
         "the reopened journal resolves only as an explicit acknowledged ambiguity")
-      guard try await reopenedVault4.loadRecoveryJournal() == nil else {
+      guard try await vault4.loadRecoveryJournal() == nil else {
         throw QueueFixtureError.failed("the acknowledged reopened journal was not cleared")
       }
-      guard case .record = try await reopened4.enqueue(.credentials(recordKey: fx.key,
+      guard case .record = try await contended4.enqueue(.credentials(recordKey: fx.key,
         generation: fx.record.generation, accessKey: units("after-reopened-fence"),
         refreshToken: nil)) else {
         throw QueueFixtureError.failed("follower after acknowledged reopened fence expected")
       }
-      try await waitForIdle(reopened4)
+      try await waitForIdle(contended4)
       try check(await fault4.recordCount() == 3,
         "the acknowledged reopened journal publishes exactly the follower")
       try await vault4.discardShadow()
     } catch {
+      await fault4.resume()
+      if let held4 { _ = try? await held4.value }
+      if let contendedWrite4 { _ = try? await contendedWrite4.value }
       try? await vault4.discardShadow()
       throw error
     }
 
-    // Corrupt journal on a cold reopen with contention: after the definite
-    // contention clears, the strict decode fails closed; the preflight never
-    // retries a corrupt artifact into a clean namespace and publishes nothing.
+    // Corrupt journal on a SHARED vault with real contention: after the
+    // definite contention clears, the strict decode fails closed; the
+    // preflight never retries a corrupt artifact into a clean namespace and
+    // publishes nothing.
     let fault5 = QueueFaultVault()
     let vault5 = PiliAccountEnvelopeStagingStore(secrets: fault5)
+    var held5: Task<Void, Error>?
+    var corruptWrite5: Task<PiliAccountShadowWriteOutcome, Error>?
     do {
       try await vault5.importShadow(fx.codec.encode(fx.base))
       try await fault5.write(Data("{\"not\":\"a journal\"}".utf8),
         key: PiliAccountEnvelopeRecoveryJournal.journalKey)
       await fault5.pauseWrite()
-      let rawHolder5 = Task { try await vault5.importShadow(fx.codec.encode(fx.base)) }
+      held5 = Task { _ = try await vault5.importShadow(fx.codec.encode(fx.base)) }
       await fault5.waitUntilPaused()
       let corruptStore5 = PiliAccountEnvelopeTransactionStore(
-        vault: PiliAccountEnvelopeStagingStore(secrets: fault5),
-        maxQueueAttempts: 800, retryDelayNanoseconds: 5_000_000)
-      let corruptWrite5 = Task { try await corruptStore5.enqueue(.credentials(recordKey: fx.key,
+        vault: vault5, maxQueueAttempts: 800, retryDelayNanoseconds: 5_000_000)
+      corruptWrite5 = Task { try await corruptStore5.enqueue(.credentials(recordKey: fx.key,
         generation: fx.record.generation, accessKey: units("must-not-publish-corrupt"),
         refreshToken: nil)) }
       try await waitForRetrySleep(corruptStore5, 1)
       await fault5.resume()
-      _ = try await rawHolder5.value
+      try await held5?.value
+      held5 = nil
       var corruptSurfaced = false
       do {
-        _ = try await corruptWrite5.value
+        _ = try await corruptWrite5?.value
         throw QueueFixtureError.failed("corrupt journal preflight fabricated success")
       } catch PiliAccountEnvelopeStagingError.invalidRecoveryJournal { corruptSurfaced = true }
       try check(corruptSurfaced,
-        "a corrupt journal fails closed after cold-preflight contention")
+        "a corrupt journal fails closed after shared-vault cold-preflight contention")
       try check(await fault5.recordCount() == 2,
         "the corrupt journal preflight publishes nothing")
       guard try await fault5.read(PiliAccountEnvelopeRecoveryJournal.journalKey) != nil else {
@@ -1078,6 +1184,9 @@ private actor QueueFaultVault: PiliAccountSecretStore {
       try await fault5.remove(PiliAccountEnvelopeRecoveryJournal.journalKey)
       try await vault5.discardShadow()
     } catch {
+      await fault5.resume()
+      if let held5 { _ = try? await held5.value }
+      if let corruptWrite5 { _ = try? await corruptWrite5.value }
       try? await vault5.discardShadow()
       throw error
     }
