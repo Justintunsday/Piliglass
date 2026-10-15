@@ -1613,12 +1613,13 @@ private actor QueueFaultVault: PiliAccountSecretStore {
       } catch PiliAccountShadowTransactionError.operationInProgress { deleteRejected = true }
       try check(deleteRejected,
         "a direct delete outsider is rejected during the cold execution window")
+      let windowReadsAfter = await fault10.journalReadCount()
+      try check(windowReadsAfter == windowReads,
+        "the rejected outsiders perform zero journal IO")
       let windowCountAfter = await fault10.recordCount()
       let windowJournal = try await vault10.loadRecoveryJournal()
-      let windowReadsAfter = await fault10.journalReadCount()
-      try check(windowCountAfter == windowCount && windowJournal == nil &&
-        windowReadsAfter == windowReads,
-        "the rejected outsiders perform no cold journal IO and leave no effects")
+      try check(windowCountAfter == windowCount && windowJournal == nil,
+        "the rejected outsiders leave no candidate and no journal")
       guard let windowPointer = try await vault10.loadShadowSnapshot(),
             windowPointer.transactionID == baseline10.transactionID else {
         throw QueueFixtureError.failed("the rejected outsiders moved the pointer")
@@ -1660,6 +1661,73 @@ private actor QueueFaultVault: PiliAccountSecretStore {
       if let coldOwner10 { _ = try? await coldOwner10.value }
       if let coldFollower10 { _ = try? await coldFollower10.value }
       try? await vault10.discardShadow()
+      throw error
+    }
+
+    // R33: a fresh competing store's direct primitives must fail fast with the
+    // established immediate vault operationInProgress while another store's
+    // publication holds the shared vault, never a queue-style retry or a new
+    // terminal error. The preserved transaction driver keeps its original
+    // catch; this block adds the multi-shape zero-effect and follower recovery
+    // evidence without touching that contract.
+    let fault11 = QueueFaultVault()
+    let vault11 = PiliAccountEnvelopeStagingStore(secrets: fault11)
+    let publisher11 = PiliAccountEnvelopeTransactionStore(
+      vault: vault11, maxQueueAttempts: 800, retryDelayNanoseconds: 5_000_000)
+    var held11: Task<Void, Error>?
+    do {
+      try await vault11.importShadow(fx.codec.encode(fx.base))
+      await fault11.pauseWrite()
+      held11 = Task { _ = try await publisher11.enqueue(.credentials(recordKey: fx.key,
+        generation: fx.record.generation, accessKey: units("fail-fast-publisher"),
+        refreshToken: nil)) }
+      await fault11.waitUntilPaused()
+      let competing11 = PiliAccountEnvelopeTransactionStore(
+        vault: vault11, maxQueueAttempts: 40, retryDelayNanoseconds: 5_000_000)
+      let pausedCount11 = await fault11.recordCount()
+      var credentialsFastFailed = false
+      do {
+        _ = try await competing11.applyCredentials(recordKeyUnits: fx.key,
+          expectedGeneration: fx.record.generation,
+          accessKeyUnits: units("must-not-publish-fast"), refreshTokenUnits: nil)
+        throw QueueFixtureError.failed("competing credentials admitted while the vault was held")
+      } catch PiliAccountEnvelopeStagingError.operationInProgress { credentialsFastFailed = true }
+      try check(credentialsFastFailed,
+        "a cold competing store fails fast with the immediate vault operationInProgress")
+      var deleteFastFailed = false
+      do {
+        _ = try await competing11.applyDelete(recordKeyUnits: fx.key,
+          expectedGeneration: fx.record.generation)
+        throw QueueFixtureError.failed("competing delete admitted while the vault was held")
+      } catch PiliAccountEnvelopeStagingError.operationInProgress { deleteFastFailed = true }
+      try check(deleteFastFailed,
+        "a second public shape fails fast with the same established staging error")
+      try check(await competing11.retrySleepCount == 0,
+        "the direct fail-fast path acquires no queue retry allowance")
+      let pausedCountAfter11 = await fault11.recordCount()
+      try check(pausedCountAfter11 == pausedCount11,
+        "the rejected direct primitives publish nothing")
+      await fault11.resume()
+      try await held11?.value
+      held11 = nil
+      guard case .record = try await competing11.enqueue(.credentials(recordKey: fx.key,
+        generation: fx.record.generation, accessKey: units("fail-fast-follower"),
+        refreshToken: nil)) else {
+        throw QueueFixtureError.failed("competing follower recovery expected")
+      }
+      try await waitForIdle(competing11)
+      guard let restored11 = try await competing11.loadShadowSnapshot() else {
+        throw QueueFixtureError.failed("missing fail-fast recovery snapshot")
+      }
+      let restoredCount11 = await fault11.recordCount()
+      try check(restored11.envelope.records[1].accessKeyUnits?.units ==
+        Array("fail-fast-follower".utf16) && restoredCount11 == 3,
+        "the competing store recovers with a follower exactly once after the contention")
+      try await vault11.discardShadow()
+    } catch {
+      await fault11.resume()
+      if let held11 { _ = try? await held11.value }
+      try? await vault11.discardShadow()
       throw error
     }
     return checks
