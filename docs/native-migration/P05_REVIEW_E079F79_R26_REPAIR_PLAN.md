@@ -94,6 +94,13 @@ R23–R25 修复被认定为实质性正面（成功 nil 读 ≠ 读错误；默
   （先单任务 retry#1，再在 < back-off 窗口内等 retry#2）；不声称 store 保证冷态并发
   提交顺序，也不声称"同一数值配置 = 一份共享 attempt 预算"。
 
+## R28–R30 修正（协调化，详见 `P05_REVIEW_48A7FCC_R28_R30_REPAIR_PLAN.md`）
+
+- queued write 的冷加载不再前置：FIFO 预留先行，冷加载+发布在同一 `executeQueuedWrite`
+  循环内共享一份配置配额；冷加载 wrapper 只保留给只读恢复/直接 primitives。
+- 冷读在 await 后重验证（`recoveryLoaded`/`unresolved`），陈旧延迟结果绝不覆盖更新
+  evidence；R30 测试改为 owner+waiter 身份归因 barrier，删除名义窗口 helper。
+
 ## 验收
 
 - 小 commit/push；先 reconcile 在途 29b0342 release38762493416/preview38762507837

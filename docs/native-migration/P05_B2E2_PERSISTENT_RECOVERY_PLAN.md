@@ -81,15 +81,13 @@ recovery 与 identity-consumer 计划**，并把 tagged-reader 计划中未执�
   adopt/install/delete/import/buvid）与 `resolveUnresolvedPublication()` 先加载一次：
   journal 存在且内存 fence 为空 → 以 journal 字段 arm `unresolved`（token/digest/kind
   与 journal 完全一致）；损坏 → 抛错（fail closed）；已加载标记避免重复 IO。
-- 冷加载的 vault 读与发布共用 operation fence：合法共享 vault 忙时必须按 store 既有配置
-  的有界 attempt/back-off 数值与同一 typed 耗尽策略重试（只重试
-  `PiliAccountEnvelopeStagingError.operationInProgress`，耗尽 → 类型化
-  `publicationConflict`；不新增 loop、不加长超时），绝不把裸 `operationInProgress`
-  外泄、也不把 unknown/corrupt journal 重试成干净命名空间（R26/R27，见
-  `P05_REVIEW_E079F79_R26_REPAIR_PLAN.md`、`P05_REVIEW_9400926_R27_REPAIR_PLAN.md`）。
-  精确界限：冷加载重试与队列发布重试各自从头计数，**不是**一份共享 attempt 预算；冷加载
-  对单槽 journal 是幂等重读（不做 single-flight 声明）；冷态并发同 key 提交按到达
-  admission 的顺序串行（fixture 用显式 barrier 构造），不声称 store 保证其提交顺序。
+- R28–R30 协调化：queued write 的冷加载**在 FIFO 预留之后、`executeQueuedWrite` 的单一
+  重试循环内**执行（与发布重试共享同一份配置 attempt/back-off 配额，不存在第二份配额）；
+  等待中的冷提交计入 `maxPendingWrites`、保持 enqueue 进入顺序、retry back-off 期间直接
+  入口仍被排除。`loadRecoveryIfNeeded` 有界包装只保留给只读恢复入口与直接 primitives
+  （独立政策）。冷读结果在 await 之后做 post-await 重验证（`recoveryLoaded`/`unresolved`），
+  延迟的陈旧结果绝不覆盖更新的 fence 或复活已清除状态（R28 seam + 回归）。见
+  `P05_REVIEW_48A7FCC_R28_R30_REPAIR_PLAN.md`。
 - 新增只读 `func loadPersistentRecovery() async throws -> PiliAccountShadowUnresolvedPublication?`
   供测试/恢复调用方显式查询（不写、不清）。
 - `pendingUnresolvedPublication` 保持 sync 观测口（文档注明：重建后需先经 async 加载）。
