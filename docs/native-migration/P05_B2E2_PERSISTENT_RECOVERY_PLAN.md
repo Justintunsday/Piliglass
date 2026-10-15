@@ -44,11 +44,16 @@ recovery 与 identity-consumer 计划**，并把 tagged-reader 计划中未执�
    无 journal 副作用）。
 2. `Task.checkCancellation()`。
 3. id/recordKey、碰撞校验（`b7f6692`）。
-4. **写 journal 并读回验证**（在任何候选/指针写入前）：
-   - 写入抛错 → 读回：确无 journal → 抛原始错误（确定未发布，无 fence）；
-     journal 已提交 → 尝试清除并验证：清除成功 → 抛原始错误；仍存在/状态不确定 →
-     抛 `unresolvedRecovery`（journal 即证据，fail closed）。
-   - 读回不匹配/读取失败 → 尝试清除；无法确认清除 → `unresolvedRecovery`。
+4. **写 journal 并读回验证**（在任何候选/指针写入前；R23 修复后验证读永不 `try?` 折为
+   nil）：
+   - 写入抛错 → 读回：读失败 → **保留既有 journal 原样**、抛 `unresolvedRecovery`（绝不
+     把读失败当"未提交"）；确无 journal（成功读到 nil）→ 抛原始错误（确定未发布，无
+     fence）；journal 已提交 → 尝试清除并逐字节验证：清除成功（成功读到 nil）→ 抛原始
+     错误；仍存在/读取不可验证 → `unresolvedRecovery` + 保留 evidence。
+   - 写成功但读回失败 → **不删除** journal，抛 `unresolvedRecovery`；journal 保留供
+     arm/resolve。
+   - 写成功但读回不匹配 → 尝试清除 + 严格复核：确认 nil → `verificationFailed`；
+     无法确认 → `unresolvedRecovery`。
 5. 候选 record + descriptor 写读验证（既有；失败清理按既有语义）。
 6. 指针写 + ack 读：
    - observed == nextBytes（提交被证实）→ **清除 journal 并验证**；清除成功 → 返回
@@ -58,10 +63,15 @@ recovery 与 identity-consumer 计划**，并把 tagged-reader 计划中未执�
      - observed == previous（确定未发布）→ 清除 journal（尽力＋验证）→ 抛原始写错误；
        清除失败 → journal 保留 + `unresolvedRecovery`。
      - 其余 → `publicationUnknown`（journal 保留）。
-7. **vault 前置检查**：任何带 journal 的 namespace 上，新的 `importShadow` 先读 journal，
-   存在即抛 `unresolvedRecovery`（另一 store/另一调用者也不能越过）；只允许
+7. **vault 前置检查（精确界限）**：只有 correlated publication（caller 提供
+   `candidateTransactionID` + `recoveryKind`）才先读 journal：存在即抛
+   `unresolvedRecovery`（另一 store/另一调用者也不能越过）；清除只允许
    `clearRecoveryJournal(expectedAttemptedTransactionID:)`（读当前 journal、token 匹配、
-   remove + 验证；nil 为 no-op；token 不匹配 → `staleRecoveryJournal`）。
+   remove + 验证；nil 为 no-op；token 不匹配 → `staleRecoveryJournal`）。raw 1-arg
+   `importShadow` 仍是显式 out-of-contract primitive（不冻结、不拦截；与 pending journal
+   交错只产生诚实的 foreign-pointer ambiguity，绝不冒充 committed）。除 correlated
+   publication 之外，不得声称"namespace 全部 writer 已冻结"或 production single-writer
+   composition——那属于 Block3 的执行/约束。
 8. Resolution 清除顺序：读回分类 → **durable clear journal** → 内存 `unresolved = nil`。
    取消/失败/stale 一律保持 journal + 内存 fence。
 
@@ -110,8 +120,16 @@ recovery 与 identity-consumer 计划**，并把 tagged-reader 计划中未执�
   `unresolvedPublication`；resolve → notCommitted → journal 清除 → follower 发布。
   write-after+unreadable-ack（已提交）同型 → committed；raw 孤儿不等于 committed。
 - 崩溃点：journal 后、候选后、指针后、ack 后、清除前各自重开 → 分类仅由
-  pointer==attempted/expected/foreign 决定；foreign 指针 → ambiguous，保留 journal 直到
-  可判定（或按策略记录 ambiguous 并清除——见下"foreign policy"）。
+  pointer==attempted/expected/foreign 决定；foreign 指针 → 默认 `ambiguousRecovery`
+  保留 journal+fence，只有显式 `allowAmbiguous:true` 确认才清除（见下"foreign policy"）。
+- 真实 Keychain（R25）：隔离 namespace 中直接物化 journal-only / journal+保留候选 /
+  journal+已提交指针三个崩溃前缀，由 fresh secret-store/vault/store 实例（同 namespace
+  client reopen，明确非进程 kill 模拟）读回、分类、durable clear；保留候选字节不早删、
+  committed 不重放、follower 精确一次。
+- journal 验证读相位故障（R23）：`failJournalReadAfter(skip,failures)` 跳过入口
+  pre-check 只打验证读/其后读回；写成功读回失败 → `unresolvedRecovery` + journal 保留 +
+  精确 arm；写失败读回失败 → `unresolvedRecovery`（绝不原始错误冒充确定）；持续读失败
+  恢复后由 vault pre-check backstop 继续 fail closed。
 - journal 写/清除故障注入（fault vault 增加 journal key 故障）：写前失败（确定无
   journal）、写后错误（清除成功→原始错误；清除失败→unresolvedRecovery）、读回持续失败
   （fail closed）、清除读回不一致（fence 保持）、取消 resolve（journal 保持）。
@@ -120,14 +138,16 @@ recovery 与 identity-consumer 计划**，并把 tagged-reader 计划中未执�
 - captured-window：见 4；保留 tagged-reader 既有 rejected/nullable/swap 测试。
 - 不降 264 account/245 transaction/148 queue baselines、180/90 budgets、断言/门禁。
 
-### foreign/ambiguous 指针策略（B2e-2a 定稿）
+### foreign/ambiguous 指针策略（B2e-2a 定稿；29b0342 复审 R24 修复后实现）
 
-- observed == attempted → committed（清除 journal）。
-- observed == expected（含双 nil）→ notCommitted（清除 journal）。
-- 其它（foreign/损坏指针）→ 保留 journal **不自动清除**，resolve 抛
-  `publicationConflict`? 不——抛新增/既有类型化 `ambiguousRecoveryPointer`，要求显式
-  `clearRecoveryJournal` 外加独立确认才可继续（fail closed，安全保留）；测试断言
-  零自动清除、零发布。
+- observed == attempted → committed（读回分类 → durable clear → 释放内存 fence）。
+- observed == expected（含双 nil）→ notCommitted（同上顺序清除）。
+- 其它（foreign/损坏指针）→ 保留 journal 与内存 fence **不自动清除**：默认
+  `resolveUnresolvedPublication()` 抛类型化 `ambiguousRecovery`；只有显式
+  `resolveUnresolvedPublication(allowAmbiguous: true)` 把歧义记录进返回 receipt 并
+  durable clear 后才释放（fail closed，安全保留；R23–R25 修复计划见
+  `P05_REVIEW_29B0342_R23_R25_REPAIR_PLAN.md`）。测试断言：默认零自动清除、零发布、
+  reopen 仍 pending、取消确认保持 journal+fence。
 
 ## 6. 边界与验收
 
