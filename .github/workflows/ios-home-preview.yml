@@ -94,6 +94,7 @@ jobs:
           path: |
             build/home-preview/*.png
             build/home-preview/*.json
+            build/home-preview/*.txt
           if-no-files-found: warn
       - name: Upload menu navigation test results
         if: always()

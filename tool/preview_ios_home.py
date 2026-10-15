@@ -5,13 +5,16 @@ This checks layout only; the regular iOS workflow builds the complete app.
 """
 
 import json
+import os
 from pathlib import Path
 from ios_native_sources import read_native_root
 import platform
 import plistlib
 import shutil
 import subprocess
+import tempfile
 import time
+import uuid
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -29,16 +32,141 @@ def run(*args):
     return subprocess.check_output(args, text=True).strip()
 
 
-def best_effort_run(*args):
+def bounded_probe(args, timeout=20):
     try:
-        return run(*args)
-    except (subprocess.CalledProcessError, OSError):
-        return ""
+        output = subprocess.check_output(args, text=True, timeout=timeout,
+                                         stderr=subprocess.DEVNULL)
+        return {"status": "ok", "output": output}
+    except subprocess.TimeoutExpired:
+        return {"status": "timeout", "output": ""}
+    except (subprocess.SubprocessError, OSError) as error:
+        return {"status": f"failed: {error}", "output": ""}
 
 
 def bounded_lines(text, limit):
     lines = text.splitlines()
     return "\n".join(lines[-limit:])
+
+
+def parse_launch_pid(output):
+    if ":" in output:
+        candidate = output.rsplit(":", 1)[1].strip()
+        if candidate.isdigit():
+            return candidate
+    return ""
+
+
+def accept_report(report, token, pid, report_mtime, launch_start):
+    if not isinstance(report, dict):
+        return False
+    if report.get("modeToken") != token:
+        return False
+    if not pid or str(report.get("launchPID", "")) != pid:
+        return False
+    if report_mtime < launch_start:
+        return False
+    return True
+
+
+def accept_current_report(report_file, token, pid, launch_start):
+    try:
+        if not report_file.exists():
+            return None
+        report_mtime = report_file.stat().st_mtime
+        report = json.loads(report_file.read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not accept_report(report, token, pid, report_mtime, launch_start):
+        return None
+    return report
+
+
+_STREAMS_SUPPORTED = None
+
+
+def launch_streams_supported():
+    global _STREAMS_SUPPORTED
+    if _STREAMS_SUPPORTED is None:
+        try:
+            help_text = subprocess.check_output(
+                ["xcrun", "simctl", "help", "launch"], text=True, timeout=20,
+                stderr=subprocess.STDOUT)
+        except (subprocess.SubprocessError, OSError):
+            help_text = ""
+        _STREAMS_SUPPORTED = "--stdout" in help_text and "--stderr" in help_text
+    return _STREAMS_SUPPORTED
+
+
+def selftest_report_acceptance():
+    now = time.time()
+    owned = {"modeToken": "token-a", "launchPID": "4242"}
+    cases = [
+        ("owned current report", owned, "token-a", "4242", now - 1, now - 2, True),
+        ("stale report before launch", owned, "token-a", "4242", now - 5, now - 2, False),
+        ("mismatched generation token", owned, "token-b", "4242", now - 1, now - 2, False),
+        ("mismatched pid", owned, "token-a", "9999", now - 1, now - 2, False),
+        ("missing token", {"launchPID": "4242"}, "token-a", "4242", now - 1, now - 2, False),
+        ("missing pid", {"modeToken": "token-a"}, "token-a", "4242", now - 1, now - 2, False),
+        ("not a report", [], "token-a", "4242", now - 1, now - 2, False),
+    ]
+    for label, report, token, pid, mtime, start, expected in cases:
+        if accept_report(report, token, pid, mtime, start) != expected:
+            raise RuntimeError(f"report acceptance self-test failed: {label}")
+
+
+def selftest_report_files():
+    with tempfile.TemporaryDirectory() as directory:
+        path = Path(directory) / "layout.json"
+        path.write_text(json.dumps({"modeToken": "token-a", "launchPID": "4242"}))
+        launch_start = time.time()
+        stale = launch_start - 30
+        os.utime(path, (stale, stale))
+        if accept_current_report(path, "token-a", "4242", launch_start) is not None:
+            raise RuntimeError("report acceptance self-test failed: stale file accepted")
+        current = time.time()
+        os.utime(path, (current, current))
+        accepted = accept_current_report(path, "token-a", "4242", launch_start)
+        if not accepted or accepted.get("modeToken") != "token-a":
+            raise RuntimeError("report acceptance self-test failed: owned report rejected")
+        path.write_text(json.dumps({"modeToken": "token-b", "launchPID": "4242"}))
+        os.utime(path, (current, current))
+        if accept_current_report(path, "token-a", "4242", launch_start) is not None:
+            raise RuntimeError("report acceptance self-test failed: mismatched token accepted")
+
+
+def write_failure_evidence(name, base, udid, diagnostics_file, stdout_file, stderr_file):
+    evidence = dict(base)
+    if diagnostics_file.exists():
+        evidence["diagnostics"] = bounded_lines(
+            diagnostics_file.read_text(errors="replace"), 400)
+    for label, path in (("stdout", stdout_file), ("stderr", stderr_file)):
+        if path.exists():
+            evidence[f"{label}Tail"] = bounded_lines(path.read_text(errors="replace"), 200)
+    post_probe = bounded_probe(["xcrun", "simctl", "spawn", udid, "launchctl", "list"])
+    evidence["postFailureProbe"] = {
+        "status": post_probe["status"],
+        "instances": [line for line in post_probe["output"].splitlines()
+                      if BUNDLE_ID in line or "HomePreview" in line],
+    }
+    try:
+        app_log = subprocess.check_output(
+            ["xcrun", "simctl", "spawn", udid, "log", "show", "--last", "2m",
+             "--style", "compact", "--predicate", 'process == "HomePreview"'],
+            text=True, timeout=90, stderr=subprocess.DEVNULL)
+        evidence["appLogTail"] = bounded_lines(app_log, 200)
+    except (subprocess.SubprocessError, OSError) as error:
+        evidence["appLogError"] = str(error)
+    crash_reports = sorted(
+        Path.home().glob("Library/Logs/DiagnosticReports/HomePreview*"))
+    if crash_reports:
+        evidence["crashReportNames"] = [path.name for path in crash_reports[-3:]]
+        try:
+            evidence["crashLogTail"] = bounded_lines(
+                crash_reports[-1].read_text(errors="replace"), 100)
+        except OSError as error:
+            evidence["crashReadError"] = str(error)
+    (OUTPUT / f"{name}-failure.json").write_text(json.dumps(evidence, indent=2))
+    return evidence
 
 
 FIXTURES = r'''
@@ -132,6 +260,14 @@ private struct PiliNativeErrorView: View {
 '''
 
 APP = r'''
+private var previewModeToken: String {
+  let arguments = ProcessInfo.processInfo.arguments
+  guard let index = arguments.firstIndex(of: "--token"), index + 1 < arguments.count else {
+    return ""
+  }
+  return arguments[index + 1]
+}
+
 private func diagnosticsTrace(_ event: String) {
   let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
   let url = documents.appendingPathComponent("layout-diagnostics.jsonl")
@@ -151,7 +287,7 @@ private func diagnosticsTrace(_ event: String) {
 private struct HomePreviewApp: App {
   @StateObject private var model = PiliNativeViewModel()
   init() {
-    diagnosticsTrace("app-init args=\(ProcessInfo.processInfo.arguments.dropFirst().joined(separator: ","))")
+    diagnosticsTrace("app-init token=\(previewModeToken) args=\(ProcessInfo.processInfo.arguments.dropFirst().joined(separator: ","))")
   }
   var body: some Scene {
     WindowGroup {
@@ -177,6 +313,10 @@ private struct HomePreviewApp: App {
         diagnosticsTrace("task-start")
         for attempt in 0..<8 {
           try? await Task.sleep(nanoseconds: 3_000_000_000)
+          if Task.isCancelled {
+            diagnosticsTrace("task-cancelled")
+            return
+          }
           diagnosticsTrace("inspect-attempt \(attempt)")
           if await inspectLayout() {
             diagnosticsTrace("inspect-success \(attempt)")
@@ -191,6 +331,10 @@ private struct HomePreviewApp: App {
 
 @MainActor
 private func inspectLayout() async -> Bool {
+  if Task.isCancelled {
+    diagnosticsTrace("cancelled-before-inspect")
+    return false
+  }
   guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
         let window = scene.windows.first(where: { $0.isKeyWindow }) else {
     diagnosticsTrace("window-missing")
@@ -201,8 +345,13 @@ private func inspectLayout() async -> Bool {
   }
   let views = descendants(window)
   if ProcessInfo.processInfo.arguments.contains("--settings") {
-    let report = ["fixture": "Playback settings with simulated latency results"]
+    let report: [String: Any] = [
+      "fixture": "Playback settings with simulated latency results",
+      "modeToken": previewModeToken,
+      "launchPID": String(ProcessInfo.processInfo.processIdentifier),
+    ]
     let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+    diagnosticsTrace("settings-encode-attempt")
     do {
       let data = try JSONSerialization.data(withJSONObject: report)
       try data.write(to: documents.appendingPathComponent("layout.json"))
@@ -242,13 +391,22 @@ private func inspectLayout() async -> Bool {
   } else {
     offset = min(280, bottom)
   }
+  diagnosticsTrace("pre-scroll current=\(scroll.contentOffset.y) top=\(top) bottom=\(bottom) content=\(scroll.contentSize.height)")
   if arguments.contains("--return-top") {
     scroll.setContentOffset(CGPoint(x: 0, y: min(280, bottom)), animated: false)
     try? await Task.sleep(nanoseconds: 450_000_000)
+    if Task.isCancelled {
+      diagnosticsTrace("cancelled-after-return-top")
+      return false
+    }
   }
   scroll.setContentOffset(CGPoint(x: 0, y: offset), animated: false)
   try? await Task.sleep(nanoseconds: 450_000_000)
-  diagnosticsTrace("scrolled offset=\(offset) bottom=\(bottom)")
+  if Task.isCancelled {
+    diagnosticsTrace("cancelled-after-scroll")
+    return false
+  }
+  diagnosticsTrace("post-scroll actual=\(scroll.contentOffset.y) intended=\(offset) bottom=\(bottom)")
   let report: [String: Any] = [
     "scrollFrame": NSCoder.string(for: scrollFrame),
     "hasNavigationBar": navigationBar != nil,
@@ -258,8 +416,11 @@ private func inspectLayout() async -> Bool {
     "bottomScrollOffset": bottom,
     "drawsBehindTabBar": scrollFrame.maxY >= barFrame.maxY - 1,
     "scrollOffset": offset,
+    "modeToken": previewModeToken,
+    "launchPID": String(ProcessInfo.processInfo.processIdentifier),
   ]
   let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+  diagnosticsTrace("encode-attempt")
   do {
     let data = try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys])
     try data.write(to: documents.appendingPathComponent("layout.json"))
@@ -276,6 +437,8 @@ private func inspectLayout() async -> Bool {
 def main():
     if platform.system() != "Darwin":
         raise SystemExit("The home preview requires macOS and Xcode.")
+    selftest_report_acceptance()
+    selftest_report_files()
     OUTPUT.mkdir(parents=True, exist_ok=True)
     source = read_native_root()
     design_start = source.index("private enum PiliNativeDesign")
@@ -340,6 +503,7 @@ private struct PiliNativeSettingsView: View {
     report_file = data_dir / "Documents" / "layout.json"
     diagnostics_file = data_dir / "Documents" / "layout-diagnostics.jsonl"
     launch_trace = []
+    streams_supported = launch_streams_supported()
     for name, appearance, args in [
         ("light", "light", []),
         ("dark", "dark", []),
@@ -357,17 +521,50 @@ private struct PiliNativeSettingsView: View {
         report_file.unlink(missing_ok=True)
         diagnostics_file.unlink(missing_ok=True)
         run("xcrun", "simctl", "ui", udid, "appearance", appearance)
-        pre_launch = best_effort_run("xcrun", "simctl", "spawn", udid, "launchctl", "list")
-        pre_launch_instances = [line for line in pre_launch.splitlines()
+        token = uuid.uuid4().hex
+        stdout_file = OUTPUT / f"{name}-stdout.txt"
+        stderr_file = OUTPUT / f"{name}-stderr.txt"
+        stdout_file.unlink(missing_ok=True)
+        stderr_file.unlink(missing_ok=True)
+        pre_probe = bounded_probe(["xcrun", "simctl", "spawn", udid, "launchctl", "list"])
+        pre_launch_instances = [line for line in pre_probe["output"].splitlines()
                                 if BUNDLE_ID in line or "HomePreview" in line]
+        launch_command = ["xcrun", "simctl", "launch"]
+        if streams_supported:
+            launch_command += [f"--stdout={stdout_file}", f"--stderr={stderr_file}"]
+        launch_command += [udid, BUNDLE_ID, "-AppleLanguages", "(zh-Hans)",
+                           "-AppleLocale", "zh_CN", "--token", token, *args]
+        launch_start = time.time()
         try:
-            launch_output = run("xcrun", "simctl", "launch", udid, BUNDLE_ID,
-                "-AppleLanguages", "(zh-Hans)", "-AppleLocale", "zh_CN", *args)
+            completed = subprocess.run(launch_command, capture_output=True, text=True, check=True)
+            launch_output = completed.stdout.strip()
         except subprocess.CalledProcessError as error:
-            launch_output = f"launch-failed: {error}"
-        poll_start = time.monotonic()
+            # Bounded diagnostics first, then preserve the hard launch failure:
+            # a failed launch must never fall through to the acceptance path.
+            trace_entry = {
+                "mode": name,
+                "appearance": appearance,
+                "arguments": args,
+                "container": str(data_dir),
+                "token": token,
+                "streamsSupported": streams_supported,
+                "preLaunchProbe": {"status": pre_probe["status"],
+                                   "instances": pre_launch_instances},
+                "launchFailed": True,
+                "launchOutput": error.stdout or "",
+                "launchError": str(error),
+                "launchStderrTail": bounded_lines(error.stderr or "", 100),
+            }
+            launch_trace.append(trace_entry)
+            (OUTPUT / "launch-trace.json").write_text(json.dumps(launch_trace, indent=2))
+            write_failure_evidence(name, trace_entry, udid, diagnostics_file,
+                                   stdout_file, stderr_file)
+            raise
+        launched_pid = parse_launch_pid(launch_output)
+        accepted_report = None
         for _ in range(30):
-            if report_file.exists():
+            accepted_report = accept_current_report(report_file, token, launched_pid, launch_start)
+            if accepted_report is not None:
                 break
             time.sleep(1)
         trace_entry = {
@@ -375,43 +572,26 @@ private struct PiliNativeSettingsView: View {
             "appearance": appearance,
             "arguments": args,
             "container": str(data_dir),
-            "preLaunchInstances": pre_launch_instances,
+            "token": token,
+            "streamsSupported": streams_supported,
+            "preLaunchProbe": {"status": pre_probe["status"],
+                               "instances": pre_launch_instances},
             "launchOutput": launch_output,
-            "reportDelaySeconds": round(time.monotonic() - poll_start, 1)
-              if report_file.exists() else None,
+            "launchedPID": launched_pid,
+            "accepted": accepted_report is not None,
+            "reportDelaySeconds": round(time.time() - launch_start, 1)
+              if accepted_report is not None else None,
             "diagnosticsPresent": diagnostics_file.exists(),
         }
         launch_trace.append(trace_entry)
         (OUTPUT / "launch-trace.json").write_text(json.dumps(launch_trace, indent=2))
-        if not report_file.exists():
-            evidence = dict(trace_entry)
-            evidence["missingReport"] = True
-            if diagnostics_file.exists():
-                evidence["diagnostics"] = bounded_lines(
-                    diagnostics_file.read_text(errors="replace"), 400)
-            post_failure = best_effort_run("xcrun", "simctl", "spawn", udid, "launchctl", "list")
-            evidence["postFailureInstances"] = [line for line in post_failure.splitlines()
-                                                if BUNDLE_ID in line or "HomePreview" in line]
-            try:
-                app_log = subprocess.check_output(
-                    ["xcrun", "simctl", "spawn", udid, "log", "show", "--last", "2m",
-                     "--style", "compact", "--predicate", 'process == "HomePreview"'],
-                    text=True, timeout=90, stderr=subprocess.DEVNULL)
-                evidence["appLogTail"] = bounded_lines(app_log, 200)
-            except (subprocess.SubprocessError, OSError) as error:
-                evidence["appLogError"] = str(error)
-            crash_reports = sorted(
-                Path.home().glob("Library/Logs/DiagnosticReports/HomePreview*"))
-            if crash_reports:
-                evidence["crashReportNames"] = [path.name for path in crash_reports[-3:]]
-                try:
-                    evidence["crashLogTail"] = bounded_lines(
-                        crash_reports[-1].read_text(errors="replace"), 100)
-                except OSError as error:
-                    evidence["crashReadError"] = str(error)
-            (OUTPUT / f"{name}-failure.json").write_text(json.dumps(evidence, indent=2))
+        if accepted_report is None:
+            # Only an owned, fresh, correctly bound report passes: a stale or
+            # mismatched file (or mere existence) is never accepted.
+            write_failure_evidence(name, trace_entry, udid, diagnostics_file,
+                                   stdout_file, stderr_file)
             raise RuntimeError(f"No layout report for {name}")
-        report = json.loads(report_file.read_text())
+        report = accepted_report
         report.update(device=device["name"], runtime=runtime["name"])
         (OUTPUT / f"{name}.json").write_text(json.dumps(report, indent=2))
         time.sleep(1)
