@@ -14,9 +14,14 @@ final class NativeAccountReverseImportException implements Exception {
 
 /// Owned, deeply immutable data only. No Account, jar or live singleton escapes.
 final class NativeAccountReverseImportResult {
-  const NativeAccountReverseImportResult._(this.value, this.accountKeys);
+  const NativeAccountReverseImportResult._(this.value, this.accountKeys, this.recordDurableIdentities);
   final Map<String, Object?> value;
   final List<String> accountKeys;
+  /// Order-aligned with `records`: the validated canonical lowercase UUID text
+  /// of each schema-3 login record's durable identity, null for the anonymous
+  /// record and for schema-2 captures. Correlation labels only — never request
+  /// authorization — and never mixed with the bridge tracker tokens.
+  final List<String?> recordDurableIdentities;
 }
 
 abstract final class NativeAccountReverseImport {
@@ -29,6 +34,7 @@ abstract final class NativeAccountReverseImport {
       return NativeAccountReverseImportResult._(
         _freeze(envelope) as Map<String, Object?>,
         List.unmodifiable(reader.keys),
+        List.unmodifiable(reader.durableIdentities),
       );
     } on NativeOrderedCookieJarExportException {
       throw const NativeAccountReverseImportException('resourceLimit');
@@ -84,16 +90,32 @@ final class _EnvelopeReader {
   final Map<String, Object?> value;
   final budget = NativeOrderedCookieExportBudget();
   final keys = <String>[];
+  final durableIdentities = <String?>[];
+  final identities = <String>{};
   static const purposes = ['main', 'heartbeat', 'recommend', 'video'];
+  static const shadowFields = [
+    'schemaVersion', 'scope', 'identityScope', 'revision',
+    'durableIdentityConfigured', 'durabilityVerified',
+    'authoritySwitchAllowed', 'nativeWritesAllowed', 'records',
+    'storedOrder', 'ownerOrder', 'selectionPurposes', 'selections', 'history',
+  ];
+  static const modernShadowFields = [...shadowFields, 'generationHighWater'];
+  static const recordFields = [
+    'record', 'generation', 'storageKeyUnits', 'mid',
+    'isLogin', 'accessKeyUnits', 'refreshTokenUnits', 'persistedPurposes',
+    'activated', 'jar',
+  ];
+  static const modernRecordFields = [...recordFields, 'durableIdentity'];
 
   void validate() {
-    _shape(value, const [
-      'schemaVersion', 'scope', 'identityScope', 'revision',
-      'durableIdentityConfigured', 'durabilityVerified',
-      'authoritySwitchAllowed', 'nativeWritesAllowed', 'records',
-      'storedOrder', 'ownerOrder', 'selectionPurposes', 'selections', 'history',
-    ]);
-    _expect(_integer(value['schemaVersion']) == 2, 'unsupportedSchema');
+    final version = _integer(value['schemaVersion']);
+    _expect(version == 2 || version == 3, 'unsupportedSchema');
+    final schemaThree = version == 3;
+    // Schema 3 may carry the monotonic generation high-water at the top level
+    // and a durable identity per login record. Schema 2 keeps the exact legacy
+    // key sets, so any extra field (including a null `durableIdentity`) fails.
+    final modernShadow = schemaThree && _hasShape(value, modernShadowFields);
+    _shape(value, modernShadow ? modernShadowFields : shadowFields);
     _expect(value['scope'] == 'coherentLiveMemoryShadow');
     _expect(value['identityScope'] == 'captureLocal');
     for (final flag in const ['durableIdentityConfigured', 'durabilityVerified',
@@ -101,6 +123,9 @@ final class _EnvelopeReader {
       _expect(!_boolean(value[flag]));
     }
     _expect(_integer(value['revision']) >= 0);
+    final rawHighWater = modernShadow ? value['generationHighWater'] : null;
+    final highWater = rawHighWater == null ? null : _integer(rawHighWater);
+    if (highWater != null) _expect(highWater >= 0);
     final records = _list(value['records']);
     _expect(records.isNotEmpty);
     _expect(records.length <= 256, 'resourceLimit');
@@ -111,21 +136,23 @@ final class _EnvelopeReader {
     _preflight(value, 0);
     final generations = <int>{};
     final uniqueKeys = <String>{};
+    var maxGeneration = 0;
     for (var index = 0; index < records.length; index++) {
       final record = _map(records[index]);
-      _shape(record, const ['record', 'generation', 'storageKeyUnits', 'mid',
-        'isLogin', 'accessKeyUnits', 'refreshTokenUnits', 'persistedPurposes',
-        'activated', 'jar']);
+      final modernRecord = schemaThree && _hasShape(record, modernRecordFields);
+      _shape(record, modernRecord ? modernRecordFields : recordFields);
       _expect(_integer(record['record']) == index);
       final generation = _integer(record['generation']);
       _expect(generation > 0 && generations.add(generation));
       final mid = _integer(record['mid']);
       _boolean(record['activated']);
       _purposes(record['persistedPurposes']);
+      final identity = modernRecord ? record['durableIdentity'] : null;
       if (index == 0) {
         _expect(!_boolean(record['isLogin']) && mid == 0);
         _expect(record['storageKeyUnits'] == null && record['accessKeyUnits'] == null &&
-          record['refreshTokenUnits'] == null);
+          record['refreshTokenUnits'] == null && identity == null);
+        durableIdentities.add(null);
       } else {
         _expect(_boolean(record['isLogin']));
         final key = _units(record['storageKeyUnits'], 4096);
@@ -133,9 +160,19 @@ final class _EnvelopeReader {
         keys.add(key);
         _optionalUnits(record['accessKeyUnits'], 65536);
         _optionalUnits(record['refreshTokenUnits'], 65536);
+        if (schemaThree) {
+          final canonical = _canonicalDurableIdentity(identity);
+          _expect(identities.add(canonical));
+          budget.reserveUnits(36);
+          durableIdentities.add(canonical);
+        } else {
+          durableIdentities.add(null);
+        }
+        if (generation > maxGeneration) maxGeneration = generation;
       }
       _jar(_map(record['jar']));
     }
+    if (highWater != null) _expect(highWater >= maxGeneration);
     final stored = _list(value['storedOrder']);
     final owners = _list(value['ownerOrder']);
     _expect(stored.length == keys.length && owners.length == keys.length);
@@ -259,8 +296,27 @@ Map<String, Object?> _map(Object? value) {
   _expect(value is Map && value.keys.every((key) => key is String));
   return (value! as Map).cast<String, Object?>();
 }
+bool _hasShape(Map<String, Object?> value, List<String> fields) =>
+    value.length == fields.length && fields.every(value.containsKey);
 void _shape(Map<String, Object?> value, List<String> fields) =>
-    _expect(value.length == fields.length && fields.every(value.containsKey));
+    _expect(_hasShape(value, fields));
+/// Canonical lowercase UUID text: exactly 36 UTF-16 units, hyphens at
+/// 8/13/18/23 and lowercase hex elsewhere. Correlation label only.
+String _canonicalDurableIdentity(Object? raw) {
+  final units = _list(raw);
+  _expect(units.length == 36);
+  for (var offset = 0; offset < units.length; offset++) {
+    final unit = units[offset];
+    _expect(unit is int && unit >= 0 && unit <= 0xffff);
+    final code = unit as int;
+    if (offset == 8 || offset == 13 || offset == 18 || offset == 23) {
+      _expect(code == 0x2D);
+    } else {
+      _expect((code >= 0x30 && code <= 0x39) || (code >= 0x61 && code <= 0x66));
+    }
+  }
+  return String.fromCharCodes(units.cast<int>());
+}
 bool _sameList(List<Object?> a, List<Object?> b) => a.length == b.length &&
     Iterable<int>.generate(a.length).every((index) => a[index] == b[index]);
 String _units(Object? raw, int maximum) {
