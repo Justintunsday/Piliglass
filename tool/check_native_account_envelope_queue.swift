@@ -1006,10 +1006,13 @@ private actor QueueFaultVault: PiliAccountSecretStore {
         generation: fx.record.generation, accessKey: units("must-not-publish-cancelled"),
         refreshToken: nil)) }
       try await waitForRetrySleep(cancelled3, 1)
-      cancelledWrite.cancel()
+      guard let cancelledTask = cancelledWrite else {
+        throw QueueFixtureError.failed("cancellation fixture missing its submission task")
+      }
+      cancelledTask.cancel()
       var coldCancelled = false
       do {
-        _ = try await cancelledWrite.value
+        _ = try await cancelledTask.value
       } catch is CancellationError { coldCancelled = true }
       try check(coldCancelled,
         "a cancelled cold recovery preflight resolves nothing")
