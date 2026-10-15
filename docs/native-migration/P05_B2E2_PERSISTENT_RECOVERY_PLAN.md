@@ -88,6 +88,11 @@ recovery 与 identity-consumer 计划**，并把 tagged-reader 计划中未执�
   （独立政策）。冷读结果在 await 之后做 post-await 重验证（`recoveryLoaded`/`unresolved`），
   延迟的陈旧结果绝不覆盖更新的 fence 或复活已清除状态（R28 seam + 回归）。见
   `P05_REVIEW_48A7FCC_R28_R30_REPAIR_PLAN.md`。
+- R31/R32 所有权修正：队列执行所有权改为 **task-specific**（`@TaskLocal
+  queuedWriteExecution`），直接 primitives 在任何冷 shared-vault IO **之前**经
+  `requireDirectEntryAllowed()` 拒绝（idle-only 政策；只有队列自身调用链携带 token），
+  `beginOperation` 在 await 后复核；只读恢复入口（`loadPersistentRecovery`/resolve）
+  不受 writer 限制。见 `P05_REVIEW_788C11D_R31_R32_REPAIR_PLAN.md`。
 - 新增只读 `func loadPersistentRecovery() async throws -> PiliAccountShadowUnresolvedPublication?`
   供测试/恢复调用方显式查询（不写、不清）。
 - `pendingUnresolvedPublication` 保持 sync 观测口（文档注明：重建后需先经 async 加载）。

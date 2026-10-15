@@ -79,6 +79,15 @@
   用 `waitForPending == 1` 归因其 FIFO 预留；不用聚合计数推断第二个任务，也不再用更长
   back-off 或近似窗口。断言保持精确 effect/receipt/publication。
 
+## R31/R32 修正（详见 `P05_REVIEW_788C11D_R31_R32_REPAIR_PLAN.md`）
+
+- 混合块 CAS 阶段的"外部发布者"改为显式声明的独立 vault actor 对抗性 fixture（与既有
+  accepted CAS 测试同模式）；shared vault 只用于冷加载争用，并补真实中间 receipt/pointer
+  证据。
+- 队列执行所有权改为 task-local token；`requireDirectEntryAllowed()` 在任何冷 IO 前拒绝
+  直接 outsider（两个 public shape），新增冷执行窗口回归；R28 回归改为合法只读
+  `loadPersistentRecovery` 延迟调用者，不再依赖 queued owner 下的 direct 写。
+
 ## 顺序与验收
 
 - 先保存本计划 → 修 source（R28/R29）→ driver（R30 + 新回归）→ 文档 → 静态检查 →
