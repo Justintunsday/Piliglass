@@ -461,14 +461,17 @@ private actor QueueFaultVault: PiliAccountSecretStore {
       try check(publishedRecords == 5,
                 "the queue publishes exactly one record per admitted write")
 
-      // Cancellation while queued: no publication and the FIFO keeps draining.
+      // Cancellation while queued: the cancelled waiter must publish nothing
+      // even though a valid follower runs afterwards, so the cancelled write
+      // uses a discriminating jar effect that the follower never overwrites,
+      // and the exact publication count proves only holder + follower landed.
+      let preCancelRecords = await fault.recordCount()
       await fault.pauseWrite()
       let holder = Task { try await store.enqueue(.cookieDeleteAll(
         recordKey: fx.key, generation: fx.record.generation)) }
       await fault.waitUntilPaused()
-      let cancelled = Task { try await store.enqueue(.credentials(recordKey: fx.key,
-        generation: fx.record.generation, accessKey: units("queue-cancelled"),
-        refreshToken: nil)) }
+      let cancelled = Task { try await store.enqueue(.cookieSave(
+        recordKey: fx.key, generation: fx.record.generation, save: fx.save)) }
       try await waitForPending(store, 1)
       let follower = Task { try await store.enqueue(.credentials(recordKey: fx.key,
         generation: fx.record.generation, accessKey: units("queue-follower"),
@@ -490,9 +493,15 @@ private actor QueueFaultVault: PiliAccountSecretStore {
       let afterCancel = try await store.loadShadowSnapshot()
       try check(afterCancel?.envelope.records[1].accessKeyUnits?.units ==
         Array("queue-follower".utf16),
-        "cancelled queued write leaves no effect and the queue keeps draining")
+        "the valid follower after the cancelled waiter still lands")
+      try check(afterCancel?.envelope.records[1].jar == fx.cleared,
+        "the cancelled queued cookieSave never lands (jar stays cleared)")
+      try check(await fault.recordCount() == preCancelRecords + 2,
+        "exactly holder + follower were published across the cancellation")
 
-      // In-flight cancellation before the pointer write keeps the previous jar.
+      // In-flight cancellation before the pointer write keeps the previous jar
+      // and publishes no record at all.
+      let preInFlightRecords = await fault.recordCount()
       await fault.pauseWrite()
       let inFlight = Task { try await store.enqueue(.cookieSave(
         recordKey: fx.key, generation: fx.record.generation, save: fx.save)) }
@@ -509,6 +518,8 @@ private actor QueueFaultVault: PiliAccountSecretStore {
       let afterInFlight = try await store.loadShadowSnapshot()
       try check(afterInFlight?.envelope.records[1].jar == fx.cleared,
                 "cancelled in-flight publication leaves the durable jar unchanged")
+      try check(await fault.recordCount() == preInFlightRecords,
+                "cancelled in-flight publication adds no record")
 
       // A queued resource-budget rejection releases the turn with no
       // publication and no fabricated receipt; a valid follower continues.
@@ -516,6 +527,8 @@ private actor QueueFaultVault: PiliAccountSecretStore {
         throw QueueFixtureError.failed("missing pre-budget snapshot")
       }
       let preBudgetRecords = await fault.recordCount()
+      try check(preBudgetRecords == preInFlightRecords,
+                "the pinned pre-budget count equals the post-cancellation contract")
       do {
         _ = try await store.enqueue(.buvidSeed(recordKey: fx.key,
           generation: fx.record.generation,
@@ -589,10 +602,11 @@ private actor QueueFaultVault: PiliAccountSecretStore {
       guard let unknownResolution = try await store.resolveUnresolvedPublication() else {
         throw QueueFixtureError.failed("unknown publication had no resolution")
       }
-      try check(unknownResolution.observedMatchedAttempt &&
+      try check(unknownResolution.outcome == .attemptCommitted &&
+        unknownResolution.observedTransactionID == unknownResolution.attemptedTransactionID &&
         unknownResolution.observedTransactionID == unknownReadback.transactionID &&
         unknownResolution.attemptedCandidateSHA256 == unresolved.attemptedCandidateSHA256,
-        "read-back resolution names the exact attempted candidate")
+        "read-back resolution correlates the exact attempted operation identity")
       try check(await store.pendingUnresolvedPublication == nil,
                 "the recorded read-back releases the fence")
       guard case .record(let recoveredB) = try await store.enqueue(.cookieSave(
@@ -628,8 +642,8 @@ private actor QueueFaultVault: PiliAccountSecretStore {
       guard let buvidResolution = try await store.resolveUnresolvedPublication() else {
         throw QueueFixtureError.failed("unknown buvid left no resolution")
       }
-      try check(buvidResolution.observedMatchedAttempt,
-                "the unknown buvid is resolved by exact candidate read-back")
+      try check(buvidResolution.outcome == .attemptCommitted,
+                "the unknown buvid is resolved by exact operation identity")
       guard let buvidReadback = try await store.loadShadowSnapshot() else {
         throw QueueFixtureError.failed("missing buvid read-back snapshot")
       }
@@ -884,7 +898,7 @@ private actor QueueFaultVault: PiliAccountSecretStore {
       guard let beforeResolution = try await store.resolveUnresolvedPublication() else {
         throw QueueFixtureError.failed("write-before-error fence did not resolve")
       }
-      try check(!beforeResolution.observedMatchedAttempt &&
+      try check(beforeResolution.outcome == .attemptNotCommitted &&
         beforeResolution.observedTransactionID == beforeUnknown.transactionID,
         "the write-before-error resolution proves the pointer never moved")
       guard case .record(let explicitRetry) = try await store.enqueue(.credentials(
@@ -926,9 +940,10 @@ private actor QueueFaultVault: PiliAccountSecretStore {
       guard let afterResolution = try await store.resolveUnresolvedPublication() else {
         throw QueueFixtureError.failed("write-after-error fence did not resolve")
       }
-      try check(afterResolution.observedMatchedAttempt &&
+      try check(afterResolution.outcome == .attemptCommitted &&
+        afterResolution.observedTransactionID == afterResolution.attemptedTransactionID &&
         afterResolution.observedTransactionID != afterRetry.transactionID,
-        "the write-after-error resolution names the committed attempted candidate")
+        "the write-after-error resolution names the committed attempted operation")
       guard let durableAfter = try await store.loadShadowSnapshot() else {
         throw QueueFixtureError.failed("missing post-resolution snapshot")
       }
@@ -1238,6 +1253,272 @@ private actor QueueFaultVault: PiliAccountSecretStore {
     return checks
   }
 
+  /// R19: content equality is not attempted-publication identity. No-op
+  /// same-value credentials/activation writes exercise write-before and
+  /// write-after unknown failures; resolution must classify by the exact
+  /// attempted transaction ID, never by bytes. A byte-identical foreign
+  /// candidate is explicitly ambiguous. Nothing is auto-replayed.
+  private static func checkSameValueResolutionIdentity(_ fx: QueueFixture) async throws -> Int {
+    var checks = 0
+    func check(_ condition: Bool, _ label: String) throws {
+      guard condition else { throw QueueFixtureError.failed(label) }
+      checks += 1
+    }
+    let fault = QueueFaultVault()
+    let vault = PiliAccountEnvelopeStagingStore(secrets: fault)
+    let store = PiliAccountEnvelopeTransactionStore(vault: vault)
+    do {
+      try await vault.importShadow(fx.codec.encode(fx.base))
+      guard case .identity = try await store.enqueue(.adoptIdentities) else {
+        throw QueueFixtureError.failed("identity adoption for the same-value contract expected")
+      }
+      guard let baseline = try await store.loadShadowSnapshot() else {
+        throw QueueFixtureError.failed("missing same-value baseline")
+      }
+      let baselineAccess = baseline.envelope.records[1].accessKeyUnits
+      let baselineRefresh = baseline.envelope.records[1].refreshTokenUnits
+      let baselineActivated = baseline.envelope.records[1].activated
+
+      // Same-value credentials, write-before error + unreadable acknowledgment:
+      // the pointer never moved although the bytes match exactly.
+      await fault.arm(.pointerWriteBefore)
+      await fault.failPointerReadAfter(2)
+      do {
+        _ = try await store.applyCredentials(recordKeyUnits: fx.key,
+          expectedGeneration: fx.record.generation, accessKeyUnits: baselineAccess,
+          refreshTokenUnits: baselineRefresh)
+        throw QueueFixtureError.failed("same-value write-before-error fabricated success")
+      } catch PiliAccountEnvelopeStagingError.publicationUnknown { checks += 1 }
+      guard let unresolvedBefore = await store.pendingUnresolvedPublication else {
+        throw QueueFixtureError.failed("same-value write-before-error left no fence")
+      }
+      guard let notCommitted = try await store.resolveUnresolvedPublication() else {
+        throw QueueFixtureError.failed("same-value write-before-error fence did not resolve")
+      }
+      try check(notCommitted.outcome == .attemptNotCommitted &&
+        notCommitted.observedTransactionID == notCommitted.expectedPreviousTransactionID &&
+        notCommitted.observedContentMatchesAttempt &&
+        notCommitted.attemptedTransactionID == unresolvedBefore.attemptedTransactionID,
+        "a byte-identical write-before attempt is not committed, never matched by content")
+
+      // Same-value credentials, write-after error + unreadable acknowledgment:
+      // the pointer committed under the exact attempted ID although the bytes
+      // equal the previous candidate.
+      await fault.arm(.pointerWriteAfter)
+      await fault.failPointerReadAfter(2)
+      do {
+        _ = try await store.enqueue(.credentials(recordKey: fx.key,
+          generation: fx.record.generation, accessKey: baselineAccess,
+          refreshToken: baselineRefresh))
+        throw QueueFixtureError.failed("same-value write-after-error fabricated success")
+      } catch PiliAccountEnvelopeStagingError.publicationUnknown { checks += 1 }
+      guard let unresolvedAfter = await store.pendingUnresolvedPublication else {
+        throw QueueFixtureError.failed("same-value write-after-error left no fence")
+      }
+      try check(unresolvedAfter.attemptedTransactionID != unresolvedBefore.attemptedTransactionID,
+                "distinct attempts keep distinct immutable IDs even with identical bytes")
+      guard let committed = try await store.resolveUnresolvedPublication() else {
+        throw QueueFixtureError.failed("same-value write-after-error fence did not resolve")
+      }
+      try check(committed.outcome == .attemptCommitted &&
+        committed.observedTransactionID == committed.attemptedTransactionID &&
+        committed.observedContentMatchesAttempt,
+        "a committed byte-identical attempt is proven by exact operation identity")
+
+      // Same-value activation on both sides of the failure boundary.
+      await fault.arm(.pointerWriteBefore)
+      await fault.failPointerReadAfter(2)
+      do {
+        _ = try await store.enqueue(.activated(recordKey: fx.key,
+          generation: fx.record.generation, activated: baselineActivated))
+        throw QueueFixtureError.failed("same-value activation before-error fabricated success")
+      } catch PiliAccountEnvelopeStagingError.publicationUnknown { checks += 1 }
+      guard let activationBefore = try await store.resolveUnresolvedPublication() else {
+        throw QueueFixtureError.failed("same-value activation before-error fence did not resolve")
+      }
+      try check(activationBefore.outcome == .attemptNotCommitted &&
+        activationBefore.observedContentMatchesAttempt,
+        "a byte-identical activation write-before attempt is not committed")
+      await fault.arm(.pointerWriteAfter)
+      await fault.failPointerReadAfter(2)
+      do {
+        _ = try await store.enqueue(.activated(recordKey: fx.key,
+          generation: fx.record.generation, activated: baselineActivated))
+        throw QueueFixtureError.failed("same-value activation after-error fabricated success")
+      } catch PiliAccountEnvelopeStagingError.publicationUnknown { checks += 1 }
+      guard let activationAfter = try await store.resolveUnresolvedPublication() else {
+        throw QueueFixtureError.failed("same-value activation after-error fence did not resolve")
+      }
+      try check(activationAfter.outcome == .attemptCommitted &&
+        activationAfter.observedTransactionID == activationAfter.attemptedTransactionID &&
+        activationAfter.observedContentMatchesAttempt,
+        "a committed byte-identical activation is proven by exact operation identity")
+
+      // A foreign store publishes a byte-identical no-op candidate while this
+      // store is fenced: the read-back must be explicitly ambiguous, never
+      // claimed as this attempt.
+      await fault.arm(.pointerWriteBefore)
+      await fault.failPointerReadAfter(2)
+      do {
+        _ = try await store.enqueue(.credentials(recordKey: fx.key,
+          generation: fx.record.generation, accessKey: baselineAccess,
+          refreshToken: baselineRefresh))
+        throw QueueFixtureError.failed("ambiguity attempt fabricated success")
+      } catch PiliAccountEnvelopeStagingError.publicationUnknown { checks += 1 }
+      let foreignVault = PiliAccountEnvelopeStagingStore(secrets: fault)
+      let foreignStore = PiliAccountEnvelopeTransactionStore(vault: foreignVault)
+      guard case .record = try await foreignStore.enqueue(.credentials(recordKey: fx.key,
+        generation: fx.record.generation, accessKey: baselineAccess,
+        refreshToken: baselineRefresh)) else {
+        throw QueueFixtureError.failed("foreign byte-identical publication expected")
+      }
+      guard let ambiguous = try await store.resolveUnresolvedPublication() else {
+        throw QueueFixtureError.failed("identical-byte foreign candidate left no resolution")
+      }
+      try check(ambiguous.outcome == .ambiguousObservedCandidate &&
+        ambiguous.observedContentMatchesAttempt &&
+        ambiguous.observedTransactionID != ambiguous.attemptedTransactionID &&
+        ambiguous.observedTransactionID != ambiguous.expectedPreviousTransactionID,
+        "an identical-byte foreign candidate is ambiguous, never claimed as this attempt")
+      guard case .record = try await store.enqueue(.credentials(recordKey: fx.key,
+        generation: fx.record.generation, accessKey: units("after-ambiguity"),
+        refreshToken: nil)) else {
+        throw QueueFixtureError.failed("follower after ambiguity expected")
+      }
+      try await waitForIdle(store)
+      guard let afterAmbiguity = try await store.loadShadowSnapshot() else {
+        throw QueueFixtureError.failed("missing post-ambiguity snapshot")
+      }
+      try check(afterAmbiguity.envelope.records[1].accessKeyUnits?.units ==
+        Array("after-ambiguity".utf16),
+        "the released store continues from read-back truth after ambiguity")
+      try await vault.discardShadow()
+    } catch {
+      try? await vault.discardShadow()
+      throw error
+    }
+    return checks
+  }
+
+  /// R20: resolution is single-flight, cancellation-aware and revalidates the
+  /// immutable pending-operation token after every await, so a stale resolver
+  /// can never release a newer fence.
+  private static func checkResolutionSerialization(_ fx: QueueFixture) async throws -> Int {
+    var checks = 0
+    func check(_ condition: Bool, _ label: String) throws {
+      guard condition else { throw QueueFixtureError.failed(label) }
+      checks += 1
+    }
+    let fault = QueueFaultVault()
+    let vault = PiliAccountEnvelopeStagingStore(secrets: fault)
+    let store = PiliAccountEnvelopeTransactionStore(vault: vault)
+    do {
+      try await vault.importShadow(fx.codec.encode(fx.base))
+      _ = try await store.enqueue(.adoptIdentities)
+
+      // Undecided unknown A: write-before + unreadable acknowledgment.
+      await fault.arm(.pointerWriteBefore)
+      await fault.failPointerReadAfter(2)
+      do {
+        _ = try await store.enqueue(.credentials(recordKey: fx.key,
+          generation: fx.record.generation, accessKey: units("resolution-a"),
+          refreshToken: nil))
+        throw QueueFixtureError.failed("resolution A fabricated success")
+      } catch PiliAccountEnvelopeStagingError.publicationUnknown { checks += 1 }
+      guard let pendingA = await store.pendingUnresolvedPublication else {
+        throw QueueFixtureError.failed("resolution A left no fence")
+      }
+
+      // Hold resolver one inside its read-back; resolver two must fail closed
+      // and must not clear the still-pending fence.
+      await fault.pauseManifestReadAfter(0)
+      let resolverOne = Task { try await store.resolveUnresolvedPublication() }
+      try await waitForManifestReadPaused(fault)
+      var overlapping = false
+      do {
+        _ = try await store.resolveUnresolvedPublication()
+      } catch PiliAccountShadowTransactionError.resolutionInProgress { overlapping = true }
+      try check(overlapping, "concurrent resolution fails closed instead of racing the fence")
+      let inFlightFence: PiliAccountShadowUnresolvedPublication? =
+        await store.pendingUnresolvedPublication
+      try check(inFlightFence?.attemptedTransactionID == pendingA.attemptedTransactionID,
+                "an in-flight resolver never clears its fence early")
+      try check(await fault.recordCount() == 2,
+                "the unknown attempt itself published no record")
+      await fault.resumeManifestRead()
+      guard let firstResolution = try await resolverOne.value else {
+        throw QueueFixtureError.failed("resolver one returned no resolution")
+      }
+      let fenceClearedAfterFirst: PiliAccountShadowUnresolvedPublication? =
+        await store.pendingUnresolvedPublication
+      try check(firstResolution.outcome == .attemptNotCommitted &&
+        fenceClearedAfterFirst == nil,
+        "the first resolver records its read-back and releases only its own fence")
+
+      // A new unknown B after A resolved: new immutable ID, fenced followers,
+      // and survival of a cancelled stale resolver.
+      await fault.arm(.pointerWriteBefore)
+      await fault.failPointerReadAfter(2)
+      do {
+        _ = try await store.enqueue(.credentials(recordKey: fx.key,
+          generation: fx.record.generation, accessKey: units("resolution-b"),
+          refreshToken: nil))
+        throw QueueFixtureError.failed("resolution B fabricated success")
+      } catch PiliAccountEnvelopeStagingError.publicationUnknown { checks += 1 }
+      guard let pendingB = await store.pendingUnresolvedPublication else {
+        throw QueueFixtureError.failed("resolution B left no fence")
+      }
+      try check(pendingB.attemptedTransactionID != pendingA.attemptedTransactionID,
+                "a new unknown keeps a new immutable ID")
+      var followerFenced = false
+      do {
+        _ = try await store.enqueue(.credentials(recordKey: fx.key,
+          generation: fx.record.generation, accessKey: units("must-not-cross-b"),
+          refreshToken: nil))
+      } catch PiliAccountShadowTransactionError.unresolvedPublication { followerFenced = true }
+      try check(followerFenced, "queued followers never cross an unresolved boundary")
+
+      // A cancelled resolver must keep B armed and release the single-flight
+      // gate for a later resolution.
+      await fault.pauseManifestReadAfter(0)
+      let cancelledResolver = Task { try await store.resolveUnresolvedPublication() }
+      try await waitForManifestReadPaused(fault)
+      cancelledResolver.cancel()
+      await fault.resumeManifestRead()
+      var cancelledResolution = false
+      do {
+        _ = try await cancelledResolver.value
+      } catch is CancellationError { cancelledResolution = true }
+      try check(cancelledResolution, "a cancelled resolver never releases the fence")
+      let fenceSurvivedB: PiliAccountShadowUnresolvedPublication? =
+        await store.pendingUnresolvedPublication
+      try check(fenceSurvivedB?.attemptedTransactionID == pendingB.attemptedTransactionID,
+                "fence B survives the cancelled stale resolver")
+      guard let secondResolution = try await store.resolveUnresolvedPublication() else {
+        throw QueueFixtureError.failed("resolution B did not resolve after the cancelled resolver")
+      }
+      try check(secondResolution.outcome == .attemptNotCommitted &&
+        secondResolution.attemptedTransactionID == pendingB.attemptedTransactionID,
+        "resolution B classifies its own immutable token after the cancelled resolver")
+      guard case .record = try await store.enqueue(.credentials(recordKey: fx.key,
+        generation: fx.record.generation, accessKey: units("after-b"),
+        refreshToken: nil)) else {
+        throw QueueFixtureError.failed("follower after resolution B expected")
+      }
+      guard let afterB = try await store.loadShadowSnapshot() else {
+        throw QueueFixtureError.failed("missing post-resolution-B snapshot")
+      }
+      try check(afterB.envelope.records[1].accessKeyUnits?.units ==
+        Array("after-b".utf16),
+        "the queue drains normally after resolution B")
+      try await vault.discardShadow()
+    } catch {
+      try? await vault.discardShadow()
+      throw error
+    }
+    return checks
+  }
+
   static func main() async throws {
     guard CommandLine.arguments.count == 2 else {
       throw QueueFixtureError.failed("fresh live actual Dart envelope golden required")
@@ -1285,6 +1566,8 @@ private actor QueueFaultVault: PiliAccountSecretStore {
     checks += try await checkQueuedEffectReceipts(fixture)
     checks += try await checkQueuedFifoFaults(fixture)
     checks += try await checkUnknownFenceProtocol(fixture)
+    checks += try await checkSameValueResolutionIdentity(fixture)
+    checks += try await checkResolutionSerialization(fixture)
     checks += try await checkQueueRetryExhaustion(fixture)
     checks += try await checkQueuedPurposeInterference(fixture)
     checks += try await checkQueueContention(fixture)
