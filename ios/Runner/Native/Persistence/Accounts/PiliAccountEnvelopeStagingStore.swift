@@ -277,6 +277,15 @@ actor PiliAccountEnvelopeStagingStore {
   /// Durable release of the recovery fence for the exact attempted operation.
   /// Nil journal is a no-op; a different token throws instead of clearing newer
   /// evidence; the removal is verified by read-back.
+  ///
+  /// Cancellation boundary (commit / point of no return): the awaited journal
+  /// read is cancellable up to the check below. A task cancelled BEFORE the
+  /// removal is initiated aborts with `CancellationError` and leaves the exact
+  /// journal untouched, so the caller's in-memory fence stays armed as well.
+  /// Once the removal is initiated the clear is committed: removal and
+  /// verification run to their conservative conclusion without re-checking
+  /// cancellation, so there is no invented rollback and a committed removal is
+  /// never misrepresented as retained evidence.
   func clearRecoveryJournal(expectedAttemptedTransactionID: UUID) async throws {
     try beginOperation()
     defer { operationInProgress = false }
@@ -284,6 +293,7 @@ actor PiliAccountEnvelopeStagingStore {
     guard current.attemptedTransactionID == expectedAttemptedTransactionID else {
       throw PiliAccountEnvelopeStagingError.staleRecoveryJournal
     }
+    try Task.checkCancellation()
     try await removeRecoveryJournalVerifying()
   }
 
