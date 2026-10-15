@@ -81,6 +81,11 @@ recovery 与 identity-consumer 计划**，并把 tagged-reader 计划中未执�
   adopt/install/delete/import/buvid）与 `resolveUnresolvedPublication()` 先加载一次：
   journal 存在且内存 fence 为空 → 以 journal 字段 arm `unresolved`（token/digest/kind
   与 journal 完全一致）；损坏 → 抛错（fail closed）；已加载标记避免重复 IO。
+- 冷加载的 vault 读与发布共用 operation fence：合法共享 vault 忙时必须按 store 既有共享
+  有界预算重试（只重试 `PiliAccountEnvelopeStagingError.operationInProgress`，耗尽 →
+  类型化 `publicationConflict`；不新增 loop、不加长超时），绝不把裸 `operationInProgress`
+  外泄、也不把 unknown/corrupt journal 重试成干净命名空间（R26，见
+  `P05_REVIEW_E079F79_R26_REPAIR_PLAN.md`）。
 - 新增只读 `func loadPersistentRecovery() async throws -> PiliAccountShadowUnresolvedPublication?`
   供测试/恢复调用方显式查询（不写、不清）。
 - `pendingUnresolvedPublication` 保持 sync 观测口（文档注明：重建后需先经 async 加载）。
