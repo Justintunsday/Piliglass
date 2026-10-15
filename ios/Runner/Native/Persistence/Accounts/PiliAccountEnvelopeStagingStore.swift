@@ -36,12 +36,13 @@ struct PiliAccountEnvelopeRecoveryJournal: Sendable, Equatable {
   /// previous pointer). Decoding rejects any non-canonical byte form, so
   /// truncation or field tampering fails closed instead of reading as absent.
   static func encode(_ journal: PiliAccountEnvelopeRecoveryJournal) throws -> Data {
+    let expected: Any = journal.expectedPreviousTransactionID
+      .map { $0.uuidString.lowercased() } ?? NSNull()
     let payload: [String: Any] = [
       "schemaVersion": 1,
       "state": "unresolved",
       "attemptedTransactionID": journal.attemptedTransactionID.uuidString.lowercased(),
-      "expectedPreviousTransactionID":
-        journal.expectedPreviousTransactionID?.uuidString.lowercased() as Any? ?? NSNull(),
+      "expectedPreviousTransactionID": expected,
       "attemptedCandidateSHA256": journal.attemptedCandidateSHA256,
       "kind": journal.kind,
     ]
