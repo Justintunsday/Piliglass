@@ -18,6 +18,12 @@ enum PiliAccountShadowTransactionError: Error, Sendable, Equatable {
   /// records the read-back; an unknown outcome is never replayed or inferred
   /// from a later payload.
   case unresolvedPublication
+  /// A read-back resolution is already in flight. Resolution is single-flight so
+  /// a stale resolver can never release a newer fence.
+  case resolutionInProgress
+  /// The fence this read-back belongs to no longer exists or was replaced; the
+  /// stale resolver must not release any fence with its read-back.
+  case staleResolution
 }
 
 struct PiliAccountShadowCookieSave: Sendable, Equatable {
@@ -125,27 +131,49 @@ enum PiliAccountShadowUnresolvedWriteKind: Sendable, Equatable {
   case cookieDeleteAll, temporarySelection, purposeChange, credentials, activated, buvidSeed
 }
 
-/// Immutable evidence retained for one unresolved publication: the exact pointer
-/// the write tried to replace and the SHA-256 of the exact encoded candidate the
-/// vault attempted. The digest shares the vault manifest's `sha256` domain, so
-/// read-back resolution correlates the attempted publication identity instead
-/// of inferring operation success from a semantically similar payload.
+/// Immutable evidence retained for one unresolved publication: the exact
+/// pointer the write tried to replace, the exact immutable transaction ID the
+/// attempt would have published under, and the SHA-256 of the exact encoded
+/// candidate. The ID is the operation identity used for correlated recovery;
+/// the digest is content evidence only and is never treated as proof that the
+/// operation committed.
 struct PiliAccountShadowUnresolvedPublication: Sendable, Equatable {
   let expectedPreviousTransactionID: UUID?
+  let attemptedTransactionID: UUID
   let attemptedCandidateSHA256: String
   let kind: PiliAccountShadowUnresolvedWriteKind
 }
 
+/// Correlated classification of one unknown-publication read-back.
+enum PiliAccountShadowPublicationResolutionOutcome: Sendable, Equatable {
+  /// The published pointer names the exact attempted transaction ID: the
+  /// attempt's pointer write is correlated operation identity.
+  case attemptCommitted
+  /// The published pointer still names the candidate the attempt intended to
+  /// replace (including "no candidate before"): the attempt never became the
+  /// published candidate, even when its bytes match the current content.
+  case attemptNotCommitted
+  /// The published pointer names neither the attempted ID nor the expected
+  /// previous ID: another publication intervened, so this read-back cannot
+  /// classify the attempt either way.
+  case ambiguousObservedCandidate
+}
+
 /// Recorded read-back outcome that releases the unresolved-publication fence.
-/// `observedMatchedAttempt` is true only when the current published candidate
-/// is byte-identical to the attempted candidate. It records evidence; it never
-/// fabricates a write receipt for the unknown operation and never replays it.
+/// The `outcome` is derived from exact immutable transaction IDs, never from
+/// content equality. `observedContentMatchesAttempt` is reported separately as
+/// content-only evidence: a same-value/no-op write can be byte-identical, so a
+/// true value must not be used as operation proof. A failed read-back throws
+/// and keeps the fence armed; a cancelled or stale resolver never releases a
+/// fence it does not own.
 struct PiliAccountShadowPublicationResolution: Sendable, Equatable {
   let expectedPreviousTransactionID: UUID?
+  let attemptedTransactionID: UUID
   let attemptedCandidateSHA256: String
   let observedTransactionID: UUID?
   let observedCandidateSHA256: String?
-  let observedMatchedAttempt: Bool
+  let outcome: PiliAccountShadowPublicationResolutionOutcome
+  let observedContentMatchesAttempt: Bool
 }
 
 /// Durable single-account transaction over the capture-local shadow. It mutates
@@ -175,6 +203,9 @@ actor PiliAccountEnvelopeTransactionStore {
   private var executingQueuedTurn = false
   private var queueRetrySleeps = 0
   private var unresolved: PiliAccountShadowUnresolvedPublication?
+  /// Single-flight gate for `resolveUnresolvedPublication()`: a second
+  /// concurrent resolver fails closed instead of racing the fence.
+  private var resolutionInProgress = false
   var nativeWritesAllowed: Bool { false }
   var authoritySwitchAllowed: Bool { false }
 
@@ -277,20 +308,26 @@ actor PiliAccountEnvelopeTransactionStore {
   }
 
   /// Single publication choke point. Any `publicationUnknown` first records the
-  /// immutable attempted-candidate evidence and the fail-closed fence, then
-  /// propagates unchanged. The attempted SHA-256 shares the vault manifest's
-  /// `sha256` domain, so read-back correlates the exact attempted publication.
+  /// immutable attempted operation evidence (exact transaction ID, expected
+  /// previous pointer, content digest) and the fail-closed fence, then
+  /// propagates unchanged. The digest is content evidence only; correlated
+  /// recovery uses the exact transaction ID.
   private func publishCandidate(_ candidate: PiliAccountLiveMemoryShadow,
                                 expectedTransactionID: UUID,
                                 kind: PiliAccountShadowUnresolvedWriteKind) async throws
     -> PiliAccountEnvelopeStagingReceipt {
     let data = try codec.encode(candidate)
+    // Mint the immutable operation identity before publishing so an unknown
+    // acknowledgment can be correlated by exact identity, never by content.
+    let attemptID = UUID()
     do {
-      return try await vault.importShadow(data, expectedTransactionID: expectedTransactionID)
+      return try await vault.importShadow(data, expectedTransactionID: expectedTransactionID,
+                                          candidateTransactionID: attemptID)
     } catch PiliAccountEnvelopeStagingError.publicationUnknown {
       if unresolved == nil {
         unresolved = PiliAccountShadowUnresolvedPublication(
           expectedPreviousTransactionID: expectedTransactionID,
+          attemptedTransactionID: attemptID,
           attemptedCandidateSHA256: Self.digest(data), kind: kind)
       }
       throw PiliAccountEnvelopeStagingError.publicationUnknown
@@ -306,28 +343,56 @@ actor PiliAccountEnvelopeTransactionStore {
   }
 
   /// Mandatory read-back for a prior `publicationUnknown`, and the only way the
-  /// fence is released. It never replays the unknown write and never fabricates
-  /// a receipt for it: it records the observed pointer identity and whether the
-  /// exact attempted candidate is the one currently published. A failed
-  /// read-back throws and keeps the fence armed. Persistent cross-restart
-  /// recovery is deliberately out of this B2e-1 slice.
+  /// fence is released. Resolution is single-flight, cancellation-aware and
+  /// revalidates the immutable pending-operation token after every await, so a
+  /// stale resolver can never release a newer fence. The outcome is correlated
+  /// exact operation identity (pointer names the attempted transaction ID) or
+  /// unchanged previous pointer or an explicit ambiguity; content equality is
+  /// reported separately and is never operation proof. It never replays the
+  /// unknown write and never fabricates a receipt for it.
   func resolveUnresolvedPublication() async throws
     -> PiliAccountShadowPublicationResolution? {
-    guard let unresolved else { return nil }
+    guard let pending = unresolved else { return nil }
+    guard !resolutionInProgress else {
+      throw PiliAccountShadowTransactionError.resolutionInProgress
+    }
+    resolutionInProgress = true
+    defer { resolutionInProgress = false }
+    try Task.checkCancellation()
     let snapshot = try await vault.loadShadowSnapshot()
+    try Task.checkCancellation()
+    // Revalidate the captured immutable token after every await: a newer fence
+    // (or another resolver's completion) must never be released by this
+    // read-back.
+    guard unresolved?.attemptedTransactionID == pending.attemptedTransactionID else {
+      throw PiliAccountShadowTransactionError.staleResolution
+    }
     let observedDigest: String?
     if let snapshot {
       observedDigest = Self.digest(try codec.encode(snapshot.envelope))
     } else {
       observedDigest = nil
     }
+    let observedID = snapshot?.transactionID
+    let outcome: PiliAccountShadowPublicationResolutionOutcome
+    if observedID == pending.attemptedTransactionID {
+      outcome = .attemptCommitted
+    } else if observedID == pending.expectedPreviousTransactionID {
+      // The pointer still names the candidate the attempt intended to replace
+      // (including "no candidate before"): not committed, even if bytes match.
+      outcome = .attemptNotCommitted
+    } else {
+      outcome = .ambiguousObservedCandidate
+    }
     let resolution = PiliAccountShadowPublicationResolution(
-      expectedPreviousTransactionID: unresolved.expectedPreviousTransactionID,
-      attemptedCandidateSHA256: unresolved.attemptedCandidateSHA256,
-      observedTransactionID: snapshot?.transactionID,
+      expectedPreviousTransactionID: pending.expectedPreviousTransactionID,
+      attemptedTransactionID: pending.attemptedTransactionID,
+      attemptedCandidateSHA256: pending.attemptedCandidateSHA256,
+      observedTransactionID: observedID,
       observedCandidateSHA256: observedDigest,
-      observedMatchedAttempt: observedDigest == unresolved.attemptedCandidateSHA256)
-    self.unresolved = nil
+      outcome: outcome,
+      observedContentMatchesAttempt: observedDigest == pending.attemptedCandidateSHA256)
+    unresolved = nil
     return resolution
   }
 

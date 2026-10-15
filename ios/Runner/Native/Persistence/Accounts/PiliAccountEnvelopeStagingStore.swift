@@ -51,15 +51,22 @@ actor PiliAccountEnvelopeStagingStore {
 
   /// Compare and publish under the same vault operation fence. All transaction
   /// actors in one namespace must share this vault instance, not separate actors.
+  /// When the caller supplies `candidateTransactionID`, this publication is
+  /// minted under that exact immutable operation ID (rejecting a collision with
+  /// an existing record) so an unknown acknowledgment can later be correlated
+  /// by identity instead of by content.
   @discardableResult
-  func importShadow(_ input: Data, expectedTransactionID: UUID) async throws
+  func importShadow(_ input: Data, expectedTransactionID: UUID,
+                    candidateTransactionID: UUID? = nil) async throws
     -> PiliAccountEnvelopeStagingReceipt {
     try beginOperation()
     defer { operationInProgress = false }
-    return try await publishShadow(input, expectedTransactionID: expectedTransactionID)
+    return try await publishShadow(input, expectedTransactionID: expectedTransactionID,
+                                   candidateTransactionID: candidateTransactionID)
   }
 
-  private func publishShadow(_ input: Data, expectedTransactionID: UUID?) async throws
+  private func publishShadow(_ input: Data, expectedTransactionID: UUID?,
+                             candidateTransactionID: UUID? = nil) async throws
     -> PiliAccountEnvelopeStagingReceipt {
     // Validate and own a complete copy before any persistent mutation.
     let candidate = try codec.decode(input)
@@ -69,13 +76,19 @@ actor PiliAccountEnvelopeStagingStore {
       throw PiliAccountEnvelopeStagingError.staleTransaction
     }
     try Task.checkCancellation()
+    let id = candidateTransactionID ?? UUID()
+    let recordKey = key(id)
+    if candidateTransactionID != nil {
+      // A caller-supplied operation ID must never overwrite an existing record.
+      guard try await secrets.read(recordKey) == nil else {
+        throw PiliAccountEnvelopeStagingError.verificationFailed
+      }
+    }
     if let previous {
       // Upgrade an existing manifest-only candidate before moving its shadow
       // pointer. A pre-upgrade authority marker may still name that record.
       try await ensureDescriptor(previous)
     }
-    let id = UUID()
-    let recordKey = key(id)
     let next = Manifest(schemaVersion: 2, transactionID: id, byteCount: data.count, sha256: digest(data))
     let encoder = JSONEncoder()
     encoder.outputFormatting = .sortedKeys
