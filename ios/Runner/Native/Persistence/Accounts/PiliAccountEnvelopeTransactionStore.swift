@@ -24,6 +24,9 @@ enum PiliAccountShadowTransactionError: Error, Sendable, Equatable {
   /// The fence this read-back belongs to no longer exists or was replaced; the
   /// stale resolver must not release any fence with its read-back.
   case staleResolution
+  /// The durable recovery journal could not be interpreted as a known attempted
+  /// write kind; the store fails closed instead of guessing.
+  case invalidRecovery
 }
 
 struct PiliAccountShadowCookieSave: Sendable, Equatable {
@@ -125,8 +128,9 @@ struct PiliAccountShadowTransactionReceipt: Sendable, Equatable {
 }
 
 /// Compact diagnostics for the exact attempted write whose publication result
-/// is unknown. It carries no payload for replay.
-enum PiliAccountShadowUnresolvedWriteKind: Sendable, Equatable {
+/// is unknown. Its raw value is the stable journal form used for durable
+/// recovery; it carries no payload for replay.
+enum PiliAccountShadowUnresolvedWriteKind: String, Sendable, Equatable {
   case adoptIdentities, install, importRecords, delete, cookieSave, cookieDelete
   case cookieDeleteAll, temporarySelection, purposeChange, credentials, activated, buvidSeed
 }
@@ -206,6 +210,10 @@ actor PiliAccountEnvelopeTransactionStore {
   /// Single-flight gate for `resolveUnresolvedPublication()`: a second
   /// concurrent resolver fails closed instead of racing the fence.
   private var resolutionInProgress = false
+  /// The durable recovery journal was loaded for this store instance. A
+  /// recreated store must arm its fence from persisted evidence before it
+  /// admits any write, never from empty memory.
+  private var recoveryLoaded = false
   var nativeWritesAllowed: Bool { false }
   var authoritySwitchAllowed: Bool { false }
 
@@ -218,9 +226,53 @@ actor PiliAccountEnvelopeTransactionStore {
   var retrySleepCount: Int { queueRetrySleeps }
   /// Immutable evidence of a `publicationUnknown` whose read-back resolution
   /// has not been recorded yet. While non-nil every durable write fails closed
-  /// with `unresolvedPublication`.
+  /// with `unresolvedPublication`. A recreated store loads the durable journal
+  /// lazily; use `loadPersistentRecovery()` to observe it explicitly before any
+  /// write.
   var pendingUnresolvedPublication: PiliAccountShadowUnresolvedPublication? {
     unresolved
+  }
+
+  /// Explicit recovery entry for a recreated store: loads the durable
+  /// unresolved-publication evidence (once per store lifetime) and returns the
+  /// pending fence without writing or clearing anything. A corrupt journal
+  /// throws and fails closed.
+  func loadPersistentRecovery() async throws -> PiliAccountShadowUnresolvedPublication? {
+    try await loadRecoveryIfNeeded()
+    return unresolved
+  }
+
+  /// Loads the single-slot recovery journal once and arms the in-memory fence
+  /// from it. Every async write entry and the resolver call this before doing
+  /// anything else.
+  private func loadRecoveryIfNeeded() async throws {
+    guard !recoveryLoaded else { return }
+    if unresolved == nil, let journal = try await vault.loadRecoveryJournal() {
+      guard let kind = PiliAccountShadowUnresolvedWriteKind(rawValue: journal.kind) else {
+        throw PiliAccountShadowTransactionError.invalidRecovery
+      }
+      unresolved = PiliAccountShadowUnresolvedPublication(
+        expectedPreviousTransactionID: journal.expectedPreviousTransactionID,
+        attemptedTransactionID: journal.attemptedTransactionID,
+        attemptedCandidateSHA256: journal.attemptedCandidateSHA256,
+        kind: kind)
+    }
+    recoveryLoaded = true
+  }
+
+  /// Arms the fence from the exact persisted journal evidence. Used when the
+  /// vault refuses a correlated publication because (or while) recovery
+  /// evidence exists; the store never invents a token it does not own.
+  private func armFromRecoveryJournal() async throws {
+    guard let journal = try await vault.loadRecoveryJournal() else { return }
+    guard let kind = PiliAccountShadowUnresolvedWriteKind(rawValue: journal.kind) else {
+      throw PiliAccountShadowTransactionError.invalidRecovery
+    }
+    unresolved = PiliAccountShadowUnresolvedPublication(
+      expectedPreviousTransactionID: journal.expectedPreviousTransactionID,
+      attemptedTransactionID: journal.attemptedTransactionID,
+      attemptedCandidateSHA256: journal.attemptedCandidateSHA256,
+      kind: kind)
   }
 
   init(vault: PiliAccountEnvelopeStagingStore,
@@ -253,6 +305,7 @@ actor PiliAccountEnvelopeTransactionStore {
   func enqueue(_ write: PiliAccountShadowQueuedWrite) async throws
     -> PiliAccountShadowWriteOutcome {
     try Task.checkCancellation()
+    try await loadRecoveryIfNeeded()
     try requireResolvedPublication()
     if writerActive {
       guard pendingWrites < maxPendingWrites else {
@@ -322,7 +375,8 @@ actor PiliAccountEnvelopeTransactionStore {
     let attemptID = UUID()
     do {
       return try await vault.importShadow(data, expectedTransactionID: expectedTransactionID,
-                                          candidateTransactionID: attemptID)
+                                          candidateTransactionID: attemptID,
+                                          recoveryKind: kind.rawValue)
     } catch PiliAccountEnvelopeStagingError.publicationUnknown {
       if unresolved == nil {
         unresolved = PiliAccountShadowUnresolvedPublication(
@@ -331,6 +385,12 @@ actor PiliAccountEnvelopeTransactionStore {
           attemptedCandidateSHA256: Self.digest(data), kind: kind)
       }
       throw PiliAccountEnvelopeStagingError.publicationUnknown
+    } catch PiliAccountEnvelopeStagingError.unresolvedRecovery {
+      // The vault refused to start (or could not verify) the durable journal.
+      // Arm the exact persisted evidence before failing closed; never invent a
+      // token for an attempt this store did not persist.
+      try await armFromRecoveryJournal()
+      throw PiliAccountEnvelopeStagingError.unresolvedRecovery
     }
   }
 
@@ -352,6 +412,7 @@ actor PiliAccountEnvelopeTransactionStore {
   /// unknown write and never fabricates a receipt for it.
   func resolveUnresolvedPublication() async throws
     -> PiliAccountShadowPublicationResolution? {
+    try await loadRecoveryIfNeeded()
     guard let pending = unresolved else { return nil }
     guard !resolutionInProgress else {
       throw PiliAccountShadowTransactionError.resolutionInProgress
@@ -392,6 +453,13 @@ actor PiliAccountEnvelopeTransactionStore {
       observedCandidateSHA256: observedDigest,
       outcome: outcome,
       observedContentMatchesAttempt: observedDigest == pending.attemptedCandidateSHA256)
+    // Record the resolution durably before releasing the in-memory fence: the
+    // journal is the only durable evidence, so a failed or cancelled clear
+    // keeps both the journal and the fence armed. Ambiguous/foreign pointers
+    // are recorded in the returned receipt and release the fence with the same
+    // honest classification instead of guessing an outcome.
+    try await vault.clearRecoveryJournal(
+      expectedAttemptedTransactionID: pending.attemptedTransactionID)
     unresolved = nil
     return resolution
   }
@@ -612,6 +680,7 @@ actor PiliAccountEnvelopeTransactionStore {
   /// from MID, storage key or runtime generation, and nothing authorizes with
   /// them.
   func adoptMissingIdentities() async throws -> PiliAccountShadowIdentityReceipt {
+    try await loadRecoveryIfNeeded()
     try beginOperation()
     defer { operationInProgress = false }
     guard let snapshot = try await vault.loadShadowSnapshot() else {
@@ -654,6 +723,7 @@ actor PiliAccountEnvelopeTransactionStore {
   /// record stay untouched.
   func applyInstall(_ install: PiliAccountShadowInstall) async throws
     -> PiliAccountShadowTransactionReceipt {
+    try await loadRecoveryIfNeeded()
     try beginOperation()
     defer { operationInProgress = false }
     guard let snapshot = try await vault.loadShadowSnapshot() else {
@@ -715,6 +785,7 @@ actor PiliAccountEnvelopeTransactionStore {
   /// History is derived again; remaining record identities are preserved.
   func applyDelete(recordKeyUnits: PiliCookieUTF16, expectedGeneration: Int64) async throws
     -> PiliAccountShadowTransactionReceipt {
+    try await loadRecoveryIfNeeded()
     try beginOperation()
     defer { operationInProgress = false }
     guard let snapshot = try await vault.loadShadowSnapshot() else {
@@ -773,6 +844,7 @@ actor PiliAccountEnvelopeTransactionStore {
   /// any rejection publishes nothing.
   func applyImport(_ entries: [PiliAccountShadowInstall]) async throws
     -> PiliAccountShadowImportReceipt {
+    try await loadRecoveryIfNeeded()
     try beginOperation()
     defer { operationInProgress = false }
     guard let snapshot = try await vault.loadShadowSnapshot() else {
@@ -901,6 +973,7 @@ actor PiliAccountEnvelopeTransactionStore {
   func applyBuvidSeed(recordKeyUnits: PiliCookieUTF16, expectedGeneration: Int64,
                       valueUnits: PiliCookieUTF16, nowMicroseconds: Int64) async throws
     -> PiliAccountShadowBuvidReceipt {
+    try await loadRecoveryIfNeeded()
     try beginOperation()
     defer { operationInProgress = false }
     guard let snapshot = try await vault.loadShadowSnapshot() else {
@@ -986,6 +1059,7 @@ actor PiliAccountEnvelopeTransactionStore {
                            _ transform: (PiliAccountLiveMemoryShadow, Int) throws
                              -> PiliAccountLiveMemoryShadow) async throws
     -> PiliAccountShadowTransactionReceipt {
+    try await loadRecoveryIfNeeded()
     try beginOperation()
     defer { operationInProgress = false }
     guard let snapshot = try await vault.loadShadowSnapshot() else {
