@@ -18,6 +18,10 @@ private actor QueueFaultVault: PiliAccountSecretStore {
   private var pauseManifestRead = false
   private var manifestReadSuspended: CheckedContinuation<Void, Never>?
   private var manifestReadObserver: CheckedContinuation<Void, Never>?
+  private var journalReadSkip = 0
+  private var pauseJournalRead = false
+  private var journalReadSuspended: CheckedContinuation<Void, Never>?
+  private var journalReadObserver: CheckedContinuation<Void, Never>?
   private var pointerReadFailures = 0
   private var pointerReadFailSkip = 0
   private var journalReadFailures = 0
@@ -50,6 +54,22 @@ private actor QueueFaultVault: PiliAccountSecretStore {
     manifestReadSuspended = nil
   }
   func isManifestReadPaused() -> Bool { manifestReadSuspended != nil }
+  /// Pauses the next journal read after `skip` further reads, so a test can
+  /// cancel a resolver (or an explicit acknowledgment) at the real durable
+  /// clear's pre-commit journal-read stage before any removal is initiated.
+  func pauseJournalReadAfter(_ skip: Int) {
+    journalReadSkip = skip
+    pauseJournalRead = true
+  }
+  func waitUntilJournalReadPaused() async {
+    if journalReadSuspended != nil { return }
+    await withCheckedContinuation { journalReadObserver = $0 }
+  }
+  func resumeJournalRead() {
+    journalReadSuspended?.resume()
+    journalReadSuspended = nil
+  }
+  func isJournalReadPaused() -> Bool { journalReadSuspended != nil }
   func isWritePaused() -> Bool { suspended != nil }
   /// Fails the pointer read that follows `skip` further pointer reads. The
   /// publish-time acknowledgment read is the second read of one attempt, so
@@ -97,6 +117,18 @@ private actor QueueFaultVault: PiliAccountSecretStore {
   func read(_ key: String) async throws -> Data? {
     if key == recoveryJournalKey {
       journalReads += 1
+      if pauseJournalRead {
+        if journalReadSkip > 0 {
+          journalReadSkip -= 1
+        } else {
+          pauseJournalRead = false
+          await withCheckedContinuation {
+            journalReadSuspended = $0
+            journalReadObserver?.resume()
+            journalReadObserver = nil
+          }
+        }
+      }
     }
     if key == recoveryJournalKey, journalReadFailures > 0 {
       if journalReadFailSkip > 0 {
@@ -218,6 +250,14 @@ private actor QueueFaultVault: PiliAccountSecretStore {
       try await Task.sleep(nanoseconds: 5_000_000)
     }
     throw QueueFixtureError.failed("manifest read pause did not arrive")
+  }
+
+  private static func waitForJournalReadPaused(_ fault: QueueFaultVault) async throws {
+    for _ in 0..<400 {
+      if await fault.isJournalReadPaused() { return }
+      try await Task.sleep(nanoseconds: 5_000_000)
+    }
+    throw QueueFixtureError.failed("journal read pause did not arrive")
   }
 
   private static func waitForWritePause(_ fault: QueueFaultVault) async throws {
@@ -3110,6 +3150,118 @@ private actor QueueFaultVault: PiliAccountSecretStore {
       try await vault6.discardShadow()
     } catch {
       try? await vault6.discardShadow()
+      throw error
+    }
+
+    // Part 7 (R35): the durable clear's awaited journal read is a real
+    // cancellation boundary. Cancelling after pointer classification but
+    // before the removal is initiated must abort with CancellationError and
+    // keep the exact journal and memory fence; the same boundary protects the
+    // explicit ambiguity acknowledgment. Once removal is initiated the clear
+    // runs to its verified conclusion under the documented commit policy.
+    let fault7 = QueueFaultVault()
+    let vault7 = PiliAccountEnvelopeStagingStore(secrets: fault7)
+    let store7 = PiliAccountEnvelopeTransactionStore(vault: vault7)
+    do {
+      try await vault7.importShadow(fx.codec.encode(fx.base))
+      _ = try await store7.enqueue(.adoptIdentities)
+      await fault7.arm(.pointerReadAfter)
+      var r35Unknown = false
+      do {
+        _ = try await store7.enqueue(.credentials(recordKey: fx.key,
+          generation: fx.record.generation, accessKey: units("r35-committed"),
+          refreshToken: nil))
+      } catch PiliAccountEnvelopeStagingError.publicationUnknown { r35Unknown = true }
+      try check(r35Unknown, "the r35 committed unknown propagates")
+      guard let journal7 = try await vault7.loadRecoveryJournal() else {
+        throw QueueFixtureError.failed("the r35 unknown left no durable journal")
+      }
+      let baselineCount7 = await fault7.recordCount()
+
+      // (a) Cancel the default resolver while the clear preflight journal read
+      // is paused: both the journal and the fence must survive.
+      await fault7.pauseJournalReadAfter(0)
+      let cancelledResolver7 = Task { try await store7.resolveUnresolvedPublication() }
+      try await waitForJournalReadPaused(fault7)
+      cancelledResolver7.cancel()
+      await fault7.resumeJournalRead()
+      var clearCancelled7 = false
+      do {
+        _ = try await cancelledResolver7.value
+      } catch is CancellationError { clearCancelled7 = true }
+      try check(clearCancelled7,
+        "a resolver cancelled before the clear commits aborts with CancellationError")
+      guard let retained7 = try await vault7.loadRecoveryJournal(),
+            retained7.attemptedTransactionID == journal7.attemptedTransactionID else {
+        throw QueueFixtureError.failed("the cancelled clear deleted the durable journal")
+      }
+      guard await store7.pendingUnresolvedPublication?.attemptedTransactionID ==
+        journal7.attemptedTransactionID else {
+        throw QueueFixtureError.failed("the cancelled clear released the memory fence")
+      }
+      checks += 1
+      let restarted7 = PiliAccountEnvelopeTransactionStore(
+        vault: PiliAccountEnvelopeStagingStore(secrets: fault7))
+      guard let reopened7 = try await restarted7.loadPersistentRecovery(),
+            reopened7.attemptedTransactionID == journal7.attemptedTransactionID else {
+        throw QueueFixtureError.failed("a recreated store lost the cancelled-clear evidence")
+      }
+      checks += 1
+      try check(await fault7.recordCount() == baselineCount7,
+        "the cancelled clear publishes nothing")
+
+      // (b) A foreign pointer makes the recorded read-back ambiguous; a
+      // cancelled EXPLICIT acknowledgment at the same pre-commit boundary also
+      // keeps the evidence, and the clean acknowledgment then releases it.
+      let foreignVault7 = PiliAccountEnvelopeStagingStore(secrets: fault7)
+      guard let whileFenced7 = try await store7.loadShadowSnapshot() else {
+        throw QueueFixtureError.failed("missing r35 fenced snapshot")
+      }
+      _ = try await foreignVault7.importShadow(fx.codec.encode(whileFenced7.envelope))
+      await fault7.pauseJournalReadAfter(0)
+      let cancelledAck7 = Task { try await store7.resolveUnresolvedPublication(allowAmbiguous: true) }
+      try await waitForJournalReadPaused(fault7)
+      cancelledAck7.cancel()
+      await fault7.resumeJournalRead()
+      var ackCancelled7 = false
+      do {
+        _ = try await cancelledAck7.value
+      } catch is CancellationError { ackCancelled7 = true }
+      try check(ackCancelled7,
+        "a cancelled explicit acknowledgment at the clear boundary keeps the evidence")
+      guard try await vault7.loadRecoveryJournal() != nil else {
+        throw QueueFixtureError.failed("the cancelled acknowledgment deleted the journal")
+      }
+      guard await store7.pendingUnresolvedPublication != nil else {
+        throw QueueFixtureError.failed("the cancelled acknowledgment released the fence")
+      }
+      guard let acknowledged7 = try await store7.resolveUnresolvedPublication(
+        allowAmbiguous: true) else {
+        throw QueueFixtureError.failed("the r35 ambiguous acknowledgment left no resolution")
+      }
+      try check(acknowledged7.outcome == .ambiguousObservedCandidate &&
+        acknowledged7.attemptedTransactionID == journal7.attemptedTransactionID,
+        "the r35 acknowledgment resolves the recorded ambiguity exactly once")
+      guard try await vault7.loadRecoveryJournal() == nil else {
+        throw QueueFixtureError.failed("the r35 acknowledgment did not clear the journal")
+      }
+      guard case .record = try await store7.enqueue(.credentials(recordKey: fx.key,
+        generation: fx.record.generation, accessKey: units("r35-after"),
+        refreshToken: nil)) else {
+        throw QueueFixtureError.failed("follower after the r35 acknowledgment expected")
+      }
+      try await waitForIdle(store7)
+      guard let final7 = try await store7.loadShadowSnapshot() else {
+        throw QueueFixtureError.failed("missing r35 final snapshot")
+      }
+      let finalCount7 = await fault7.recordCount()
+      try check(final7.envelope.records[1].accessKeyUnits?.units == Array("r35-after".utf16) &&
+        finalCount7 == baselineCount7 + 2,
+        "the noncancelled resolver and follower succeed exactly once after the cancelled clears")
+      try await vault7.discardShadow()
+    } catch {
+      await fault7.resumeJournalRead()
+      try? await vault7.discardShadow()
       throw error
     }
     return checks
