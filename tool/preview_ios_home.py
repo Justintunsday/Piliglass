@@ -29,6 +29,18 @@ def run(*args):
     return subprocess.check_output(args, text=True).strip()
 
 
+def best_effort_run(*args):
+    try:
+        return run(*args)
+    except (subprocess.CalledProcessError, OSError):
+        return ""
+
+
+def bounded_lines(text, limit):
+    lines = text.splitlines()
+    return "\n".join(lines[-limit:])
+
+
 FIXTURES = r'''
 import SwiftUI
 import UIKit
@@ -120,9 +132,27 @@ private struct PiliNativeErrorView: View {
 '''
 
 APP = r'''
+private func diagnosticsTrace(_ event: String) {
+  let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+  let url = documents.appendingPathComponent("layout-diagnostics.jsonl")
+  let line = String(format: "%.3f pid=%d %@\n", Date().timeIntervalSince1970,
+                    ProcessInfo.processInfo.processIdentifier, event)
+  guard let data = line.data(using: .utf8) else { return }
+  if let handle = try? FileHandle(forWritingTo: url) {
+    handle.seekToEndOfFile()
+    handle.write(data)
+    try? handle.close()
+  } else {
+    try? data.write(to: url)
+  }
+}
+
 @main
 private struct HomePreviewApp: App {
   @StateObject private var model = PiliNativeViewModel()
+  init() {
+    diagnosticsTrace("app-init args=\(ProcessInfo.processInfo.arguments.dropFirst().joined(separator: ","))")
+  }
   var body: some Scene {
     WindowGroup {
       Group {
@@ -144,10 +174,16 @@ private struct HomePreviewApp: App {
         // simulator relaunch; a bounded retry keeps the inspection
         // deterministic inside the harness's unchanged per-mode report window
         // instead of silently producing no report at all.
-        for _ in 0..<8 {
+        diagnosticsTrace("task-start")
+        for attempt in 0..<8 {
           try? await Task.sleep(nanoseconds: 3_000_000_000)
-          if await inspectLayout() { return }
+          diagnosticsTrace("inspect-attempt \(attempt)")
+          if await inspectLayout() {
+            diagnosticsTrace("inspect-success \(attempt)")
+            return
+          }
         }
+        diagnosticsTrace("inspect-exhausted")
       }
     }
   }
@@ -156,7 +192,10 @@ private struct HomePreviewApp: App {
 @MainActor
 private func inspectLayout() async -> Bool {
   guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
-        let window = scene.windows.first(where: { $0.isKeyWindow }) else { return false }
+        let window = scene.windows.first(where: { $0.isKeyWindow }) else {
+    diagnosticsTrace("window-missing")
+    return false
+  }
   func descendants(_ view: UIView) -> [UIView] {
     [view] + view.subviews.flatMap { descendants($0) }
   }
@@ -164,18 +203,27 @@ private func inspectLayout() async -> Bool {
   if ProcessInfo.processInfo.arguments.contains("--settings") {
     let report = ["fixture": "Playback settings with simulated latency results"]
     let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-    if let data = try? JSONSerialization.data(withJSONObject: report) {
-      try? data.write(to: documents.appendingPathComponent("layout.json"))
+    do {
+      let data = try JSONSerialization.data(withJSONObject: report)
+      try data.write(to: documents.appendingPathComponent("layout.json"))
+      diagnosticsTrace("settings-write-ok")
+      return true
+    } catch {
+      diagnosticsTrace("settings-write-fail \(error)")
+      return false
     }
-    return true
   }
   let scrolls = views.compactMap { $0 as? UIScrollView }.filter {
     let frame = $0.convert($0.bounds, to: window)
     return $0.contentSize.height > $0.bounds.height + 100 &&
       frame.intersection(window.bounds).width > window.bounds.width * 0.8
   }
+  diagnosticsTrace("hierarchy scrolls=\(scrolls.count)")
   guard let scroll = scrolls.first,
-        let tabBar = views.compactMap({ $0 as? UITabBar }).first else { return false }
+        let tabBar = views.compactMap({ $0 as? UITabBar }).first else {
+    diagnosticsTrace("hierarchy-missing")
+    return false
+  }
   let scrollFrame = scroll.convert(scroll.bounds, to: window)
   let barFrame = tabBar.convert(tabBar.bounds, to: window)
   let navigationBar = views.compactMap { $0 as? UINavigationBar }.first {
@@ -200,6 +248,7 @@ private func inspectLayout() async -> Bool {
   }
   scroll.setContentOffset(CGPoint(x: 0, y: offset), animated: false)
   try? await Task.sleep(nanoseconds: 450_000_000)
+  diagnosticsTrace("scrolled offset=\(offset) bottom=\(bottom)")
   let report: [String: Any] = [
     "scrollFrame": NSCoder.string(for: scrollFrame),
     "hasNavigationBar": navigationBar != nil,
@@ -211,10 +260,15 @@ private func inspectLayout() async -> Bool {
     "scrollOffset": offset,
   ]
   let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-  if let data = try? JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys]) {
-    try? data.write(to: documents.appendingPathComponent("layout.json"))
+  do {
+    let data = try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys])
+    try data.write(to: documents.appendingPathComponent("layout.json"))
+    diagnosticsTrace("write-ok bytes=\(data.count)")
+    return true
+  } catch {
+    diagnosticsTrace("write-fail \(error)")
+    return false
   }
-  return true
 }
 '''
 
@@ -284,6 +338,8 @@ private struct PiliNativeSettingsView: View {
     run("xcrun", "simctl", "install", udid, str(app))
     data_dir = Path(run("xcrun", "simctl", "get_app_container", udid, BUNDLE_ID, "data"))
     report_file = data_dir / "Documents" / "layout.json"
+    diagnostics_file = data_dir / "Documents" / "layout-diagnostics.jsonl"
+    launch_trace = []
     for name, appearance, args in [
         ("light", "light", []),
         ("dark", "dark", []),
@@ -299,14 +355,61 @@ private struct PiliNativeSettingsView: View {
     ]:
         subprocess.run(["xcrun", "simctl", "terminate", udid, BUNDLE_ID], capture_output=True)
         report_file.unlink(missing_ok=True)
+        diagnostics_file.unlink(missing_ok=True)
         run("xcrun", "simctl", "ui", udid, "appearance", appearance)
-        run("xcrun", "simctl", "launch", udid, BUNDLE_ID,
-            "-AppleLanguages", "(zh-Hans)", "-AppleLocale", "zh_CN", *args)
+        pre_launch = best_effort_run("xcrun", "simctl", "spawn", udid, "launchctl", "list")
+        pre_launch_instances = [line for line in pre_launch.splitlines()
+                                if BUNDLE_ID in line or "HomePreview" in line]
+        try:
+            launch_output = run("xcrun", "simctl", "launch", udid, BUNDLE_ID,
+                "-AppleLanguages", "(zh-Hans)", "-AppleLocale", "zh_CN", *args)
+        except subprocess.CalledProcessError as error:
+            launch_output = f"launch-failed: {error}"
+        poll_start = time.monotonic()
         for _ in range(30):
             if report_file.exists():
                 break
             time.sleep(1)
+        trace_entry = {
+            "mode": name,
+            "appearance": appearance,
+            "arguments": args,
+            "container": str(data_dir),
+            "preLaunchInstances": pre_launch_instances,
+            "launchOutput": launch_output,
+            "reportDelaySeconds": round(time.monotonic() - poll_start, 1)
+              if report_file.exists() else None,
+            "diagnosticsPresent": diagnostics_file.exists(),
+        }
+        launch_trace.append(trace_entry)
+        (OUTPUT / "launch-trace.json").write_text(json.dumps(launch_trace, indent=2))
         if not report_file.exists():
+            evidence = dict(trace_entry)
+            evidence["missingReport"] = True
+            if diagnostics_file.exists():
+                evidence["diagnostics"] = bounded_lines(
+                    diagnostics_file.read_text(errors="replace"), 400)
+            post_failure = best_effort_run("xcrun", "simctl", "spawn", udid, "launchctl", "list")
+            evidence["postFailureInstances"] = [line for line in post_failure.splitlines()
+                                                if BUNDLE_ID in line or "HomePreview" in line]
+            try:
+                app_log = subprocess.check_output(
+                    ["xcrun", "simctl", "spawn", udid, "log", "show", "--last", "2m",
+                     "--style", "compact", "--predicate", 'process == "HomePreview"'],
+                    text=True, timeout=90, stderr=subprocess.DEVNULL)
+                evidence["appLogTail"] = bounded_lines(app_log, 200)
+            except (subprocess.SubprocessError, OSError) as error:
+                evidence["appLogError"] = str(error)
+            crash_reports = sorted(
+                Path.home().glob("Library/Logs/DiagnosticReports/HomePreview*"))
+            if crash_reports:
+                evidence["crashReportNames"] = [path.name for path in crash_reports[-3:]]
+                try:
+                    evidence["crashLogTail"] = bounded_lines(
+                        crash_reports[-1].read_text(errors="replace"), 100)
+                except OSError as error:
+                    evidence["crashReadError"] = str(error)
+            (OUTPUT / f"{name}-failure.json").write_text(json.dumps(evidence, indent=2))
             raise RuntimeError(f"No layout report for {name}")
         report = json.loads(report_file.read_text())
         report.update(device=device["name"], runtime=runtime["name"])
