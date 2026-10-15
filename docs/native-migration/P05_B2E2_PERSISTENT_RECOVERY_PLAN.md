@@ -93,6 +93,11 @@ recovery 与 identity-consumer 计划**，并把 tagged-reader 计划中未执�
   `requireDirectEntryAllowed()` 拒绝（idle-only 政策；只有队列自身调用链携带 token），
   `beginOperation` 在 await 后复核；只读恢复入口（`loadPersistentRecovery`/resolve）
   不受 writer 限制。见 `P05_REVIEW_788C11D_R31_R32_REPAIR_PLAN.md`。
+- R33 权限分层最终态：**直连写入 primitives 对共享 vault 争用保持既有 fail-fast**
+  （单次 `loadRecoveryOnce()`，立即以外层 vault `operationInProgress` 外泄，不重试、
+  不引入新终态错误）；queued 写入在 `executeQueuedWrite` 单一循环内独占有序重试配额；
+  `loadRecoveryIfNeeded` 有界 wrapper **仅**用于只读恢复入口。见
+  `P05_REVIEW_F3404CE_R33_R34_REPAIR_PLAN.md`。
 - 新增只读 `func loadPersistentRecovery() async throws -> PiliAccountShadowUnresolvedPublication?`
   供测试/恢复调用方显式查询（不写、不清）。
 - `pendingUnresolvedPublication` 保持 sync 观测口（文档注明：重建后需先经 async 加载）。
