@@ -140,17 +140,23 @@ private struct HomePreviewApp: App {
       .tint(piliAccent)
       .environment(\.dynamicTypeSize, ProcessInfo.processInfo.arguments.contains("--large-text") ? .accessibility1 : .large)
       .task {
-        try? await Task.sleep(nanoseconds: 3_000_000_000)
-        await inspectLayout()
+        // The offline fixture can need longer than one fixed delay on a slow
+        // simulator relaunch; a bounded retry keeps the inspection
+        // deterministic inside the harness's unchanged per-mode report window
+        // instead of silently producing no report at all.
+        for _ in 0..<8 {
+          try? await Task.sleep(nanoseconds: 3_000_000_000)
+          if await inspectLayout() { return }
+        }
       }
     }
   }
 }
 
 @MainActor
-private func inspectLayout() async {
+private func inspectLayout() async -> Bool {
   guard let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
-        let window = scene.windows.first(where: { $0.isKeyWindow }) else { return }
+        let window = scene.windows.first(where: { $0.isKeyWindow }) else { return false }
   func descendants(_ view: UIView) -> [UIView] {
     [view] + view.subviews.flatMap { descendants($0) }
   }
@@ -161,7 +167,7 @@ private func inspectLayout() async {
     if let data = try? JSONSerialization.data(withJSONObject: report) {
       try? data.write(to: documents.appendingPathComponent("layout.json"))
     }
-    return
+    return true
   }
   let scrolls = views.compactMap { $0 as? UIScrollView }.filter {
     let frame = $0.convert($0.bounds, to: window)
@@ -169,7 +175,7 @@ private func inspectLayout() async {
       frame.intersection(window.bounds).width > window.bounds.width * 0.8
   }
   guard let scroll = scrolls.first,
-        let tabBar = views.compactMap({ $0 as? UITabBar }).first else { return }
+        let tabBar = views.compactMap({ $0 as? UITabBar }).first else { return false }
   let scrollFrame = scroll.convert(scroll.bounds, to: window)
   let barFrame = tabBar.convert(tabBar.bounds, to: window)
   let navigationBar = views.compactMap { $0 as? UINavigationBar }.first {
@@ -208,6 +214,7 @@ private func inspectLayout() async {
   if let data = try? JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys]) {
     try? data.write(to: documents.appendingPathComponent("layout.json"))
   }
+  return true
 }
 '''
 
