@@ -1,5 +1,11 @@
 # P05 退修计划：a4f6bb6 复审 R13–R18（queue/unknown/receipt 语义）
 
+> 2026-10-15 更新：Codex 对 `0ea82b1` 的复审确认 R14–R18 修复有效，但 R13 的
+> digest-相等判定被 R19 取代（内容相等不是 operation identity）。当前 resolution
+> 语义（attempted transaction ID + 三态 outcome + 单飞/token 复核）见
+> [P05_REVIEW_0EA82B1_R19_R21_REPAIR_PLAN.md](P05_REVIEW_0EA82B1_R19_R21_REPAIR_PLAN.md)；
+> 本文件 R13 段落中基于 SHA-256 相等的判定描述仅作历史记录。
+
 2026-10-12（Asia/Hong_Kong）。Codex 对 `a4f6bb6`（及 `4944557`/`c007c8c`）独立复审为
 **CHANGES_REQUESTED**：结构拆分把 queue 编译移出 transaction driver 是合法降载，但
 R13 unknown fence、R14 unknownA/B 顺序、R15 队列失败/CAS/receipt 覆盖、R16 直接入口

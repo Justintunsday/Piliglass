@@ -39,17 +39,21 @@ fail-closed 语义更正。四能力 flag 保持 false；不接 authority；本�
      `operationInProgress`/`staleTransaction`，重试基于新快照重新变换（无丢更新），
      重试耗尽 → `publicationConflict`（不伪成功）。生产 composition 统一走 `enqueue`
      （B2e-3）。
-  e. unknown 结果 fence（R13 fail-closed）：`publicationUnknown` 原样上抛且**不自动
-     重试**，同时把未决发布记录为不可变证据 `{expectedPreviousTransactionID,
-     attemptedCandidateSHA256, kind}` 并**冻结后续所有写**（队列项与直接 public 入口
-     均 `unresolvedPublication`）；只有 `resolveUnresolvedPublication()` 完成读回后才
-     释放 fence，返回 `{observedTransactionID, observedCandidateSHA256,
-     observedMatchedAttempt}`。判定基于"实际提交候选的 SHA-256 与当前 manifest 候选
-     SHA-256 是否一致"（vault manifest 的同一 sha256 域），不是语义 payload 猜测；
-     读回失败时 fence 保持。测试覆盖写前错误/写后错误 + 不可读 ack、同 key
-     overwriting follower 被冻结、持续读回失败、reopen 边界、取消/释放，以及
-     "landed unknown 重提交 → duplicateRecordKey / buvid no-op"（未把 unknown 当未写、
-     不重放、不伪造 receipt）。
+  e. unknown 结果 fence（R13/R19/R20 fail-closed）：`publicationUnknown` 原样上抛且
+     **不自动重试**。store 在发布前铸造不可变 operation ID 并经
+     `importShadow(candidateTransactionID:)` 交给 vault（caller ID 需无碰撞），未决证据为
+     `{expectedPreviousTransactionID, attemptedTransactionID, attemptedCandidateSHA256,
+     kind}`；**冻结后续所有写**（队列项与直接 public 入口均 `unresolvedPublication`）。
+     `resolveUnresolvedPublication()` 单飞（并发第二个抛 `resolutionInProgress`）、每个
+     await 后按 token 复核（不同 token 抛 `staleResolution` 且不清 fence）、取消的
+     resolver 抛 `CancellationError` 且不释放 fence（读回前/后 `checkCancellation`）；
+     只有完整读回后才释放。outcome = `attemptCommitted`（指针 == attempted transaction
+     ID）/ `attemptNotCommitted`（指针 == expectedPrevious，含双 nil；**字节相同也算
+     未提交**）/ `ambiguousObservedCandidate`（外来候选）；内容 digest 仅作
+     `observedContentMatchesAttempt` 旁证，**永不作为 operation 提交证明**，也不重放/
+     伪造 receipt。测试覆盖同值 credentials/activation 的写前/写后错误+不可读 ack、
+     同字节外来候选歧义、并发 resolver、取消 resolver、新 fence 存活、持续读回失败、
+     reopen 边界、follower 冻结/释放与无重放。
   f. 测试矩阵（driver，真实 Keychain staging + 受控 fault vault）：receipt 身份与
      lookup 命中/未命中/不改变指针；同 key FIFO（后项快照包含前项）+ A/B/C receipt→
      immutable candidate 逐一关联；不同 key 双效应；队满溢出两次 typed 拒绝
@@ -90,9 +94,10 @@ fail-closed 语义更正。四能力 flag 保持 false；不接 authority；本�
   与 vault `operationInProgress` 有界重试（默认 40 次 × 25ms），耗尽
   `publicationConflict`；其余错误（含 `resourceLimit`、`staleGeneration`）立即上抛，
   释放 turn。
-- `publicationUnknown` 例外且 fail closed：上抛 + 记录不可变未决证据 + 冻结所有后续写，
-  直到 `resolveUnresolvedPublication()` 记录读回（读回失败保持冻结）；不自动重试、
-  不重放、不伪造 receipt、不从匹配 payload 推断成功。
+- `publicationUnknown` 例外且 fail closed：上抛 + 记录不可变未决证据（含 attempted
+  operation ID）+ 冻结所有后续写，直到 `resolveUnresolvedPublication()` 单飞且 token
+  复核地记录读回；取消/过期 resolver 不得释放 fence；不自动重试、不重放、不伪造
+  receipt、不以内容相等推断提交。
 - 入口策略（R16）：queued turn 持有 writer 角色（执行/back-off/预约等待者）或未决
   fence 存在时，直接 public 写入口拒绝（`operationInProgress`/`unresolvedPublication`）；
   直接 API 仅空闲期 legacy/primitive，生产统一走队列（B2e-3）。
