@@ -73,7 +73,10 @@ recovery 与 identity-consumer 计划**，并把 tagged-reader 计划中未执�
    publication 之外，不得声称"namespace 全部 writer 已冻结"或 production single-writer
    composition——那属于 Block3 的执行/约束。
 8. Resolution 清除顺序：读回分类 → **durable clear journal** → 内存 `unresolved = nil`。
-   取消/失败/stale 一律保持 journal + 内存 fence。
+   取消/失败/stale 一律保持 journal + 内存 fence。R35 精确化：clear 的 journal 读
+   （pre-commit 阶段）被取消 → `CancellationError` + journal/fence 原样保留；一旦发起
+   删除即为 commit/point-of-no-return，删除+验证按既有保守逻辑跑到结论、不重新检查取消、
+   不伪造回滚或"journal 保留"（见 `P05_REVIEW_8CF6629_R35_REPAIR_PLAN.md`）。
 
 ### 2.2 store 集成
 
