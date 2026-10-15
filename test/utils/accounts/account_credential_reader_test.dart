@@ -9,14 +9,19 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'account_test_storage.dart';
 
-LoginAccount _account(int mid, {String session = 'reader', String csrf = 'csrf'}) =>
+LoginAccount _account(
+  int mid, {
+  String session = 'reader',
+  String csrf = 'csrf',
+  bool withAccessKey = true,
+}) =>
     LoginAccount(
       BiliCookieJar.fromJson({
         'DedeUserID': '$mid',
         'bili_jct': csrf,
         'SESSDATA': session,
       }),
-      'access-$session',
+      withAccessKey ? 'access-$session' : null,
       'refresh-$session',
     )..activated = true;
 
@@ -132,6 +137,56 @@ void main() {
       throwsUnsupportedError,
     );
     expect(Accounts.account.isNotEmpty, true);
+  });
+
+  test('tagged reads keep rejection, nullable data and zero effect distinct', () async {
+    final account = _account(930007, session: 'tagged');
+    await Accounts.installCredentials(account);
+    final stamp = Accounts.captureRequest(account)!;
+    final revision = Accounts.requestRevision;
+
+    final csrf = accountCredentialReader.boundCsrfFor(account, stamp);
+    expect(csrf.isBound, true);
+    expect(csrf.value, 'csrf');
+    final access = accountCredentialReader.boundAccessKeyFor(account, stamp);
+    expect(access.isBound, true);
+    expect(access.value, 'access-tagged');
+    expect(Accounts.requestRevision, revision);
+
+    final nullable = _account(930008, session: 'nullable', withAccessKey: false);
+    await Accounts.installCredentials(nullable);
+    final nullableStamp = Accounts.captureRequest(nullable)!;
+    final nullableBound =
+        accountCredentialReader.boundAccessKeyFor(nullable, nullableStamp);
+    expect(nullableBound.isBound, true);
+    expect(nullableBound.value, isNull);
+    // The legacy wrapper cannot distinguish a bound null from a rejection.
+    expect(accountCredentialReader.accessKeyFor(nullable, nullableStamp), isNull);
+    expect(accountCredentialReader.boundCsrfFor(nullable, nullableStamp).isBound,
+        true);
+
+    await account.delete();
+    final rejectedCsrf = accountCredentialReader.boundCsrfFor(account, stamp);
+    expect(rejectedCsrf.isRejected, true);
+    expect(rejectedCsrf.value, isNull);
+    final rejectedAccess =
+        accountCredentialReader.boundAccessKeyFor(account, stamp);
+    expect(rejectedAccess.isRejected, true);
+    expect(rejectedAccess.value, isNull);
+
+    final foreignState = AccountRequestState<Account>();
+    final anonymous = AnonymousAccount();
+    final foreign = foreignState.activate(anonymous);
+    final foreignRevision = Accounts.requestRevision;
+    expect(
+      accountCredentialReader.boundCsrfFor(anonymous, foreign).isRejected,
+      true,
+    );
+    expect(
+      accountCredentialReader.boundAccessKeyFor(anonymous, foreign).isRejected,
+      true,
+    );
+    expect(Accounts.requestRevision, foreignRevision);
   });
 
   test('production composition shares one read-only credential reader', () {

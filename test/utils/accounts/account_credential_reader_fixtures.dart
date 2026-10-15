@@ -11,6 +11,8 @@ final class CountingCredentialReader implements AccountCredentialReader {
   int captures = 0;
   int csrfReads = 0;
   int accessKeyReads = 0;
+  int boundCsrfReads = 0;
+  int boundAccessKeyReads = 0;
 
   @override
   AccountCredentialContext? captureRequest(
@@ -19,6 +21,24 @@ final class CountingCredentialReader implements AccountCredentialReader {
   ) {
     captures++;
     return inner.captureRequest(owner, stamp);
+  }
+
+  @override
+  AccountBoundCredential<String> boundCsrfFor(
+    Account owner,
+    AccountRequestStamp<Account> stamp,
+  ) {
+    boundCsrfReads++;
+    return inner.boundCsrfFor(owner, stamp);
+  }
+
+  @override
+  AccountBoundCredential<String?> boundAccessKeyFor(
+    Account owner,
+    AccountRequestStamp<Account> stamp,
+  ) {
+    boundAccessKeyReads++;
+    return inner.boundAccessKeyFor(owner, stamp);
   }
 
   @override
@@ -37,7 +57,8 @@ final class CountingCredentialReader implements AccountCredentialReader {
   List<AccountCredentialSummary> visibleAccounts() => inner.visibleAccounts();
 }
 
-/// Always unavailable: the caller must keep its existing revoked handling.
+/// Always unavailable: the caller must keep its existing revoked handling, and
+/// no caller may turn a rejected stamp into a raw owner-field fallback.
 final class DeniedCredentialReader implements AccountCredentialReader {
   const DeniedCredentialReader();
 
@@ -46,6 +67,20 @@ final class DeniedCredentialReader implements AccountCredentialReader {
     Account owner,
     AccountRequestStamp<Account> stamp,
   ) => null;
+
+  @override
+  AccountBoundCredential<String> boundCsrfFor(
+    Account owner,
+    AccountRequestStamp<Account> stamp,
+  ) =>
+      const AccountBoundCredential.rejected();
+
+  @override
+  AccountBoundCredential<String?> boundAccessKeyFor(
+    Account owner,
+    AccountRequestStamp<Account> stamp,
+  ) =>
+      const AccountBoundCredential.rejected();
 
   @override
   String? csrfFor(Account owner, AccountRequestStamp<Account> stamp) => null;
