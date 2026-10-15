@@ -4,7 +4,10 @@ private enum QueueFixtureError: Error { case failed(String), injected }
 
 /// Secret store with pause/unknown fault injection for the queue contract.
 private actor QueueFaultVault: PiliAccountSecretStore {
-  enum Fault: Sendable, Equatable { case pointerWriteAfter, pointerReadAfter, pointerWriteBefore }
+  enum Fault: Sendable, Equatable {
+    case pointerWriteAfter, pointerReadAfter, pointerWriteBefore
+    case journalWriteBefore, journalWriteAfter
+  }
   private var values: [String: Data] = [:]
   private var fault: Fault?
   private var published = false
@@ -17,7 +20,9 @@ private actor QueueFaultVault: PiliAccountSecretStore {
   private var manifestReadObserver: CheckedContinuation<Void, Never>?
   private var pointerReadFailures = 0
   private var pointerReadFailSkip = 0
+  private var journalReadFailures = 0
   private let pointer = "account-envelope-shadow-manifest-v2"
+  private let recoveryJournalKey = "account-envelope-recovery-journal-v1"
 
   func arm(_ next: Fault) { fault = next; published = false }
   func pauseWrite() { pause = true }
@@ -58,11 +63,19 @@ private actor QueueFaultVault: PiliAccountSecretStore {
     pointerReadFailSkip = 0
     pointerReadFailures = 0
   }
+  /// Persistent journal read failure: recovery metadata must be unreadable
+  /// without ever being treated as absent.
+  func failJournalReadsForever() { journalReadFailures = Int.max }
+  func allowJournalReads() { journalReadFailures = 0 }
   func recordCount() -> Int {
     values.keys.filter { $0.hasPrefix("account-envelope-shadow-v2.") }.count
   }
 
   func read(_ key: String) async throws -> Data? {
+    if key == recoveryJournalKey, journalReadFailures > 0 {
+      if journalReadFailures != Int.max { journalReadFailures -= 1 }
+      throw QueueFixtureError.injected
+    }
     if key == pointer {
       if pauseManifestRead {
         if manifestReadSkip > 0 {
@@ -93,13 +106,19 @@ private actor QueueFaultVault: PiliAccountSecretStore {
   }
 
   func write(_ data: Data, key: String) async throws {
-    if pause {
+    if pause, key != recoveryJournalKey {
       pause = false
       await withCheckedContinuation {
         suspended = $0
         pauseObserver?.resume()
         pauseObserver = nil
       }
+    }
+    if key == recoveryJournalKey {
+      if fault == .journalWriteBefore { fault = nil; throw QueueFixtureError.injected }
+      values[key] = data
+      if fault == .journalWriteAfter { fault = nil; throw QueueFixtureError.injected }
+      return
     }
     if key == pointer, fault == .pointerWriteBefore {
       fault = nil
@@ -951,9 +970,8 @@ private actor QueueFaultVault: PiliAccountSecretStore {
         Array("unknown-after".utf16),
         "the committed unknown write is durable exactly once, without replay")
 
-      // Reopen boundary: the in-process fence stays fail-closed on the old
-      // store; a fresh store over the same secrets reads the committed
-      // candidate before its own CAS publish and never replays the unknown.
+      // Reopen boundary: the durable journal makes a recreated store arm its
+      // fence from persisted evidence before it may admit any follower.
       await fault.arm(.pointerReadAfter)
       let reopenUnknown = Task { try await store.enqueue(.credentials(recordKey: fx.key,
         generation: fx.record.generation, accessKey: units("unknown-reopen"),
@@ -973,6 +991,25 @@ private actor QueueFaultVault: PiliAccountSecretStore {
       try check(oldStoreFenced, "the original store stays fenced after the unknown")
       let restartedVault = PiliAccountEnvelopeStagingStore(secrets: fault)
       let restartedStore = PiliAccountEnvelopeTransactionStore(vault: restartedVault)
+      guard let restartedRecovery = try await restartedStore.loadPersistentRecovery() else {
+        throw QueueFixtureError.failed("restarted store lost the unresolved evidence")
+      }
+      try check(restartedRecovery.kind == .credentials &&
+        restartedRecovery.attemptedCandidateSHA256.count == 64,
+        "a recreated store arms the fence from the durable journal")
+      var restartedFenced = false
+      do {
+        _ = try await restartedStore.enqueue(.credentials(recordKey: fx.key,
+          generation: fx.record.generation, accessKey: units("must-not-cross-reopen"),
+          refreshToken: nil))
+      } catch PiliAccountShadowTransactionError.unresolvedPublication { restartedFenced = true }
+      try check(restartedFenced,
+                "a recreated store never admits an overwriting follower from empty memory")
+      guard let restartedResolution = try await restartedStore.resolveUnresolvedPublication() else {
+        throw QueueFixtureError.failed("restarted recovery did not resolve")
+      }
+      try check(restartedResolution.outcome == .attemptCommitted,
+                "the recreated store resolves the committed unknown by operation identity")
       guard let restartedReadback = try await restartedStore.loadShadowSnapshot() else {
         throw QueueFixtureError.failed("missing restarted read-back")
       }
@@ -1375,13 +1412,15 @@ private actor QueueFaultVault: PiliAccountSecretStore {
           refreshToken: baselineRefresh))
         throw QueueFixtureError.failed("ambiguity attempt fabricated success")
       } catch PiliAccountEnvelopeStagingError.publicationUnknown { checks += 1 }
+      // The namespace journal blocks every second correlated publisher, so the
+      // out-of-contract foreign byte-identical candidate is produced by the raw
+      // uncorrelated import primitive: the journal survives and the read-back
+      // must be explicitly ambiguous, never claimed as this attempt.
       let foreignVault = PiliAccountEnvelopeStagingStore(secrets: fault)
-      let foreignStore = PiliAccountEnvelopeTransactionStore(vault: foreignVault)
-      guard case .record = try await foreignStore.enqueue(.credentials(recordKey: fx.key,
-        generation: fx.record.generation, accessKey: baselineAccess,
-        refreshToken: baselineRefresh)) else {
-        throw QueueFixtureError.failed("foreign byte-identical publication expected")
+      guard let currentWhileFenced = try await store.loadShadowSnapshot() else {
+        throw QueueFixtureError.failed("missing fenced snapshot for the foreign candidate")
       }
+      _ = try await foreignVault.importShadow(fx.codec.encode(currentWhileFenced.envelope))
       guard let ambiguous = try await store.resolveUnresolvedPublication() else {
         throw QueueFixtureError.failed("identical-byte foreign candidate left no resolution")
       }
@@ -1584,6 +1623,268 @@ private actor QueueFaultVault: PiliAccountSecretStore {
     return checks
   }
 
+  /// B2e-2: the durable recovery journal survives store recreation; a recreated
+  /// store arms its fence from persisted evidence, resolves by exact operation
+  /// identity and only then admits followers. Corrupt or unverifiable journals
+  /// fail closed and are never read as absent.
+  private static func checkPersistentRecoveryJournal(_ fx: QueueFixture) async throws -> Int {
+    var checks = 0
+    func check(_ condition: Bool, _ label: String) throws {
+      guard condition else { throw QueueFixtureError.failed(label) }
+      checks += 1
+    }
+
+    // Part 1: committed unknown (write after error + unreadable ack) reopened.
+    let fault = QueueFaultVault()
+    let vault = PiliAccountEnvelopeStagingStore(secrets: fault)
+    let store = PiliAccountEnvelopeTransactionStore(vault: vault)
+    do {
+      try await vault.importShadow(fx.codec.encode(fx.base))
+      _ = try await store.enqueue(.adoptIdentities)
+      await fault.arm(.pointerReadAfter)
+      let unknown = Task { try await store.enqueue(.credentials(recordKey: fx.key,
+        generation: fx.record.generation, accessKey: units("journal-committed"),
+        refreshToken: nil)) }
+      var surfaced = false
+      do {
+        _ = try await unknown.value
+        throw QueueFixtureError.failed("journaled unknown fabricated a receipt")
+      } catch PiliAccountEnvelopeStagingError.publicationUnknown { surfaced = true }
+      try check(surfaced, "the journaled unknown still propagates instead of a fake receipt")
+      guard let journal = try await vault.loadRecoveryJournal() else {
+        throw QueueFixtureError.failed("unknown publication left no durable journal")
+      }
+      try check(journal.kind == "credentials" && journal.attemptedCandidateSHA256.count == 64,
+                "the durable journal carries the attempted operation evidence")
+      let restartedVault = PiliAccountEnvelopeStagingStore(secrets: fault)
+      let restarted = PiliAccountEnvelopeTransactionStore(vault: restartedVault)
+      guard let pending = try await restarted.loadPersistentRecovery() else {
+        throw QueueFixtureError.failed("recreated store lost the durable fence")
+      }
+      try check(pending.attemptedTransactionID == journal.attemptedTransactionID &&
+        pending.expectedPreviousTransactionID == journal.expectedPreviousTransactionID,
+        "the recreated fence matches the durable journal identity")
+      var fenced = false
+      do {
+        _ = try await restarted.enqueue(.credentials(recordKey: fx.key,
+          generation: fx.record.generation, accessKey: units("must-not-overwrite"),
+          refreshToken: nil))
+      } catch PiliAccountShadowTransactionError.unresolvedPublication { fenced = true }
+      try check(fenced, "a recreated store cannot admit an overwriting follower")
+      guard let resolution = try await restarted.resolveUnresolvedPublication() else {
+        throw QueueFixtureError.failed("recreated store did not resolve")
+      }
+      try check(resolution.outcome == .attemptCommitted &&
+        resolution.observedTransactionID == resolution.attemptedTransactionID,
+        "the recreated store classifies the committed attempt by identity")
+      guard try await restartedVault.loadRecoveryJournal() == nil else {
+        throw QueueFixtureError.failed("resolution did not durably clear the journal")
+      }
+      guard case .record = try await restarted.enqueue(.credentials(recordKey: fx.key,
+        generation: fx.record.generation, accessKey: units("journal-after"),
+        refreshToken: nil)) else {
+        throw QueueFixtureError.failed("follower after journal resolution expected")
+      }
+      try await waitForIdle(restarted)
+      try await restartedVault.discardShadow()
+    } catch {
+      try? await vault.discardShadow()
+      throw error
+    }
+
+    // Part 2: uncommitted unknown (write before error + unreadable ack) reopened.
+    let fault2 = QueueFaultVault()
+    let vault2 = PiliAccountEnvelopeStagingStore(secrets: fault2)
+    let store2 = PiliAccountEnvelopeTransactionStore(vault: vault2)
+    do {
+      try await vault2.importShadow(fx.codec.encode(fx.base))
+      _ = try await store2.enqueue(.adoptIdentities)
+      await fault2.arm(.pointerWriteBefore)
+      await fault2.failPointerReadAfter(2)
+      var surfaced2 = false
+      do {
+        _ = try await store2.enqueue(.credentials(recordKey: fx.key,
+          generation: fx.record.generation, accessKey: units("journal-uncommitted"),
+          refreshToken: nil))
+        throw QueueFixtureError.failed("uncommitted journaled unknown fabricated a receipt")
+      } catch PiliAccountEnvelopeStagingError.publicationUnknown { surfaced2 = true }
+      try check(surfaced2, "the uncommitted journaled unknown propagates")
+      guard let journal2 = try await vault2.loadRecoveryJournal() else {
+        throw QueueFixtureError.failed("write-before unknown left no durable journal")
+      }
+      let restarted2 = PiliAccountEnvelopeTransactionStore(
+        vault: PiliAccountEnvelopeStagingStore(secrets: fault2))
+      guard let pending2 = try await restarted2.loadPersistentRecovery() else {
+        throw QueueFixtureError.failed("recreated store lost the uncommitted fence")
+      }
+      try check(pending2.attemptedTransactionID == journal2.attemptedTransactionID,
+                "the uncommitted fence matches its durable journal")
+      guard let resolution2 = try await restarted2.resolveUnresolvedPublication() else {
+        throw QueueFixtureError.failed("uncommitted resolution missing")
+      }
+      try check(resolution2.outcome == .attemptNotCommitted &&
+        resolution2.observedTransactionID == resolution2.expectedPreviousTransactionID,
+        "the recreated store classifies the uncommitted attempt and keeps the pointer")
+      guard try await vault2.loadRecoveryJournal() == nil else {
+        throw QueueFixtureError.failed("uncommitted resolution did not clear the journal")
+      }
+      try await vault2.discardShadow()
+    } catch {
+      try? await vault2.discardShadow()
+      throw error
+    }
+
+    // Part 3: a corrupt journal fails closed for the live and recreated store
+    // and blocks publication entirely.
+    let fault3 = QueueFaultVault()
+    let vault3 = PiliAccountEnvelopeStagingStore(secrets: fault3)
+    let store3 = PiliAccountEnvelopeTransactionStore(vault: vault3)
+    do {
+      try await vault3.importShadow(fx.codec.encode(fx.base))
+      _ = try await store3.enqueue(.adoptIdentities)
+      try await fault3.write(Data("{\"not\":\"a journal\"}".utf8),
+                             key: "account-envelope-recovery-journal-v1")
+      var corruptRejected = false
+      do {
+        _ = try await store3.enqueue(.credentials(recordKey: fx.key,
+          generation: fx.record.generation, accessKey: units("corrupt-must-not-publish"),
+          refreshToken: nil))
+      } catch PiliAccountEnvelopeStagingError.invalidRecoveryJournal { corruptRejected = true }
+      try check(corruptRejected, "a corrupt journal fails closed instead of reading as absent")
+      let restarted3 = PiliAccountEnvelopeTransactionStore(
+        vault: PiliAccountEnvelopeStagingStore(secrets: fault3))
+      var restartedCorrupt = false
+      do {
+        _ = try await restarted3.loadPersistentRecovery()
+      } catch PiliAccountEnvelopeStagingError.invalidRecoveryJournal { restartedCorrupt = true }
+      try check(restartedCorrupt, "a recreated store also fails closed on the corrupt journal")
+      try check(await fault3.recordCount() == 2,
+                "the corrupt journal blocked publication entirely")
+      try await vault3.discardShadow()
+    } catch {
+      try? await vault3.discardShadow()
+      throw error
+    }
+
+    // Part 4: journal write failures before/after commit leave no deadlock and
+    // no leftover fence for a definite pre-publication failure.
+    let fault4 = QueueFaultVault()
+    let vault4 = PiliAccountEnvelopeStagingStore(secrets: fault4)
+    let store4 = PiliAccountEnvelopeTransactionStore(vault: vault4)
+    do {
+      try await vault4.importShadow(fx.codec.encode(fx.base))
+      _ = try await store4.enqueue(.adoptIdentities)
+      await fault4.arm(.journalWriteBefore)
+      var beforeFailed = false
+      do {
+        _ = try await store4.enqueue(.credentials(recordKey: fx.key,
+          generation: fx.record.generation, accessKey: units("journal-write-before"),
+          refreshToken: nil))
+        throw QueueFixtureError.failed("journal write-before failure accepted")
+      } catch QueueFixtureError.injected { beforeFailed = true }
+      try check(beforeFailed, "a journal write failure before commit surfaces")
+      guard try await vault4.loadRecoveryJournal() == nil else {
+        throw QueueFixtureError.failed("write-before failure left a journal")
+      }
+      try check(await store4.pendingUnresolvedPublication == nil,
+                "a definite pre-publication journal failure leaves no fence")
+      guard case .record = try await store4.enqueue(.credentials(recordKey: fx.key,
+        generation: fx.record.generation, accessKey: units("after-journal-before"),
+        refreshToken: nil)) else {
+        throw QueueFixtureError.failed("follower after journal write-before expected")
+      }
+      try check(await fault4.recordCount() == 3,
+                "the failed journal write published no candidate")
+
+      await fault4.arm(.journalWriteAfter)
+      var afterFailed = false
+      do {
+        _ = try await store4.enqueue(.credentials(recordKey: fx.key,
+          generation: fx.record.generation, accessKey: units("journal-write-after"),
+          refreshToken: nil))
+        throw QueueFixtureError.failed("journal write-after failure accepted")
+      } catch QueueFixtureError.injected { afterFailed = true }
+      try check(afterFailed, "a journal write failure after commit surfaces")
+      guard try await vault4.loadRecoveryJournal() == nil else {
+        throw QueueFixtureError.failed("write-after failure left an unverifiable journal")
+      }
+      try check(await store4.pendingUnresolvedPublication == nil,
+                "the verified clear restores a definite pre-publication state")
+      guard case .record = try await store4.enqueue(.credentials(recordKey: fx.key,
+        generation: fx.record.generation, accessKey: units("after-journal-after"),
+        refreshToken: nil)) else {
+        throw QueueFixtureError.failed("follower after journal write-after expected")
+      }
+      try check(await fault4.recordCount() == 4,
+                "the cleared journal attempt published no candidate")
+      try await vault4.discardShadow()
+    } catch {
+      try? await vault4.discardShadow()
+      throw error
+    }
+
+    // Part 5: cancellation keeps the durable journal and unverifiable journal
+    // reads fail resolution closed until reads recover.
+    let fault5 = QueueFaultVault()
+    let vault5 = PiliAccountEnvelopeStagingStore(secrets: fault5)
+    let store5 = PiliAccountEnvelopeTransactionStore(vault: vault5)
+    do {
+      try await vault5.importShadow(fx.codec.encode(fx.base))
+      _ = try await store5.enqueue(.adoptIdentities)
+      await fault5.arm(.pointerReadAfter)
+      var surfaced5 = false
+      do {
+        _ = try await store5.enqueue(.credentials(recordKey: fx.key,
+          generation: fx.record.generation, accessKey: units("journal-unreadable"),
+          refreshToken: nil))
+        throw QueueFixtureError.failed("unreadable-journal unknown fabricated a receipt")
+      } catch PiliAccountEnvelopeStagingError.publicationUnknown { surfaced5 = true }
+      try check(surfaced5, "the unreadable-journal unknown propagates")
+      let restarted5 = PiliAccountEnvelopeTransactionStore(
+        vault: PiliAccountEnvelopeStagingStore(secrets: fault5))
+      await fault5.pauseManifestReadAfter(0)
+      let cancelledResolver = Task { try await restarted5.resolveUnresolvedPublication() }
+      try await waitForManifestReadPaused(fault5)
+      cancelledResolver.cancel()
+      await fault5.resumeManifestRead()
+      var cancelledResolution = false
+      do {
+        _ = try await cancelledResolver.value
+      } catch is CancellationError { cancelledResolution = true }
+      try check(cancelledResolution, "a cancelled resolver never releases the durable fence")
+      guard try await vault5.loadRecoveryJournal() != nil else {
+        throw QueueFixtureError.failed("cancelled resolver cleared the durable journal")
+      }
+      await fault5.failJournalReadsForever()
+      var readFailureSurfaced = false
+      do {
+        _ = try await restarted5.resolveUnresolvedPublication()
+      } catch QueueFixtureError.injected { readFailureSurfaced = true }
+      try check(readFailureSurfaced, "an unreadable journal fails the resolution closed")
+      let fenceStillArmed: PiliAccountShadowUnresolvedPublication? =
+        await restarted5.pendingUnresolvedPublication
+      try check(fenceStillArmed != nil,
+                "the unreadable-journal resolution kept the fence armed")
+      await fault5.allowJournalReads()
+      guard let resolved5 = try await restarted5.resolveUnresolvedPublication() else {
+        throw QueueFixtureError.failed("unreadable-journal recovery did not resolve")
+      }
+      try check(resolved5.outcome == .attemptCommitted,
+                "the recovered journal classifies the committed attempt")
+      guard case .record = try await restarted5.enqueue(.credentials(recordKey: fx.key,
+        generation: fx.record.generation, accessKey: units("unreadable-after"),
+        refreshToken: nil)) else {
+        throw QueueFixtureError.failed("follower after unreadable-journal recovery expected")
+      }
+      try await waitForIdle(restarted5)
+      try await vault5.discardShadow()
+    } catch {
+      try? await vault5.discardShadow()
+      throw error
+    }
+    return checks
+  }
+
   static func main() async throws {
     guard CommandLine.arguments.count == 2 else {
       throw QueueFixtureError.failed("fresh live actual Dart envelope golden required")
@@ -1633,6 +1934,7 @@ private actor QueueFaultVault: PiliAccountSecretStore {
     checks += try await checkUnknownFenceProtocol(fixture)
     checks += try await checkSameValueResolutionIdentity(fixture)
     checks += try await checkResolutionSerialization(fixture)
+    checks += try await checkPersistentRecoveryJournal(fixture)
     checks += try await checkQueueRetryExhaustion(fixture)
     checks += try await checkQueuedPurposeInterference(fixture)
     checks += try await checkQueueContention(fixture)
