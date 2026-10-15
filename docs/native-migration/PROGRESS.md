@@ -243,6 +243,26 @@ sourceSHA=workflowSHA=9724ddb；preview 20 tests 0 failures、压力 `failures=[
 shadow 组件：未接 authority、无生产 caller，durable identity 消费/恢复语义、账号级队列与
 receipt/unknown ack、Block 3/4/5 仍未交付；四能力 flag 保持 false，P05 未整体完成。
 
+**tagged-bound credential reader（53aed63 保留项①）在 `e3ea5ae` 获 Codex 有限 PASS；captured-window 回归保留到恢复组**：
+- 内容：`AccountCredentialBinding {notInstalled, rejected, bound}` + `AccountBoundCredential<T>`；
+  reader 增加 `boundCsrfFor`/`boundAccessKeyFor`（legacy nullable wrapper 保留并归约到 tagged）；
+  `Accounts.boundCsrf/boundAccessKey` 返回 tagged；`csrfOf` 有 stamp 但被拒 → 抛 StateError
+  （不再回退 raw csrf），bound → 真实值；`accessKeyOf` retired/rejected → null、合法 nullable
+  bound(null)；显式 no-stamp legacy 路径保留（含删除后 csrfOf 旧值；Codex 明确不构成
+  fail-closed 生产读取证明）。真实消费者盘点（AccountManager/lease 已 fail closed；
+  100+ csrfOf endpoints 继承 wrapper 语义；15 处 accessKeyOf；snapshot service 自带
+  owner/generation 校验+checkpoint）写入计划，未声称全部 reader 收口。
+- 实际证据（`sourceSHA=workflowSHA=e3ea5ae`）：release 38756024676 success5/5、
+  preview 38756042155 success4/4（均首次尝试、无 job 重跑）；九强制 outcome 全 success、
+  BUILD SUCCEEDED、109.1MB、Aether FFmpeg 先于 media-kit；envelope 109/44/40/
+  245(68+177)/148/51；87 源 hash（85+2 声明 pubspec）、golden `8d3742…`/`fd1b38…`；
+  账户 **264** tests（258+6）/runtime 72/analyze 无问题；preview 20 tests 0 failures、
+  11 layout reports、压力 `failures=[]`（100000 danmaku/1000 comments）。
+- Codex 明确 carry-forward：no-stamp legacy csrf 仍可能读到 retired 旧字段（文档化兼容）；
+  计划中 `restoreEmptyCaptured` captured-window 定向回归**本组未执行**，必须在恢复组补做并
+  报告实际执行；100+ endpoint 显式 tagged 消费迁移、refresh/grpc/snapshot 残余直读
+  仍属 Block1。B2e-2 journal/恢复与 B2e-3 composition 未接受；四 flag false。
+
 **B2e-1 R19–R22 退修在 `b7f6692` 获 Codex 有限 PASS（仅该 shadow 组件）；preview attempt1 失败保留 + 同 SHA 单 job 重试成功**：
 - `0ea82b1` 复审 R19–R21：vault 支持 caller-minted `candidateTransactionID`（无碰撞校验），
   unresolved 证据含 `attemptedTransactionID`；resolution 单飞（并发 `resolutionInProgress`）、

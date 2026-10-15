@@ -92,3 +92,23 @@ B2e-1 in-process queue/receipt/unknown-resolution 组件，并明确授权下一
 - 明确未做：B2e-2 持久恢复、B2e-3/Block3 生产 composition、endpoint 100+ csrf 调用点
   的 tagged 消费迁移（本组只保证 legacy wrapper 不再 fail open）、snapshot/refresh/
   grpcHeaders 残余直读、CA5/CA6 真机与 authority。四 flag false，P05 未完成。
+
+### 实际证据与 Codex 有限 PASS（2026-10-15，代码 SHA `e3ea5ae`）
+
+- release [38756024676](https://github.com/Justintunsday/Piliglass/actions/runs/38756024676)
+  success5/5 与 preview [38756042155](https://github.com/Justintunsday/Piliglass/actions/runs/38756042155)
+  success4/4（均首轮、无 job 重跑）；九强制 outcome 全 success、BUILD SUCCEEDED、
+  109.1MB、Aether FFmpeg 先于 media-kit；envelope `status=passed`
+  109/44/40/245(68+177)/148/51；87 源 hash（85 匹配 + 2 声明 pubspec）、golden
+  `8d3742…`/`fd1b38…`；账户 **264** tests（258+6）/runtime 72/analyze 无问题；preview
+  20 tests 0 failures、11 layout reports、压力 `failures=[]`。
+- Codex FINAL DISPOSITION：**PASS 仅限 typed binding/read-only adapter/stamped wrapper
+  fail-closed 与消费者盘点范围**；53aed63 保留项① 在这组 API 上闭合。
+- **Carry-forward（恢复组必做）**：本计划"真实状态拒绝"里承诺的
+  `restoreEmptyCaptured` anonymous captured-window 定向回归**未在本组执行**（本组执行的是
+  reader-denied、存储对象替换、foreign/stale stamp 等）；必须在 B2e-2/恢复组用受控
+  persistence seam 补做：捕获窗口内匿名 stamped context 被拒（tagged rejected）、
+  `csrfOf` 抛错、无 raw 回退/无新副作用，并保留显式 no-stamp 兼容另一路。
+  另外 no-stamp legacy csrf 仍可读 retired 旧字段（文档化，不构成全部 reader 收口）；
+  100+ endpoint tagged 消费与 refresh/grpc/snapshot 残余直读仍属 Block1。
+  四 flag false，P05 未完成。

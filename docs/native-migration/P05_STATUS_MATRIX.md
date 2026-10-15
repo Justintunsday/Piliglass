@@ -273,6 +273,22 @@ attempt2 success4/4（navigation9 + attempt1 同 SHA account6/image3/player2 = 2
 非 Block1/2/P05 完成；B2e-2 跨重启恢复、B2e-3/Block3 生产接线、53aed63
 tagged-bound-reader 保留项、CA5/CA6 真机与 authority 均未闭合；四 flag false。
 
+**tagged-bound credential reader（53aed63 保留项①）在 `e3ea5ae` 获 Codex 有限 PASS（仅该只读 adapter/wrapper 范围）**：
+`AccountCredentialBinding`/`AccountBoundCredential<T>` 三态（notInstalled = 显式无 stamp
+legacy；rejected = 有 stamp 被拒，绝不回退 raw；bound = 真实值，nullable accessKey 的
+合法 null 属 bound）；reader 新增 tagged 主契约 + legacy nullable wrapper；`csrfOf` 对
+rejected 抛 StateError（不回退缓存 csrf）、no-stamp 保留历史直读；`accessKeyOf`
+retired/rejected null、bound(null) 合法；消费者盘点（request/lease 已 fail closed、
+100+ csrfOf、15 处 accessKeyOf、snapshot 自带 owner/generation + checkpoint）。
+证据：release [38756024676](https://github.com/Justintunsday/Piliglass/actions/runs/38756024676)
+success5/5 与 preview [38756042155](https://github.com/Justintunsday/Piliglass/actions/runs/38756042155)
+success4/4（均首轮、无 job 重跑）；九 outcome、BUILD SUCCEEDED、109.1MB、FFmpeg 顺序；
+envelope 109/44/40/**245**(68+177)/**148**/51、87 源 hash（85+2）、golden
+`8d3742…`/`fd1b38…`；账户 **264**(258+6)/72；preview 20 tests/11 reports/`failures=[]`。
+carry-forward：no-stamp legacy 仍可读 retired 旧字段（文档化，不构成全部 reader 收口）；
+计划中 `restoreEmptyCaptured` captured-window 定向回归**本组未执行**，恢复组必做并报告；
+100+ endpoint tagged 消费与 refresh/grpc/snapshot 残余直读仍开放；四 flag false。
+
 **Block 1 / B1d 切片（页面读取、延迟副作用、maintenance gate）已在 `98e6f9b` 验收**：
 `Accounts.installedAccounts()` 纯只读 seam + 页面 `isEmpty/isNotEmpty` 切
 `visibleAccounts()`（login/mine/setting/about，内容/顺序/读取时机不变、零
