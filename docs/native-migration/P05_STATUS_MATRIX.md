@@ -289,6 +289,36 @@ carry-forward：no-stamp legacy 仍可读 retired 旧字段（文档化，不构
 计划中 `restoreEmptyCaptured` captured-window 定向回归**本组未执行**，恢复组必做并报告；
 100+ endpoint tagged 消费与 refresh/grpc/snapshot 残余直读仍开放；四 flag false。
 
+**B2e-2a/2c 持久 recovery journal + R23–R35 在 `75d829c` 获 Codex 有限 PASS（仅该恢复组件）**：
+单槽 vault journal（canonical 严格解码/4096B、写 journal 先于候选/指针）、R23 成功 nil 读
+≠读错误、R24 默认歧义保留 + 显式 `allowAmbiguous`、R25 真实 Keychain 四崩溃前缀 client
+reopen、R26–R33 冷加载协调化（FIFO 预留先行/单一 queued 配额/direct fail-fast/只读恢复
+独立包装）、R28 post-await 重验证、R31/R32 task-local 队列所有权 + 冷窗口 outsider 拒绝、
+R34 无 IO 记账、R35 clear pre-commit 取消边界 + commit 语义、实际 Dart
+`restoreEmptyCaptured` captured-window 回归执行。证据：release
+[38810974696](https://github.com/Justintunsday/Piliglass/actions/runs/38810974696) 5/5 与
+preview [38810980896](https://github.com/Justintunsday/Piliglass/actions/runs/38810980896)
+4/4（首次尝试、无 job 重跑）；九 outcome/BUILD 109.1MB/FFmpeg；109/44/40/**245**(68+177)/
+**292**/51、producer 8/10/2、账户 265/72、88 源 hash（86+2 pubspec）、golden
+`933df5…`/`915f69…`、preview 20 tests/11 reports/`failures=[]`；Swift 6 strict-concurrency
+complete（未声称 warnings-as-errors）。**边界**：非 whole Block2/P05、无 process-kill/
+断电/真机证据；B2e-2b/B2e-3/Block3/handoff/GC/Block1/4/5 未闭合；raw import 仍
+out-of-contract；四 flag false。
+
+**R36/R37 preview-harness 诊断/owned-report 门在 `b73efec` 获 Codex 有限 PASS**：
+launch `check=True` 失败先写有界证据再 re-raise；每 mode 唯一 token + `modeToken`/
+`launchPID` + mtime≥launchStart 的 owned 报告接受；纯本地负例自测；launchctl 20s 有界
+distinct status；runner `simctl help` 判定的 `--stdout/--stderr` 捕获（22 stream 文件）；
+app 侧 pre/post-scroll 实际 offset、取消与 encode/write 阶段；30s/25min 预算、layout
+断言/截图/UI 未变。证据：release
+[38820520873](https://github.com/Justintunsday/Piliglass/actions/runs/38820520873) 5/5 与
+preview [38820524983](https://github.com/Justintunsday/Piliglass/actions/runs/38820524983)
+4/4（首次尝试）；九 outcome/BUILD/FFmpeg；109/44/40/245/292/51、producer 8/10/2、
+账户 265/72、88 源 hash（86+2）、golden `462110…`/`2264d5…`、preview 20 tests、
+11 reports 每个 modeToken==trace token 且 launchPID==解析 PID、压力 `failures=[]`。
+**边界**：不证明此前 last-row 缺失报告的根因；诊断≠成功报告；本地 3 项 mock QA 不是
+CI 计数或设备执行；无真机/authority 结论；前驱 8cf6629/085d883 preview 失败保留。
+
 **Block 1 / B1d 切片（页面读取、延迟副作用、maintenance gate）已在 `98e6f9b` 验收**：
 `Accounts.installedAccounts()` 纯只读 seam + 页面 `isEmpty/isNotEmpty` 切
 `visibleAccounts()`（login/mine/setting/about，内容/顺序/读取时机不变、零

@@ -282,3 +282,43 @@ adapter，见 §10）、Hive compaction/close、LoginUtils 副作用。
   恢复组必须补做并报告实际执行；100+ endpoint 显式 tagged 消费、refresh/grpc/snapshot
   残余直读仍属 Block1；B2e-2 持久恢复、B2e-3/Block3 composition、CA5/CA6 与 authority
   均未闭合；四 flag false，P05 未完成。
+
+## 14. 2026-10-16 B2e-2a/2c 持久 recovery journal + R23–R35（`75d829c`；Codex 有限 PASS）
+
+- 同代码 SHA `75d829c2d99f5eccc62da57d4cf3e33876222aee`：release
+  [38810974696](https://github.com/Justintunsday/Piliglass/actions/runs/38810974696)
+  success5/5 与 preview
+  [38810980896](https://github.com/Justintunsday/Piliglass/actions/runs/38810980896)
+  success4/4（均首次尝试、无 job 重跑）；九强制 outcome 全 success、`BUILD SUCCEEDED`、
+  109.1MB、Aether FFmpeg 先于 media-kit；native 109/44/40/**245**(68+177)/**292**/51、
+  producer 8/10/2、账户 265/runtime 72/analyze 无问题；88 raw source hash（86 匹配 +
+  2 声明 pubspec）、golden `933df5…`/`915f69…`；preview 20 tests、11 reports、
+  压力 `failures=[]`；Swift 6 strict-concurrency complete（未声称 warnings-as-errors）。
+- 内容：单槽 vault recovery journal（canonical 严格解码/4096B、写 journal 先于候选/指针、
+  期望前置指针 + attempted ID 持久化）、R23 成功 nil 读 ≠ 读错误、R24 默认歧义保留 +
+  显式 `allowAmbiguous` 确认、R25 真实 Keychain 隔离 namespace 四崩溃前缀 client reopen、
+  R26–R33 冷加载协调化、R28 post-await 重验证、R31/R32 task-local 队列所有权 + 冷窗口
+  outsider 拒绝、R34 无 IO 计数记账、R35 clear pre-commit 取消边界 + commit/point-of-
+  no-return 语义；实际 Dart `restoreEmptyCaptured` captured-window 回归执行。
+- 边界：**不构成 whole Block2/P05**；无 process-kill/断电/真机/账户证据；B2e-2b identity
+  消费者对齐、B2e-3/Block3 生产 composition/handoff/revert/启动/GC、Block1/4 残余
+  reader、Block5 真机清单未闭合；raw uncorrelated import 仍 out-of-contract；四 flag false。
+
+## 15. 2026-10-16 R36/R37 preview-harness 诊断/owned-report 门（`b73efec`；Codex 有限 PASS）
+
+- 同代码 SHA `b73efec39e68aac3a941abc3df313072042bb4c7`：release
+  [38820520873](https://github.com/Justintunsday/Piliglass/actions/runs/38820520873)
+  success5/5 与 preview
+  [38820524983](https://github.com/Justintunsday/Piliglass/actions/runs/38820524983)
+  success4/4（均首次尝试）；九强制 outcome/BUILD/FFmpeg；native 109/44/40/245/**292**/51、
+  producer 8/10/2、账户 265/72、88 源 hash（86+2）、golden `462110…`/`2264d5…`；preview
+  20 tests、11 reports（每个 modeToken==launch-trace token 且 launchPID==解析 PID、
+  streamsSupported=true、22 stream 文件）、压力 `failures=[]`。
+- 内容：launch 失败硬保留（先写有界证据再 re-raise，绝不进入接受路径）；唯一 token +
+  `launchPID` + mtime≥launchStart 的 owned 报告接受；纯本地负例自测；launchctl 20s 有界
+  distinct status；runner `simctl help` 判定的 stdout/stderr 捕获；app 侧 pre/post-scroll
+  实际 offset、取消与 encode/write 阶段证据；30s/25min 预算、layout 断言/截图/UI 未变。
+- 边界：**不证明此前 last-row 缺失报告的根因**（成功 instrumented run ≠ 因果证明）；
+  诊断文件与成功报告分离；本地 3 项 mock 控制流 QA 不是 CI 计数或模拟器/设备执行；
+  前驱 8cf6629/085d883 preview failure 保留；无真机/authority 结论；四 flag false。
+- 记录为 docs-only commit，不代表 code CI SHA；实际测试 SC SHA 为上述两个代码 SHA。

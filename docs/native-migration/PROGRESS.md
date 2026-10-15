@@ -243,6 +243,57 @@ sourceSHA=workflowSHA=9724ddb；preview 20 tests 0 failures、压力 `failures=[
 shadow 组件：未接 authority、无生产 caller，durable identity 消费/恢复语义、账号级队列与
 receipt/unknown ack、Block 3/4/5 仍未交付；四能力 flag 保持 false，P05 未整体完成。
 
+**R36/R37 preview-harness 诊断/owned-report 门在 `b73efec` 获 Codex 有限 PASS（仅该 harness 验证面）；本地 mock QA 不是 CI 或设备证据**：
+- 沿革：`085d883` readiness-retry 仍缺 last-row 报告（main job 116703630704 失败，
+  artifact 12010604817 仅 3 JSON+3 PNG 无诊断）；R36（`cf1a1c7`）加入 launch PID/
+  container/mode 关联、app 侧 `layout-diagnostics.jsonl` phase trace、失败证据 JSON；
+  R37（`e33b562`）修正 launch 失败被吞的接受缺陷——`simctl launch` check=True，
+  失败先写有界证据再原样 re-raise；每 mode 生成唯一 token（`--token`）并由 app 写入
+  `layout.json` 的 `modeToken`+`launchPID`，接受要求 token 匹配 + 解析 PID 匹配 +
+  mtime ≥ launch start；新增纯本地负例自测（stale/mismatch/missing 拒绝、owned 接受）；
+  launchctl 探针 20s 有界且记录 ok/timeout/failed；`--stdout`/`--stderr` 由 runner 的
+  `simctl help` 判定后捕获（22 个 stream 文件）；app 增加 pre/post-scroll 实际 offset、
+  取消与 encode/write 阶段证据。30s poll/25min 预算/layout 断言/截图/UI 均未变。
+- 实际证据（`sourceSHA=workflowSHA=b73efec`，Codex 独立下载/读取/核对）：
+  release [38820520873](https://github.com/Justintunsday/Piliglass/actions/runs/38820520873)
+  success 5/5、preview [38820524983](https://github.com/Justintunsday/Piliglass/actions/runs/38820524983)
+  success 4/4（均首次尝试、无 job 重跑）；九强制 outcome 全 success、BUILD SUCCEEDED、
+  109.1MB、Aether FFmpeg 先于 media-kit；native 109/44/40/**245**(68+177)/**292**/51、
+  producer 8/10/2、账户 265/runtime 72/analyze 无问题；88 raw source hash（86 匹配 +
+  2 声明 pubspec 差异）；golden `462110…`/`2264d5…`；preview 20 tests 0 failures、
+  11 reports（每个 modeToken==launch-trace token 且 launchPID==解析 PID）、trace 全部
+  accepted、streamsSupported=true、last-row offset 4395==bottom、压力 `failures=[]`。
+- 边界（Codex 与本文同等强调）：这是 harness 诊断/owned-report gate 的有限 PASS，
+  **不证明此前 last-row 缺失报告的根因**（本次 last-row report delay 21.4s 只是本 run
+  观察）；diagnostics ≠ 成功报告；本地 3 项 mock 控制流 QA 不是 CI 计数或模拟器/设备
+  执行；不含 process-kill/真机/账户证据；不构成 whole Block2/P05 或 authority 验收。
+- 前驱失败保留：8cf6629 release success/preview failure（missing last-row）、085d883
+  release success5/5/preview failure（missing last-row）；75d829c preview success 使用
+  旧 one-shot harness，不转移为 b73efec 证据。
+
+**B2e-2a/2c 持久 recovery journal + R23–R35 退修在 `75d829c` 获 Codex 有限 PASS（仅该恢复组件）；本记录为 docs-only，非 CI 代码 SHA**：
+- 内容：单槽 vault journal（`account-envelope-recovery-journal-v1`，canonical 严格
+  解码/4096B 上限）、写 journal 先于候选/指针的 crash ordering、R23 成功 nil 读
+  ≠ 读错误、R24 默认歧义保留 journal+fence + 显式 `allowAmbiguous` 确认、R25 真实
+  Keychain 隔离 namespace 四崩溃前缀（journal-only/候选/已提交/foreign）client reopen、
+  R26–R33 冷加载协调化（FIFO 预留先行、单一 queued attempt 配额、direct primitive
+  fail-fast 既有 staging 错误、只读恢复独立有界包装）、R28 post-await 重验证、
+  R31/R32 task-local 队列执行所有权 + 冷窗口 outsider 拒绝、R34 无 IO 计数记账、
+  R35 journal-clear pre-commit 取消边界（commit/point-of-no-return 文档化）、
+  R36/R37（见上条）。实际 Dart `restoreEmptyCaptured` captured-window 回归本组执行。
+- 实际证据（`sourceSHA=workflowSHA=75d829c`，Codex 独立下载核实）：
+  release [38810974696](https://github.com/Justintunsday/Piliglass/actions/runs/38810974696)
+  success 5/5、preview [38810980896](https://github.com/Justintunsday/Piliglass/actions/runs/38810980896)
+  success 4/4（首次尝试）；nine outcomes/BUILD 109.1MB/FFmpeg；109/44/40/**245**(68+177)/
+  **292**/51（R35 Part 7 的实际执行）；producer 8/10/2；账户 265/runtime 72/analyze
+  无问题；88 raw source hash（86+2 pubspec）；golden `933df5…`/`915f69…`；preview 20
+  tests、11 reports（含 last-row/returned-top-dark）、压力 `failures=[]`；Swift 6
+  strict-concurrency complete（未声称 warnings-as-errors）。
+- 边界：不构成 whole Block2/P05、process-kill/断电/真机/账户验收；B2e-2b identity 消费者
+  对齐、B2e-3/Block3 生产 composition/handoff/revert/启动/GC、Block1/4 残余 reader、
+  Block5 真机清单仍未闭合；raw uncorrelated import 仍是 out-of-contract primitive；
+  四 flag false；Codex 已指示下一步按保存的依赖计划继续。
+
 **tagged-bound credential reader（53aed63 保留项①）在 `e3ea5ae` 获 Codex 有限 PASS；captured-window 回归保留到恢复组**：
 - 内容：`AccountCredentialBinding {notInstalled, rejected, bound}` + `AccountBoundCredential<T>`；
   reader 增加 `boundCsrfFor`/`boundAccessKeyFor`（legacy nullable wrapper 保留并归约到 tagged）；
