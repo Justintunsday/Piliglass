@@ -23,6 +23,7 @@ private actor QueueFaultVault: PiliAccountSecretStore {
   private var journalReadFailures = 0
   private var journalReadFailSkip = 0
   private var journalRemoveFailures = 0
+  private var journalReads = 0
   private let pointer = "account-envelope-shadow-manifest-v2"
   private let recoveryJournalKey = "account-envelope-recovery-journal-v1"
 
@@ -75,6 +76,9 @@ private actor QueueFaultVault: PiliAccountSecretStore {
     journalReadFailSkip = 0
     journalReadFailures = 0
   }
+  /// Counts every journal read attempt (including faulted ones), so a test can
+  /// prove a rejected outsider performed no cold shared-vault journal IO.
+  func journalReadCount() -> Int { journalReads }
   /// Fails the journal read that follows `skip` further reads (or `failures`
   /// consecutive reads after the skip), so the entry pre-check read can pass
   /// and the post-write verification or clear-verification read can fail on
@@ -91,6 +95,9 @@ private actor QueueFaultVault: PiliAccountSecretStore {
   }
 
   func read(_ key: String) async throws -> Data? {
+    if key == recoveryJournalKey {
+      journalReads += 1
+    }
     if key == recoveryJournalKey, journalReadFailures > 0 {
       if journalReadFailSkip > 0 {
         journalReadFailSkip -= 1
@@ -1395,9 +1402,16 @@ private actor QueueFaultVault: PiliAccountSecretStore {
       try await held8?.value
       held8 = nil
       try await waitForManifestReadPaused(fault8)
-      _ = try await holder8.applyCredentials(recordKeyUnits: fx.key,
-        expectedGeneration: fx.record.generation, accessKeyUnits: units("mixed-intervening"),
-        refreshTokenUnits: nil)
+      // Adversarial external-publisher fixture (same pattern as the accepted
+      // CAS-specific test): a separate out-of-contract vault actor over the
+      // same secret store models an external publication that can move the
+      // pointer while the shared-vault CAS comparison read is paused. This is
+      // a declared adversary, not production actor-per-writer composition.
+      let intervenVault8 = PiliAccountEnvelopeStagingStore(secrets: fault8)
+      let intervening8 = PiliAccountEnvelopeTransactionStore(vault: intervenVault8)
+      let interveningReceipt8 = try await intervening8.applyCredentials(
+        recordKeyUnits: fx.key, expectedGeneration: fx.record.generation,
+        accessKeyUnits: units("mixed-intervening"), refreshTokenUnits: nil)
       await fault8.resumeManifestRead()
       var mixedExhausted = false
       do {
@@ -1411,6 +1425,12 @@ private actor QueueFaultVault: PiliAccountSecretStore {
       let mixedExhaustedCount = await fault8.recordCount()
       try check(mixedExhaustedCount == 3,
         "the exhausted mixed write publishes nothing")
+      guard let afterMixed8 = try await intervenVault8.loadShadowSnapshot() else {
+        throw QueueFixtureError.failed("missing post-mixed pointer proof")
+      }
+      try check(afterMixed8.transactionID == interveningReceipt8.transactionID &&
+        accessText(afterMixed8.envelope.records[1]) == "mixed-intervening",
+        "the exhausted mixed attempt left the intervening publication as the pointer")
       try check(await mixed8.pendingUnresolvedPublication == nil,
         "the exhausted mixed write leaves no fence")
       guard case .record = try await mixed8.enqueue(.credentials(recordKey: fx.key,
@@ -1439,13 +1459,14 @@ private actor QueueFaultVault: PiliAccountSecretStore {
     // R28: a delayed cold read captured before a resolution and a newer
     // unknown must never overwrite the newer exact evidence. The delivery gate
     // controls the real store installation boundary after the vault fence was
-    // released.
+    // released; both involved callers are legal read-only recovery entries, so
+    // no direct write is attempted under an active queued owner.
     let fault9 = QueueFaultVault()
     let vault9 = PiliAccountEnvelopeStagingStore(secrets: fault9)
     let stale9 = PiliAccountEnvelopeTransactionStore(
       vault: vault9, maxQueueAttempts: 800, retryDelayNanoseconds: 5_000_000)
     let gate9 = DeliveryGate()
-    var staleWrite9: Task<PiliAccountShadowWriteOutcome, Error>?
+    var delayedInit9: Task<PiliAccountShadowUnresolvedPublication?, Error>?
     do {
       try await vault9.importShadow(fx.codec.encode(fx.base))
       guard let baseline9 = try await vault9.loadShadowSnapshot() else {
@@ -1461,39 +1482,32 @@ private actor QueueFaultVault: PiliAccountSecretStore {
         key: PiliAccountEnvelopeRecoveryJournal.journalKey)
       let hook: @Sendable () async -> Void = { await gate9.pause() }
       await stale9.setRecoveryReadDeliveryHook(hook)
-      staleWrite9 = Task { try await stale9.enqueue(.credentials(recordKey: fx.key,
-        generation: fx.record.generation, accessKey: units("stale-write"),
-        refreshToken: nil)) }
-      // The cold owner captured journal A and is suspended after its vault
-      // read returned; the vault operation fence is already released.
+      delayedInit9 = Task { try await stale9.loadPersistentRecovery() }
+      // The delayed read-only initializer captured journal A and is suspended
+      // after its vault read returned; the vault operation fence is released.
       try await waitForDeliveryGate(gate9)
-      var installerFenced = false
-      do {
-        _ = try await stale9.applyCredentials(recordKeyUnits: fx.key,
-          expectedGeneration: fx.record.generation, accessKeyUnits: units("stale-installer"),
-          refreshTokenUnits: nil)
-      } catch PiliAccountShadowTransactionError.unresolvedPublication { installerFenced = true }
-      try check(installerFenced,
-        "the first completed cold read installs the persisted pending fence")
-      guard let armedA = await stale9.pendingUnresolvedPublication,
-            armedA.attemptedTransactionID == pendingAttempt9 else {
+      // A second completed read-only initializer installs the persisted fence.
+      guard let installedA = try await stale9.loadPersistentRecovery(),
+            installedA.attemptedTransactionID == pendingAttempt9 else {
         throw QueueFixtureError.failed("the persisted pending evidence was not installed")
       }
+      checks += 1
       guard let resolvedA = try await stale9.resolveUnresolvedPublication() else {
         throw QueueFixtureError.failed("the persisted pending evidence did not resolve")
       }
       try check(resolvedA.outcome == .attemptNotCommitted &&
         resolvedA.attemptedTransactionID == pendingAttempt9,
         "the persisted pending evidence resolves by exact identity before the stale delivery")
+      // A legitimate queued publication then arms newer exact evidence.
       await fault9.arm(.pointerReadAfter)
       var bUnknown = false
       do {
-        _ = try await stale9.applyCredentials(recordKeyUnits: fx.key,
-          expectedGeneration: fx.record.generation, accessKeyUnits: units("stale-b"),
-          refreshTokenUnits: nil)
+        _ = try await stale9.enqueue(.credentials(recordKey: fx.key,
+          generation: fx.record.generation, accessKey: units("stale-b"),
+          refreshToken: nil))
         throw QueueFixtureError.failed("newer unknown fabricated a receipt")
       } catch PiliAccountEnvelopeStagingError.publicationUnknown { bUnknown = true }
-      try check(bUnknown, "the newer unknown publication arms its exact evidence")
+      try check(bUnknown, "the newer queued unknown publication arms its exact evidence")
       guard let armedB = await stale9.pendingUnresolvedPublication,
             armedB.attemptedTransactionID != pendingAttempt9,
             try await vault9.loadRecoveryJournal()?.attemptedTransactionID ==
@@ -1503,14 +1517,15 @@ private actor QueueFaultVault: PiliAccountSecretStore {
       checks += 1
       let countBeforeRelease = await fault9.recordCount()
       await gate9.release()
-      var staleFenced = false
-      do {
-        _ = try await staleWrite9?.value
-        throw QueueFixtureError.failed("the delayed stale cold read fabricated success")
-      } catch PiliAccountShadowTransactionError.unresolvedPublication { staleFenced = true }
-      try check(staleFenced,
-        "the delayed stale cold read hits the newer fence instead of overwriting it")
-      staleWrite9 = nil
+      guard let delayedResult = try await delayedInit9?.value else {
+        throw QueueFixtureError.failed("the delayed read-only initializer returned nothing")
+      }
+      try check(delayedResult.attemptedTransactionID == armedB.attemptedTransactionID &&
+        delayedResult.expectedPreviousTransactionID == armedB.expectedPreviousTransactionID &&
+        delayedResult.attemptedCandidateSHA256 == armedB.attemptedCandidateSHA256 &&
+        delayedResult.kind == armedB.kind,
+        "the delayed stale cold read revalidates and reports the newer evidence")
+      delayedInit9 = nil
       guard let survivedB = await stale9.pendingUnresolvedPublication else {
         throw QueueFixtureError.failed("the newer exact evidence was overwritten by the stale read")
       }
@@ -1520,7 +1535,7 @@ private actor QueueFaultVault: PiliAccountSecretStore {
         survivedB.kind == armedB.kind,
         "the newer exact evidence survives the stale delivery unchanged")
       try check(await fault9.recordCount() == countBeforeRelease,
-        "the stale delivery and the fenced write publish nothing")
+        "the stale delivery publishes nothing")
       guard let resolvedB = try await stale9.resolveUnresolvedPublication() else {
         throw QueueFixtureError.failed("the newer evidence did not independently resolve")
       }
@@ -1550,8 +1565,101 @@ private actor QueueFaultVault: PiliAccountSecretStore {
     } catch {
       await gate9.release()
       await stale9.setRecoveryReadDeliveryHook(nil)
-      if let staleWrite9 { _ = try? await staleWrite9.value }
+      if let delayedInit9 { _ = try? await delayedInit9.value }
       try? await vault9.discardShadow()
+      throw error
+    }
+
+    // R32: a direct outsider must be rejected before any cold shared-vault IO
+    // while a queued owner is suspended at the real cold delivery boundary
+    // (writer role reserved; task-local queued-execution ownership not held by
+    // the outsider's task).
+    let fault10 = QueueFaultVault()
+    let vault10 = PiliAccountEnvelopeStagingStore(secrets: fault10)
+    let window10 = PiliAccountEnvelopeTransactionStore(
+      vault: vault10, maxQueueAttempts: 800, retryDelayNanoseconds: 5_000_000)
+    let gate10 = DeliveryGate()
+    var coldOwner10: Task<PiliAccountShadowWriteOutcome, Error>?
+    var coldFollower10: Task<PiliAccountShadowWriteOutcome, Error>?
+    do {
+      try await vault10.importShadow(fx.codec.encode(fx.base))
+      guard let baseline10 = try await vault10.loadShadowSnapshot() else {
+        throw QueueFixtureError.failed("cold window baseline missing")
+      }
+      let hook10: @Sendable () async -> Void = { await gate10.pause() }
+      await window10.setRecoveryReadDeliveryHook(hook10)
+      coldOwner10 = Task { try await window10.enqueue(.credentials(recordKey: fx.key,
+        generation: fx.record.generation, accessKey: units("cold-window-owner"),
+        refreshToken: nil)) }
+      // The queued owner is suspended inside its cold load after the vault
+      // read returned: writer role reserved, vault fence released.
+      try await waitForDeliveryGate(gate10)
+      let windowIdle = await window10.writeQueueIdle
+      try check(!windowIdle, "the cold-window owner reserves the writer role")
+      let windowReads = await fault10.journalReadCount()
+      let windowCount = await fault10.recordCount()
+      var credentialsRejected = false
+      do {
+        _ = try await window10.applyCredentials(recordKeyUnits: fx.key,
+          expectedGeneration: fx.record.generation,
+          accessKeyUnits: units("must-not-enter-window"), refreshTokenUnits: nil)
+      } catch PiliAccountShadowTransactionError.operationInProgress { credentialsRejected = true }
+      try check(credentialsRejected,
+        "a direct credentials outsider is rejected during the cold execution window")
+      var deleteRejected = false
+      do {
+        _ = try await window10.applyDelete(recordKeyUnits: fx.key,
+          expectedGeneration: fx.record.generation)
+      } catch PiliAccountShadowTransactionError.operationInProgress { deleteRejected = true }
+      try check(deleteRejected,
+        "a direct delete outsider is rejected during the cold execution window")
+      let windowCountAfter = await fault10.recordCount()
+      let windowJournal = try await vault10.loadRecoveryJournal()
+      let windowReadsAfter = await fault10.journalReadCount()
+      try check(windowCountAfter == windowCount && windowJournal == nil &&
+        windowReadsAfter == windowReads,
+        "the rejected outsiders perform no cold journal IO and leave no effects")
+      guard let windowPointer = try await vault10.loadShadowSnapshot(),
+            windowPointer.transactionID == baseline10.transactionID else {
+        throw QueueFixtureError.failed("the rejected outsiders moved the pointer")
+      }
+      checks += 1
+      coldFollower10 = Task { try await window10.enqueue(.credentials(recordKey: fx.key,
+        generation: fx.record.generation, accessKey: units("cold-window-follower"),
+        refreshToken: nil)) }
+      try await waitForPending(window10, 1)
+      await gate10.release()
+      guard let ownerValue10 = try await coldOwner10?.value,
+            case .record(let ownerReceipt10) = ownerValue10 else {
+        throw QueueFixtureError.failed("the cold-window owner expected a record receipt")
+      }
+      coldOwner10 = nil
+      guard let followerValue10 = try await coldFollower10?.value,
+            case .record(let followerReceipt10) = followerValue10 else {
+        throw QueueFixtureError.failed("the cold-window follower expected a record receipt")
+      }
+      coldFollower10 = nil
+      try await waitForIdle(window10)
+      guard let windowFinal = try await window10.loadShadowSnapshot() else {
+        throw QueueFixtureError.failed("missing cold-window final snapshot")
+      }
+      let windowFinalCount = await fault10.recordCount()
+      try check(ownerReceipt10.transactionID != followerReceipt10.transactionID &&
+        windowFinal.transactionID == followerReceipt10.transactionID &&
+        windowFinal.envelope.records[1].accessKeyUnits?.units ==
+          Array("cold-window-follower".utf16) &&
+        windowFinalCount == 3,
+        "the owner and the admitted follower complete in order after the window")
+      try check(await window10.retrySleepCount == 0,
+        "the cold-window rejection is ownership policy, not vault contention")
+      await window10.setRecoveryReadDeliveryHook(nil)
+      try await vault10.discardShadow()
+    } catch {
+      await gate10.release()
+      await window10.setRecoveryReadDeliveryHook(nil)
+      if let coldOwner10 { _ = try? await coldOwner10.value }
+      if let coldFollower10 { _ = try? await coldFollower10.value }
+      try? await vault10.discardShadow()
       throw error
     }
     return checks
