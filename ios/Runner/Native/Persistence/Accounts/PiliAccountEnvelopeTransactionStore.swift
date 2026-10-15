@@ -219,6 +219,12 @@ actor PiliAccountEnvelopeTransactionStore {
   /// recreated store must arm its fence from persisted evidence before it
   /// admits any write, never from empty memory.
   private var recoveryLoaded = false
+  /// Test-only scheduling seam awaited between a completed cold journal read
+  /// and its state installation, so a test can deliver an already-captured
+  /// read result after newer evidence was installed. Always nil in production
+  /// wiring; it controls the real state-installation boundary, not a mock
+  /// store or a separate algorithm.
+  private var recoveryReadDeliveryHook: (@Sendable () async -> Void)?
   var nativeWritesAllowed: Bool { false }
   var authoritySwitchAllowed: Bool { false }
 
@@ -247,17 +253,23 @@ actor PiliAccountEnvelopeTransactionStore {
     return unresolved
   }
 
-  /// Loads the single-slot recovery journal once and arms the in-memory fence
-  /// from it. Every async write entry and the resolver call this before doing
-  /// anything else. The cold load reads the shared vault under the same
-  /// operation fence as publications, so a legitimately busy shared vault is
-  /// retried within the store's existing bounded attempt/backoff budget
-  /// instead of leaking `operationInProgress` to the caller. Only that
-  /// definite pre-publication contention is retryable; a persistent unknown
-  /// publication, a corrupt or unreadable journal and every other failure
-  /// still fail closed immediately. Concurrent first use is reentrancy-safe:
-  /// each call reads the same single slot and arms identical persisted
-  /// evidence.
+  /// Installs or removes the test-only cold-read delivery seam (see
+  /// `recoveryReadDeliveryHook`). Production wiring never calls this.
+  func setRecoveryReadDeliveryHook(_ hook: (@Sendable () async -> Void)?) {
+    recoveryReadDeliveryHook = hook
+  }
+
+  /// Bounded retrying cold load for the read-only recovery entry points and
+  /// the direct primitive entries. Queued writes do NOT use this wrapper:
+  /// their recovery initialization runs inside the single queued attempt
+  /// budget (`executeQueuedWrite`), so one queued write can never spend two
+  /// separate contention allowances. The cold load reads the shared vault
+  /// under the same operation fence as publications, so a legitimately busy
+  /// shared vault is retried here within the configured bounded
+  /// attempt/backoff values instead of leaking `operationInProgress` to the
+  /// caller. Only that definite pre-publication contention is retryable; a
+  /// persistent unknown publication, a corrupt or unreadable journal and
+  /// every other failure still fail closed immediately.
   private func loadRecoveryIfNeeded() async throws {
     var attempt = 0
     while true {
@@ -275,13 +287,25 @@ actor PiliAccountEnvelopeTransactionStore {
     }
   }
 
-  /// One cold-load attempt: strict semantics unchanged. A corrupt journal, an
-  /// unreadable journal or a read failure throws and fails closed, and
-  /// `recoveryLoaded` is only set after a successful read, so the next caller
-  /// retries the same strict load.
+  /// One cold-load attempt: strict read semantics unchanged. A corrupt
+  /// journal, an unreadable journal or a read failure throws and fails closed,
+  /// and `recoveryLoaded` is only set after a successful read, so the next
+  /// caller retries the same strict load.
+  ///
+  /// The read result is revalidated AFTER the await before anything is
+  /// installed: actor reentrancy can delay this continuation past another
+  /// initializer's completion, a resolution and a newer unresolved fence, so
+  /// a result captured before any of that must never overwrite newer evidence
+  /// or resurrect cleared state. Every newer fence arms only after
+  /// initialization completed for this store, so the post-await
+  /// `recoveryLoaded`/`unresolved` checks reject exactly those stale
+  /// schedules.
   private func loadRecoveryOnce() async throws {
     guard !recoveryLoaded else { return }
-    if unresolved == nil, let journal = try await vault.loadRecoveryJournal() {
+    let journal = try await vault.loadRecoveryJournal()
+    await recoveryReadDeliveryHook?()
+    guard !recoveryLoaded, unresolved == nil else { return }
+    if let journal {
       guard let kind = PiliAccountShadowUnresolvedWriteKind(rawValue: journal.kind) else {
         throw PiliAccountShadowTransactionError.invalidRecovery
       }
@@ -323,13 +347,21 @@ actor PiliAccountEnvelopeTransactionStore {
   }
 
   /// Account-level write coordination: one bounded FIFO around the
-  /// single-publisher vault. Same-key submissions keep submission order; every
-  /// attempt loads a fresh snapshot and revalidates key+generation, so a queued
-  /// write can neither lose an intervening update nor publish from a snapshot
-  /// that stopped being current (bounded fence/CAS retry; exhausted retries
-  /// throw `publicationConflict`). A full queue throws `writeQueueOverflow`
-  /// immediately and never silently drops the write. Cancellation before
-  /// publication publishes nothing and the FIFO keeps draining.
+  /// single-publisher vault. A submission reserves its FIFO position (or the
+  /// writer role) BEFORE any shared-vault access, including the cold recovery
+  /// initialization, so waiting cold submissions count against
+  /// `maxPendingWrites`, `pendingWriteCount`/`writeQueueIdle` represent them,
+  /// same-key operations keep their observed enqueue-entry order and direct
+  /// public entry stays excluded while the turn is held (including during the
+  /// cold-load retry back-off). Every attempt loads a fresh snapshot and
+  /// revalidates key+generation, so a queued write can neither lose an
+  /// intervening update nor publish from a snapshot that stopped being current
+  /// (bounded fence/CAS retry; exhausted retries throw `publicationConflict`,
+  /// with ONE configured attempt allowance covering the cold recovery
+  /// preflight and the publication retries of the same queued write).
+  /// A full queue throws `writeQueueOverflow` immediately and never silently
+  /// drops the write. Cancellation before publication publishes nothing and
+  /// the FIFO keeps draining.
   ///
   /// `publicationUnknown` always propagates and arms a fail-closed
   /// unresolved-publication fence: no later write, queued or direct, publishes
@@ -339,8 +371,6 @@ actor PiliAccountEnvelopeTransactionStore {
   func enqueue(_ write: PiliAccountShadowQueuedWrite) async throws
     -> PiliAccountShadowWriteOutcome {
     try Task.checkCancellation()
-    try await loadRecoveryIfNeeded()
-    try requireResolvedPublication()
     if writerActive {
       guard pendingWrites < maxPendingWrites else {
         throw PiliAccountShadowTransactionError.writeQueueOverflow
@@ -350,8 +380,6 @@ actor PiliAccountEnvelopeTransactionStore {
       pendingWrites -= 1
       do {
         try Task.checkCancellation()
-        // A previous turn may have armed the fence while this write waited.
-        try requireResolvedPublication()
       } catch {
         passTurn()
         throw error
@@ -523,6 +551,12 @@ actor PiliAccountEnvelopeTransactionStore {
         // entry stays rejected during the retry back-off below.
         executingQueuedTurn = true
         defer { executingQueuedTurn = false }
+        // Cold recovery initialization is part of this single bounded attempt
+        // budget: the load, the fence gate and the queued transform retry
+        // together, so one queued write can never spend two separate
+        // contention allowances.
+        try await loadRecoveryOnce()
+        try requireResolvedPublication()
         return try await performQueuedWrite(write)
       } catch let error as PiliAccountShadowTransactionError
         where error == .operationInProgress {
