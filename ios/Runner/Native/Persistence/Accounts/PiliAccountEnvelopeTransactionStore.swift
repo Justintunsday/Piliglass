@@ -204,12 +204,12 @@ actor PiliAccountEnvelopeTransactionStore {
   private var writerActive = false
   private var pendingWrites = 0
   private var waitingTurns: [CheckedContinuation<Void, Never>] = []
-  /// True only while a queued turn is actively executing one attempt. Direct
-  /// public entry is rejected whenever `writerActive` holds the turn (including
-  /// bounded retry back-off and reserved waiters), so a public bypass can never
-  /// enter ahead of admitted queue work; queued attempts pass through because
-  /// they run inside this flag.
-  private var executingQueuedTurn = false
+  /// Task-specific queued-execution ownership: true only inside the queue's
+  /// own invocation of one attempt (set through `withValue`), so a direct
+  /// outsider can never pass the writer-role guard merely because some queued
+  /// task is suspended in an await. A shared actor-wide flag would let any
+  /// other task act as the queued executor during a queued await.
+  @TaskLocal private static var queuedWriteExecution = false
   private var queueRetrySleeps = 0
   private var unresolved: PiliAccountShadowUnresolvedPublication?
   /// Single-flight gate for `resolveUnresolvedPublication()`: a second
@@ -547,17 +547,18 @@ actor PiliAccountEnvelopeTransactionStore {
     while true {
       attempt += 1
       do {
-        // Only the active attempt counts as queued execution: direct public
-        // entry stays rejected during the retry back-off below.
-        executingQueuedTurn = true
-        defer { executingQueuedTurn = false }
-        // Cold recovery initialization is part of this single bounded attempt
-        // budget: the load, the fence gate and the queued transform retry
-        // together, so one queued write can never spend two separate
-        // contention allowances.
-        try await loadRecoveryOnce()
-        try requireResolvedPublication()
-        return try await performQueuedWrite(write)
+        // The queue's own invocation carries the task-local execution
+        // ownership token for the whole attempt (including the cold recovery
+        // load and every await); no other task can act as the queued executor.
+        return try await Self.$queuedWriteExecution.withValue(true) {
+          // Cold recovery initialization is part of this single bounded
+          // attempt budget: the load, the fence gate and the queued transform
+          // retry together, so one queued write can never spend two separate
+          // contention allowances.
+          try await loadRecoveryOnce()
+          try requireResolvedPublication()
+          return try await performQueuedWrite(write)
+        }
       } catch let error as PiliAccountShadowTransactionError
         where error == .operationInProgress {
         guard attempt < maxQueueAttempts else {
@@ -759,6 +760,7 @@ actor PiliAccountEnvelopeTransactionStore {
   /// from MID, storage key or runtime generation, and nothing authorizes with
   /// them.
   func adoptMissingIdentities() async throws -> PiliAccountShadowIdentityReceipt {
+    try requireDirectEntryAllowed()
     try await loadRecoveryIfNeeded()
     try beginOperation()
     defer { operationInProgress = false }
@@ -802,6 +804,7 @@ actor PiliAccountEnvelopeTransactionStore {
   /// record stay untouched.
   func applyInstall(_ install: PiliAccountShadowInstall) async throws
     -> PiliAccountShadowTransactionReceipt {
+    try requireDirectEntryAllowed()
     try await loadRecoveryIfNeeded()
     try beginOperation()
     defer { operationInProgress = false }
@@ -864,6 +867,7 @@ actor PiliAccountEnvelopeTransactionStore {
   /// History is derived again; remaining record identities are preserved.
   func applyDelete(recordKeyUnits: PiliCookieUTF16, expectedGeneration: Int64) async throws
     -> PiliAccountShadowTransactionReceipt {
+    try requireDirectEntryAllowed()
     try await loadRecoveryIfNeeded()
     try beginOperation()
     defer { operationInProgress = false }
@@ -923,6 +927,7 @@ actor PiliAccountEnvelopeTransactionStore {
   /// any rejection publishes nothing.
   func applyImport(_ entries: [PiliAccountShadowInstall]) async throws
     -> PiliAccountShadowImportReceipt {
+    try requireDirectEntryAllowed()
     try await loadRecoveryIfNeeded()
     try beginOperation()
     defer { operationInProgress = false }
@@ -1052,6 +1057,7 @@ actor PiliAccountEnvelopeTransactionStore {
   func applyBuvidSeed(recordKeyUnits: PiliCookieUTF16, expectedGeneration: Int64,
                       valueUnits: PiliCookieUTF16, nowMicroseconds: Int64) async throws
     -> PiliAccountShadowBuvidReceipt {
+    try requireDirectEntryAllowed()
     try await loadRecoveryIfNeeded()
     try beginOperation()
     defer { operationInProgress = false }
@@ -1138,6 +1144,7 @@ actor PiliAccountEnvelopeTransactionStore {
                            _ transform: (PiliAccountLiveMemoryShadow, Int) throws
                              -> PiliAccountLiveMemoryShadow) async throws
     -> PiliAccountShadowTransactionReceipt {
+    try requireDirectEntryAllowed()
     try await loadRecoveryIfNeeded()
     try beginOperation()
     defer { operationInProgress = false }
@@ -1242,18 +1249,34 @@ actor PiliAccountEnvelopeTransactionStore {
       generationHighWater: resolvedHighWater)
   }
 
+  /// Cheap pre-IO direct-entry gate: a direct public primitive must be rejected
+  /// BEFORE it performs any shared-vault IO (including the cold recovery load)
+  /// while a queued turn holds the writer role (executing, retrying or
+  /// reserved) or while another direct entry holds the operation fence. Only
+  /// the queue's own invocation (task-local ownership token) may run inside an
+  /// active queued turn; `beginOperation` revalidates after the load.
+  private func requireDirectEntryAllowed() throws {
+    guard !operationInProgress else {
+      throw PiliAccountShadowTransactionError.operationInProgress
+    }
+    guard !writerActive || Self.queuedWriteExecution else {
+      throw PiliAccountShadowTransactionError.operationInProgress
+    }
+  }
+
   private func beginOperation() throws {
     // Actor methods can reenter across awaits; fence the load/transform/publish
     // transaction until its durable publication has finished. Direct public
     // entry is a legacy primitive that fails closed while a queued turn holds
     // the writer role (executing, retrying or reserved) and while an unresolved
-    // publication awaits its recorded read-back resolution. Queued attempts
-    // pass because they execute inside `executingQueuedTurn`.
+    // publication awaits its recorded read-back resolution. Only the queue's
+    // own invocation carries the task-local execution ownership token; an
+    // outsider never passes merely because a queued task is suspended.
     guard !operationInProgress else {
       throw PiliAccountShadowTransactionError.operationInProgress
     }
     try requireResolvedPublication()
-    guard !writerActive || executingQueuedTurn else {
+    guard !writerActive || Self.queuedWriteExecution else {
       throw PiliAccountShadowTransactionError.operationInProgress
     }
     operationInProgress = true
