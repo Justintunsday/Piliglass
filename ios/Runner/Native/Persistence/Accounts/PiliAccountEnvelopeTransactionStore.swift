@@ -249,8 +249,37 @@ actor PiliAccountEnvelopeTransactionStore {
 
   /// Loads the single-slot recovery journal once and arms the in-memory fence
   /// from it. Every async write entry and the resolver call this before doing
-  /// anything else.
+  /// anything else. The cold load reads the shared vault under the same
+  /// operation fence as publications, so a legitimately busy shared vault is
+  /// retried within the store's existing bounded attempt/backoff budget
+  /// instead of leaking `operationInProgress` to the caller. Only that
+  /// definite pre-publication contention is retryable; a persistent unknown
+  /// publication, a corrupt or unreadable journal and every other failure
+  /// still fail closed immediately. Concurrent first use is reentrancy-safe:
+  /// each call reads the same single slot and arms identical persisted
+  /// evidence.
   private func loadRecoveryIfNeeded() async throws {
+    var attempt = 0
+    while true {
+      attempt += 1
+      do {
+        try await loadRecoveryOnce()
+        return
+      } catch PiliAccountEnvelopeStagingError.operationInProgress {
+        guard attempt < maxQueueAttempts else {
+          throw PiliAccountShadowTransactionError.publicationConflict
+        }
+        queueRetrySleeps += 1
+        try await Task.sleep(nanoseconds: retryDelayNanoseconds)
+      }
+    }
+  }
+
+  /// One cold-load attempt: strict semantics unchanged. A corrupt journal, an
+  /// unreadable journal or a read failure throws and fails closed, and
+  /// `recoveryLoaded` is only set after a successful read, so the next caller
+  /// retries the same strict load.
+  private func loadRecoveryOnce() async throws {
     guard !recoveryLoaded else { return }
     if unresolved == nil, let journal = try await vault.loadRecoveryJournal() {
       guard let kind = PiliAccountShadowUnresolvedWriteKind(rawValue: journal.kind) else {
