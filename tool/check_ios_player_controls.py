@@ -185,7 +185,13 @@ final class PlayerControlsTests: XCTestCase {
       let landscape = NSPredicate { _, _ in self.app.frame.width > self.app.frame.height }
       expectation(for: landscape, evaluatedWith: app)
       waitForExpectations(timeout: 10)
-      if !app.buttons["720P"].isHittable {
+      // The hit-test precondition can block for many seconds while the
+      // production chrome auto-hide (hideDelay 8s) runs: the failing landscape
+      // launch spent 13.57s inside `isHittable` and then waited for controls
+      // that had already hidden. Use the cheap hierarchy query and one reveal
+      // tap when the controls are absent; the 8s existence assertion and every
+      // other budget/assertion stays unchanged.
+      if !app.buttons["720P"].exists {
         app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
       }
       XCTAssertTrue(app.buttons["720P"].waitForExistence(timeout: 8))

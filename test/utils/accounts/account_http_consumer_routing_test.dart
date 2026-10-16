@@ -9,6 +9,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:PiliPlus/common/widgets/custom_toast.dart';
 import 'package:PiliPlus/http/api.dart';
 import 'package:PiliPlus/http/init.dart';
 import 'package:PiliPlus/http/loading_state.dart';
@@ -18,7 +19,9 @@ import 'package:PiliPlus/utils/accounts.dart';
 import 'package:PiliPlus/utils/accounts/account.dart';
 import 'package:PiliPlus/utils/accounts/account_manager/account_mgr.dart';
 import 'package:dio/dio.dart';
+import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:material_ui/material_ui.dart';
 
 import 'account_test_storage.dart';
 
@@ -62,12 +65,56 @@ Future<String?> _cookie(
   return null;
 }
 
+/// Mounts the real notification host with the production wiring from
+/// `main.dart` (`FlutterSmartDialog.init` + `CustomToast` + observer), so the
+/// AccountManager error/toast path runs against an initialized dialog context.
+Future<void> _pumpNotificationHost(WidgetTester tester) async {
+  await tester.pumpWidget(
+    MaterialApp(
+      navigatorObservers: [FlutterSmartDialog.observer],
+      builder: FlutterSmartDialog.init(toastBuilder: CustomToast.new),
+      home: const SizedBox.shrink(),
+    ),
+  );
+  await tester.pump();
+}
+
+/// Bounded cleanup mirroring the dialog package's supported test harness:
+/// build the toast entry, dismiss it with pumped animation frames, flush the
+/// queued display/interval timers, unmount the host and verify that no toast
+/// remains so notification work cannot leak into the following tests.
+Future<void> _disposeNotificationHost(WidgetTester tester) async {
+  await tester.pump();
+  final dismissing = SmartDialog.dismiss(status: SmartStatus.allToast);
+  await tester.pump();
+  await tester.pump(const Duration(milliseconds: 250));
+  await tester.pump();
+  // Give the dismissal's fake-zone timer/animation more than enough slack
+  // before awaiting the completion future, so the helper stays bounded even
+  // if the configured animation ever exceeds the 250ms pump above.
+  await tester.pump(const Duration(seconds: 3));
+  await dismissing;
+  await tester.pumpWidget(const SizedBox.shrink());
+  await tester.pump();
+  expect(
+    SmartDialog.checkExist(dialogTypes: const {SmartAllDialogType.toast}),
+    isFalse,
+    reason: 'the cancellation notification must be fully dismissed before the host unmounts',
+  );
+}
+
 void main() {
   late AccountTestStorage storage;
   late _ControlledAdapter adapter;
 
   setUpAll(() async {
     storage = await AccountTestStorage.open();
+    // Mirror the production notification configuration (main.dart) so the real
+    // cancellation toast runs under the supported host instead of an
+    // uninitialized dialog context.
+    SmartDialog.config.toast = SmartConfigToast(
+      displayType: SmartToastType.onlyRefresh,
+    );
   });
 
   setUp(() async {
@@ -450,27 +497,31 @@ void main() {
     expect(await _cookie(videoB, 'prebind_write'), isNull);
   });
 
-  test('tvPlayUrl cancels instead of sending after a pre-binding same-MID replacement', () async {
-    final video = _account(375, session: 'revoke-owner');
-    await Accounts.installCredentials(video);
-    await Accounts.set(AccountType.video, video);
-    final barrier = installBarrier();
+  testWidgets('tvPlayUrl cancels instead of sending after a pre-binding same-MID replacement', (tester) async {
+    await _pumpNotificationHost(tester);
+    await tester.runAsync(() async {
+      final video = _account(375, session: 'revoke-owner');
+      await Accounts.installCredentials(video);
+      await Accounts.set(AccountType.video, video);
+      final barrier = installBarrier();
 
-    final stateFuture = VideoHttp.tvPlayUrl(cid: 17, objectId: 28, playurlType: 1);
-    await barrier.entered.future;
-    final replacement = _account(375, session: 'revoke-replacement');
-    await Accounts.installCredentials(replacement);
-    expect(Accounts.ownsCredentials(video), isFalse);
-    barrier.release();
+      final stateFuture = VideoHttp.tvPlayUrl(cid: 17, objectId: 28, playurlType: 1);
+      await barrier.entered.future;
+      final replacement = _account(375, session: 'revoke-replacement');
+      await Accounts.installCredentials(replacement);
+      expect(Accounts.ownsCredentials(video), isFalse);
+      barrier.release();
 
-    final outcome = await settleOutcome(stateFuture);
-    expect(
-      outcome.fetched,
-      isFalse,
-      reason: 'a replaced pre-binding owner must cancel before any fetch',
-    );
-    expect(await stateFuture, isA<Error>());
-    expect(adapter.fetchCount, 0);
+      final outcome = await settleOutcome(stateFuture);
+      expect(
+        outcome.fetched,
+        isFalse,
+        reason: 'a replaced pre-binding owner must cancel before any fetch',
+      );
+      expect(await stateFuture, isA<Error>());
+      expect(adapter.fetchCount, 0);
+    });
+    await _disposeNotificationHost(tester);
   });
 
   test('a new tvPlayUrl request after the slot switch uses the new owner consistently', () async {
@@ -566,27 +617,31 @@ void main() {
     );
   });
 
-  test('feedDislike cancels instead of sending after a pre-binding recommend replacement', () async {
-    final recommend = _account(385, session: 'feed-replace');
-    await Accounts.installCredentials(recommend);
-    Accounts.selectTemporarily(AccountType.recommend, recommend);
-    final barrier = installBarrier();
+  testWidgets('feedDislike cancels instead of sending after a pre-binding recommend replacement', (tester) async {
+    await _pumpNotificationHost(tester);
+    await tester.runAsync(() async {
+      final recommend = _account(385, session: 'feed-replace');
+      await Accounts.installCredentials(recommend);
+      Accounts.selectTemporarily(AccountType.recommend, recommend);
+      final barrier = installBarrier();
 
-    final stateFuture = VideoHttp.feedDislike(goto: 'video', id: 82, reasonId: 2);
-    await barrier.entered.future;
-    final replacement = _account(385, session: 'feed-replacement');
-    await Accounts.installCredentials(replacement);
-    expect(Accounts.ownsCredentials(recommend), isFalse);
-    barrier.release();
+      final stateFuture = VideoHttp.feedDislike(goto: 'video', id: 82, reasonId: 2);
+      await barrier.entered.future;
+      final replacement = _account(385, session: 'feed-replacement');
+      await Accounts.installCredentials(replacement);
+      expect(Accounts.ownsCredentials(recommend), isFalse);
+      barrier.release();
 
-    final outcome = await settleOutcome(stateFuture);
-    expect(
-      outcome.fetched,
-      isFalse,
-      reason: 'a replaced pre-binding gate owner must cancel before any fetch',
-    );
-    expect(await stateFuture, isA<Error>());
-    expect(adapter.fetchCount, 0);
+      final outcome = await settleOutcome(stateFuture);
+      expect(
+        outcome.fetched,
+        isFalse,
+        reason: 'a replaced pre-binding gate owner must cancel before any fetch',
+      );
+      expect(await stateFuture, isA<Error>());
+      expect(adapter.fetchCount, 0);
+    });
+    await _disposeNotificationHost(tester);
   });
 
   test('a null-key installed recommend login still rejects the feed gate before sending', () async {
@@ -627,31 +682,35 @@ void main() {
     );
   });
 
-  test('feedDislikeCancel cancels instead of sending after a pre-binding recommend replacement', () async {
-    final recommend = _account(391, session: 'cancel-replace');
-    await Accounts.installCredentials(recommend);
-    Accounts.selectTemporarily(AccountType.recommend, recommend);
-    final barrier = installBarrier();
+  testWidgets('feedDislikeCancel cancels instead of sending after a pre-binding recommend replacement', (tester) async {
+    await _pumpNotificationHost(tester);
+    await tester.runAsync(() async {
+      final recommend = _account(391, session: 'cancel-replace');
+      await Accounts.installCredentials(recommend);
+      Accounts.selectTemporarily(AccountType.recommend, recommend);
+      final barrier = installBarrier();
 
-    final stateFuture = VideoHttp.feedDislikeCancel(
-      goto: 'video',
-      id: 84,
-      feedbackId: 5,
-    );
-    await barrier.entered.future;
-    final replacement = _account(391, session: 'cancel-replacement');
-    await Accounts.installCredentials(replacement);
-    expect(Accounts.ownsCredentials(recommend), isFalse);
-    barrier.release();
+      final stateFuture = VideoHttp.feedDislikeCancel(
+        goto: 'video',
+        id: 84,
+        feedbackId: 5,
+      );
+      await barrier.entered.future;
+      final replacement = _account(391, session: 'cancel-replacement');
+      await Accounts.installCredentials(replacement);
+      expect(Accounts.ownsCredentials(recommend), isFalse);
+      barrier.release();
 
-    final outcome = await settleOutcome(stateFuture);
-    expect(
-      outcome.fetched,
-      isFalse,
-      reason: 'a replaced pre-binding gate owner must cancel before any fetch',
-    );
-    expect(await stateFuture, isA<Error>());
-    expect(adapter.fetchCount, 0);
+      final outcome = await settleOutcome(stateFuture);
+      expect(
+        outcome.fetched,
+        isFalse,
+        reason: 'a replaced pre-binding gate owner must cancel before any fetch',
+      );
+      expect(await stateFuture, isA<Error>());
+      expect(adapter.fetchCount, 0);
+    });
+    await _disposeNotificationHost(tester);
   });
 
   test('a null-key installed recommend login still rejects the cancel gate before sending', () async {
