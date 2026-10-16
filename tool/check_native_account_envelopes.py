@@ -115,6 +115,41 @@ QUEUE_SOURCES = [
     "ios/Runner/Native/Persistence/Accounts/PiliAccountEnvelopeTransactionStore.swift",
     "tool/check_native_account_envelope_queue.swift",
 ]
+# Atomic read-only schema-3 current-pointer export plus its cross-runtime Dart
+# consumption. Same strict-concurrency flags and per-command budgets; the Dart
+# consumer lives OUTSIDE the earlier whole-account discovery directory and is
+# analyzed/executed only by this envelope pipeline with a required fixture path.
+EXPORT_SOURCES = [
+    "ios/Runner/Native/Domain/Accounts/PiliAccountRepository.swift",
+    "ios/Runner/Native/Domain/Accounts/PiliOrderedCookieArchive.swift",
+    "ios/Runner/Native/Data/Accounts/PiliOrderedCookieArchiveCodec.swift",
+    "ios/Runner/Native/Domain/Accounts/PiliAccountLiveMemoryShadow.swift",
+    "ios/Runner/Native/Data/Accounts/PiliAccountLiveMemoryShadowCodec.swift",
+    "ios/Runner/Native/Data/Accounts/PiliNativeOrderedCookieReducer.swift",
+    "ios/Runner/Native/Persistence/Accounts/PiliNativeCookieParser.swift",
+    "ios/Runner/Native/Persistence/Accounts/PiliAccountSecretStore.swift",
+    "ios/Runner/Native/Persistence/Accounts/PiliAccountEnvelopeStagingStore.swift",
+    "ios/Runner/Native/Persistence/Accounts/PiliAccountEnvelopeTransactionStore.swift",
+    "tool/check_native_account_envelope_export.swift",
+]
+# The consumer test is deliberately outside test/utils/accounts/ (which runs
+# before this pipeline) and requires the fresh Swift-produced fixture path.
+EXPORT_CONSUMER = [
+    "test/services/native_accounts/native_account_schema3_export_consumption_test.dart",
+]
+# Local mocked negative QA harness: it proves the phase wiring fails closed but
+# is explicitly not Mac/Swift/Dart or device runtime evidence.
+EXPORT_QA = [
+    "tool/qa_native_account_envelope_export.py",
+]
+EXPORT_METADATA_KEYS = {
+    "schema", "sourceSHA", "workflowSHA", "transactionID",
+    "envelopeSchemaVersion", "envelopeByteCount", "envelopeSHA256", "wireFileName",
+}
+EXPORT_METADATA_SCHEMA = "pili.account.schema3-export.v1"
+EXPORT_CONSUMED_SCHEMA = "pili.account.schema3-export.consumed.v1"
+MINIMUM_EXPORT_CHECKS = 40
+CONSUMER_TESTS = 6
 LIVE_IDS = [
     "anonymous-empty-jar",
     "stored-10-2-owner-2-10",
@@ -140,7 +175,8 @@ CONTRACT_INPUTS = [
 def source_hashes():
     paths = {ROOT / path for path in [*SOURCES, *STAGING_SOURCES, *TRANSACTION_SOURCES,
                                       *TRANSACTION_IDENTITY_SOURCES,
-                                      *AUTHORITY_SOURCES, *QUEUE_SOURCES, *PRODUCERS,
+                                      *AUTHORITY_SOURCES, *QUEUE_SOURCES, *EXPORT_SOURCES,
+                                      *PRODUCERS, *EXPORT_CONSUMER, *EXPORT_QA,
                                       *ANALYSIS, *CONTRACT_INPUTS]}
     files = set()
     for path in paths:
@@ -162,7 +198,8 @@ def clean_contract_sources(log):
     # separately, including those already prepared by the build workflow.
     paths = sorted({*SOURCES, *STAGING_SOURCES, *TRANSACTION_SOURCES,
                     *TRANSACTION_IDENTITY_SOURCES, *AUTHORITY_SOURCES,
-                    *QUEUE_SOURCES, *PRODUCERS, *ANALYSIS,
+                    *QUEUE_SOURCES, *EXPORT_SOURCES, *PRODUCERS,
+                    *EXPORT_CONSUMER, *EXPORT_QA, *ANALYSIS,
                     Path(__file__).resolve().relative_to(ROOT).as_posix()})
     run(["git", "diff", "--quiet", "HEAD", "--", *paths], log)
 
@@ -243,6 +280,93 @@ def verify_golden_hashes(expected):
         raise RuntimeError("Fresh actual Dart golden bytes changed during Native verification")
 
 
+def verify_crossruntime_export(source_sha, workflow_sha):
+    """Swift-produced schema-3 export consumed by the real Dart strict decoder.
+
+    Runs entirely inside this mandatory envelope outcome: fresh cleanup, the
+    export driver compile/runtime, strict exact-byte metadata checks, the
+    dedicated Dart consumer (fatal-analyzed with a required fixture path) and a
+    post-consumer re-hash. Any failure raises before the passed summary.
+    """
+    live = OUTPUT / "live-memory.json"
+    metadata = OUTPUT / "schema3-export.json"
+    wire = OUTPUT / "schema3-export-wire.bin"
+    consumed_path = OUTPUT / "schema3-export-consumed.json"
+    executable = OUTPUT / "check-native-account-envelope-export"
+    run(["xcrun", "swiftc", "-swift-version", "6", "-strict-concurrency=complete",
+         "-parse-as-library", "-o", str(executable), *(str(ROOT / path) for path in EXPORT_SOURCES)],
+        "schema3-export-compile.log")
+    output = run([str(executable), str(live), str(metadata), str(wire), source_sha,
+                  workflow_sha or ""], "schema3-export-result.log", timeout=90)
+    print(output, end="")
+    matched = re.search(r"(\d+) native account envelope export checks passed", output)
+    if not matched or int(matched[1]) < MINIMUM_EXPORT_CHECKS:
+        raise RuntimeError("Atomic read-only schema-3 export evidence incomplete")
+    # Absent artifacts are a failure; the stage cleaned them before running, so
+    # nothing stale can be accepted.
+    if not metadata.is_file() or not wire.is_file():
+        raise RuntimeError("Cross-runtime export artifacts missing after the Swift producer")
+    metadata_bytes = metadata.read_bytes()
+    wire_bytes = wire.read_bytes()
+    meta = json.loads(metadata_bytes, object_pairs_hook=strict_object)
+    workflow_value = meta.get("workflowSHA") if isinstance(meta, dict) else None
+    if (not isinstance(meta, dict) or set(meta.keys()) != EXPORT_METADATA_KEYS
+            or meta.get("schema") != EXPORT_METADATA_SCHEMA
+            or not isinstance(meta.get("sourceSHA"), str)
+            or re.fullmatch(r"[0-9a-f]{40}", meta["sourceSHA"]) is None
+            or meta["sourceSHA"] != source_sha
+            or (workflow_value != workflow_sha if workflow_sha else workflow_value is not None)
+            or not isinstance(meta.get("transactionID"), str)
+            or re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
+                            meta["transactionID"]) is None
+            or type(meta.get("envelopeSchemaVersion")) is not int
+            or meta["envelopeSchemaVersion"] != 3
+            or type(meta.get("envelopeByteCount")) is not int
+            or meta["envelopeByteCount"] != len(wire_bytes)
+            or meta.get("wireFileName") != wire.name):
+        raise RuntimeError("Cross-runtime export metadata is absent, stale or mismatched")
+    # The digest is computed over the exact produced file bytes; JSON parse and
+    # re-encoding are never used as the oracle.
+    wire_digest = hashlib.sha256(wire_bytes).hexdigest()
+    if meta.get("envelopeSHA256") != wire_digest:
+        raise RuntimeError("Cross-runtime export wire digest mismatch")
+    metadata_digest = hashlib.sha256(metadata_bytes).hexdigest()
+    run(["dart", "analyze", "--fatal-infos", "test/services/native_accounts/"],
+        "schema3-export-consumer-analyze.log")
+    consumer_output = run([
+        "flutter", "test", "--no-pub", "--reporter", "expanded",
+        f"--dart-define=NATIVE_ACCOUNT_SCHEMA3_EXPORT={metadata}",
+        f"--dart-define=NATIVE_ACCOUNT_SCHEMA3_SOURCE={live}",
+        *EXPORT_CONSUMER,
+    ], "schema3-export-consumer-test.log", timeout=240)
+    consumer_match = re.search(r"\+(\d+): All tests passed!", consumer_output)
+    if not consumer_match or int(consumer_match[1]) != CONSUMER_TESTS:
+        raise RuntimeError("Swift-produced wire was not strictly consumed by the Dart consumer")
+    if not consumed_path.is_file():
+        raise RuntimeError("Dart consumer did not record its consumption of the produced bytes")
+    consumed = json.loads(consumed_path.read_bytes(), object_pairs_hook=strict_object)
+    if (not isinstance(consumed, dict)
+            or set(consumed.keys()) != {"schema", "transactionID", "envelopeSHA256", "envelopeByteCount"}
+            or consumed.get("schema") != EXPORT_CONSUMED_SCHEMA
+            or consumed.get("transactionID") != meta["transactionID"]
+            or consumed.get("envelopeSHA256") != wire_digest
+            or type(consumed.get("envelopeByteCount")) is not int
+            or consumed["envelopeByteCount"] != len(wire_bytes)):
+        raise RuntimeError("Dart consumer record does not match the produced wire bytes")
+    # Output hashes are rechecked after the actual consumer execution: the
+    # consumed digest can only describe the bytes that are still on disk.
+    if (hashlib.sha256(metadata.read_bytes()).hexdigest() != metadata_digest
+            or hashlib.sha256(wire.read_bytes()).hexdigest() != wire_digest):
+        raise RuntimeError("Cross-runtime artifacts changed during consumer execution")
+    return {
+        "metadataSHA256": metadata_digest, "wireSHA256": wire_digest,
+        "wireByteCount": len(wire_bytes), "transactionID": meta["transactionID"],
+        "exportChecks": int(matched[1]), "consumerTests": int(consumer_match[1]),
+        "consumerAnalyzeLog": "schema3-export-consumer-analyze.log",
+        "consumerTestLog": "schema3-export-consumer-test.log",
+    }
+
+
 def main():
     OUTPUT.mkdir(parents=True, exist_ok=True)
     summary = {
@@ -262,6 +386,10 @@ def main():
                      "check-native-account-envelope-queue",
                      "queue-compile.log", "queue-result.log", "check-native-account-authority",
                      "authority-compile.log", "authority-result.log",
+                     "check-native-account-envelope-export", "schema3-export.json",
+                     "schema3-export-wire.bin", "schema3-export-consumed.json",
+                     "schema3-export-compile.log", "schema3-export-result.log",
+                     "schema3-export-consumer-analyze.log", "schema3-export-consumer-test.log",
                      "analyze.log", "dart-test.log", "compile.log", "result.log",
                      "source-revision.log", "source-revision-after.log",
                      "source-clean.log", "source-clean-after.log", "build-preparation-diff-names.log"]:
@@ -379,6 +507,7 @@ def main():
         authority_matched = re.search(r"(\d+) native account authority checks passed", authority_output)
         if not authority_matched or int(authority_matched[1]) < 51:
             raise RuntimeError("Durable account authority handoff/recovery evidence incomplete")
+        export_evidence = verify_crossruntime_export(source_sha, workflow_sha)
         final_sha = run(["git", "rev-parse", "HEAD"], "source-revision-after.log").strip()
         if final_sha != source_sha or source_hashes() != source_digests:
             raise RuntimeError("Production sources changed during actual Dart/Native verification")
@@ -391,7 +520,8 @@ def main():
                        transactionChecks=transaction_checks,
                        transactionIdentityChecks=int(identity_matched[1]),
                        queueChecks=int(queue_matched[1]),
-                       authorityChecks=int(authority_matched[1]), sourceSHA256=source_digests)
+                       authorityChecks=int(authority_matched[1]), sourceSHA256=source_digests,
+                       schema3Export=export_evidence)
     except (OSError, RuntimeError, ValueError, subprocess.TimeoutExpired) as error:
         summary["reason"] = str(error)
         print(f"FAIL native account envelopes: {error}")

@@ -325,3 +325,16 @@ func exportCurrentShadow(expectedTransactionID: UUID) async throws -> PiliAccoun
 - 未来 bootstrap 写入在**另行 review 批准**前不实施；导出结果绝不超过 §1.3 保证范围。
 - 本 docs-only 修订先经 Codex contract review；通过后才实现 §3.3 切片（新 code SHA + BOTH
   workflow 各一次 + 独立复审）。318 limited PASS 与既有失败历史保持。
+
+## 状态注记（2026-10-17）
+
+- §3.3 bounded 只读导出切片已实现并提交：staging `exportCurrentShadow`（原 enum 新增
+  `shadowUnavailable`/`staleExport`）、driver `tool/check_native_account_envelope_export.swift`、
+  `tool/check_native_account_envelopes.py` 内的新阶段（consumer 并入同一 mandatory outcome）、
+  consumer `test/services/native_accounts/native_account_schema3_export_consumption_test.dart`、
+  本地 mock QA `tool/qa_native_account_envelope_export.py`、`ios.yml` trigger paths +
+  `*.bin` artifact 接线。
+- 本切片**未派发任何 CI**：按 source-preflight 次序，先提交 code SHA 等待 Codex SOURCE
+  PREFLIGHT；通过后才在同一 exact SHA 派发 BOTH workflow 各一次，再由 Codex 复核实际证据。
+- §1.3 保证范围、§2 composition 会话设计、§3.1/3.2 bootstrap/binding 保持 OPEN、未实施；
+  四 flag false；既有计数/预算/aggregate、318 limited PASS 与失败历史不变。

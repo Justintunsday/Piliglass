@@ -34,6 +34,7 @@ on:
       - "tool/check_response_cookie_headers.dart"
       - "tool/check_account_request_state.dart"
       - "test/utils/accounts/**"
+      - "test/services/native_accounts/**"
       - "test/http/**"
       - "test/services/native_login/**"
       - "test/utils/native_*"
@@ -42,6 +43,7 @@ on:
       - "tool/check_native_signing*"
       - "tool/check_native_accounts*"
       - "tool/check_native_account_envelopes*"
+      - "tool/check_native_account_envelope_export*"
       - "tool/check_native_login*"
       - "tool/check_native_body_codec.py"
       - "tool/check_native_cookie_store*"
@@ -83,6 +85,7 @@ on:
       - "tool/check_response_cookie_headers.dart"
       - "tool/check_account_request_state.dart"
       - "test/utils/accounts/**"
+      - "test/services/native_accounts/**"
       - "test/http/**"
       - "test/services/native_login/**"
       - "test/utils/native_*"
@@ -91,6 +94,7 @@ on:
       - "tool/check_native_signing*"
       - "tool/check_native_accounts*"
       - "tool/check_native_account_envelopes*"
+      - "tool/check_native_account_envelope_export*"
       - "tool/check_native_login*"
       - "tool/check_native_body_codec.py"
       - "tool/check_native_cookie_store*"
@@ -344,6 +348,7 @@ jobs:
           path: |
             build/native-account-envelope-check/*.json
             build/native-account-envelope-check/*.log
+            build/native-account-envelope-check/*.bin
           if-no-files-found: warn
 
       - name: Verify playback sources and latency selection

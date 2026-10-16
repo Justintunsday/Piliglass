@@ -3,7 +3,8 @@ import Foundation
 
 enum PiliAccountEnvelopeStagingError: Error, Sendable, Equatable {
   case operationInProgress, invalidManifest, missingRecord, verificationFailed, publicationUnknown,
-       staleTransaction, invalidRecoveryJournal, unresolvedRecovery, staleRecoveryJournal
+       staleTransaction, invalidRecoveryJournal, unresolvedRecovery, staleRecoveryJournal,
+       shadowUnavailable, staleExport
 }
 
 struct PiliAccountEnvelopeStagingReceipt: Sendable, Equatable {
@@ -15,6 +16,15 @@ struct PiliAccountEnvelopeStagingReceipt: Sendable, Equatable {
 struct PiliAccountEnvelopeSnapshot: Sendable, Equatable {
   let transactionID: UUID
   let envelope: PiliAccountLiveMemoryShadow
+}
+
+/// Exact, strictly validated read-only export of the current immutable
+/// schema-3 shadow publication. `envelopeBytes` are the record's stored bytes:
+/// never re-encoded and never substituted by a historical candidate.
+struct PiliAccountEnvelopeExport: Sendable, Equatable {
+  let transactionID: UUID
+  let envelopeBytes: Data
+  let envelopeSHA256: String
 }
 
 /// Persistent evidence that one correlated publication attempt may have an
@@ -395,6 +405,66 @@ actor PiliAccountEnvelopeStagingStore {
     guard let current = try await manifest() else { return nil }
     return .init(transactionID: current.value.transactionID,
                  envelope: try await readRecord(current.value))
+  }
+
+  /// Atomic read-only export of the current immutable schema-3 shadow pointer.
+  ///
+  /// The whole sequence runs under one vault operation fence. The recovery
+  /// journal is read fresh (never through a cached store API): a present,
+  /// corrupt or unreadable journal fails closed and its persistent evidence is
+  /// preserved exactly; this method never clears, resolves or replays anything.
+  /// The caller supplies the exact expected pointer, so a moved pointer fails
+  /// with `staleExport` instead of returning stale bytes. Returned bytes are the
+  /// exact stored bytes of that pointer's record (never re-encoded), strictly
+  /// validated as schema 3 with the production codec and its existing
+  /// byte/node/UTF16 limits. Cancellation is honored at every await boundary
+  /// and releases the fence; no write path is reachable.
+  func exportCurrentShadow(expectedTransactionID: UUID) async throws -> PiliAccountEnvelopeExport {
+    try beginOperation()
+    defer { operationInProgress = false }
+    try Task.checkCancellation()
+    do {
+      if try await recoveryJournal() != nil {
+        throw PiliAccountEnvelopeStagingError.unresolvedRecovery
+      }
+    } catch let error as CancellationError {
+      throw error
+    } catch let error as PiliAccountEnvelopeStagingError {
+      throw error
+    } catch {
+      // A failed journal read never proves absence: any unreadable state fails
+      // closed as unresolved recovery and leaves the bytes untouched.
+      throw PiliAccountEnvelopeStagingError.unresolvedRecovery
+    }
+    try Task.checkCancellation()
+    guard let current = try await manifest() else {
+      throw PiliAccountEnvelopeStagingError.shadowUnavailable
+    }
+    guard current.value.transactionID == expectedTransactionID else {
+      throw PiliAccountEnvelopeStagingError.staleExport
+    }
+    try Task.checkCancellation()
+    guard let data = try await secrets.read(key(current.value.transactionID)) else {
+      throw PiliAccountEnvelopeStagingError.missingRecord
+    }
+    guard data.count == current.value.byteCount, digest(data) == current.value.sha256 else {
+      throw PiliAccountEnvelopeStagingError.verificationFailed
+    }
+    try Task.checkCancellation()
+    let envelope: PiliAccountLiveMemoryShadow
+    do {
+      envelope = try codec.decode(data)
+    } catch {
+      throw PiliAccountEnvelopeStagingError.verificationFailed
+    }
+    guard envelope.schemaVersion == 3 else {
+      // A schema-2 publication is not an exportable schema-3 shadow; the
+      // pointer and bytes stay untouched for a later explicit adoption.
+      throw PiliAccountEnvelopeStagingError.shadowUnavailable
+    }
+    try Task.checkCancellation()
+    return PiliAccountEnvelopeExport(transactionID: current.value.transactionID,
+                                     envelopeBytes: data, envelopeSHA256: digest(data))
   }
 
   /// Resolves the exact immutable candidate named by an authority marker,
