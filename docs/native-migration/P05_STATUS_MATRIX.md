@@ -424,6 +424,22 @@ cancel-responsive/硬期限证明；同进程 Keychain 实例 ≠ process kill�
 **边界**：不等于 whole Block1/2/P05/schema3 专属竞态/process kill/authority/handoff-revert-GC/
 设备；四 flag false；docs-only 记录（实际测试 SHA `3818948`）。
 
+**B2e-2b-2 legacy schema-1 staging fetch（`stagingExport()`）+ R55 在 `318bb88` 获 Codex 有限 PASS（仅 legacy read-only fetch/命名统一/新取消回归/组件 provenance 范围）**：
+真实仓库方法 `stagingExport()`（命令 `exportNativeAccountStaging`、nil 参数、严格 codec/
+error-state；R55 统一 driver 命名、无别名）+ 预取消零 invoke/受控挂起取消（显式 release）/
+严格 malformed 经 repository + native-account 自持 14 输入 provenance。证据：release
+[38919853808](https://github.com/Justintunsday/Piliglass/actions/runs/38919853808) 5/5 与
+preview [38919866173](https://github.com/Justintunsday/Piliglass/actions/runs/38919866173)
+4/4（首次、无 job 重跑）；九 outcome/BUILD 109.1MB/executed FFmpeg；账户 **322**/72/strict
+clean；legacy 88 checks/14 blobs 全 match/legacy goldens `2c91d905…`/`b6cea08b…`；
+109/44/1/40/**285**/292/51；producer 8/10/2；91 raw 89+2；preview 20
+（299.688+85.440+187.571+70.252s）；11 reports/22 streams/`failures[]`；MacQA 45/45
+（1.40s synthetic）。前驱保留：`ab1b9e5` missing-member 编译失败（不追溯接受）。**精度**：
+schema-1 tracker fetch 经 fixture invoker，非 MethodChannel e2e/full schema3 durable
+bridge/freeze lease/生产 composition；14/91 ledger 非 105 unique。**边界**：不等于 whole
+Block1/2/P05/authority/handoff-revert-GC/设备；四 flag false；docs-only 记录（实际测试 SHA
+`318bb88`）。
+
 **Block 1 / B1d 切片（页面读取、延迟副作用、maintenance gate）已在 `98e6f9b` 验收**：
 `Accounts.installedAccounts()` 纯只读 seam + 页面 `isEmpty/isNotEmpty` 切
 `visibleAccounts()`（login/mine/setting/about，内容/顺序/读取时机不变、零

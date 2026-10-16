@@ -243,6 +243,32 @@ sourceSHA=workflowSHA=9724ddb；preview 20 tests 0 failures、压力 `failures=[
 shadow 组件：未接 authority、无生产 caller，durable identity 消费/恢复语义、账号级队列与
 receipt/unknown ack、Block 3/4/5 仍未交付；四能力 flag 保持 false，P05 未整体完成。
 
+**B2e-2b-2 legacy schema-1 staging fetch（`stagingExport()`）+ R55 在 `318bb88` 获 Codex 有限 PASS（仅 legacy read-only fetch/命名统一/新取消回归/组件 provenance 范围；不等于 full schema3 wire/frozen lease/MethodChannel e2e/生产 composition/authority/P05）**：
+- 内容：`PiliAccountFlutterRepository.stagingExport()`（真实命令 `exportNativeAccountStaging`、nil
+  参数、与 `selectionSnapshot()` 同型 error-state、严格 `PiliAccountStagingBridgeCodec`）；R55
+  将 driver 三处 `exportStaging()` 统一为真实方法名、无别名；新回归：预取消零 invoke、受控挂起后
+  cancel+显式 release → `CancellationError`/恰一次 invoke/不 decode 结果（`.null` 可判别）、三类
+  malformed payload 同时经直连 codec 与 repository（`invalidSnapshot`）；native-account 自持
+  provenance（`sourceSHA=workflowSHA`、14 raw-byte 输入 hash、golden/HEAD 前后复核、120/60
+  预算不变）。
+- 实际证据（`review-318bb88…-codex` FINAL DISPOSITION，Codex 独立读取 main/四条 preview 日志与
+  legacy/envelope artifacts）：release
+  [38919853808](https://github.com/Justintunsday/Piliglass/actions/runs/38919853808) 5/5 与
+  preview [38919866173](https://github.com/Justintunsday/Piliglass/actions/runs/38919866173)
+  4/4（均首次尝试、无 job 重跑）；账户 322/runtime 72/analyzer `--fatal-infos` No issues；九强制
+  outcome 全 success、BUILD SUCCEEDED、109.1MB、executed FFmpeg；legacy 组件 88 native-account
+  checks、14 raw Git blobs 全 match、legacy goldens `2c91d905…`/`b6cea08b…` 匹配；envelope
+  109/44/1/40/**285**(108+177)/292/51、producer 8/10/2、91 raw 89+2、2 goldens 匹配；preview 20
+  （nav 299.688s + image 85.440s + account 187.571s + player 70.252s）；home 11/11 unique
+  token+PID、22 streams、last-row 4395==bottom、压力 `failures[]`；Mac QA 45/45（1.40s synthetic）。
+- 精度/边界（LIMITED PASS 精确声明保留）：schema-1 tracker-identity fetch 经 fixture invoker
+  消费 actual Dart exports——**不是** live MethodChannel e2e、非 full schema3 durable envelope
+  bridge、非 acquired freeze/drain lease（Dart `_capture` 仅 optimistic revalidation）、非生产
+  composition/authority/handoff/revert/startup/GC、非 process-kill recovery；typed 取消用例需要显
+  式 gate release（非通用取消期限）；14/91 ledger 有重叠（非 105 unique）；`ab1b9e5` actual
+  missing-member compile failure 保留、不追溯接受。四 flag false；本记录为 docs-only（实际测试
+  SHA `318bb88`）。
+
 **Native `applyPurposeChange` read-transform-publish CAS 目标组（原 53 item8）+ R51–R54 在 `3818948` 获 Codex 有限 PASS（仅该 schema2 fixture/同 vault 合法竞争者/同进程 Keychain reopen 范围；不等于 whole Block1/2/P05/schema3 专属竞态/process kill/authority）**：
 - 内容：生产唯一新增为 instance-local、缺省 nil 的 `prePublicationDeliveryHook`（`publishCandidate`
   内 encode/attemptID mint 之后、shared-vault `importShadow` 之前 await；生产接线从不安装）。

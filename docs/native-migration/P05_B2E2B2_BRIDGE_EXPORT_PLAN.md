@@ -75,3 +75,16 @@ durable identity（缺失/不匹配 → 拒绝、零写）；identity 只作关�
 - 小 commit/push；新最终 code SHA 显式 BOTH `ios.yml`+`ios-home-preview.yml`（各一次），读实际
   artifacts；docs 证据与代码 SHA 分离；交 Codex 独立复审后再进下一组（本提案批准前不实施
   契约部分；Block3 composition 仍为独立门）。
+
+## 状态注记（2026-10-16）：本组实现切片获 Codex 有限 PASS
+
+- B2e-2b-2 legacy schema-1 staging fetch（`PiliAccountFlutterRepository.stagingExport()` 只读
+  读取 + R55 命名统一/新取消回归/组件 provenance）在测试代码 SHA
+  `318bb88ee02063e67d62d5bc658e9c7d50b177e1` 获 Codex 有限 PASS（详见 `PROGRESS.md`/
+  `P05_COMPLETION_REPORT.md` §22；docs 记录与测试 SHA 分离）。
+- 明确仍开放（继承上文边界不变）：full schema3 envelope wire / frozen-revision handoff /
+  双向 durable-identity carriage —— 见
+  [P05_B2E2B3_SCHEMA3_ENVELOPE_WIRE_CONTRACT_PLAN.md](P05_B2E2B3_SCHEMA3_ENVELOPE_WIRE_CONTRACT_PLAN.md)
+  （仅计划，待 Codex contract review）；legacy fetch 非 MethodChannel e2e/生产 composition/
+  authority；`apply()` 不携带 durable labels；nonempty-target/idempotent reverse apply、
+  startup/revert/GC 为独立门。

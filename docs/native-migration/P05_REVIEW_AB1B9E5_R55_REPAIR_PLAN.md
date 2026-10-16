@@ -55,3 +55,10 @@ Codex SOURCE PREFLIGHT；通过后再由同一 session 各一次 dispatch BOTH w
   Option B（独立 schema-3 envelope wire）仅为后续方向（composition 拥有 freeze/drain 与
   pinned pointer/revision、双向 label 契约、unknown journal fail-closed 不静默 resolve），
   未获批实施。
+
+## 结果（2026-10-16）
+
+- `318bb88`：命名统一（`stagingExport`）+ 新 fetch 取消/严格 malformed 经 repository 回归 +
+  14 输入 provenance 落地；actual CI 双 5/5+4/4、native-account 88 checks、14 Git blobs 全
+  match、legacy goldens 匹配；**LIMITED PASS**（`review-318bb88…-codex`，仅 legacy schema-1
+  fetch/R55 范围）。`ab1b9e5` 编译失败历史保留；OptionB 契约计划另存待 Codex review。

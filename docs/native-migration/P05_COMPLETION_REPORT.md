@@ -323,6 +323,33 @@ adapter，见 §10）、Hive compaction/close、LoginUtils 副作用。
   前驱 8cf6629/085d883 preview failure 保留；无真机/authority 结论；四 flag false。
 - 记录为 docs-only commit，不代表 code CI SHA；实际测试 SC SHA 为上述两个代码 SHA。
 
+## 22. 2026-10-16 B2e-2b-2 legacy schema-1 staging fetch + R55（`318bb88`；Codex 有限 PASS）
+
+- 生产方法：`PiliAccountFlutterRepository.stagingExport()`（真实命令
+  `exportNativeAccountStaging`、nil 参数、与 `selectionSnapshot()` 同型 error-state、严格
+  `PiliAccountStagingBridgeCodec`）；R55 命名统一（driver `exportStaging()` → `stagingExport()`，
+  无别名）；不做 Domain protocol/authority 变更。
+- 新回归：预取消零 invoke；受控挂起后 cancel+显式 release → `CancellationError`/恰一次 invoke/
+  不 decode 结果（`.null` 判别）；三类 malformed payload 直连 codec 与 repository 双路径
+  `invalidSnapshot`；native-account 自持 provenance（sourceSHA=workflowSHA=318、14 输入 raw
+  hash、golden/HEAD 前后复核、120/60 不变）。
+- 同代码 SHA `318bb88ee02063e67d62d5bc658e9c7d50b177e1`：release
+  [38919853808](https://github.com/Justintunsday/Piliglass/actions/runs/38919853808) success5/5 与
+  preview [38919866173](https://github.com/Justintunsday/Piliglass/actions/runs/38919866173)
+  success4/4（均首次尝试、无 job 重跑）；九强制 outcome 全 success、`BUILD SUCCEEDED`、109.1MB、
+  executed FFmpeg；账户 **322**/runtime 72/analyzer `--fatal-infos` No issues；legacy 组件 88
+  native-account checks、14 raw Git blobs 全 match、legacy goldens `2c91d905…`/`b6cea08b…`；
+  envelope 109/44/1/40/**285**(108+177)/292/51、producer 8/10/2、91 raw 89+2、2 goldens；
+  preview 20（299.688+85.440+187.571+70.252s）；home 11/11 unique token+PID、22 streams、
+  last-row 4395==bottom；压力 `failures[]`；Mac QA 45/45（1.40s synthetic）。
+- 前驱失败保留：`ab1b9e5` actual missing-member compile failure（`exportStaging`），不追溯接受。
+- 精度/边界：schema-1 tracker-identity fetch 经 fixture invoker 消费 actual Dart exports；非 live
+  MethodChannel e2e、非 full schema3 durable envelope bridge、非 acquired freeze/drain lease
+  （Dart 仅 optimistic revalidation）、非生产 composition/authority/handoff/revert/startup/GC、
+  非 process-kill recovery；typed 取消需显式 gate release；14/91 ledger 有重叠非 105 unique。
+  有限 PASS 仅该范围；未闭合 whole Block1/2/P05/authority/device；四 flag false；本记录为
+  docs-only commit（实际测试 SHA `318bb88`）。
+
 ## 21. 2026-10-16 Native `applyPurposeChange` read-transform-publish CAS（原 53 item8）+ R51–R54（`3818948`；Codex 有限 PASS）
 
 - 生产唯一新增：instance-local、缺省 nil 的 `prePublicationDeliveryHook`（`publishCandidate`
