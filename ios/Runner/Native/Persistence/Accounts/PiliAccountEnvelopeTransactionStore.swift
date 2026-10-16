@@ -225,6 +225,15 @@ actor PiliAccountEnvelopeTransactionStore {
   /// wiring; it controls the real state-installation boundary, not a mock
   /// store or a separate algorithm.
   private var recoveryReadDeliveryHook: (@Sendable () async -> Void)?
+  /// Test-only scheduling seam awaited at the single publication choke point,
+  /// after the candidate and its immutable operation identity are fixed and
+  /// before entering the shared-vault compare-and-publish. It exposes the real
+  /// read-transform-publish window (captured previous pointer and candidate
+  /// retained, wrapper gate held, staging gate free) so a test can interleave
+  /// a legitimate competing publisher and then resume into the real CAS.
+  /// Always nil in production wiring; it controls scheduling only and cannot
+  /// change the candidate, the pointer or the vault comparison.
+  private var prePublicationDeliveryHook: (@Sendable () async -> Void)?
   var nativeWritesAllowed: Bool { false }
   var authoritySwitchAllowed: Bool { false }
 
@@ -257,6 +266,12 @@ actor PiliAccountEnvelopeTransactionStore {
   /// `recoveryReadDeliveryHook`). Production wiring never calls this.
   func setRecoveryReadDeliveryHook(_ hook: (@Sendable () async -> Void)?) {
     recoveryReadDeliveryHook = hook
+  }
+
+  /// Installs or removes the test-only pre-publication scheduling seam (see
+  /// `prePublicationDeliveryHook`). Production wiring never calls this.
+  func setPrePublicationDeliveryHook(_ hook: (@Sendable () async -> Void)?) {
+    prePublicationDeliveryHook = hook
   }
 
   /// Bounded retrying cold load for the READ-ONLY recovery entry points
@@ -434,6 +449,13 @@ actor PiliAccountEnvelopeTransactionStore {
     // Mint the immutable operation identity before publishing so an unknown
     // acknowledgment can be correlated by exact identity, never by content.
     let attemptID = UUID()
+    // Test-only scheduling seam (nil in production): the candidate and the
+    // immutable operation identity are already fixed and the wrapper gate is
+    // held, so a test can schedule a legitimate competing publisher on the
+    // shared vault before this attempt enters the real compare-and-publish.
+    if let prePublicationDeliveryHook {
+      await prePublicationDeliveryHook()
+    }
     do {
       return try await vault.importShadow(data, expectedTransactionID: expectedTransactionID,
                                           candidateTransactionID: attemptID,

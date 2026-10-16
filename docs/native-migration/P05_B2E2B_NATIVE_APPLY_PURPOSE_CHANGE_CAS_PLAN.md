@@ -43,7 +43,8 @@
 ## 拟议 seam（最小、生产默认惰性；R51 允许的 testability seam）
 
 - 位置：`publishCandidate`（:429+）内，`attemptID` mint（:436）之后、`vault.importShadow(...)`
-  （:438）之前，await 一个可选 hook——即"进入 staging importShadow 之前"的确切边界。
+  （:438）之前，await 一个可选 hook——即"进入 staging importShadow 之前"的确切边界
+  （暂停发生时 `attemptID` 已 mint；恢复后不再 mint，直接进入 vault 调用）。
 - 形态：仿既有文档化 seam `recoveryReadDeliveryHook`（:222-227 注释、:256-260 setter）：
   `private var prePublicationDeliveryHook: (@Sendable () async -> Void)?` +
   `func setPrePublicationDeliveryHook(_ hook: (@Sendable () async -> Void)?)`。
@@ -80,9 +81,9 @@
 5. B 合法竞争发布：`storeB.applyPurposeChange(secondKey, gen, purpose: purposeB,
    previousKeyUnits: nil, ...)`（purposeB ≠ purposeA、亦未被持有）→ CAS 期望 P0 == 当前 →
    真实发布 W（新 transactionID）；保留 B receipt。
-6. `resume()` ⇒ A 恢复进入真实 `publishCandidate`（内部 mint attemptID）→ 真实
-   `vault.importShadow(expectedTransactionID: P0)` → `publishShadow` CAS 见 W ≠ P0 →
-   抛 `.staleTransaction`。
+6. `resume()` ⇒ A 恢复：`attemptID` 已在暂停前 mint（hook 位于 mint 之后、vault 调用之前），
+   A 直接进入真实 `vault.importShadow(expectedTransactionID: P0)` → `publishShadow` CAS
+   见 W ≠ P0 → 抛 `.staleTransaction`。
 7. 断言：
    - B 在 A 挂起期间**成功**（receipt 非 nil、无 `operationInProgress`）——直接证明该相位
      staging 门空闲（与既有 fenced :295-310"门真被持有 → 第二 actor 被拒
@@ -128,8 +129,16 @@
 
 ## 回归矩阵与计数
 
-- 新增 C1–C4（上述）；既有 sequential/close-reopen/byte-budget/temporary-selection/
-  ambiguous/rejection/cancellation/operationInProgress 用例全部保留（C5：不重做、不弱化、不改预算）。
+- 新增 C1–C4（上述）；另有 **C1c 直接取消对照**（新 hook）：A 暂停、无 B 移动指针 →
+  `cancel()` 后**显式** `resume()`（continuation 不自动感知取消）→ 精确 `CancellationError`、
+  无 receipt、零 durable 写、无 fence/journal、winner 不变；随后同一 store 的合法写入成功
+  （wrapper/hook 清理），且 staging 既有 CAS-先于-checkCancellation 顺序不变。
+  既有 sequential/close-reopen/byte-budget/temporary-selection/ambiguous/rejection/
+  cancellation/operationInProgress 用例全部保留（C5：不重做、不弱化、不改预算）。
+- 证据强化：C1/C4 的 winner 期望信封由 fixture/primitive 语义**独立构建**后与 full decoded
+  snapshot + transactionID 比较（非读回 W 再与自身比较）；同 namespace 使用透明转发 write
+  计数器（不注入 pointer 值）证明 stale/cancel 零 durable 写；实际 Keychain 无键枚举 →
+  不声称 orphan 记录清点（可观察不变量 + 源 CAS-先于写）。
 - 既有 fenced 块（:249-310）继续是**独立的** `operationInProgress` 控制；目标 CAS 用例不得把
   wrapper 本地门或 vault `operationInProgress` 当作拒绝原因混淆。
 - 新用例只增 check 计数；envelope 基线 109/44/40/245/292/51 不降；**精确新增计数以实际新

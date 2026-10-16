@@ -46,7 +46,155 @@ private actor TransactionFaultVault: PiliAccountSecretStore {
   func remove(_ key: String) { values.removeValue(forKey: key) }
 }
 
+/// Test-tool only: drives the deterministic pause of one transaction at the
+/// production pre-publication seam. It never injects values, gates or
+/// failures; it only suspends the calling transaction until the test resumes
+/// it, and it surfaces a transaction that finished before reaching the seam
+/// instead of waiting forever for a pause signal.
+private actor PrePublicationPauser {
+  enum Outcome: Sendable, Equatable { case paused, completedBeforePause(String) }
+  private var reached = false
+  private var earlyExit: String?
+  private var suspended: CheckedContinuation<Void, Never>?
+  private var pauseObserver: CheckedContinuation<Outcome, Never>?
+
+  func suspendOnce() async {
+    guard !reached else { return }
+    reached = true
+    await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+      suspended = continuation
+      pauseObserver?.resume(returning: .paused)
+      pauseObserver = nil
+    }
+  }
+
+  func waitUntilPaused() async -> Outcome {
+    if let earlyExit { return .completedBeforePause(earlyExit) }
+    if reached { return .paused }
+    return await withCheckedContinuation { (continuation: CheckedContinuation<Outcome, Never>) in
+      pauseObserver = continuation
+    }
+  }
+
+  func resume() {
+    suspended?.resume()
+    suspended = nil
+  }
+
+  func completedBeforePause(_ message: String) {
+    guard !reached else { return }
+    earlyExit = message
+    pauseObserver?.resume(returning: .completedBeforePause(message))
+    pauseObserver = nil
+  }
+}
+
+/// Test-tool only transparent forwarding counter over the real Keychain
+/// backend: every operation delegates unchanged and successful writes are
+/// counted, so a rejected or cancelled attempt can be observed to perform zero
+/// durable writes without injecting or reading any pointer value.
+private actor ForwardingWriteCountingSecrets: PiliAccountSecretStore {
+  private let inner: PiliAccountKeychainSecretStore
+  private var writeCount = 0
+
+  init(_ inner: PiliAccountKeychainSecretStore) { self.inner = inner }
+  func writes() -> Int { writeCount }
+  func read(_ key: String) async throws -> Data? { try await inner.read(key) }
+  func write(_ data: Data, key: String) async throws {
+    try await inner.write(data, key: key)
+    writeCount += 1
+  }
+  func remove(_ key: String) async throws { try await inner.remove(key) }
+}
+
 @main private struct AccountEnvelopeTransactionChecks {
+  private static func raceSlot(_ purpose: PiliAccountPurpose) -> Int {
+    switch purpose {
+    case .main: return 0
+    case .heartbeat: return 1
+    case .recommend: return 2
+    case .video: return 3
+    }
+  }
+
+  /// Mirrors the production `replace` carry rule: every field except the
+  /// explicit overrides is copied and schema 3 keeps the monotonic high-water.
+  private static func raceShadow(_ current: PiliAccountLiveMemoryShadow,
+                                 records: [PiliAccountLiveMemoryRecord]? = nil,
+                                 selections: [Int]? = nil,
+                                 history: Int? = nil) -> PiliAccountLiveMemoryShadow {
+    let resolvedHighWater: Int64? = current.schemaVersion == 3
+      ? max(current.generationHighWater ?? 0, current.effectiveGenerationHighWater)
+      : nil
+    return PiliAccountLiveMemoryShadow(
+      schemaVersion: current.schemaVersion,
+      scope: current.scope, identityScope: current.identityScope,
+      revision: current.revision,
+      durableIdentityConfigured: current.durableIdentityConfigured,
+      durabilityVerified: current.durabilityVerified,
+      authoritySwitchAllowed: current.authoritySwitchAllowed,
+      nativeWritesAllowed: current.nativeWritesAllowed,
+      records: records ?? current.records,
+      storedOrder: current.storedOrder,
+      ownerOrder: current.ownerOrder,
+      selectionPurposes: current.selectionPurposes,
+      selections: selections ?? current.selections,
+      history: history ?? current.history,
+      generationHighWater: resolvedHighWater)
+  }
+
+  /// Independently derives the expected `applyPurposeChange` result from the
+  /// fixture and the documented primitive: append-if-missing on the selected
+  /// record, the explicitly named previous holder loses the purpose in the
+  /// same candidate, the slot and history follow the existing policy, and
+  /// every other field is carried. It never reads the produced winner.
+  private static func expectedPurposeChange(_ current: PiliAccountLiveMemoryShadow,
+                                            index: Int, purpose: PiliAccountPurpose,
+                                            previousIndex: Int?)
+    -> PiliAccountLiveMemoryShadow {
+    var records = current.records
+    let selected = records[index]
+    if !selected.persistedPurposes.contains(purpose) {
+      records[index] = PiliAccountLiveMemoryRecord(
+        record: selected.record, generation: selected.generation,
+        storageKeyUnits: selected.storageKeyUnits, mid: selected.mid,
+        isLogin: selected.isLogin, accessKeyUnits: selected.accessKeyUnits,
+        refreshTokenUnits: selected.refreshTokenUnits,
+        persistedPurposes: selected.persistedPurposes + [purpose],
+        activated: selected.activated, jar: selected.jar,
+        durableIdentity: selected.durableIdentity)
+    }
+    if let previousIndex, previousIndex != index {
+      let previous = records[previousIndex]
+      if previous.persistedPurposes.contains(purpose) {
+        records[previousIndex] = PiliAccountLiveMemoryRecord(
+          record: previous.record, generation: previous.generation,
+          storageKeyUnits: previous.storageKeyUnits, mid: previous.mid,
+          isLogin: previous.isLogin, accessKeyUnits: previous.accessKeyUnits,
+          refreshTokenUnits: previous.refreshTokenUnits,
+          persistedPurposes: previous.persistedPurposes.filter { $0 != purpose },
+          activated: previous.activated, jar: previous.jar,
+          durableIdentity: previous.durableIdentity)
+      }
+    }
+    var selections = current.selections
+    selections[raceSlot(purpose)] = records[index].record
+    let heartbeat = selections[1]
+    let history = records[heartbeat].isLogin ? heartbeat : selections[0]
+    return raceShadow(current, records: records, selections: selections, history: history)
+  }
+
+  /// Independently derives the expected `applyTemporarySelection` result.
+  private static func expectedTemporarySelection(_ current: PiliAccountLiveMemoryShadow,
+                                                 index: Int, purpose: PiliAccountPurpose)
+    -> PiliAccountLiveMemoryShadow {
+    var selections = current.selections
+    selections[raceSlot(purpose)] = current.records[index].record
+    let heartbeat = selections[1]
+    let history = current.records[heartbeat].isLogin ? heartbeat : selections[0]
+    return raceShadow(current, selections: selections, history: history)
+  }
+
   static func main() async throws {
     guard CommandLine.arguments.count == 2 else {
       throw TransactionFixtureError.failed("fresh live actual Dart envelope golden required")
@@ -533,6 +681,277 @@ private actor TransactionFaultVault: PiliAccountSecretStore {
       try await purposeVault.discardShadow()
     } catch {
       try? await purposeVault.discardShadow()
+      throw error
+    }
+
+    // R51 targeted race: `applyPurposeChange` keeps its captured previous
+    // pointer and its validated candidate while a legitimate competing
+    // publisher on the SAME vault instance publishes a newer envelope; on
+    // resume the real staging compare-and-publish must reject the stale
+    // transform with `staleTransaction`, publish nothing and leave the
+    // winner's complete state. The expectation is derived independently from
+    // the fixture/primitive and never read back from the winner.
+    let raceNamespace = UUID()
+    let raceSecrets = ForwardingWriteCountingSecrets(
+      PiliAccountKeychainSecretStore(stagingNamespace: raceNamespace))
+    let raceVault = PiliAccountEnvelopeStagingStore(secrets: raceSecrets)
+    let raceStoreA = PiliAccountEnvelopeTransactionStore(vault: raceVault)
+    let raceStoreB = PiliAccountEnvelopeTransactionStore(vault: raceVault)
+    do {
+      try await raceVault.importShadow(codec.encode(base))
+      guard let raceKey = base.records[2].storageKeyUnits,
+            let raceBaseline = try await raceVault.loadShadowSnapshot() else {
+        throw TransactionFixtureError.failed("race fixture incomplete")
+      }
+      try check(raceBaseline.envelope == base, "race baseline is the imported fixture")
+      let initialSecond = base.records[2].persistedPurposes
+      guard let racePurposeA = PiliAccountPurpose.allCases.first(where: {
+        !initialSecond.contains($0)
+      }), let racePurposeB = PiliAccountPurpose.allCases.first(where: {
+        !initialSecond.contains($0) && $0 != racePurposeA
+      }) else {
+        throw TransactionFixtureError.failed("race purposes missing")
+      }
+
+      // C1: A pauses at the pre-publication seam; B publishes the winner
+      // through the real API; A resumes into the real CAS.
+      let racePauser = PrePublicationPauser()
+      await raceStoreA.setPrePublicationDeliveryHook { await racePauser.suspendOnce() }
+      let raceTask = Task {
+        try await raceStoreA.applyPurposeChange(
+          recordKeyUnits: raceKey, expectedGeneration: base.records[2].generation,
+          purpose: racePurposeA, previousKeyUnits: nil, previousExpectedGeneration: nil)
+      }
+      let raceWatcher = Task {
+        do { _ = try await raceTask.value }
+        catch { await racePauser.completedBeforePause(String(describing: error)) }
+      }
+      do {
+        switch await racePauser.waitUntilPaused() {
+        case .paused: break
+        case .completedBeforePause(let message):
+          throw TransactionFixtureError.failed("race transaction finished before the pause: \(message)")
+        }
+        let writesAtPause = await raceSecrets.writes()
+        let winnerReceipt = try await raceStoreB.applyPurposeChange(
+          recordKeyUnits: raceKey, expectedGeneration: base.records[2].generation,
+          purpose: racePurposeB, previousKeyUnits: nil, previousExpectedGeneration: nil)
+        let writesAfterWinner = await raceSecrets.writes()
+        try check(writesAfterWinner > writesAtPause,
+                  "competing publisher performs durable writes during the pause")
+        guard let winner = try await raceVault.loadShadowSnapshot() else {
+          throw TransactionFixtureError.failed("missing race winner snapshot")
+        }
+        let expectedWinner = expectedPurposeChange(
+          base, index: 2, purpose: racePurposeB, previousIndex: nil)
+        try check(winner.transactionID == winnerReceipt.transactionID,
+                  "winner pointer names the competing publication")
+        try check(winner.envelope == expectedWinner,
+                  "winner equals the independently derived purpose-change envelope")
+        await racePauser.resume()
+        do {
+          _ = try await raceTask.value
+          throw TransactionFixtureError.failed("stale purpose transform published over the winner")
+        } catch PiliAccountEnvelopeStagingError.staleTransaction { checks += 1 }
+        try check(await raceStoreA.pendingUnresolvedPublication == nil,
+                  "stale rejection arms no unknown fence")
+        try check(try await raceVault.loadRecoveryJournal() == nil,
+                  "stale rejection writes no recovery journal")
+        try check(await raceSecrets.writes() == writesAfterWinner,
+                  "stale rejection performs zero durable writes")
+        guard let afterStale = try await raceVault.loadShadowSnapshot() else {
+          throw TransactionFixtureError.failed("missing post-stale snapshot")
+        }
+        try check(afterStale.transactionID == winnerReceipt.transactionID,
+                  "stale rejection keeps the winning pointer")
+        try check(afterStale.envelope == expectedWinner,
+                  "stale rejection leaves the complete winner state")
+        await raceWatcher.value
+      } catch {
+        await racePauser.resume()
+        _ = try? await raceTask.value
+        await raceWatcher.value
+        await raceStoreA.setPrePublicationDeliveryHook(nil)
+        throw error
+      }
+
+      // Cancellation control on the same seam: A paused with no competing
+      // publisher. The continuation is not cancellation-aware, so the test
+      // cancels and then explicitly resumes; the staging CAS passes first and
+      // the existing checkCancellation surfaces exactly CancellationError with
+      // no receipt, no durable write and no fence before the later valid write.
+      let cancelPauser = PrePublicationPauser()
+      await raceStoreA.setPrePublicationDeliveryHook { await cancelPauser.suspendOnce() }
+      let cancelTask = Task {
+        try await raceStoreA.applyPurposeChange(
+          recordKeyUnits: raceKey, expectedGeneration: base.records[2].generation,
+          purpose: racePurposeA, previousKeyUnits: nil, previousExpectedGeneration: nil)
+      }
+      let cancelWatcher = Task {
+        do { _ = try await cancelTask.value }
+        catch { await cancelPauser.completedBeforePause(String(describing: error)) }
+      }
+      do {
+        switch await cancelPauser.waitUntilPaused() {
+        case .paused: break
+        case .completedBeforePause(let message):
+          throw TransactionFixtureError.failed("cancel control finished before the pause: \(message)")
+        }
+        let writesBeforeCancel = await raceSecrets.writes()
+        cancelTask.cancel()
+        await cancelPauser.resume()
+        do {
+          _ = try await cancelTask.value
+          throw TransactionFixtureError.failed("cancelled paused transaction published")
+        } catch is CancellationError { checks += 1 }
+        try check(await raceStoreA.pendingUnresolvedPublication == nil,
+                  "cancellation arms no unknown fence")
+        try check(try await raceVault.loadRecoveryJournal() == nil,
+                  "cancellation writes no recovery journal")
+        try check(await raceSecrets.writes() == writesBeforeCancel,
+                  "cancellation performs zero durable writes")
+        guard let afterCancel = try await raceVault.loadShadowSnapshot() else {
+          throw TransactionFixtureError.failed("missing post-cancel snapshot")
+        }
+        try check(afterCancel.transactionID == winnerReceipt.transactionID &&
+                  afterCancel.envelope == expectedWinner,
+                  "cancellation leaves the durable winner untouched")
+        await cancelWatcher.value
+      } catch {
+        await cancelPauser.resume()
+        _ = try? await cancelTask.value
+        await cancelWatcher.value
+        await raceStoreA.setPrePublicationDeliveryHook(nil)
+        throw error
+      }
+      await raceStoreA.setPrePublicationDeliveryHook(nil)
+
+      // A later valid publication merges from the winner: B's purpose is
+      // preserved, A's stale candidate is never reused and the receipt names
+      // the fresh pointer/record/identity with both authority gates false.
+      let mergeReceipt = try await raceStoreA.applyPurposeChange(
+        recordKeyUnits: raceKey, expectedGeneration: base.records[2].generation,
+        purpose: racePurposeA, previousKeyUnits: nil, previousExpectedGeneration: nil)
+      guard let afterMerge = try await raceVault.loadShadowSnapshot() else {
+        throw TransactionFixtureError.failed("missing post-merge snapshot")
+      }
+      let expectedMerge = expectedPurposeChange(
+        expectedWinner, index: 2, purpose: racePurposeA, previousIndex: nil)
+      try check(mergeReceipt.transactionID == afterMerge.transactionID,
+                "later publication names the fresh pointer")
+      try check(mergeReceipt.record == base.records[2].record,
+                "later publication names the exact record")
+      try check(mergeReceipt.durableIdentity == base.records[2].durableIdentity,
+                "later publication carries the record's durable identity")
+      try check(mergeReceipt.nativeWritesAllowed == false &&
+                mergeReceipt.authoritySwitchAllowed == false,
+                "later publication still grants no authority")
+      try check(afterMerge.envelope == expectedMerge,
+                "later publication merges the winner's purpose in Dart order")
+      try check(afterMerge.envelope.records[2].generation == base.records[2].generation &&
+                afterMerge.envelope.revision == base.revision,
+                "later publication keeps capture-local identity unrenumbered")
+
+      // Reopen only after every racing task has settled: a fresh
+      // Security.framework instance over the same namespace reads the merge.
+      let reopenedRaceVault = PiliAccountEnvelopeStagingStore(
+        secrets: PiliAccountKeychainSecretStore(stagingNamespace: raceNamespace))
+      try check(try await reopenedRaceVault.loadShadow() == expectedMerge,
+                "fresh same-namespace Keychain instance reads the final winner")
+      try await raceVault.discardShadow()
+    } catch {
+      await raceStoreA.setPrePublicationDeliveryHook(nil)
+      try? await raceVault.discardShadow()
+      throw error
+    }
+
+    // C4 variant: the competing publisher moves the slot with a temporary
+    // selection instead of a purpose change; the resumed stale transform must
+    // be rejected the same way and the winner's slot/history stay untouched.
+    let tempNamespace = UUID()
+    let tempSecrets = ForwardingWriteCountingSecrets(
+      PiliAccountKeychainSecretStore(stagingNamespace: tempNamespace))
+    let tempVault = PiliAccountEnvelopeStagingStore(secrets: tempSecrets)
+    let tempStoreA = PiliAccountEnvelopeTransactionStore(vault: tempVault)
+    let tempStoreB = PiliAccountEnvelopeTransactionStore(vault: tempVault)
+    do {
+      try await tempVault.importShadow(codec.encode(base))
+      guard let tempKey = base.records[2].storageKeyUnits,
+            let tempBaseline = try await tempVault.loadShadowSnapshot() else {
+        throw TransactionFixtureError.failed("temporary race fixture incomplete")
+      }
+      try check(tempBaseline.envelope == base, "temporary race baseline is the imported fixture")
+      let tempInitialSecond = base.records[2].persistedPurposes
+      guard let tempPurposeA = PiliAccountPurpose.allCases.first(where: {
+        !tempInitialSecond.contains($0)
+      }), let tempSelectionPurpose = PiliAccountPurpose.allCases.first(where: {
+        !tempInitialSecond.contains($0) && $0 != tempPurposeA
+      }) else {
+        throw TransactionFixtureError.failed("temporary race purposes missing")
+      }
+      let tempPauser = PrePublicationPauser()
+      await tempStoreA.setPrePublicationDeliveryHook { await tempPauser.suspendOnce() }
+      let tempTask = Task {
+        try await tempStoreA.applyPurposeChange(
+          recordKeyUnits: tempKey, expectedGeneration: base.records[2].generation,
+          purpose: tempPurposeA, previousKeyUnits: nil, previousExpectedGeneration: nil)
+      }
+      let tempWatcher = Task {
+        do { _ = try await tempTask.value }
+        catch { await tempPauser.completedBeforePause(String(describing: error)) }
+      }
+      do {
+        switch await tempPauser.waitUntilPaused() {
+        case .paused: break
+        case .completedBeforePause(let message):
+          throw TransactionFixtureError.failed("temporary race finished before the pause: \(message)")
+        }
+        let tempWritesAtPause = await tempSecrets.writes()
+        let tempWinnerReceipt = try await tempStoreB.applyTemporarySelection(
+          recordKeyUnits: tempKey, expectedGeneration: base.records[2].generation,
+          purpose: tempSelectionPurpose)
+        let tempWritesAfterWinner = await tempSecrets.writes()
+        try check(tempWritesAfterWinner > tempWritesAtPause,
+                  "temporary competing publisher performs durable writes during the pause")
+        guard let tempWinner = try await tempVault.loadShadowSnapshot() else {
+          throw TransactionFixtureError.failed("missing temporary race winner snapshot")
+        }
+        let expectedTemporaryWinner = expectedTemporarySelection(
+          base, index: 2, purpose: tempSelectionPurpose)
+        try check(tempWinner.transactionID == tempWinnerReceipt.transactionID,
+                  "temporary winner pointer names the competing publication")
+        try check(tempWinner.envelope == expectedTemporaryWinner,
+                  "temporary winner equals the independently derived selection envelope")
+        await tempPauser.resume()
+        do {
+          _ = try await tempTask.value
+          throw TransactionFixtureError.failed("stale purpose transform published over the temporary winner")
+        } catch PiliAccountEnvelopeStagingError.staleTransaction { checks += 1 }
+        try check(await tempStoreA.pendingUnresolvedPublication == nil,
+                  "temporary race arms no unknown fence")
+        try check(try await tempVault.loadRecoveryJournal() == nil,
+                  "temporary race writes no recovery journal")
+        try check(await tempSecrets.writes() == tempWritesAfterWinner,
+                  "temporary race rejection performs zero durable writes")
+        guard let tempAfterStale = try await tempVault.loadShadowSnapshot() else {
+          throw TransactionFixtureError.failed("missing temporary post-stale snapshot")
+        }
+        try check(tempAfterStale.transactionID == tempWinnerReceipt.transactionID &&
+                  tempAfterStale.envelope == expectedTemporaryWinner,
+                  "temporary race rejection leaves the complete winner state")
+        await tempWatcher.value
+      } catch {
+        await tempPauser.resume()
+        _ = try? await tempTask.value
+        await tempWatcher.value
+        await tempStoreA.setPrePublicationDeliveryHook(nil)
+        throw error
+      }
+      await tempStoreA.setPrePublicationDeliveryHook(nil)
+      try await tempVault.discardShadow()
+    } catch {
+      await tempStoreA.setPrePublicationDeliveryHook(nil)
+      try? await tempVault.discardShadow()
       throw error
     }
 
