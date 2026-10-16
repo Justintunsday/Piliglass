@@ -370,6 +370,24 @@ gRPC purpose binding、generic purpose CAS 读-改-写干扰）/B2e-2b bridge/Bl
 authority；real hard cancel 仍可能跳过上传；"exactly 5s" 读作最多 5s；8 存在 THEN 8 选中
 为两次顺序上界；四 flag false。
 
+**B1g 真实 VideoHttp 消费者 + R48 预绑定修复 + R49 宿主/播放器前置条件在 `c9adf9b` 获 Codex 有限 PASS（仅四个已测试消费者/调用时捕获/fixture 面）**：
+22 个真实消费者用例（tvPlayUrl/dislikeVideo/feedDislike/feedDislikeCancel；调用时一次捕获 owner →
+公开 `Options(extra account)`，无后读槽/私有绑定；replaced owner 取消零 fetch）+ R49 真实
+SmartDialog 宿主（`FlutterSmartDialog.init`+`CustomToast`+observer+生产 onlyRefresh 配置，
+有界 dismiss/清理）与播放器 `isHittable`→`exists` 前置（单次 reveal tap、8s 断言/预算不变）。
+证据：release [38885857383](https://github.com/Justintunsday/Piliglass/actions/runs/38885857383)
+5/5 与 preview [38885862718](https://github.com/Justintunsday/Piliglass/actions/runs/38885862718)
+4/4（首次、无 job 重跑）；九 outcome/BUILD 109.1MB/executed FFmpeg；账户 **315** 全过/
+runtime 72/strict clean；109/44/1 synthetic/40/**245**(68+177)/**292**/51；producer 8/10/2；
+90 raw blob 88+2；golden `b503b6…`/`42c295…`；preview 20 tests 0 failure（landscape
+127.606s 实际执行 720P 与后续手势/scrub/lock）；11 reports/22 streams/`failures[]`；
+Mac QA 45/45（bounded 1.76s）。前驱保留：`12738bc` 311=305+**6**（owner/replacement 预绑定
+六项，断言止于 owner 检查）；`8d86327` 315=314+1 `contextToast` LIE + 20 UI=19+1
+landscape 720P 失败；`a50ea69` limited PASS 保留。**精度**：固定 pump 非普适清理证明、
+`exists` 非全局廉价 AX、绿色不证明 8d 唯一根因、raw inner 日志未读不声称。**边界**：
+非 generic purpose CAS read-transform-publish/全量 120+18/whole writer closure/gRPC/B2e-2b
+bridge/Block3/4/5/authority；四 flag false。
+
 **Block 1 / B1d 切片（页面读取、延迟副作用、maintenance gate）已在 `98e6f9b` 验收**：
 `Accounts.installedAccounts()` 纯只读 seam + 页面 `isEmpty/isNotEmpty` 切
 `visibleAccounts()`（login/mine/setting/about，内容/顺序/读取时机不变、零

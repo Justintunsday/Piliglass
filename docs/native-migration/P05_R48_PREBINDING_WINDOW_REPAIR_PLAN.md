@@ -131,3 +131,8 @@ Dart fallback、Aether 独立、不读/改 `youtube/`、无 UI visual/真实账�
   analyze、native/hash/goldens、九 outcome、BUILD/FFmpeg、preview 20/11/压力）→ 最终修复
   后的新代码 SHA 交 Codex 独立复审（含诊断轮实际红证据）；不自我验收、不重跑 unchanged
   `12738bc`/`08e50b9`、不推进 authority/下一组。
+- 验收记录（docs-only，不改变代码 SHA）：R48 修复与 B1g 四个消费者连同 R49 fixture 在代码
+  SHA `c9adf9b0dcc94d91bdce122735934921c44c0d92` 获 Codex 有限 PASS（release 38885857383
+  5/5 + preview 38885862718 4/4，账户 315 全过；`12738bc` 六红与 `8d86327` 的
+  `contextToast`/landscape 失败作为历史保留）。仅在已测试路径范围内成立；无后读槽/私有绑定、
+  无通用 call-time stamp API、非 whole Block1/authority。

@@ -109,3 +109,8 @@ harness 前置条件修复；实际 CI 执行结果决定是否收敛。
 小 commit/push → 新最终代码 SHA 显式 BOTH workflows（各一次）→ 读实际 evidence
 （account 315 全过/strict analyze、native/hash/goldens、九 outcome、BUILD/FFmpeg、preview
 20 UI/11 owned reports/pressure）→ docs-only 证据（与代码 SHA 分列）→ Codex 独立复审。
+- 验收记录（docs-only，不改变代码 SHA）：本计划连同 R48/B1g 在代码 SHA
+  `c9adf9b0dcc94d91bdce122735934921c44c0d92` 获 Codex 有限 PASS（release 38885857383 5/5 +
+  preview 38885862718 4/4；preview 20 tests 0 failure，landscape 127.606s 实际执行 720P
+  与后续手势/scrub/lock 断言）。精度保留：固定 pump 非普适有界清理证明、`exists` 非全局
+  廉价 AX、绿色不证明 `8d` 唯一历史根因。

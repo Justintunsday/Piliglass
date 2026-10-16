@@ -243,6 +243,41 @@ sourceSHA=workflowSHA=9724ddb；preview 20 tests 0 failures、压力 `failures=[
 shadow 组件：未接 authority、无生产 caller，durable identity 消费/恢复语义、账号级队列与
 receipt/unknown ack、Block 3/4/5 仍未交付；四能力 flag 保持 false，P05 未整体完成。
 
+**B1g 真实视频 HTTP 消费者 + R48 预绑定窗口修复 + R49 通知宿主/播放器前置条件在 `c9adf9b` 获 Codex 有限 PASS（仅四个已测试消费者/调用时捕获/fixture-harness 面；不等于 whole Block1/2/P05/authority）**：
+- 内容：四个真实 `VideoHttp` 消费者（`tvPlayUrl`/`dislikeVideo`/`feedDislike`/`feedDislikeCancel`）的
+  purpose/凭据/取消路径回归（文件 22 个用例）；R48 在 builder 内**一次捕获**与 key/gate/sign
+  同源的 owner，并经公开 `Options(extra: {'account': …})` 传给请求绑定（无后读槽/私有绑定/
+  AccountManager 改动），被替换/注销的 captured owner 取消零 fetch；R49 用真实
+  `FlutterSmartDialog.init(toastBuilder: CustomToast.new)` + observer + 生产
+  `SmartConfigToast(displayType: .onlyRefresh)` 宿主覆盖三条取消用例并有界 dismiss/清理；
+  播放器 harness 前置判据 `isHittable`→`exists`（保留单次 reveal tap 与 8s 断言与全部预算）。
+- 实际证据（`sourceSHA=workflowSHA=c9adf9b`，Codex 独立读取 main/四条 preview 日志并下载
+  产物核对）：release [38885857383](https://github.com/Justintunsday/Piliglass/actions/runs/38885857383)
+  SUCCESS5/5 与 preview [38885862718](https://github.com/Justintunsday/Piliglass/actions/runs/38885862718)
+  SUCCESS4/4（均首次尝试、无 job 重跑）；九强制 outcome 全 success、BUILD SUCCEEDED、
+  Runner.app 109.1MB、实际执行 Aether FFmpeg 先于 media-kit 的 Mach-O 验证；账户 **315**
+  All tests passed（含全部 22 个真实消费者用例、六个 R48 负例、三条真实宿主取消路径；无
+  LateInitializationError/失败标记）、runtime 72、strict analyze clean；envelope 109/44 负例/
+  1 synthetic/40 staging/**245**(68+177)/**292**/51；producer 8/10/2；90 raw Git blob 88
+  match+2 声明 pubspec；golden live `b503b6…` / hive-reopened `42c295…`；preview 20 tests
+  0 failure（navigation 289.699s + image 138.625s + account 139.696s + player 162.357s；
+  landscape 127.606s 实际执行 720P 与后续 doubletap/hold/scrub/lock 断言）、11 owned reports
+  （token/launchPID 匹配）、22 streams，last-row 4395==bottom、压力 `failures[]`；
+  Mac QA 45/45（ready SIG_IGN/no alive/bounded 1.76s）。
+- 历史保留（不追溯改判）：`12738bc` 实际 311 = 305 PASS + **6 FAIL**（恰为预绑定
+  owner/replacement 六项；owner 断言在后续 query/header/Cookie 检查之前停止）；`8d86327`
+  实际 315 = 314 + 1 `contextToast` LateInitializationError（`AccountManager.toast` 路径）
+  + preview 20 UI = 19 + 1 landscape 720P 失败；`a50ea69` limited PASS 保留。
+- 精度：固定 pump 不构成任意未来动画/计时配置的普适有界清理证明；`exists` 并非全局廉价/
+  有界 AX；本次绿不证明 `8d` 的唯一历史根因；raw inner producer/compile 日志不在下载的
+  artifact 中（不声称已读缺失文件，driver 执行/源码核对与「亲自打开日志」区分）；内部编译
+  审查/model 报告不是验收。
+- 边界：limited PASS 仅上述已测试路径；generic purpose CAS read-transform-publish 干扰、
+  全部 120 csrf/18 access 消费者、whole writer async closure、gRPC purpose binding、
+  B2e-2b bridge/frozen revision、Block3 composition/handoff/revert/startup/GC、Block4/5、
+  真机/authority 未闭合；四 flag false；本记录为 docs-only，不代表 code CI SHA（实际测试
+  SHA 为 `c9adf9b`）。
+
 **B1f 真实 Dio+AccountManager purpose path-routing 9 regressions + R43 判别矩阵 + preview-harness R44–R47 在 `a50ea69` 获 Codex 有限 PASS（仅这些已测试路径；不等于 whole Block1/P05/生产 authority）**：
 - 内容：B1f 以真实 Dio/AccountManager（离线受控 adapter）的 9 项路由回归——video 路径、
   heartbeat 匿名负例（判别性：main 放不同登录账号）、real HB 表路径（`Api.videoIntro`，

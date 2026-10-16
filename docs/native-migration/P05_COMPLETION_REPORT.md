@@ -323,6 +323,40 @@ adapter，见 §10）、Hive compaction/close、LoginUtils 副作用。
   前驱 8cf6629/085d883 preview failure 保留；无真机/authority 结论；四 flag false。
 - 记录为 docs-only commit，不代表 code CI SHA；实际测试 SC SHA 为上述两个代码 SHA。
 
+## 19. 2026-10-16 B1g 真实 VideoHttp 消费者 + R48 预绑定修复 + R49 宿主/播放器前置条件（`c9adf9b`；Codex 有限 PASS）
+
+- 同代码 SHA `c9adf9b0dcc94d91bdce122735934921c44c0d92`：release
+  [38885857383](https://github.com/Justintunsday/Piliglass/actions/runs/38885857383)
+  success5/5 与 preview
+  [38885862718](https://github.com/Justintunsday/Piliglass/actions/runs/38885862718)
+  success4/4（均首次尝试、无 job 重跑）；九强制 outcome 全 success、`BUILD SUCCEEDED`、
+  Runner.app 109.1MB、实际执行 Aether FFmpeg 先于 media-kit 的 Mach-O 验证；账户
+  **315** tests All passed（22 个真实消费者用例/六个 R48 负例/三条真实宿主取消路径，无
+  LateInitializationError）、runtime 72、strict analyze clean；envelope 109/44 负例/
+  1 synthetic/40 staging/**245**(68+177)/**292**/51；producer 8/10/2；90 raw Git blob
+  88 match+2 声明 pubspec；golden `b503b6…`（live）/`42c295…`（Hive reopen）；preview
+  20 tests 0 failure（navigation 289.699s + image 138.625s + account 139.696s + player
+  162.357s，landscape 127.606s 实际执行 720P 与后续手势/scrub/lock 断言）、11 owned
+  reports/22 streams、last-row 4395==bottom、压力 `failures[]`；Mac QA 45/45（bounded
+  1.76s；synthetic 进程 QA ≠ 模拟器/设备证据）。
+- 内容：四个真实 `VideoHttp` 消费者的 purpose/凭据/取消路径回归；R48 调用时一次捕获
+  与 key/gate/sign 同源 owner 并经受支持的公开 `Options(extra: {'account': …})` 绑定
+  （replaced/revoked owner 取消零 fetch）；R49 真实 SmartDialog 宿主（生产接线）覆盖
+  三条取消用例并有界清理；播放器前置 `isHittable`→`exists`（保留单次 reveal tap、
+  8s/10s/hideDelay8/25min 与全部手势断言）。
+- 前驱失败保留（不追溯改判）：`12738bc` 311=305PASS+**6FAIL**（预绑定 owner/replacement
+  六项，断言止于 owner 检查，未观察全部混合字段）；`8d86327` 315=314+1
+  `contextToast` LateInitializationError + preview 20=19+1 landscape 720P 失败；
+  `a50ea69` limited PASS 保留。
+- 精度：固定 pump 不是任意未来动画/计时配置的普适有界清理证明；`exists` 并非全局廉价/
+  有界 AX；本次绿色不证明 `8d` 的唯一历史根因；raw inner producer/compile 日志不在下载
+  artifact 中（不声称已读缺失文件）；内部编译审查/model 报告不是验收。
+- 边界：有限 PASS 仅上述已测试路径；generic purpose CAS read-transform-publish 干扰、
+  全部 120 csrf/18 access 消费者、whole writer async closure、gRPC purpose binding、
+  B2e-2b bridge/frozen revision、Block3 composition/handoff/revert/startup/GC、Block4/5、
+  真机/authority 未闭合；四 flag false；本记录为 docs-only commit，不代表 code CI SHA
+  （实际测试 SHA 为 `c9adf9b`）。
+
 ## 18. 2026-10-16 B1f purpose path-routing + R43 矩阵 + harness R44–R47（`a50ea69`；Codex 有限 PASS）
 
 - 同代码 SHA `a50ea693c2d4b7d410fff9e29c40ad437af941ac`：release
