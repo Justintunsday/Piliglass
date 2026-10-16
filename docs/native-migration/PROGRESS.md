@@ -255,8 +255,11 @@ receipt/unknown ack、Block 3/4/5 仍未交付；四能力 flag 保持 false，P
 - 跨运行时：driver 产出 6223 字节精确 wire + 元数据；**同一 mandatory envelope outcome** 内
   实际 Dart consumer 6 测试严格消费（byte/hash/consumed/指针一致、labels 对齐独立 actual
   Dart capture、负例拒绝），Python 消费后复核产物哈希；consumer 文件不改。
-- 实际证据（`review-6b39ac1…-codex` FINAL DISPOSITION，Codex 独立读取双 workflow 全部实际
-  日志/artifacts 并 raw-hash 94+14 Git blobs）：release
+- 实际证据（`review-6b39ac1…-codex` FINAL DISPOSITION）：Codex 独立读取 completed main 与
+  四条 preview raw 日志、全部实际 inner 组件日志/artifacts 与 job metadata（**未声称**五条
+  release raw job logs 全部亲自读取），并 raw-hash envelope 台账 94 条（92 match + 2 声明
+  pubspec 准备差异）与 legacy 14 条（全 match）——两组有重叠、**非 unique**、不做聚合文件数
+  声明。release
   [38939382819](https://github.com/Justintunsday/Piliglass/actions/runs/38939382819) 5/5 与
   preview [38939388310](https://github.com/Justintunsday/Piliglass/actions/runs/38939388310)
   4/4（均首次尝试、无 job 重跑）；九 outcome 全 success、BUILD 109.1MB、executed FFmpeg；

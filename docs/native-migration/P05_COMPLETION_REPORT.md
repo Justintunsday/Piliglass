@@ -350,8 +350,9 @@ adapter，见 §10）、Hive compaction/close、LoginUtils 副作用。
   Runner.app 109.1MB/executed FFmpeg；账户 **322**/runtime 72/`--fatal-infos` No issues；
   七个 Swift6 strict compile/result 日志（含新 export driver）实际 **128** export checks；
   consumer 6 tests；既有 109/44/1/40/**285**(108+177)/292/51、producer 8/10/2；legacy 组件
-  88 checks；envelope 94 raw Git blob 92 match + 2 声明 pubspec（legacy 14 全 match；
-  **非** 108 unique）；goldens `d67f0fc8…`/`4f9b95f9…`（envelope）与
+  88 checks；envelope 台账 94 条（92 match + 2 声明 pubspec 准备差异）与 legacy 14 条
+  （全 match；两组重叠、**非 unique**，不做聚合文件数声明）；goldens
+  `d67f0fc8…`/`4f9b95f9…`（envelope）与
   `0198a937…`/`b1220406…`（legacy）匹配；metadata `0af69bf2…`/wire `aed83d99…`/consumed
   `ff52457b…`；preview 20（nav 398.437s + image 62.362s + account 173.313s + player
   71.989s）；home 11/11 token+PID、22 streams、last-row 4395==bottom、dark top -168==-168；

@@ -437,8 +437,9 @@ release [38939382819](https://github.com/Justintunsday/Piliglass/actions/runs/38
 5/5 与 preview [38939388310](https://github.com/Justintunsday/Piliglass/actions/runs/38939388310)
 4/4（首次、无 job 重跑）；九 outcome/BUILD 109.1MB/executed FFmpeg；账户 **322**/72/strict
 clean；七个 Swift6 strict 日志 **128** export checks/consumer 6；既有
-109/44/1/40/**285**(108+177)/292/51、producer 8/10/2；legacy 88；94 raw 92+2（非 108
-unique）；goldens `d67f0fc8…`/`4f9b95f9…`/`0198a937…`/`b1220406…`；metadata
+109/44/1/40/**285**(108+177)/292/51、producer 8/10/2；legacy 88；envelope 台账 94 条（92
+match+2 声明 pubspec）与 legacy 14 条（全 match，两组重叠、非 unique；不做聚合文件数
+声明）；goldens `d67f0fc8…`/`4f9b95f9…`/`0198a937…`/`b1220406…`；metadata
 `0af69bf2…`/wire `aed83d99…`/consumed `ff52457b…`；preview 20
 （398.437+62.362+173.313+71.989s）；11 reports/22 streams/`failures[]`；MacQA 45/45（1.66s
 synthetic）。前驱保留：`818a0e9`/`3e7a21f` 两次 source-preflight CHANGES_REQUESTED（R62–R65）、

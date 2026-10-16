@@ -360,8 +360,9 @@ func exportCurrentShadow(expectedTransactionID: UUID) async throws -> PiliAccoun
   `6b39ac14ef49d871621a3f40f40fb90edb24c594`，release
   [38939382819](https://github.com/Justintunsday/Piliglass/actions/runs/38939382819) 5/5 +
   preview [38939388310](https://github.com/Justintunsday/Piliglass/actions/runs/38939388310)
-  4/4（首次、无重跑）；实际 128 export checks/consumer 6、既有计数不变、104 raw Git blob
-  match（94 92+2 与 legacy 14 重叠，非 unique）。LIMITED PASS 仅该只读导出 + selected
+  4/4（首次、无重跑）；实际 128 export checks/consumer 6、既有计数不变；envelope 台账
+  94 条（92 match + 2 声明 pubspec 准备差异）与 legacy 14 条（全 match），两组有重叠、
+  **非 unique**，不做聚合文件数声明。LIMITED PASS 仅该只读导出 + selected
   `stored-10-2-owner-2-10` 跨运行时 fixture + R62–R65；精确记录见 `PROGRESS.md`/
   `P05_COMPLETION_REPORT.md` §23。
 - §1.3 保证范围、§2 composition 会话设计、§3.1/3.2 bootstrap/binding 保持 **OPEN、未实施**；

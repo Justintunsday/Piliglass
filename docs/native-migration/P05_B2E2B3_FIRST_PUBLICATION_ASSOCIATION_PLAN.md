@@ -1,173 +1,234 @@
-# P05 下一组计划（契约评审版）：guarded FIRST 发布/bootstrap（create-only expected-absent）+ captured Dart→adopted Native 关联 + composition 会话/recovery 依赖
+# P05 下一组计划（R66–R68 修订版；契约评审）：guarded FIRST 发布/bootstrap（create-only expected-absent）+ captured Dart→adopted Native 关联 + composition 会话/recovery 依赖
 
 2026-10-17（Asia/Hong_Kong）。依据
-`build/native-migration/review-6b39ac14ef49d871621a3f40f40fb90edb24c594-codex/REVIEW.md`
-FINAL DISPOSITION 的 "Next authorized substantive work" 与
-`review-053aed63…`/`review-818a0e9…`/`review-3e7a21f…` 既有结论。**本文件只保存下一组的
-具体契约计划（docs-only，不实现、不派发 CI）**；通过 Codex CONTRACT review 后才实施。
-6b limited PASS 仅覆盖只读导出 + 跨运行时 fixture（见 `PROGRESS.md` 记录）；本计划**不把
-未来 §2/3.1–2 视为整体获批**，只选定一个有界的安全下一组。
+`build/native-migration/review-081f2d5cf2718a0cf799b481575ac32ea9559188-codex/REVIEW.md`
+R66–R68（对上一版计划的 contract plan CHANGES_REQUESTED）与
+`review-6b39ac1…-codex` FINAL DISPOSITION 的 "Next authorized substantive work"。
+**本文件只保存修订后的具体契约计划（docs-only，不实现、不派发 CI）**；通过 Codex CONTRACT
+review 后才实施。6b limited PASS 仅覆盖只读导出 + selected fixture（不重开）；本计划只选定
+一个有界下一组，不把未来 §2/3.1–2 视为整体获批。
 
 ## 0. 现状与确定性事实（源码核对）
 
-- 已验收（6b）：`exportCurrentShadow(expectedTransactionID:)` 只读导出（单 shared-vault
-  fence、fresh journal、精确已存字节、严格 schema3、zero writes、显式 post-await 取消）。
-- **缺口**：不存在 create-only 的“首次发布”原语。`importShadow(_ input:)`（raw，:135-140）
-  是 out-of-contract 覆写原语；correlated 版
-  `importShadow(_:expectedTransactionID:candidateTransactionID:recoveryKind:)`（:149-159）
-  要求**非可选** `expectedTransactionID: UUID`（无法表达“期望缺席”），而内部
-  `publishShadow` 的 `nil` 只属于 raw 路径的“无期望/跳过 CAS”；两者都不是 expected-absent
-  语义，必须新增 create-only 原语。`bootstrapShadow` 目前不存在（R59 曾明确将其排除出
-  只读切片并要求单独协议）。
-- `publishShadow`（:161-266）已给出可复用的 crash/unknown 次序：candidate 校验/编码 →
-  journal 写+读回验证 → record 写+读回 → descriptor 写+读回 → pointer 写 → pointer ack
-  读；candidate 阶段失败经 `clearJournalAfterFailedAttempt`（验证清除）；ack 未知 →
-  `publicationUnknown` 且 **journal 保留**；确定未提交 → 清理候选/descriptor + 验证清
-  journal 后抛原始错误；验证提交 → 验证清 journal + receipt。本组复用这些 helper，
-  **不改其语义**。
-- adoption：`PiliAccountEnvelopeTransactionStore.adoptMissingIdentities()`（:783-820）要求
-  schema-2，经 reviewed `publishCandidate`（correlated attemptID + journal + 未知 fence）
-  发布 schema-3、mint 每 login record 的 canonical `durableIdentity` 与 high-water；
-  schema-3 已 adopted → no-op receipt `transactionID: nil, adopted: 0, adoptedIdentities: []`
-  （:792-795），**不得据此伪造 pointer**。
-- Dart capture：`NativeAccountSnapshotService._capture/_verify` = optimistic revision 复核
-  （capture-local revision、**非** freeze/lease）；tracker token（Expando）≠ 信封
-  `durableIdentity` 命名空间 ≠ authorization。composition 会话 =
-  `AccountWriteBackCoordinator.beginMaintenance()`（returns `AccountWriteBackMaintenance?`）/
-  `end({required bool permanent})`；`freeze()` 无 unfreeze（终态）；`end(false)` 只恢复
-  admission，**不是** single-writer handoff 证明。
+- 已验收（6b）：`exportCurrentShadow(expectedTransactionID:)` 原子只读导出（单 shared-vault
+  fence、fresh persistent journal fail-closed、精确已存字节、严格 schema3、zero writes、
+  显式 post-successful-await 取消）。
+- **缺口**：不存在 create-only expected-absent 发布原语。raw `importShadow(_:)`（:135-140）
+  out-of-contract；correlated `importShadow(_:expectedTransactionID:candidateTransactionID:
+  recoveryKind:)`（:149-159）要求非可选 `expectedTransactionID: UUID`（无法表达“期望缺席”）。
+  内部 `publishShadow`（:161-266）的 `expectedTransactionID: UUID?` 中 `nil` 只表示“无期望”
+  （raw 跳过 CAS）。
+- **kind 事实**：`PiliAccountShadowUnresolvedWriteKind: String` 声明于
+  `PiliAccountEnvelopeTransactionStore.swift:138-141`，现 case = `adoptIdentities, install,
+  importRecords, delete, cookieSave, cookieDelete, cookieDeleteAll, temporarySelection,
+  purposeChange, credentials, activated, buvidSeed`——**没有 bootstrap**；无任何 switch 穷举，
+  冷加载（`loadRecoveryOnce` :323 与 `armFromRecoveryJournal` :340）仅做
+  `rawValue` 转换，未知 kind → `PiliAccountShadowTransactionError.invalidRecovery`。
+  `PiliAccountEnvelopeRecoveryJournal.encode` 不校验 kind 形状（仅 ≤4096B），decode 才校验
+  （非空/≤64 UTF16/可打印 ASCII 无空格）。
+- **fence 事实**：staging `operationInProgress` 只是**实例级序列化门**，`defer` 在 throw 时也
+  释放；它**不是** owner/memory fence，也不会 arm 任何 TransactionStore `unresolved`。只有
+  `publishCandidate`（transaction）捕获 `publicationUnknown` 时才 arm 自己的内存 fence。
+  跨 actor 的持久护栏只有单槽 journal。
+- `publishShadow` 现有 collision 检查**只查 record key**（:189-193），不查 descriptor key；
+  candidate 阶段失败清理移除 record+descriptor 并验证清 journal（`clearJournalAfterFailedAttempt`），
+  ack 未知 → `publicationUnknown` journal 保留；确定未提交 → 清理+原错误；验证提交 → 验证清
+  journal + receipt。
+- adoption：`adoptMissingIdentities()`（:783-820）要求 schema-2 → 经 reviewed
+  `publishCandidate` 发布 schema-3（minted canonical labels/high-water）；schema-3 已 adopted
+  → no-op receipt `transactionID: nil`（:792-795），不得伪造 pointer。
+- Dart capture：optimistic revision 复核（capture-local，无 lease）；coordinator
+  `beginMaintenance()`/`end({permanent})`；`end(false)` 只恢复 admission，不是 handoff 证明。
 
-## 1. 下一实施切片（bounded；先经 CONTRACT review）
+## 1. R66 —— bootstrap 的 kind / fence 契约（精确选择）
 
-改动文件（拟定）：
-- 修改 `ios/Runner/Native/Persistence/Accounts/PiliAccountEnvelopeStagingStore.swift`：
-  原 enum 新增 `case bootstrapRefused`；新增 `bootstrapShadow`。
-- 新增 `tool/check_native_account_envelope_bootstrap.swift`（矩阵 + 首次发布跨运行时
-  recipe）。
-- 修改 `tool/check_native_account_envelopes.py`：新 BOOTSTRAP 阶段（并入同一 mandatory
-  envelope outcome）、cleanup/ledger/summary 扩展。
-- 修改 `.github/workflows/ios.yml`：仅新增 trigger path
-  `tool/check_native_account_envelope_bootstrap*`（artifact glob 已覆盖 `*.json`/`*.log`/
-  `*.bin`；**不改 step/aggregate**）。
-- **不改** Dart consumer 测试文件（同一测试以 define 指向 bootstrap 元数据复跑；见 §5）。
-- **不**新增 MethodChannel/命令；**不**接 composition/authority。
+### 1.1 语义 kind（新增原 enum case；无 caller 字符串）
 
-### 1.1 `bootstrapShadow` 契约（create-only、expected-absent、correlated）
+- 在**原声明** `PiliAccountShadowUnresolvedWriteKind`（TransactionStore :138-141）新增
+  `case bootstrap`（rawValue `"bootstrap"`）。冷加载两处 rawValue 转换无需改动即识别；
+  无 switch 需更新。（源文件已在编译闭包内；staging store 直接引用该 enum 生成常量
+  `.bootstrap.rawValue`，不再接受调用方传入任意 kind 字符串。）
+- `PiliAccountEnvelopeRecoveryJournal` 的 kind 形状校验由**构造保证**：写入路径不再有
+  caller 输入；`"bootstrap"` 天然满足 decode 约束（非空/ASCII/≤64）。无效/伪造 kind 仍需
+  由 decode 拒绝（既有行为），不新增语义。
 
-```swift
-func bootstrapShadow(_ input: Data, candidateTransactionID: UUID,
-                     recoveryKind: String) async throws -> PiliAccountEnvelopeStagingReceipt
+### 1.2 双层 fence 契约（durable vs owner-memory）
+
+- **durable fence** = 单槽持久 journal。bootstrap/followers 的 fresh 读是唯一跨 actor 护栏：
+  - 任何 in-contract 后续发布（correlated import、bootstrap、adoption、队列写）在 journal
+    存在时 fail closed（staging → `unresolvedRecovery`；TransactionStore 冷加载把
+    `.bootstrap` kind 转为 pending fence）；
+  - 新 actor/新进程只需 fresh 读即可看到证据，**不依赖**任何 in-memory fence。
+- **owner-memory fence** = 仅 TransactionStore 自己的 `unresolved`。bootstrap（staging 层）
+  不 arm 内存 fence；`publicationUnknown` 之后调用方必须自行冷加载/（未来）走显式恢复。
+  **禁止**从 staging defer 推导出全局内存 fence 承诺。
+- raw out-of-contract `importShadow` 仍在保证之外（文档化，不重开）。
+
+### 1.3 fresh store 冷加载与显式恢复（isolated fixture）
+
+- 冷加载断言：`expectedPreviousTransactionID == nil`、`attemptedTransactionID` == bootstrap
+  入参 ID、`attemptedCandidateSHA256` == 候选编码 digest、`kind == .bootstrap`。
+- **正常 bootstrap/只读导出绝不**自动 resolve/clear/replay unknown。
+- 显式 `resolveUnresolvedPublication()` 仅在**隔离 fixture**上单独测试分类：pointer ==
+  attemptedID → committed；pointer 仍 nil（== expectedPrevious nil）→ notCommitted；其它
+  pointer → ambiguous。分类结果不写回 binding、不授权。
+
+## 2. R67 —— create-only 写入生命周期（精确实现选择）
+
+### 2.1 私有 expectation 重构（单一 fenced 序列，无 TOCTOU）
+
+- 把 `publishShadow` 的私有参数从 `expectedTransactionID: UUID?` 改为：
+  `private enum ShadowPublicationExpectation { case uncorrelated, exact(UUID), absent }`；
+  公共入口映射：raw → `.uncorrelated`（保持跳过 CAS）、correlated → `.exact(id)`（保持
+  `staleTransaction`）、新 `bootstrapShadow` → `.absent`。判定点与今日 CAS 同一位置：
+  `.absent` 时 `guard previous == nil else { throw bootstrapRefused }`。
+  **不**在 fence 外先查缺席再调用 raw（消除 TOCTOU）；**不**从 bootstrap 内部调用公共
+  fenced import（会 `operationInProgress`）。既有 raw/correlated 语义逐字节保留。
+- `bootstrapShadow` 签名（最终）：
+  `func bootstrapShadow(_ input: Data, candidateTransactionID: UUID) async throws
+  -> PiliAccountEnvelopeStagingReceipt`（kind 固定 `.bootstrap`，无 caller kind 参数）。
+
+### 2.2 输入/collision 边界（全部在首个持久写之前）
+
+- 输入：`codec.decode` + `codec.encode(candidate)`（内存拥有 canonical 候选）；**仅接受
+  schema-2**（zero-label 初始准入；schema==3 → 新 `invalidBootstrap`）；codec/限额错误按既有
+  类型原样传播。
+- journal fresh 读：有效存在 → `unresolvedRecovery`；损坏 → `invalidRecoveryJournal`；
+  不可读 → `unresolvedRecovery`（与导出一致）。
+- pointer present → `bootstrapRefused`（零写）。
+- **record 与 descriptor 双重 collision 检查**（新）：`key(id)` 或 `descriptorKey(id)` 任一
+  存在 → `bootstrapRefused`，**绝不覆写**试图复用 ID 下的孤儿 immutable descriptor。（既有
+  correlated 路径只查 record 的行为不变，作为已验收语义明确保留，不在本组扩大修改。）
+- 原 enum 新增两个 case（照旧只加在原声明 staging :4-7）：`bootstrapRefused`（状态
+  前置/collision）与 `invalidBootstrap`（schema 策略拒绝）。其余错误复用既有类型。
+
+### 2.3 阶段化取消/失败语义（truthful，不承诺无条件 clean）
+
+复用既有 helper，逐阶段精确（无“cancel 一定干净”承诺）：
+
+| 阶段 | 结果 | 持久状态 |
+| --- | --- | --- |
+| 首个 IO 前 cancel | `CancellationError` | 零 IO |
+| journal 写前 cancel | `CancellationError` | 无 journal/无 record |
+| journal 写失败/验证读失败 | 确定未写 → 原写错误；不确定 → `unresolvedRecovery` | journal 保留 |
+| record 写前检查点 cancel | 先走 candidate 清理：record/descriptor `try?` 移除 + 验证清 journal | 清理验证成功 → **原始 `CancellationError`**；清 journal 不可验证 → `unresolvedRecovery`（journal 保留） |
+| record 写/读回失败 | 同上清理路径 | `verificationFailed` 或清理失败时 `unresolvedRecovery` |
+| descriptor 写/验证失败 | 同上清理路径 | 同上 |
+| pointer 写失败 + ack 可读且 == previous(nil) | 确定未提交：清理 + 原错误 | journal 验证清除 |
+| pointer 写失败 + ack 不可读/异常 | `publicationUnknown` | **journal 保留**（durable fence），不 replay/不自动 resolve |
+| ack == nextBytes（即使写报错） | 验证提交：receipt（`recoveredWriteAcknowledgment = writeFailure != nil`） | 验证清 journal |
+| 验证提交后 | 无追溯取消：只保留已定义前置检查点 | — |
+
+## 3. P0/P1 与关联校验（test-only；无生产 binding）
+
+- 序列（driver 证明；production composition 仍 OPEN）：真实 Dart capture → `bootstrapShadow`
+  receipt **P0**（真实 pointer）→ `adoptMissingIdentities()` receipt **P1**（receipt.transactionID
+  非 nil；no-op 分支用 pinned 全校验读的当前 pointer，绝不伪造）→ `exportCurrentShadow(P1)`
+  → 校验。
+- 关联校验显式 **test-only**：driver 内私有
+  `ExportAssociationFixtureOracle.validate(capture: PiliAccountLiveMemoryShadow,
+  exported: PiliAccountLiveMemoryShadow, pointer: UUID, envelopeSHA256: String,
+  captureRevision: Int64?)`，文档注明**仅 driver fixture oracle，非生产 API/binding/identity**，
+  错误为 driver-local typed error；断言 key/mid/generation 对齐、labels canonical/unique、
+  digest 相等；负例（缺 label/非 canonical/重复/key-mid-generation 不符/digest 不符）零写
+  拒绝。**不**产出生产 binding 对象、不序列化 label 到任何账号结构。
+- 诚实边界：Native bootstrap recipe + 离线 Dart consumer **不是**真实 frozen
+  Dart→Native→Dart 运行时 composition；association/global retain fence 保持 OPEN。
+
+## 4. R68 —— 双阶段跨运行时证据（可复用 pipeline）
+
+### 4.1 Python 复用阶段 helper（精确签名）
+
+`tool/check_native_account_envelopes.py` 抽出并可复用：
+
+```python
+def verify_crossruntime_stage(
+    *, stage: str,                       # "export" | "bootstrap"
+    sources: list[str], executable_name: str,
+    metadata_name: str, wire_name: str, expected_wire_name: str,
+    compile_log: str, result_log: str, consumer_test_log: str,
+    retained_consumed_name: str,         # stage 专属保留名
+    minimum_checks: int, consumer_tests: int,
+    run_analyze: bool,                   # 仅第一阶段执行 analyze，共享同一日志
+) -> dict
 ```
 
-单次 `beginOperation` fence（defer 释放）内次序：
+固定步骤：清理该阶段输出 → 编译（默认 180 上界）→ 运行 driver（90 上界）→ 严格 metadata
+（strict_object/精确 key set/sourceSHA/workflowSHA/schema3/count/digest/`wireFileName ==
+expected_wire_name`）→ （第一阶段）`dart analyze --fatal-infos test/services/native_accounts/`
+→ consumer `flutter test`（`--dart-define=NATIVE_ACCOUNT_SCHEMA3_EXPORT=<stage metadata>` +
+SOURCE define；**新**独立 240 上界）→ consumed 记录严格校验（精确 key set、
+`transactionID == 本阶段 metadata.transactionID`（wrong-stage UUID 必失败）、digest/count
+一致）→ **把 consumed 改名保留**为本阶段专属 `retained_consumed_name`
+（受控 `os.replace`，build 忽略目录）并记录 hash → 消费后重核 metadata/wire hash。
+返回该阶段独立 evidence（两阶段各一份）。
 
-1. `Task.checkCancellation()`（first IO 之前）。
-2. `codec.decode(input)` + `codec.encode(candidate)`（先在内存拥有 canonical 候选；失败
-   零持久副作用）。
-3. **fresh journal 读**（原始读 + canonical decode，不经缓存）：有效存在 →
-   `unresolvedRecovery`；损坏 → `invalidRecoveryJournal`；不可读 → `unresolvedRecovery`
-   （映射与导出契约一致；取消错误原样）。
-4. `manifest()` **必须缺席**（nil）：present → 新 `bootstrapRefused`（零写；绝不覆写既有
-   pointer）。这是 create-only 的线性化前置条件。
-5. `Task.checkCancellation()`。
-6. `secrets.read(key(candidateTransactionID))` 必须 nil（碰撞 → `verificationFailed`，零写）。
-7. 写 journal（attemptedID=入参 ID、expected=nil、digest、kind 由调用方；验证读回）。
-8. record 写 + 读回 == 候选（且 codec decode == candidate）→ descriptor 写 + 读回。
-9. `Task.checkCancellation()`；写 pointer；其余（candidate 阶段失败清理、ack 未知
-   `publicationUnknown` 保留 journal+fence、确定未提交清理并抛原错、验证提交验证清
-   journal + receipt）**完全复用既有 publishShadow 语义**，不新增恢复路径、不 replay、
-   不自动 resolve/clear 未知。
-10. receipt = `PiliAccountEnvelopeStagingReceipt(transactionID: candidateTransactionID,
-    recoveredWriteAcknowledgment: …)`。
+### 4.2 两阶段独立记录与 ALL-consumer 后复核
 
-边界：`candidateTransactionID`/`recoveryKind` 必填（匿名 bootstrap 不允许）；raw
-`importShadow` 保持 out-of-contract（仅 driver fixture 用途）；本原语**不是** adoption、
-不写 durable label、不接触 authority/账号。enum 修改照旧只加在**原声明**（staging
-store :4-7）。
+- 阶段一保持现有 `schema3-export.json`/`schema3-export-wire.bin`/日志名与流程；
+  阶段二使用 `schema3-bootstrap-export.json`/`schema3-bootstrap-wire.bin` 与新日志名。
+- 保留记录名：`schema3-export.consumed.retained.json` /
+  `schema3-bootstrap.consumed.retained.json`（consumer 文件**不改**；依次复写后立即改名避免
+  第二次覆盖第一条真实消费记录）。
+- 两阶段 consumer 全部完成后：重核 **6 个产物**（2×metadata/wire/retained-consumed）hash ==
+  各自记录值；随后既有 final HEAD/source-hash/goldens 复核；全部通过才写 passed summary
+  （仍在同一 mandatory envelope outcome 内）。
+- 必失败项：缺 metadata/wire/consumed、stale（SHA 不符）、wrong-stage UUID、retained 记录被
+  覆盖/篡改、consumer 进程失败/缺 pass 行；两阶段计数分别观察记录，不互相借用。
+- mock QA（`tool/qa_native_account_envelope_export.py`）扩展为**两阶段各自** happy/负例
+  （不得用一条 happy 记录同时证明两阶段）；覆盖上述必失败项与覆盖/篡改检测。
+- 触发/接线（仅此清单，无其它源文件）：修改
+  `ios/…/PiliAccountEnvelopeStagingStore.swift`、`ios/…/PiliAccountEnvelopeTransactionStore.swift`
+  （仅新增 kind case）、`tool/check_native_account_envelopes.py`、
+  `tool/qa_native_account_envelope_export.py`、`.github/workflows/ios.yml`（仅 trigger path
+  `tool/check_native_account_envelope_bootstrap*`）；新增
+  `tool/check_native_account_envelope_bootstrap.swift`；Dart consumer/ios-home-preview.yml 不变。
 
-## 2. P0/P1 与关联绑定（association）
+## 5. 受控证明矩阵（bootstrap driver；全阶段 + 独立 oracle）
 
-- 未来序列（本组以 driver 证明；production composition 仍 OPEN）：
-  真实 reviewed session 下 capture Dart owned schema-2 → **`bootstrapShadow`**（receipt
-  **P0** = 真实新 pointer）→ **`adoptMissingIdentities()`**（receipt **P1**）→
-  `exportCurrentShadow(expected: P1)` 得权威 bytes+digest → binding。
-- P1 规则：`receipt.transactionID` 非 nil → P1 = 该 pointer；no-op 分支（已 adopted，
-  receipt.transactionID == nil）→ P1 = **经 pinned 读（`loadShadowSnapshot` 全校验）确认的
-  当前 pointer**，绝不伪造/复用 nil receipt。
-- binding（未来 Dart composition 对象；本组由 driver 构造并断言语义，不是生产 Dart API）：
-  `bindingID`、`expectedPointer`(P1)、`envelopeSHA256`（权威导出 digest）、
-  `captureRevision`（capture-local，仅乐观复核证据）、`records:[{storageKey(UTF16), mid,
-  generation(capture-local), durableIdentity?}]`。
-- 规则：labels 只作关联、绝不授权；tracker token 不进入 binding；generation 是 capture-local，
-  非跨重启 credential；同 key/MID ≠ 同 incarnation。
-- typed 拒绝（零写、零 fence 变更）：digest/pointer 不符 → `verificationFailed`/
-  `staleExport`；schema-3 login record 缺 label/非 canonical/重复 → typed association
-  mismatch；capture 与导出 record 的 key/mid/generation 不匹配 → typed mismatch。
-- **production caller/wire：无**（本组不接任何命令/UI/仓库调用；未来 composition 消费者
-  出现时另立 gate）。
+1. 空 vault → bootstrap：receipt == 入参 ID；pointer/record/descriptor 齐备；journal 缺席；
+   winner 全字节 oracle == `codec.encode(schema2 候选)`。
+2. pointer present → `bootstrapRefused` 零写；全字节快照不变。
+3. schema-3 输入 → `invalidBootstrap` 零写；codec/限额错误按既有类型。
+4. journal 有效/损坏/不可读：`unresolvedRecovery`/`invalidRecoveryJournal`/`unresolvedRecovery`；
+   字节保留；**unknown/伪造 kind 的 journal** 按“存在”处理（bootstrap → `unresolvedRecovery`；
+   TransactionStore 冷加载 → `invalidRecovery`），不因 kind 内容跳过护栏。
+5. record collision（复用的 ID 已有 record）→ `bootstrapRefused` 零写。
+6. **orphan descriptor collision**（复用 ID 已有 descriptor、无 record）→ `bootstrapRefused`
+   零写，descriptor 原样保留。
+7. pre-cancel（自取消任务）→ 精确 `CancellationError`、read/write/remove 计数 0。
+8. journal 写前/写后/不可读验证：按 §2.3 表精确断言（含 `unresolvedRecovery` 保留路径）。
+9. record/descriptor 写/读回失败 + 清理失败：`verificationFailed` 或 `unresolvedRecovery`；
+   清理成功时 journal 验证清除、无 record/descriptor/pointer。
+10. pointer 写前失败 / 写后 ack 可读 nil → 确定未提交清理+原错误；ack 不可读/异常 →
+    `publicationUnknown` + journal 保留 + 全字节快照；导出/bootstrap 随后
+    `unresolvedRecovery`；绝不 resolve/clear/replay。
+11. 验证提交（ack == nextBytes，含写报错）：receipt + 验证清 journal；无追溯取消。
+12. fresh store 冷加载隔离 fixture：§1.3 字段 + 显式 resolve 三态分类；正常路径不自动 resolve。
+13. 合法并发：暂停 bootstrap 时同 vault 第二 bootstrap / correlated import →
+    `operationInProgress`、winner 不变；release 后二次 bootstrap → `bootstrapRefused`；
+    journal 存在时所有 in-contract follower fail closed（跨新 actor）。
+14. same-process reopen：同 namespace 真实 Keychain 新实例读 P0 一致（同进程、非 kill）。
+15. adoption：P1 != P0、schema-3 labels canonical/unique/high-water；再次 adopt no-op 不伪造。
+16. 关联 oracle 负例（§3）与两阶段跨运行时（§4）全部通过；失败时 mandatory outcome 必须失败。
+17. provenance：sourceSHA=workflowSHA；ledger 含新 driver/修改源；goldens 前后一致；HEAD
+    前后一致；新阶段命令沿用 180/90 上界（新命令、既有值不变），第二阶段 consumer 为新显式
+    240 上界；既有计数/预算/aggregate 不变；driver 计数以实际 CI 观察（计划不预写）。
+18. 计数诚实性：成功写调用计数 ≠ attempted writes/removes/orphan 枚举；unresolved 路径不得
+    声称零孤儿；本组不得声称 process-kill/device/composition/authority。
 
-## 3. composition 会话与 recovery 依赖（契约文本；Dart 侧实现仍属后续 gate）
+## 6. 明确不在本组（保持 OPEN）
 
-- session ownership（Dart，Block3 实现）：composition 打开 `beginMaintenance()` token；
-  success/precommit-cancel → `end(permanent:false)`；close → `end(permanent:true)`；
-  pending acquisition 禁止 abandon（await 到 grant 后立即 end）。
-- drain 覆盖（已接 admission 的 writer）：`Accounts.set/selectTemporarily/refresh`、
-  install/import/delete ports、`LoginUtils.setWebCookie`/`onLoginMain`/`onLogoutMain`、
-  `RequestUtils.syncHistoryStatus`、`Accounts.clear`/匿名 reset、`GStorage.compact/close`、
-  Native HTTP lease finish。
-- 明确 **OPEN/未覆盖**：coordinator 之外的裸 Hive 写入、页面只读、snapshot capture
-  （只读）、未经 port 的第三方写入；"已命名 coordinator" ≠ all-writer freeze。
-- success/precommit-cancel：token 结束、无未决；**postcommit unknown（Native）**：token 按
-  规则 end，但 **persistent journal + in-memory fence 保留**；`end(false)` 不解除未知、
-  **不构成 handoff/全局 retain fence**。未来 unknown/admission 表（哪些 writer 可在
-  handoff 期间运行）保持 **OPEN**，直到显式 global retain fence 设计获批。
-- Dart capture 仅 optimistic revalidation（无 acquired lease）；本组不在 Dart 侧新增会话
-  实现。
+- Block3 production composition/startup/revert、nonempty-target reverse apply、MethodChannel、
+  authority/handoff、GC、process-kill/设备、remaining Block1/4、Block5 真机清单。
+- 全局 in-memory retain fence / handoff admission 表；`end(false)` 不当 thaw/handoff；
+  association 生产 binding、真实 frozen Dart→Native→Dart 运行时组合均 OPEN。
+- 四 flag false；无真实账户 auth/写、captcha、设备伪造；Flutter/Dart fallback 与 Aether 独立；
+  不读/改 `youtube/`；不改 UI visual；不改任何既有断言/预算/门。
 
-## 4. 受控证明矩阵（bootstrap driver；独立 oracle + provenance）
-
-1. 空 vault → bootstrap：receipt == 入参 ID；pointer/record/descriptor 齐备；journal 缺席。
-2. pointer 已存在 → `bootstrapRefused`；全字节快照不变、零 attempted writes/removes。
-3. journal 有效存在 / 损坏 / 不可读 / 无关 typed 读错：`unresolvedRecovery` /
-   `invalidRecoveryJournal` / `unresolvedRecovery` / `unresolvedRecovery`；字节保留。
-4. attemptID 记录碰撞 → 拒绝零写。
-5. pre-cancel（自取消任务）→ 精确 `CancellationError`、zero IO（read/write/remove 计数 0）。
-6. 受控暂停于 journal 写后 / record 写前 cancel + 显式 resume → `CancellationError`、
-   candidate 阶段失败路径验证清 journal、无 record/pointer、fence 释放。
-7. pointer ack 不可读 → 真实 `publicationUnknown`；journal+fence 保留；全字节快照保留；
-   导出/bootstrap 均拒绝为 `unresolvedRecovery`；**绝不** resolve/clear/replay。
-8. 确定未提交（ack == previous nil）→ 候选清理 + 原错误；journal 验证清除。
-9. 合法并发：暂停 bootstrap 时同 vault 第二 bootstrap / 既有 import → `operationInProgress`、
-   winner 不变；release 后合法路径可继续（第二次 bootstrap → `bootstrapRefused`）。
-10. same-process reopen：同 namespace 真实 Keychain 新实例读 P0 一致（同进程、非 kill）。
-11. adoption：P1 != P0、真实非 nil、schema-3 labels canonical/unique、high-water 正确；
-    再次 adopt → nil receipt no-op，pinned P1 读一致（不伪造 pointer）。
-12. 关联绑定：digest 相等；独立 oracle = 真实 Dart capture（`live-memory.json` 的
-    `stored-10-2-owner-2-10`）逐 record key/mid/generation 对齐；typed 负例（缺 label /
-    非 canonical / 重复 / key-mid-generation 不符 / digest 不符）零写拒绝。
-13. 跨运行时：bootstrap→adoption→P1 导出写 `schema3-bootstrap-export.json` +
-    `schema3-bootstrap-wire.bin`（精确字节；sourceSHA=workflowSHA=最终 code SHA）；
-    同一已验证 Dart consumer 测试以
-    `--dart-define=NATIVE_ACCOUNT_SCHEMA3_EXPORT=<bootstrap 元数据>` 复跑：byte/hash/
-    consumed（固定名依次复写，各阶段即时校验）/labels/projection 全通过，且 Python
-    在消费后复核产物哈希。consumer 文件本身**不改**。
-14. provenance：ledger 含新 driver/producers/相关 Swift 源；goldens 前后一致；HEAD 前后
-    一致；新阶段命令沿用既有 180/90 per-command 上界（新命令、既有值不变），consumer 第二次
-    运行使用新的显式 240 上界；**所有既有计数/预算/aggregate 不变**；新的 driver 计数以
-    实际 CI 观察为准（计划不预写数字）。
-
-## 5. 明确不在本组（保持 OPEN）
-
-- Block3 production composition/startup apply/revert、nonempty-target reverse apply、
-  MethodChannel/命令接线、authority activation/handoff、GC、process-kill/设备验收、
-  remaining Block1/4、Block5 真机清单。
-- 全局 in-memory retain fence / handoff admission 表；`end(false)` 不当 thaw/handoff。
-- 不新增真实账户 auth/写、captcha、设备伪造；四 flag false；Flutter/Dart fallback 与
-  Aether 独立不变；不读/改 `youtube/`；不改 UI visual。
-
-## 6. 验收顺序
+## 7. 验收顺序
 
 1. 本 docs-only 计划先经 Codex CONTRACT review（返回本文 SHA；未获批前不实现）。
-2. 获批后：实现 → 本地 Python mock QA（如实标注 mock）→ commit/push 新 code SHA → **STOP
-   BEFORE CI** 交 Codex SOURCE PREFLIGHT → 通过后同一 SHA 各派发 ios.yml /
+2. 获批后：实现 → 本地 Python mock QA（两阶段，如实标注 mock）→ commit/push 新 code SHA →
+   **STOP BEFORE CI** 交 Codex SOURCE PREFLIGHT → 通过后同一 SHA 各派发 ios.yml /
    ios-home-preview.yml 一次 → Codex 独立实际证据复审 → 有限验收后再进依赖组。
