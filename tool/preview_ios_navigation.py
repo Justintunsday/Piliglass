@@ -11,6 +11,7 @@ import platform
 import subprocess
 
 import preview_ios_home as home
+import preview_step_runner
 
 ROOT = home.ROOT
 OUTPUT = ROOT / "build" / "navigation-preview"
@@ -530,17 +531,29 @@ def main():
     devices = json.loads(home.run('xcrun','simctl','list','devices','available','-j'))['devices']
     device = next(d for values in devices.values() for d in values if d['state']=='Booted' and 'iPhone' in d['name'])
     home.run('xcrun','simctl','ui',device['udid'],'appearance','light')
+    phases = preview_step_runner.PhaseLog(OUTPUT / 'phases.log')
     result = OUTPUT / 'MenuNavigation.xcresult'
-    with (OUTPUT / 'xcodebuild.log').open('w') as log:
-        completed = subprocess.run(['xcodebuild','test','-project',str(project),'-scheme','MenuPreview',
-            '-destination',f"platform=iOS Simulator,id={device['udid']}",'-parallel-testing-enabled','NO',
-            '-resultBundlePath',str(result),'-derivedDataPath',str(OUTPUT/'DerivedData')],stdout=log,stderr=subprocess.STDOUT)
-    print((OUTPUT / 'xcodebuild.log').read_text()[-16000:], flush=True)
-    if result.exists():
-        subprocess.run(['xcrun','xcresulttool','export','attachments','--path',str(result),
-                        '--output-path',str(OUTPUT/'attachments')],check=False)
-    if completed.returncode:
-        raise SystemExit(completed.returncode)
+    code = None
+    try:
+        code = preview_step_runner.run_streaming(
+            ['xcodebuild','test','-project',str(project),'-scheme','MenuPreview',
+             '-destination',f"platform=iOS Simulator,id={device['udid']}",'-parallel-testing-enabled','NO',
+             '-resultBundlePath',str(result),'-derivedDataPath',str(OUTPUT/'DerivedData')],
+            OUTPUT / 'xcodebuild.log', phases, 'xcodebuild-test')
+    finally:
+        # Keep the xcresult attachments on every exit path (failure, timeout or
+        # cancellation), not only after a normal return, so the workflow's
+        # always-upload steps still receive the evidence. Bounded so cleanup can
+        # never hang the step itself.
+        if result.exists():
+            phases.mark('exporting xcresult attachments')
+            try:
+                subprocess.run(['xcrun','xcresulttool','export','attachments','--path',str(result),
+                                '--output-path',str(OUTPUT/'attachments')],check=False,timeout=600)
+            except subprocess.TimeoutExpired:
+                phases.mark('attachments export timed out (bounded 600s)')
+    if code:
+        raise SystemExit(code)
 
 
 if __name__ == '__main__':

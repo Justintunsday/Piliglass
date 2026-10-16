@@ -103,6 +103,7 @@ jobs:
           name: ios-menu-navigation
           path: |
             build/navigation-preview/xcodebuild.log
+            build/navigation-preview/phases.log
             build/navigation-preview/MenuNavigation.xcresult
             build/navigation-preview/attachments
           if-no-files-found: warn
