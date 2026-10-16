@@ -9,8 +9,9 @@ carriage plan based on REAL current Dart/Swift callers"）、`P05_B2E2_PERSISTEN
 
 - Dart 产出端：`NativeAccountSnapshotService.stagingExport()`（native_account_snapshot_service.dart:56-71）
   → `{schemaVersion:1, authority:'dartHive', nativeWritesAllowed:false, snapshot, entries}`；
-  `_capture()`（:97-141）在抓取时冻结 `revision = Accounts.requestRevision`，`_verify()`（:143-159）
-  在 checkpoint 后复核 revision/stamps/selection 与复制值（capture-local revision，非 durable
+  `_capture()`（:97-141）先捕获 `revision = Accounts.requestRevision`，`_verify()`（:143-159）
+  在 checkpoint 后**乐观复核** revision/stamps/selection 与复制值（captures-then-revalidates；
+  **非**获取型 freeze/drain lease，写者无需等待；capture-local revision，非 durable
   identity）；credentials 经 tagged/bound reader（:73-95；未持有 → `snapshotChanged`，绝不回退
   raw）；`identity` 是进程内 tracker token（Expando `_tokens`，:171-174），**与信封
   `durableIdentity`（36-unit canonical 文本）命名空间分离**。
@@ -31,17 +32,19 @@ carriage plan based on REAL current Dart/Swift callers"）、`P05_B2E2_PERSISTEN
 
 ## 本组实施（B2e-2b-2，read-only、零 authority、不改命令/旗标）
 
-1. `PiliAccountFlutterRepository.exportStaging()`：invoke `exportNativeAccountStaging`（无参数）、
+1. `PiliAccountFlutterRepository.stagingExport()`：invoke `exportNativeAccountStaging`（无参数）、
    与 `selectionSnapshot()` 相同的 error-state 处理（`{state:error, code, nativeWritesAllowed}`
    → `invalidSnapshot` 或 `serviceFailure(code)`）、再交 `PiliAccountStagingBridgeCodec.decode`；
    不做 Domain protocol 改动（composition consumer 出现时再提升，避免无消费者的抽象面变更）。
 2. `tool/check_native_accounts.swift` 回归（只增）：
-   - 真实 Dart export round-trip：`exportStaging()` 结果 == codec 期望，方法路由
+   - 真实 Dart export round-trip：`stagingExport()` 结果 == codec 期望，方法路由
      `exportNativeAccountStaging`、恰一次调用；
    - error-state：精确 `serviceFailure("snapshotChanged")`；畸形 error dict（多余 key /
      `nativeWritesAllowed:true`）→ `invalidSnapshot`；
    - 变更 fixture 负例：`schemaVersion:2` / `nativeWritesAllowed:true` / 空 `entries` →
-     `invalidSnapshot`。
+     直连 codec 与 `repository.stagingExport()` 双路径 `invalidSnapshot`（R55）；
+   - 取消回归（R55）：预取消 → 零 invoke；受控挂起后 cancel+release → `CancellationError`、
+     恰一次 invoke、不 decode 结果。
 3. 明确 NOT（不得声称）：本切片是 **legacy staging bridge**（tracker identity），不携带/校验
    durable identity；不新增 bridge 命令；不接 authority、不改 flag、不碰 UI/`youtube/`。
 
