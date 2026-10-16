@@ -243,6 +243,35 @@ sourceSHA=workflowSHA=9724ddb；preview 20 tests 0 failures、压力 `failures=[
 shadow 组件：未接 authority、无生产 caller，durable identity 消费/恢复语义、账号级队列与
 receipt/unknown ack、Block 3/4/5 仍未交付；四能力 flag 保持 false，P05 未整体完成。
 
+**B1h 真实 Dart `Accounts.set` post-activation revalidate#2 干扰（7 用例，main/heartbeat）在 `eb58d5c` 获 Codex 有限 PASS（仅该 7 用例/offline seam 范围；不闭合 Native purpose CAS/初始 Hive await/default/全部 writer）**：
+- 内容：`test/utils/accounts/account_purpose_set_interference_test.dart` 7 个用例（真实 Hive +
+  受控 adapter + LoginUtils 文档化 seam）：对照 publish 链、暂停中 selection switch 零后续
+  请求/零 publish、same-MID replacement 继承 types 且 stamp 失效、并发完整 `set(main, B)`
+  last-writer-wins 恰一次 publish + 两 admission 并存、暂停中 `deleteAll` 零 publish、
+  heartbeat 对照翻转 anonymity、heartbeat slot switch 不被 stale 效果覆盖。R50 收窄口径由
+  docs-only `b4ea200` 完成（非测试 SHA）；不得以本组声称原 53 Native CAS 行闭合。
+- 实际证据（`review-eb58d5c…-codex` FINAL DISPOSITION，Codex 独立核对）：release
+  [38891705943](https://github.com/Justintunsday/Piliglass/actions/runs/38891705943)
+  SUCCESS5/5 与 preview
+  [38891709617](https://github.com/Justintunsday/Piliglass/actions/runs/38891709617)
+  SUCCESS4/4（均首次尝试、无 job 重跑）；账户 strict analyze No issues/runtime 72/**322**
+  All tests passed（7 个新用例实际执行 157→164）；九强制 outcome 全 success、BUILD
+  SUCCEEDED、Runner.app 109.1MB、执行 Aether FFmpeg 先于 media-kit 验证；native
+  109/44 负例/1 synthetic/40 staging/**245**(68+177)/**292**/51；producer 8/10/2；
+  91 raw Git blob 89 match+2 声明 pubspec；golden live `5c30f83b…`/hive `71ed239c…`；
+  preview 20 passed（nav 441.056s + image 169.513s + account 206.278s + player 101.689s）；
+  home 11/11 token/PID、22 streams、last-row 4395==bottom、压力 `failures[]`；
+  Mac QA 45/45（1.65s，synthetic 进程 QA ≠ UI/设备证据）。
+- 精度/边界（R50/有限 PASS 声明保留）：证明的是 writer/state-machine 时序；不证明
+  headers/Cookie/auth pipeline、Native CAS、真实 WK/浏览器副作用或真实账户；mirror/publisher
+  为既有 seam（计数 admission→effect）、historyPause 用真实 cache；adapter issued 计数证明
+  "未发起外部调用"；并发未决 future 只说明重叠，未直接断言 2 个 live admission/token 释放/
+  drain；main/heartbeat 已测、default purpose 未测；仅覆盖 post-activation/revalidate#2，
+  未覆盖初始 `onChange` await/#1。Native `applyPurposeChange` CAS（原 53 item8）维持 OPEN，
+  其 proposed plan 已按 R51 修正待计划复核；B2e-2b bridge/frozen revision、Block3/4/5、
+  authority 未闭合；四 flag false；本记录为 docs-only，实际测试 SHA 为 `eb58d5c`
+  （`b4ea200` 为 docs-only 收窄提交，非测试 SHA）。
+
 **B1g 真实视频 HTTP 消费者 + R48 预绑定窗口修复 + R49 通知宿主/播放器前置条件在 `c9adf9b` 获 Codex 有限 PASS（仅四个已测试消费者/调用时捕获/fixture-harness 面；不等于 whole Block1/2/P05/authority）**：
 - 内容：四个真实 `VideoHttp` 消费者（`tvPlayUrl`/`dislikeVideo`/`feedDislike`/`feedDislikeCancel`）的
   purpose/凭据/取消路径回归（文件 22 个用例）；R48 在 builder 内**一次捕获**与 key/gate/sign

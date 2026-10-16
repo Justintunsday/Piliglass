@@ -323,6 +323,35 @@ adapter，见 §10）、Hive compaction/close、LoginUtils 副作用。
   前驱 8cf6629/085d883 preview failure 保留；无真机/authority 结论；四 flag false。
 - 记录为 docs-only commit，不代表 code CI SHA；实际测试 SC SHA 为上述两个代码 SHA。
 
+## 20. 2026-10-16 B1h Dart `Accounts.set` post-activation revalidate#2 干扰（7 用例，`eb58d5c`；Codex 有限 PASS）
+
+- 同代码 SHA `eb58d5cdfbd709c73db727a4c25c61e9c1666894`：release
+  [38891705943](https://github.com/Justintunsday/Piliglass/actions/runs/38891705943)
+  success5/5 与 preview
+  [38891709617](https://github.com/Justintunsday/Piliglass/actions/runs/38891709617)
+  success4/4（均首次尝试、无 job 重跑）；九强制 outcome 全 success、`BUILD SUCCEEDED`、
+  Runner.app 109.1MB、实际执行 Aether FFmpeg 先于 media-kit 的 Mach-O 验证；账户 strict
+  analyze No issues、runtime 72、**322** tests All passed（7 个新用例实际执行 157→164）；
+  envelope 109/44 负例/1 synthetic/40 staging/**245**(68+177)/**292**/51；producer 8/10/2；
+  91 raw Git blob 89 match+2 声明 pubspec；golden `5c30f83b…`（live）/`71ed239c…`（hive）；
+  preview 20 tests passed（navigation 441.056s + image 169.513s + account 206.278s +
+  player 101.689s）；home 11/11 accepted（token/launchPID 匹配）/22 streams、last-row
+  4395==bottom；压力 `failures[]`；Mac QA 45/45（1.65s；synthetic 进程 QA ≠ 模拟器/设备证据）。
+- 内容：7 个真实 Hive + 受控 adapter + LoginUtils 文档化 seam 用例（control publish 链、
+  selection switch 零后续请求/零 publish、same-MID replacement 继承 types、并发完整
+  `set(main, B)` last-writer-wins 恰一次 publish + 两 admission、`deleteAll`、heartbeat
+  对照、heartbeat slot switch）；R50 收窄口径由 docs-only `b4ea200` 完成（**非测试代码 SHA**）。
+- 精度：证明 writer/state-machine 时序；不证明 headers/Cookie/auth pipeline、Native CAS、
+  真实 WK/浏览器副作用或真实账户；mirror/publisher 为既有 seam（计数 admission→effect）；
+  adapter issued 计数证明"未发起外部调用"；并发未决 future 只说明重叠，未直接断言
+  2 个 live admission/token 释放/drain。
+- 边界：有限 PASS 仅上述 7 用例范围；不闭合 Native `applyPurposeChange` CAS（原 53 item8；
+  其 proposed plan 已按 R51 `review-b4ea200…` 修正，处于计划复核门）、初始 Hive
+  onChange await/revalidate #1、default purpose、全部 writer/async closure、B2e-2b
+  bridge/frozen revision、Block3 composition/handoff/revert/startup/GC、Block4/5、
+  真机/authority；四 flag false；本记录为 docs-only commit，不代表 code CI SHA
+  （实际测试 SHA 为 `eb58d5c`）。
+
 ## 19. 2026-10-16 B1g 真实 VideoHttp 消费者 + R48 预绑定修复 + R49 宿主/播放器前置条件（`c9adf9b`；Codex 有限 PASS）
 
 - 同代码 SHA `c9adf9b0dcc94d91bdce122735934921c44c0d92`：release

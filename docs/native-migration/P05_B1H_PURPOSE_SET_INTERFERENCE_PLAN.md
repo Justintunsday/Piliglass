@@ -2,9 +2,12 @@
 
 2026-10-16（Asia/Hong_Kong）。**R50 收窄版本**：依据
 `review-eb58d5cdfbd709c73db727a4c25c61e9c1666894-codex/REVIEW.md`（R50 scope
-correction）与 `review-44a9818482baad28d9864579f8324091de54d1a8-codex/REVIEW.md`
-（plan review），修正先前把本组映射为"原 53 开放行闭合"的错误口径。**本文件在实现之前
-保存（已实现部分保留，见下）；Native purpose CAS 保持 OPEN，另行 proposed plan。**
+correction 与该组 FINAL DISPOSITION）与
+`review-44a9818482baad28d9864579f8324091de54d1a8-codex/REVIEW.md`（plan review），
+修正先前把本组映射为"原 53 开放行闭合"的错误口径。**本文件在实现之前保存（已实现部分保留，
+见下）；R50 收窄已获独立接受，测试代码 SHA `eb58d5c` 获 LIMITED PASS（仅 7 用例范围）；
+docs-only 收窄提交 `b4ea200` 非测试 SHA。Native purpose CAS 保持 OPEN，其 proposed plan
+已按 R51（`review-b4ea200…`）修正，处于计划复核门。**
 
 ## 范围修正（R50）
 
@@ -58,8 +61,13 @@ correction）与 `review-44a9818482baad28d9864579f8324091de54d1a8-codex/REVIEW.m
 6. `set(heartbeat)` 对照 → anonymity 翻转；
 7. 暂停中 heartbeat slot switch → anonymity 不被 stale 效果覆盖。
 
-## 实际证据（等待 Codex 有限验收；非自我验收/非自我 PASS）
+## 实际证据与 Codex 有限 PASS（测试代码 SHA `eb58d5c`；docs-only SHA `b4ea200`，非测试 SHA）
 
+- **Codex FINAL DISPOSITION（`review-eb58d5c…-codex/REVIEW.md`）：LIMITED PASS，仅上述 7 个
+  Dart 用例范围 + 声明的 offline/seam 限制**；明确不闭合 initial Hive await/revalidate #1、
+  default purpose 分支、全部 writer/consumer/admission-drain 组合、Native purpose CAS、
+  B2e-2b bridge/frozen revision、Block3/4/5、生产 authority 与 whole P05。R50 收窄口径
+  （docs-only `b4ea200`）同时获接受；`b4ea200` 非测试代码 SHA，实际测试 SHA 为 `eb58d5c`。
 - `sourceSHA=workflowSHA=eb58d5c`：release
   [38891705943](https://github.com/Justintunsday/Piliglass/actions/runs/38891705943)
   SUCCESS5/5 与 preview
@@ -81,10 +89,11 @@ correction）与 `review-44a9818482baad28d9864579f8324091de54d1a8-codex/REVIEW.m
 
 ## 边界与验收
 
-- 本组（收窄后）以实际证据进入 **Codex 有限验收**（仅 Dart 7 用例范围）；不得以本组
-  声称 Native purpose CAS 或 whole Block1/P05 闭合。
-- Native `applyPurposeChange` CAS 组按 proposed plan 单独实现，新实现 SHA 需 BOTH
-  workflows + Codex 独立复审；本 docs-only 轮不实现、不派发 CI、不改生产/测试。
+- 本组（收窄后）已获 **Codex 有限 PASS**（仅 Dart 7 用例范围；`review-eb58d5c…` FINAL
+  DISPOSITION）；不得以本组声称 Native purpose CAS 或 whole Block1/P05 闭合。
+- Native `applyPurposeChange` CAS 行维持 OPEN；其 proposed plan 已按 R51 修正（真实窗口 +
+  最小 seam），处于计划复核门；实现为单独的新代码 SHA，需 BOTH workflows + Codex 独立复审；
+  本 docs-only 轮不实现、不派发 CI、不改生产/测试。
 - 四 flag false、Flutter/Dart fallback、Aether 独立、不读/改 `youtube/`、无 UI visual/
   真实账户写/auth/captcha/设备伪造；保留全部历史失败（127 六红、8d 两失败、R48/R49 实际
   记录）与 c9/a50 已接受 limited 组。

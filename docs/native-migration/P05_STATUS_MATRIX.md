@@ -388,6 +388,23 @@ landscape 720P 失败；`a50ea69` limited PASS 保留。**精度**：固定 pump
 非 generic purpose CAS read-transform-publish/全量 120+18/whole writer closure/gRPC/B2e-2b
 bridge/Block3/4/5/authority；四 flag false。
 
+**B1h 真实 Dart `Accounts.set` post-activation revalidate#2 干扰（7 用例）在 `eb58d5c` 获 Codex 有限 PASS（仅该 7 用例/offline seam 范围）**：
+7 个真实 Hive + 受控 adapter 用例（control publish 链/selection switch 零效果/same-MID
+replacement 继承 types/并发完整 set 恰一次 publish + 两 admission/deleteAll/heartbeat 对照与
+slot switch）；R50 收窄由 docs-only `b4ea200` 完成（非测试 SHA）。证据：release
+[38891705943](https://github.com/Justintunsday/Piliglass/actions/runs/38891705943) 5/5 与
+preview [38891709617](https://github.com/Justintunsday/Piliglass/actions/runs/38891709617)
+4/4（首次、无 job 重跑）；九 outcome/BUILD 109.1MB/executed FFmpeg；账户 **322** 全过
+（7 新用例 157→164）/runtime 72/strict clean；109/44/1 synthetic/40/**245**(68+177)/**292**/51；
+producer 8/10/2；91 raw blob 89+2；golden `5c30f83b…`/`71ed239c…`；preview 20 tests
+（441.056+169.513+206.278+101.689s）；11 reports/22 streams/`failures[]`；Mac QA 45/45
+（1.65s synthetic）。**精度**：证明 writer/state-machine 时序，非 headers/Cookie/auth
+pipeline/Native CAS/WK 副作用/真实账户；mirror/publisher 为既有 seam；并发 future 只证重叠；
+main/heartbeat 已测、default 未测；仅 post-activation/#2。**边界**：不闭合 Native
+`applyPurposeChange` CAS（原 53 item8；其 proposed plan 已按 R51 修正待计划复核）、初始 Hive
+onChange await/#1、全部 writer/async closure、B2e-2b bridge/frozen revision、Block3/4/5、
+authority；四 flag false；本记录为 docs-only（实际测试 SHA `eb58d5c`）。
+
 **Block 1 / B1d 切片（页面读取、延迟副作用、maintenance gate）已在 `98e6f9b` 验收**：
 `Accounts.installedAccounts()` 纯只读 seam + 页面 `isEmpty/isNotEmpty` 切
 `visibleAccounts()`（login/mine/setting/about，内容/顺序/读取时机不变、零
