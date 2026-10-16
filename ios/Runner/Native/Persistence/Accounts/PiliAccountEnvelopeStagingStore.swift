@@ -226,7 +226,9 @@ actor PiliAccountEnvelopeStagingStore {
         // classifies the fresh journal read exactly like the read-only export:
         // a corrupt journal stays invalidRecoveryJournal, any other unreadable
         // state fails closed as unresolvedRecovery, and cancellation stays
-        // cancellation.
+        // cancellation. A successful read is never interpreted before its
+        // post-await cancellation check, so a resumed refusal cannot mask the
+        // delivered cancellation.
         try Task.checkCancellation()
         let journal: PiliAccountEnvelopeRecoveryJournal?
         do {
@@ -238,6 +240,7 @@ actor PiliAccountEnvelopeStagingStore {
         } catch {
           throw PiliAccountEnvelopeStagingError.unresolvedRecovery
         }
+        try Task.checkCancellation()
         guard journal == nil else {
           throw PiliAccountEnvelopeStagingError.unresolvedRecovery
         }
@@ -248,6 +251,12 @@ actor PiliAccountEnvelopeStagingStore {
       }
     }
     let previous = try await manifest()
+    if case .absent = expectation {
+      // Post-await interpretation: a cancellation delivered while the pointer
+      // read was resumed must surface exactly, never be interpreted as a
+      // present pointer.
+      try Task.checkCancellation()
+    }
     switch expectation {
     case .uncorrelated:
       break
@@ -267,11 +276,20 @@ actor PiliAccountEnvelopeStagingStore {
       if case .absent = expectation {
         // Create-only refuses both an existing record and an orphan descriptor
         // under the reused ID: an immutable descriptor may still be referenced
-        // by an authority marker, so it is never overwritten.
-        guard try await secrets.read(recordKey) == nil,
-              try await secrets.read(descriptorKey(id)) == nil else {
+        // by an authority marker, so it is never overwritten. Each successful
+        // collision read is checked for cancellation before its result is
+        // interpreted (a resumed present record/descriptor must surface the
+        // delivered cancellation, not bootstrapRefused).
+        let existingRecord = try await secrets.read(recordKey)
+        try Task.checkCancellation()
+        let existingDescriptor = try await secrets.read(descriptorKey(id))
+        try Task.checkCancellation()
+        guard existingRecord == nil, existingDescriptor == nil else {
           throw PiliAccountEnvelopeStagingError.bootstrapRefused
         }
+        // Pre-journal checkpoint: no durable journal may start after a
+        // cancellation delivered during the collision preflight.
+        try Task.checkCancellation()
       } else {
         // A caller-supplied operation ID must never overwrite an existing record.
         guard try await secrets.read(recordKey) == nil else {

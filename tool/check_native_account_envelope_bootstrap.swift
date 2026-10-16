@@ -35,16 +35,25 @@ private actor BootstrapFaultVault: PiliAccountSecretStore {
   private var pauseManifestRead = false
   private var manifestReadSuspended: CheckedContinuation<Void, Never>?
   private var recordWriteFailures = 0
+  private var recordWriteCommitThenThrow = false
   private var recordReadCount = 0
   private var recordReadFailAt = 0
   private var recordReadMismatchAt = 0
+  private var recordReadPauseAt = 0
+  private var recordReadSuspended: CheckedContinuation<Void, Never>?
   private var descriptorWriteFailures = 0
   private var descriptorReadCount = 0
   private var descriptorReadMismatchAt = 0
+  private var descriptorReadFailAt = 0
+  private var descriptorReadPauseAt = 0
+  private var descriptorReadSuspended: CheckedContinuation<Void, Never>?
   private var pointerWriteFailures = 0
   private var pointerWriteCommitThenThrow = false
   private var pointerReadFailures = 0
   private var pointerReadFailSkip = 0
+  private var pointerReadCount = 0
+  private var pointerReadPauseAt = 0
+  private var pointerReadSuspended: CheckedContinuation<Void, Never>?
   private var scriptTerminal: String?
   private var phaseWaiters: [CheckedContinuation<Void, Never>] = []
 
@@ -62,6 +71,7 @@ private actor BootstrapFaultVault: PiliAccountSecretStore {
     journalReadCount = 0
     recordReadCount = 0
     descriptorReadCount = 0
+    pointerReadCount = 0
   }
 
   func failJournalReads(_ enabled: Bool) { failJournalReads = enabled }
@@ -83,10 +93,27 @@ private actor BootstrapFaultVault: PiliAccountSecretStore {
     manifestReadSuspended = nil
   }
   func failRecordWrites(_ count: Int) { recordWriteFailures = count }
+  func recordCommitThenThrow(_ enabled: Bool) { recordWriteCommitThenThrow = enabled }
   func failRecordReadAt(_ ordinal: Int) { recordReadFailAt = ordinal }
   func recordReadBackMismatchAt(_ ordinal: Int) { recordReadMismatchAt = ordinal }
+  func pauseRecordReadAt(_ ordinal: Int) { recordReadPauseAt = ordinal }
+  func resumeRecordRead() {
+    recordReadSuspended?.resume()
+    recordReadSuspended = nil
+  }
   func failDescriptorWrites(_ count: Int) { descriptorWriteFailures = count }
   func descriptorReadBackMismatchAt(_ ordinal: Int) { descriptorReadMismatchAt = ordinal }
+  func failDescriptorReadAt(_ ordinal: Int) { descriptorReadFailAt = ordinal }
+  func pauseDescriptorReadAt(_ ordinal: Int) { descriptorReadPauseAt = ordinal }
+  func resumeDescriptorRead() {
+    descriptorReadSuspended?.resume()
+    descriptorReadSuspended = nil
+  }
+  func pausePointerReadAt(_ ordinal: Int) { pointerReadPauseAt = ordinal }
+  func resumePointerRead() {
+    pointerReadSuspended?.resume()
+    pointerReadSuspended = nil
+  }
   func failPointerWrites(_ count: Int) { pointerWriteFailures = count }
   func pointerCommitThenThrow(_ enabled: Bool) { pointerWriteCommitThenThrow = enabled }
   /// Fails the pointer read that follows `skip` further successful pointer
@@ -112,10 +139,16 @@ private actor BootstrapFaultVault: PiliAccountSecretStore {
   }
   func terminalOutcome() -> String? { scriptTerminal }
   func waitUntilPhaseOrTerminal() async -> Bool {
-    if journalReadSuspended != nil || manifestReadSuspended != nil { return true }
+    if phaseSuspended() { return true }
     if scriptTerminal != nil { return false }
     await withCheckedContinuation { phaseWaiters.append($0) }
-    return journalReadSuspended != nil || manifestReadSuspended != nil
+    return phaseSuspended()
+  }
+
+  private func phaseSuspended() -> Bool {
+    journalReadSuspended != nil || manifestReadSuspended != nil
+      || pointerReadSuspended != nil || recordReadSuspended != nil
+      || descriptorReadSuspended != nil
   }
 
   func read(_ key: String) async throws -> Data? {
@@ -141,12 +174,22 @@ private actor BootstrapFaultVault: PiliAccountSecretStore {
       return values[key]
     }
     if key == pointerKey {
+      pointerReadCount += 1
       if pointerReadFailures > 0 {
         if pointerReadFailSkip > 0 {
           pointerReadFailSkip -= 1
         } else {
           if pointerReadFailures != Int.max { pointerReadFailures -= 1 }
           throw BootstrapFixtureError.injected
+        }
+      }
+      if pointerReadPauseAt != 0, pointerReadCount == pointerReadPauseAt {
+        pointerReadPauseAt = 0
+        await withCheckedContinuation { continuation in
+          pointerReadSuspended = continuation
+          let waiters = phaseWaiters
+          phaseWaiters = []
+          for waiter in waiters { waiter.resume() }
         }
       }
       if pauseManifestRead {
@@ -162,9 +205,22 @@ private actor BootstrapFaultVault: PiliAccountSecretStore {
     }
     if key.hasPrefix("account-envelope-shadow-descriptor-v2.") {
       descriptorReadCount += 1
+      if descriptorReadFailAt != 0, descriptorReadCount == descriptorReadFailAt {
+        descriptorReadFailAt = 0
+        throw BootstrapFixtureError.injected
+      }
       if descriptorReadMismatchAt != 0, descriptorReadCount == descriptorReadMismatchAt {
         descriptorReadMismatchAt = 0
         if let current = values[key] { return current + Data([0x00]) }
+      }
+      if descriptorReadPauseAt != 0, descriptorReadCount == descriptorReadPauseAt {
+        descriptorReadPauseAt = 0
+        await withCheckedContinuation { continuation in
+          descriptorReadSuspended = continuation
+          let waiters = phaseWaiters
+          phaseWaiters = []
+          for waiter in waiters { waiter.resume() }
+        }
       }
       return values[key]
     }
@@ -177,6 +233,15 @@ private actor BootstrapFaultVault: PiliAccountSecretStore {
       if recordReadMismatchAt != 0, recordReadCount == recordReadMismatchAt {
         recordReadMismatchAt = 0
         if let current = values[key] { return current + Data([0x00]) }
+      }
+      if recordReadPauseAt != 0, recordReadCount == recordReadPauseAt {
+        recordReadPauseAt = 0
+        await withCheckedContinuation { continuation in
+          recordReadSuspended = continuation
+          let waiters = phaseWaiters
+          phaseWaiters = []
+          for waiter in waiters { waiter.resume() }
+        }
       }
       return values[key]
     }
@@ -228,6 +293,10 @@ private actor BootstrapFaultVault: PiliAccountSecretStore {
         throw BootstrapFixtureError.injected
       }
       values[key] = data
+      if recordWriteCommitThenThrow {
+        recordWriteCommitThenThrow = false
+        throw BootstrapFixtureError.injected
+      }
       return
     }
     values[key] = data
@@ -328,10 +397,27 @@ private struct ExportAssociationFixtureOracle {
 }
 
 @main private struct AccountEnvelopeBootstrapChecks {
+  /// Driver-local mirror of the staging layer's Codable publication manifest.
+  /// JSONEncoder with sorted keys encodes UUID through its Codable
+  /// conformance (Foundation's uppercase `uuidString`), so this is the
+  /// independent exact-byte oracle for newly produced pointer/descriptor
+  /// bytes; the injected-fixture helper must never be used as that oracle.
+  private struct FixtureManifest: Codable {
+    let schemaVersion: Int
+    let transactionID: UUID
+    let byteCount: Int
+    let sha256: String
+  }
+
   private static let manifestKey = "account-envelope-shadow-manifest-v2"
   private static let journalKey = "account-envelope-recovery-journal-v1"
   private static let fixtureCaseID = "stored-10-2-owner-2-10"
   private static let followerKind = "test-follower"
+  /// Fixed operation IDs containing hex letters: a lowercase UUID encoding
+  /// cannot accidentally pass the exact-byte oracle.
+  private static let fixedBootstrapID = UUID(uuidString: "0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d")!
+  private static let fixedReusedID = UUID(uuidString: "deadbeef-cafe-4bad-8bee-f0123456789a")!
+  private static let fixedForeignID = UUID(uuidString: "feedface-0abc-4def-8abc-123456789abc")!
 
   private static func sha256Hex(_ data: Data) -> String {
     bootstrapSHA256Hex(data)
@@ -355,13 +441,10 @@ private struct ExportAssociationFixtureOracle {
   }
 
   private static func manifestBytes(transactionID: UUID, byteCount: Int, sha256: String) throws -> Data {
-    let object: [String: Any] = [
-      "schemaVersion": 2,
-      "transactionID": transactionID.uuidString.lowercased(),
-      "byteCount": byteCount,
-      "sha256": sha256,
-    ]
-    return try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+    let encoder = JSONEncoder()
+    encoder.outputFormatting = .sortedKeys
+    return try encoder.encode(FixtureManifest(
+      schemaVersion: 2, transactionID: transactionID, byteCount: byteCount, sha256: sha256))
   }
 
   private static func expectedJournalBytes(attemptedID: UUID, candidate: Data) throws -> Data {
@@ -442,12 +525,18 @@ private struct ExportAssociationFixtureOracle {
       }
       await vault.resumeJournalRead()
       await vault.resumeManifestRead()
+      await vault.resumePointerRead()
+      await vault.resumeRecordRead()
+      await vault.resumeDescriptorRead()
       let value = try await task.value
       return (value, betweenChecks)
     } catch {
       task.cancel()
       await vault.resumeJournalRead()
       await vault.resumeManifestRead()
+      await vault.resumePointerRead()
+      await vault.resumeRecordRead()
+      await vault.resumeDescriptorRead()
       _ = try? await task.value
       await vault.noteTerminal("failure")
       throw error
@@ -475,7 +564,7 @@ private struct ExportAssociationFixtureOracle {
       let vault = BootstrapFaultVault()
       let staging = PiliAccountEnvelopeStagingStore(secrets: vault)
       let data = try codec.encode(base)
-      let pointerID = UUID()
+      let pointerID = fixedBootstrapID
       await vault.resetCounters()
       let receipt = try await staging.bootstrapShadow(data, candidateTransactionID: pointerID)
       try require(receipt.transactionID == pointerID, "bootstrap receipt keeps the input operation ID")
@@ -499,8 +588,9 @@ private struct ExportAssociationFixtureOracle {
       checks += 1
       let writeAttempts = await vault.writeAttemptCount()
       let removeAttempts = await vault.removeAttemptCount()
-      try require(writeAttempts == 4 && removeAttempts == 0,
-                  "clean bootstrap attempts exactly journal/record/descriptor/pointer writes")
+      try require(writeAttempts == 4 && removeAttempts == 1,
+                  "clean bootstrap attempts exactly journal/record/descriptor/pointer writes "
+                  + "and the single verified journal removal")
       checks += 1
       let winner = try await staging.loadShadowSnapshot()
       try require(winner?.transactionID == pointerID && winner?.envelope == base,
@@ -592,7 +682,7 @@ private struct ExportAssociationFixtureOracle {
       let vault = BootstrapFaultVault()
       let staging = PiliAccountEnvelopeStagingStore(secrets: vault)
       let data = try codec.encode(base)
-      let reusedID = UUID()
+      let reusedID = fixedReusedID
       await vault.installFixtureBytes(data, key: recordKey(reusedID))
       let snapshotBefore = await vault.storedSnapshot()
       await vault.resetCounters()
@@ -614,7 +704,7 @@ private struct ExportAssociationFixtureOracle {
       let vault = BootstrapFaultVault()
       let staging = PiliAccountEnvelopeStagingStore(secrets: vault)
       let data = try codec.encode(base)
-      let reusedID = UUID()
+      let reusedID = fixedReusedID
       let orphanDescriptor = try manifestBytes(transactionID: reusedID, byteCount: data.count,
                                                sha256: sha256Hex(data))
       await vault.installFixtureBytes(orphanDescriptor, key: descriptorKey(reusedID))
@@ -964,6 +1054,11 @@ private struct ExportAssociationFixtureOracle {
       let snapshotAfter = await vault.storedSnapshot()
       try require(snapshotAfter == initial, "descriptor mismatch cleanup restores the pre-attempt state")
       checks += 1
+      let writeAttempts = await vault.writeAttemptCount()
+      let removeAttempts = await vault.removeAttemptCount()
+      try require(writeAttempts == 3 && removeAttempts == 3,
+                  "descriptor mismatch attempts three writes and three cleanup removals")
+      checks += 1
     }
     do {
       let vault = BootstrapFaultVault()
@@ -1012,6 +1107,51 @@ private struct ExportAssociationFixtureOracle {
                   "the failed candidate cleanup removes the record and descriptor")
       checks += 1
     }
+    do {
+      let vault = BootstrapFaultVault()
+      let staging = PiliAccountEnvelopeStagingStore(secrets: vault)
+      let pointerID = fixedBootstrapID
+      let initial = await vault.storedSnapshot()
+      await vault.resetCounters()
+      await vault.recordCommitThenThrow(true)
+      var surface = false
+      do { _ = try await staging.bootstrapShadow(data, candidateTransactionID: pointerID) }
+      catch { surface = isInjected(error) }
+      try require(surface, "a record write that commits then throws surfaces the original error")
+      checks += 1
+      let snapshotAfter = await vault.storedSnapshot()
+      try require(snapshotAfter == initial,
+                  "the committed-then-failed record is cleaned up to the pre-attempt state")
+      checks += 1
+      let writeAttempts = await vault.writeAttemptCount()
+      let removeAttempts = await vault.removeAttemptCount()
+      try require(writeAttempts == 2 && removeAttempts == 3,
+                  "the committed-then-failed record attempts two writes and three removals")
+      checks += 1
+    }
+    do {
+      let vault = BootstrapFaultVault()
+      let staging = PiliAccountEnvelopeStagingStore(secrets: vault)
+      let pointerID = fixedBootstrapID
+      let initial = await vault.storedSnapshot()
+      await vault.resetCounters()
+      await vault.failDescriptorReadAt(2)
+      var surface = false
+      do { _ = try await staging.bootstrapShadow(data, candidateTransactionID: pointerID) }
+      catch { surface = isInjected(error) }
+      try require(surface,
+                  "a descriptor read-back IO error propagates the original error after cleanup")
+      checks += 1
+      let snapshotAfter = await vault.storedSnapshot()
+      try require(snapshotAfter == initial,
+                  "the descriptor read-back error cleanup restores the pre-attempt state")
+      checks += 1
+      let writeAttempts = await vault.writeAttemptCount()
+      let removeAttempts = await vault.removeAttemptCount()
+      try require(writeAttempts == 3 && removeAttempts == 3,
+                  "the descriptor read-back error attempts three writes and three removals")
+      checks += 1
+    }
     return checks
   }
 
@@ -1049,7 +1189,7 @@ private struct ExportAssociationFixtureOracle {
     do {
       let vault = BootstrapFaultVault()
       let staging = PiliAccountEnvelopeStagingStore(secrets: vault)
-      let pointerID = UUID()
+      let pointerID = fixedBootstrapID
       let expectedJournal = try expectedJournalBytes(attemptedID: pointerID, candidate: data)
       let expectedDescriptor = try manifestBytes(transactionID: pointerID, byteCount: data.count,
                                                  sha256: sha256Hex(data))
@@ -1079,11 +1219,47 @@ private struct ExportAssociationFixtureOracle {
       try require(writeAttempts == 4 && removeAttempts == 0,
                   "the unknown performs no cleanup writes or removes")
       checks += 1
+      // Follower fan-out on the real unknown: a NEW owner cold-loads the
+      // evidence and refuses with the exact owner fence; staging bootstrap and
+      // export followers fail closed on the journal; every persistent byte is
+      // unchanged and no additional mutation is attempted.
+      let snapshotFrozen = await vault.storedSnapshot()
+      await vault.resetCounters()
+      let owner = PiliAccountEnvelopeTransactionStore(vault: staging)
+      let ownerPending = try await owner.loadPersistentRecovery()
+      try require(ownerPending?.attemptedTransactionID == pointerID
+                  && ownerPending?.kind == .bootstrap,
+                  "a new owner cold-loads the exact unknown evidence")
+      checks += 1
+      var ownerRefused = false
+      do { _ = try await owner.adoptMissingIdentities() }
+      catch PiliAccountShadowTransactionError.unresolvedPublication { ownerRefused = true }
+      try require(ownerRefused, "the new owner refuses the follower write with unresolvedPublication")
+      checks += 1
+      var bootstrapRefused = false
+      do { _ = try await staging.bootstrapShadow(data, candidateTransactionID: fixedForeignID) }
+      catch PiliAccountEnvelopeStagingError.unresolvedRecovery { bootstrapRefused = true }
+      try require(bootstrapRefused, "a staging bootstrap follower fails closed on the journal")
+      checks += 1
+      var exportRefused = false
+      do { _ = try await staging.exportCurrentShadow(expectedTransactionID: pointerID) }
+      catch PiliAccountEnvelopeStagingError.unresolvedRecovery { exportRefused = true }
+      try require(exportRefused, "a read-only export follower fails closed on the journal")
+      checks += 1
+      let snapshotFrozenAfter = await vault.storedSnapshot()
+      try require(snapshotFrozenAfter == snapshotFrozen,
+                  "no follower changes any persistent winner/evidence byte")
+      checks += 1
+      let followerWrites = await vault.writeAttemptCount()
+      let followerRemoves = await vault.removeAttemptCount()
+      try require(followerWrites == 0 && followerRemoves == 0,
+                  "no follower attempts an additional write or remove")
+      checks += 1
     }
     do {
       let vault = BootstrapFaultVault()
       let staging = PiliAccountEnvelopeStagingStore(secrets: vault)
-      let pointerID = UUID()
+      let pointerID = fixedBootstrapID
       let expectedManifest = try manifestBytes(transactionID: pointerID, byteCount: data.count,
                                                sha256: sha256Hex(data))
       await vault.resetCounters()
@@ -1120,7 +1296,7 @@ private struct ExportAssociationFixtureOracle {
     do {
       let vault = BootstrapFaultVault()
       let staging = PiliAccountEnvelopeStagingStore(secrets: vault)
-      let pointerID = UUID()
+      let pointerID = fixedBootstrapID
       let expectedManifest = try manifestBytes(transactionID: pointerID, byteCount: data.count,
                                                sha256: sha256Hex(data))
       await vault.resetCounters()
@@ -1138,11 +1314,16 @@ private struct ExportAssociationFixtureOracle {
       try require(snapshotAfter[journalKey] == nil,
                   "a verifiable journal clear leaves no journal after a verified commit")
       checks += 1
+      let writeAttempts = await vault.writeAttemptCount()
+      let removeAttempts = await vault.removeAttemptCount()
+      try require(writeAttempts == 4 && removeAttempts == 1,
+                  "the recovered-acknowledgment commit attempts four writes and one journal removal")
+      checks += 1
     }
     do {
       let vault = BootstrapFaultVault()
       let staging = PiliAccountEnvelopeStagingStore(secrets: vault)
-      let pointerID = UUID()
+      let pointerID = fixedBootstrapID
       let expectedJournal = try expectedJournalBytes(attemptedID: pointerID, candidate: data)
       await vault.resetCounters()
       await vault.failJournalRemoves(true)
@@ -1203,7 +1384,7 @@ private struct ExportAssociationFixtureOracle {
     do {
       let vault = BootstrapFaultVault()
       let staging = PiliAccountEnvelopeStagingStore(secrets: vault)
-      let pointerID = UUID()
+      let pointerID = fixedBootstrapID
       await vault.resetCounters()
       await vault.failJournalReadAt(3)
       let receipt = try await staging.bootstrapShadow(data, candidateTransactionID: pointerID)
@@ -1228,8 +1409,9 @@ private struct ExportAssociationFixtureOracle {
   }
 
   /// Rows 12-13 of the proof matrix: real cold-load recognition and the three
-  /// explicit resolution classifications on isolated fixtures, plus the
-  /// normal-path no-auto-resolve guarantee.
+  /// explicit resolution classifications on isolated fixtures, the fresh and
+  /// initialized owner-fence cases against real unknown evidence, and the
+  /// no-auto-resolve guarantee.
   private static func checkColdLoadAndResolution(codec: PiliAccountLiveMemoryShadowCodec,
                                                  base: PiliAccountLiveMemoryShadow) async throws -> Int {
     var checks = 0
@@ -1239,7 +1421,7 @@ private struct ExportAssociationFixtureOracle {
       // unreadable, so the retained journal names the exact attempted ID.
       let vault = BootstrapFaultVault()
       let staging = PiliAccountEnvelopeStagingStore(secrets: vault)
-      let attemptedID = UUID()
+      let attemptedID = fixedBootstrapID
       await vault.pointerCommitThenThrow(true)
       await vault.failPointerReadsAfter(1)
       var surfaced = false
@@ -1276,7 +1458,7 @@ private struct ExportAssociationFixtureOracle {
       // was unreadable, so the pointer remains absent (== expected previous).
       let vault = BootstrapFaultVault()
       let staging = PiliAccountEnvelopeStagingStore(secrets: vault)
-      let attemptedID = UUID()
+      let attemptedID = fixedBootstrapID
       await vault.failPointerWrites(1)
       await vault.failPointerReadsAfter(1)
       var surfaced = false
@@ -1300,7 +1482,7 @@ private struct ExportAssociationFixtureOracle {
       // pointer (an isolated fixture mutation, not a legal follower).
       let vault = BootstrapFaultVault()
       let staging = PiliAccountEnvelopeStagingStore(secrets: vault)
-      let attemptedID = UUID()
+      let attemptedID = fixedBootstrapID
       await vault.failPointerWrites(1)
       await vault.failPointerReadsAfter(1)
       var surfaced = false
@@ -1309,7 +1491,7 @@ private struct ExportAssociationFixtureOracle {
       await vault.allowPointerReads()
       try require(surfaced, "ambiguous fixture produced a real publicationUnknown")
       checks += 1
-      let foreignID = UUID()
+      let foreignID = fixedForeignID
       let foreignManifest = try manifestBytes(transactionID: foreignID, byteCount: data.count,
                                               sha256: sha256Hex(data))
       await vault.installFixtureBytes(data, key: recordKey(foreignID))
@@ -1335,25 +1517,91 @@ private struct ExportAssociationFixtureOracle {
       checks += 1
     }
     do {
-      // Normal-path no-auto-resolve: a fresh store observing valid bootstrap
-      // evidence fails a real in-contract publication closed and leaves the
-      // journal untouched. The journal is installed after the legal raw
-      // publication so the schema-2 pointer exists and adoption reaches the
-      // real publication choke point.
+      // (a) Cold owner: a NEW store cold-loads valid bootstrap evidence,
+      // recognizes the kind, arms its in-memory fence and refuses a real
+      // adoption with the exact owner-side unresolvedPublication; the staging
+      // journal is never auto-cleared and no mutation is attempted.
       let vault = BootstrapFaultVault()
       let staging = PiliAccountEnvelopeStagingStore(secrets: vault)
-      try await staging.importShadow(data)
-      let attemptedID = UUID()
+      let attemptedID = fixedBootstrapID
       let journalBytes = try expectedJournalBytes(attemptedID: attemptedID, candidate: data)
       await vault.installFixtureBytes(journalBytes, key: journalKey)
+      let snapshotBefore = await vault.storedSnapshot()
+      await vault.resetCounters()
       let store = PiliAccountEnvelopeTransactionStore(vault: staging)
-      var blocked = false
+      var ownerBlocked = false
       do { _ = try await store.adoptMissingIdentities() }
-      catch PiliAccountEnvelopeStagingError.unresolvedRecovery { blocked = true }
-      try require(blocked, "a normal in-contract publication fails closed on live evidence")
+      catch PiliAccountShadowTransactionError.unresolvedPublication { ownerBlocked = true }
+      try require(ownerBlocked,
+                  "a fresh owner cold-load arms the fence and refuses with unresolvedPublication")
+      checks += 1
+      let pending = await store.pendingUnresolvedPublication
+      try require(pending?.attemptedTransactionID == attemptedID
+                  && pending?.expectedPreviousTransactionID == nil
+                  && pending?.attemptedCandidateSHA256 == sha256Hex(data)
+                  && pending?.kind == .bootstrap,
+                  "the cold owner fence carries the exact persisted fields")
+      checks += 1
+      let snapshotAfter = await vault.storedSnapshot()
+      try require(snapshotAfter == snapshotBefore,
+                  "the owner refusal preserves every persistent byte")
+      checks += 1
+      let writeAttempts = await vault.writeAttemptCount()
+      let removeAttempts = await vault.removeAttemptCount()
+      try require(writeAttempts == 0 && removeAttempts == 0,
+                  "the owner refusal attempts no writes or removes")
       checks += 1
       let preserved = await vault.storedBytes(journalKey)
-      try require(preserved == journalBytes, "the normal path never auto-resolves the evidence")
+      try require(preserved == journalBytes, "the owner refusal never auto-resolves the journal")
+      checks += 1
+    }
+    do {
+      // (b) Already-clean-initialized owner meets later REAL staging unknown
+      // evidence: the store is initialized while clean, a real bootstrap
+      // attempt then produces the pointer-committed unknown (journal + winner
+      // retained), and the owner's later real write is refused by the staging
+      // journal with the exact unresolvedRecovery plus actual arming.
+      let vault = BootstrapFaultVault()
+      let staging = PiliAccountEnvelopeStagingStore(secrets: vault)
+      let store = PiliAccountEnvelopeTransactionStore(vault: staging)
+      let clean = try await store.loadPersistentRecovery()
+      try require(clean == nil, "the owner is initialized clean before the unknown appears")
+      checks += 1
+      let attemptedID = fixedBootstrapID
+      await vault.pointerCommitThenThrow(true)
+      await vault.failPointerReadsAfter(1)
+      var unknown = false
+      do { _ = try await staging.bootstrapShadow(data, candidateTransactionID: attemptedID) }
+      catch PiliAccountEnvelopeStagingError.publicationUnknown { unknown = true }
+      await vault.allowPointerReads()
+      try require(unknown, "the real bootstrap attempt produced the staging unknown evidence")
+      checks += 1
+      let expectedJournal = try expectedJournalBytes(attemptedID: attemptedID, candidate: data)
+      let snapshotBefore = await vault.storedSnapshot()
+      try require(snapshotBefore[journalKey] == expectedJournal
+                  && snapshotBefore[recordKey(attemptedID)] == data
+                  && snapshotBefore[descriptorKey(attemptedID)] != nil,
+                  "the unknown retains the exact journal/record/descriptor evidence")
+      checks += 1
+      await vault.resetCounters()
+      var stagingBlocked = false
+      do { _ = try await store.adoptMissingIdentities() }
+      catch PiliAccountEnvelopeStagingError.unresolvedRecovery { stagingBlocked = true }
+      try require(stagingBlocked,
+                  "the initialized owner's later write is refused by the staging journal")
+      checks += 1
+      let armed = await store.pendingUnresolvedPublication
+      try require(armed?.attemptedTransactionID == attemptedID && armed?.kind == .bootstrap,
+                  "the staging refusal arms the exact pending evidence for this store")
+      checks += 1
+      let snapshotAfter = await vault.storedSnapshot()
+      try require(snapshotAfter == snapshotBefore,
+                  "the staging refusal preserves every persistent byte")
+      checks += 1
+      let writeAttempts = await vault.writeAttemptCount()
+      let removeAttempts = await vault.removeAttemptCount()
+      try require(writeAttempts == 0 && removeAttempts == 0,
+                  "the staging refusal attempts no additional writes or removes")
       checks += 1
     }
     return checks
@@ -1361,15 +1609,16 @@ private struct ExportAssociationFixtureOracle {
 
   /// Row 13 first half: while a bootstrap holds the shared-vault operation
   /// fence, a second bootstrap and a correlated import are refused with the
-  /// established immediate operationInProgress; after release the pointer
-  /// exists and create-only refuses.
+  /// established immediate operationInProgress before any durable write; the
+  /// paused vault is still completely empty. After release the publication
+  /// leaves its exact complete winner dictionary and create-only refuses.
   private static func checkSameVaultContention(codec: PiliAccountLiveMemoryShadowCodec,
                                                base: PiliAccountLiveMemoryShadow) async throws -> Int {
     var checks = 0
     let vault = BootstrapFaultVault()
     let staging = PiliAccountEnvelopeStagingStore(secrets: vault)
     let data = try codec.encode(base)
-    let firstID = UUID()
+    let firstID = fixedBootstrapID
     await vault.resetCounters()
     await vault.pauseJournalReadAt(1)
     let outcome = try await runControlledBootstrap(
@@ -1377,32 +1626,46 @@ private struct ExportAssociationFixtureOracle {
       candidateTransactionID: firstID, cancelBeforeResume: false
     ) {
       var bootstrapBlocked = false
-      do { _ = try await staging.bootstrapShadow(data, candidateTransactionID: UUID()) }
+      do { _ = try await staging.bootstrapShadow(data, candidateTransactionID: fixedReusedID) }
       catch PiliAccountEnvelopeStagingError.operationInProgress { bootstrapBlocked = true }
       try require(bootstrapBlocked, "a second same-vault bootstrap meets the operation fence")
       var importBlocked = false
       do {
-        _ = try await staging.importShadow(data, expectedTransactionID: UUID(),
-                                           candidateTransactionID: UUID(),
+        _ = try await staging.importShadow(data, expectedTransactionID: fixedForeignID,
+                                           candidateTransactionID: fixedForeignID,
                                            recoveryKind: followerKind)
       } catch PiliAccountEnvelopeStagingError.operationInProgress { importBlocked = true }
       try require(importBlocked, "a correlated import meets the same operation fence")
-      let pointerDuring = await vault.storedBytes(manifestKey)
-      try require(pointerDuring == nil, "rejected writers leave the pointer untouched")
+      // The paused create-only publication has not started any durable write:
+      // the complete vault dictionary must still be empty.
+      let during = await vault.storedSnapshot()
+      try require(during.isEmpty,
+                  "the paused publication has not started any durable write")
       return 3
     }
     checks += outcome.checks
     try require(outcome.value.transactionID == firstID,
                 "the paused create-only publication resumes and publishes its own ID")
     checks += 1
-    let journalAfter = await vault.storedBytes(journalKey)
-    let pointerAfter = await vault.storedBytes(manifestKey)
-    try require(journalAfter == nil && pointerAfter != nil,
-                "the resumed bootstrap completes cleanly with the pointer published")
+    let expectedManifest = try manifestBytes(transactionID: firstID, byteCount: data.count,
+                                             sha256: sha256Hex(data))
+    let expectedWinner: [String: Data] = [
+      manifestKey: expectedManifest,
+      descriptorKey(firstID): expectedManifest,
+      recordKey(firstID): data,
+    ]
+    let snapshotAfter = await vault.storedSnapshot()
+    try require(snapshotAfter == expectedWinner,
+                "the resumed publication leaves the exact complete winner dictionary")
+    checks += 1
+    let writeAttempts = await vault.writeAttemptCount()
+    let removeAttempts = await vault.removeAttemptCount()
+    try require(writeAttempts == 4 && removeAttempts == 1,
+                "contention attempts exactly four writes and one journal removal")
     checks += 1
     await vault.resetCounters()
     var refusedAgain = false
-    do { _ = try await staging.bootstrapShadow(data, candidateTransactionID: UUID()) }
+    do { _ = try await staging.bootstrapShadow(data, candidateTransactionID: fixedReusedID) }
     catch PiliAccountEnvelopeStagingError.bootstrapRefused { refusedAgain = true }
     try require(refusedAgain, "after release a new create-only attempt is refused")
     checks += 1
@@ -1521,6 +1784,218 @@ private struct ExportAssociationFixtureOracle {
       try require(cleanup.transactionID == pointerID, "fence released after manifest-stage cancel")
       checks += 1
     }
+    do {
+      // Refusing journal result: the resumed read finds a valid journal, so a
+      // missing post-await check would report unresolvedRecovery instead.
+      let vault = BootstrapFaultVault()
+      let staging = PiliAccountEnvelopeStagingStore(secrets: vault)
+      let pointerID = fixedBootstrapID
+      let journalBytes = try expectedJournalBytes(attemptedID: UUID(), candidate: data)
+      await vault.installFixtureBytes(journalBytes, key: journalKey)
+      let snapshotBefore = await vault.storedSnapshot()
+      await vault.resetCounters()
+      await vault.pauseJournalReadAt(1)
+      var cancelled = false
+      do {
+        _ = try await runControlledBootstrap(
+          label: "journal-present-cancel", vault: vault, staging: staging, input: data,
+          candidateTransactionID: pointerID, cancelBeforeResume: true) { 0 }
+      } catch is CancellationError { cancelled = true }
+      try require(cancelled,
+                  "journal-present cancel surfaces CancellationError, not unresolvedRecovery")
+      checks += 1
+      let writeAttempts = await vault.writeAttemptCount()
+      let removeAttempts = await vault.removeAttemptCount()
+      try require(writeAttempts == 0 && removeAttempts == 0,
+                  "journal-present cancel attempts no writes or removes")
+      checks += 1
+      let snapshotAfter = await vault.storedSnapshot()
+      try require(snapshotAfter == snapshotBefore,
+                  "journal-present cancel preserves the exact fixture bytes")
+      checks += 1
+      await vault.rawRemove(journalKey)
+      let cleanup = try await staging.bootstrapShadow(data, candidateTransactionID: pointerID)
+      try require(cleanup.transactionID == pointerID, "fence released after journal-present cancel")
+      checks += 1
+    }
+    do {
+      // Refusing pointer result: the resumed manifest read finds an existing
+      // pointer, so a missing post-await check would report bootstrapRefused.
+      let vault = BootstrapFaultVault()
+      let staging = PiliAccountEnvelopeStagingStore(secrets: vault)
+      try await staging.importShadow(data)
+      guard let existing = try await staging.loadShadowSnapshot() else {
+        throw BootstrapFixtureError.failed("missing raw publication for pointer-present cancel")
+      }
+      let candidateID = fixedBootstrapID
+      let snapshotBefore = await vault.storedSnapshot()
+      await vault.resetCounters()
+      await vault.pausePointerReadAt(1)
+      var cancelled = false
+      do {
+        _ = try await runControlledBootstrap(
+          label: "pointer-present-cancel", vault: vault, staging: staging, input: data,
+          candidateTransactionID: candidateID, cancelBeforeResume: true) { 0 }
+      } catch is CancellationError { cancelled = true }
+      try require(cancelled,
+                  "pointer-present cancel surfaces CancellationError, not bootstrapRefused")
+      checks += 1
+      let writeAttempts = await vault.writeAttemptCount()
+      let removeAttempts = await vault.removeAttemptCount()
+      try require(writeAttempts == 0 && removeAttempts == 0,
+                  "pointer-present cancel attempts no writes or removes")
+      checks += 1
+      let snapshotAfter = await vault.storedSnapshot()
+      try require(snapshotAfter == snapshotBefore,
+                  "pointer-present cancel preserves every vault byte")
+      checks += 1
+      let follower = try await staging.importShadow(data, expectedTransactionID: existing.transactionID,
+                                                   candidateTransactionID: fixedForeignID,
+                                                   recoveryKind: followerKind)
+      try require(follower.transactionID == fixedForeignID,
+                  "a correlated publication succeeds after the pointer-present cancel")
+      checks += 1
+    }
+    do {
+      // Refusing record-collision result: the resumed record read finds an
+      // existing record, so a missing post-await check would report
+      // bootstrapRefused.
+      let vault = BootstrapFaultVault()
+      let staging = PiliAccountEnvelopeStagingStore(secrets: vault)
+      let reusedID = fixedReusedID
+      await vault.installFixtureBytes(data, key: recordKey(reusedID))
+      let snapshotBefore = await vault.storedSnapshot()
+      await vault.resetCounters()
+      await vault.pauseRecordReadAt(1)
+      var cancelled = false
+      do {
+        _ = try await runControlledBootstrap(
+          label: "record-present-cancel", vault: vault, staging: staging, input: data,
+          candidateTransactionID: reusedID, cancelBeforeResume: true) { 0 }
+      } catch is CancellationError { cancelled = true }
+      try require(cancelled,
+                  "record-collision cancel surfaces CancellationError, not bootstrapRefused")
+      checks += 1
+      let writeAttempts = await vault.writeAttemptCount()
+      let removeAttempts = await vault.removeAttemptCount()
+      try require(writeAttempts == 0 && removeAttempts == 0,
+                  "record-collision cancel attempts no writes or removes")
+      checks += 1
+      let snapshotAfter = await vault.storedSnapshot()
+      try require(snapshotAfter == snapshotBefore,
+                  "record-collision cancel preserves the fixture record bytes")
+      checks += 1
+      await vault.rawRemove(recordKey(reusedID))
+      let cleanup = try await staging.bootstrapShadow(data, candidateTransactionID: reusedID)
+      try require(cleanup.transactionID == reusedID,
+                  "fence released after the record-collision cancel")
+      checks += 1
+    }
+    do {
+      // Refusing descriptor-collision result: the resumed descriptor read
+      // finds an orphan descriptor, so a missing post-await check would
+      // report bootstrapRefused.
+      let vault = BootstrapFaultVault()
+      let staging = PiliAccountEnvelopeStagingStore(secrets: vault)
+      let reusedID = fixedReusedID
+      let orphanDescriptor = try manifestBytes(transactionID: reusedID, byteCount: data.count,
+                                               sha256: sha256Hex(data))
+      await vault.installFixtureBytes(orphanDescriptor, key: descriptorKey(reusedID))
+      let snapshotBefore = await vault.storedSnapshot()
+      await vault.resetCounters()
+      await vault.pauseDescriptorReadAt(1)
+      var cancelled = false
+      do {
+        _ = try await runControlledBootstrap(
+          label: "descriptor-present-cancel", vault: vault, staging: staging, input: data,
+          candidateTransactionID: reusedID, cancelBeforeResume: true) { 0 }
+      } catch is CancellationError { cancelled = true }
+      try require(cancelled,
+                  "orphan-descriptor cancel surfaces CancellationError, not bootstrapRefused")
+      checks += 1
+      let writeAttempts = await vault.writeAttemptCount()
+      let removeAttempts = await vault.removeAttemptCount()
+      try require(writeAttempts == 0 && removeAttempts == 0,
+                  "orphan-descriptor cancel attempts no writes or removes")
+      checks += 1
+      let snapshotAfter = await vault.storedSnapshot()
+      try require(snapshotAfter == snapshotBefore,
+                  "orphan-descriptor cancel preserves the fixture descriptor bytes")
+      checks += 1
+      await vault.rawRemove(descriptorKey(reusedID))
+      let cleanup = try await staging.bootstrapShadow(data, candidateTransactionID: reusedID)
+      try require(cleanup.transactionID == reusedID,
+                  "fence released after the orphan-descriptor cancel")
+      checks += 1
+    }
+    do {
+      // Final pre-pointer checkpoint: a cancellation delivered while the
+      // descriptor read-back is resumed must run the defined candidate cleanup
+      // and surface the original CancellationError, resetting every byte.
+      let vault = BootstrapFaultVault()
+      let staging = PiliAccountEnvelopeStagingStore(secrets: vault)
+      let pointerID = fixedBootstrapID
+      let snapshotBefore = await vault.storedSnapshot()
+      await vault.resetCounters()
+      await vault.pauseDescriptorReadAt(2)
+      var cancelled = false
+      do {
+        _ = try await runControlledBootstrap(
+          label: "descriptor-checkpoint-cancel", vault: vault, staging: staging, input: data,
+          candidateTransactionID: pointerID, cancelBeforeResume: true) { 0 }
+      } catch is CancellationError { cancelled = true }
+      try require(cancelled,
+                  "the final pre-pointer cancel surfaces the original CancellationError")
+      checks += 1
+      let snapshotAfter = await vault.storedSnapshot()
+      try require(snapshotAfter == snapshotBefore,
+                  "candidate cleanup restores the pre-attempt state before the pointer stage")
+      checks += 1
+      let writeAttempts = await vault.writeAttemptCount()
+      let removeAttempts = await vault.removeAttemptCount()
+      try require(writeAttempts == 3 && removeAttempts == 3,
+                  "the final pre-pointer cancel attempts three writes and three cleanup removals")
+      checks += 1
+      let cleanup = try await staging.bootstrapShadow(data, candidateTransactionID: pointerID)
+      try require(cleanup.transactionID == pointerID,
+                  "fence released after the final pre-pointer cancel")
+      checks += 1
+    }
+    do {
+      // Verified-commit no-retroactive-cancel: cancelling while the pointer
+      // acknowledgment read is resumed must not roll back an observed commit;
+      // the receipt still returns with the exact winner bytes.
+      let vault = BootstrapFaultVault()
+      let staging = PiliAccountEnvelopeStagingStore(secrets: vault)
+      let pointerID = fixedBootstrapID
+      await vault.resetCounters()
+      await vault.pausePointerReadAt(2)
+      let outcome = try await runControlledBootstrap(
+        label: "verified-commit-cancel", vault: vault, staging: staging, input: data,
+        candidateTransactionID: pointerID, cancelBeforeResume: true) { 0 }
+      try require(outcome.value.transactionID == pointerID
+                  && !outcome.value.recoveredWriteAcknowledgment,
+                  "the verified commit still returns its receipt across the cancel")
+      checks += 1
+      let expectedManifest = try manifestBytes(transactionID: pointerID, byteCount: data.count,
+                                               sha256: sha256Hex(data))
+      let snapshotAfter = await vault.storedSnapshot()
+      try require(snapshotAfter[manifestKey] == expectedManifest
+                  && snapshotAfter[descriptorKey(pointerID)] == expectedManifest
+                  && snapshotAfter[recordKey(pointerID)] == data
+                  && snapshotAfter[journalKey] == nil,
+                  "the verified commit keeps every winner byte and releases the journal")
+      checks += 1
+      let terminal = await vault.terminalOutcome()
+      try require(terminal == "success",
+                  "the verified-commit task reports success, not a cancellation rewrite")
+      checks += 1
+      let writeAttempts = await vault.writeAttemptCount()
+      let removeAttempts = await vault.removeAttemptCount()
+      try require(writeAttempts == 4 && removeAttempts == 1,
+                  "the verified-commit cancel path attempts four writes and one journal removal")
+      checks += 1
+    }
     return checks
   }
 
@@ -1595,6 +2070,36 @@ private struct ExportAssociationFixtureOracle {
       activated: record.activated, jar: record.jar, durableIdentity: record.durableIdentity)
   }
 
+  private static func replacingGeneration(_ record: PiliAccountLiveMemoryRecord,
+                                          generation: Int64) -> PiliAccountLiveMemoryRecord {
+    PiliAccountLiveMemoryRecord(
+      record: record.record, generation: generation, storageKeyUnits: record.storageKeyUnits,
+      mid: record.mid, isLogin: record.isLogin, accessKeyUnits: record.accessKeyUnits,
+      refreshTokenUnits: record.refreshTokenUnits, persistedPurposes: record.persistedPurposes,
+      activated: record.activated, jar: record.jar, durableIdentity: record.durableIdentity)
+  }
+
+  /// Drives one association negative and requires the exact driver-local typed
+  /// reason: the oracle must reject for the expected cause, never accept and
+  /// never fail for an unrelated one.
+  private static func expectAssociationRejection(
+    _ label: String, _ expectedReason: String,
+    oracle: ExportAssociationFixtureOracle, capture: PiliAccountLiveMemoryShadow,
+    exported: PiliAccountLiveMemoryShadow, pointer: UUID, envelopeSHA256: String,
+    captureRevision: Int64?
+  ) throws {
+    do {
+      try oracle.validate(capture: capture, exported: exported, pointer: pointer,
+                          envelopeSHA256: envelopeSHA256, captureRevision: captureRevision)
+    } catch let error as BootstrapFixtureError {
+      guard case .failed(let reason) = error, reason == expectedReason else {
+        throw BootstrapFixtureError.failed("\(label): unexpected rejection reason")
+      }
+      return
+    }
+    throw BootstrapFixtureError.failed("\(label): the association oracle accepted the negative")
+  }
+
   private static func replacingRecords(_ envelope: PiliAccountLiveMemoryShadow,
                                        records: [PiliAccountLiveMemoryRecord]) -> PiliAccountLiveMemoryShadow {
     PiliAccountLiveMemoryShadow(
@@ -1650,87 +2155,72 @@ private struct ExportAssociationFixtureOracle {
     do {
       var records = exported.records
       records[1] = replacingIdentity(records[1], identity: nil)
-      var rejected = false
-      do {
-        try oracle.validate(capture: base, exported: replacingRecords(exported, records: records),
-                            pointer: export.transactionID,
-                            envelopeSHA256: export.envelopeSHA256,
-                            captureRevision: base.revision)
-      } catch { rejected = true }
-      try require(rejected, "a missing login label is rejected")
+      try expectAssociationRejection(
+        "missing label", "association: durable label", oracle: oracle, capture: base,
+        exported: replacingRecords(exported, records: records), pointer: export.transactionID,
+        envelopeSHA256: export.envelopeSHA256, captureRevision: base.revision)
       negatives += 1
     }
     do {
+      // Deterministic invalid casing: uppercase a FIXED canonical UUID that
+      // contains hex letters, so the transform always changes bytes.
       var records = exported.records
-      let upper = identity(units: labels[0].units.map { $0 >= 0x61 && $0 <= 0x66 ? $0 - 0x20 : $0 })
+      let upper = identity(units: Array("0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d".uppercased().utf16))
       records[1] = replacingIdentity(records[1], identity: upper)
-      var rejected = false
-      do {
-        try oracle.validate(capture: base, exported: replacingRecords(exported, records: records),
-                            pointer: export.transactionID,
-                            envelopeSHA256: export.envelopeSHA256,
-                            captureRevision: base.revision)
-      } catch { rejected = true }
-      try require(rejected, "a non-canonical label is rejected")
+      try expectAssociationRejection(
+        "non-canonical label", "association: durable label", oracle: oracle, capture: base,
+        exported: replacingRecords(exported, records: records), pointer: export.transactionID,
+        envelopeSHA256: export.envelopeSHA256, captureRevision: base.revision)
       negatives += 1
     }
     do {
       var records = exported.records
       records[2] = replacingIdentity(records[2], identity: labels[0])
-      var rejected = false
-      do {
-        try oracle.validate(capture: base, exported: replacingRecords(exported, records: records),
-                            pointer: export.transactionID,
-                            envelopeSHA256: export.envelopeSHA256,
-                            captureRevision: base.revision)
-      } catch { rejected = true }
-      try require(rejected, "duplicate labels are rejected")
+      try expectAssociationRejection(
+        "duplicate label", "association: durable label", oracle: oracle, capture: base,
+        exported: replacingRecords(exported, records: records), pointer: export.transactionID,
+        envelopeSHA256: export.envelopeSHA256, captureRevision: base.revision)
       negatives += 1
     }
     do {
       var records = exported.records
       records[1] = replacingMid(records[1], mid: records[1].mid &+ 1)
-      var rejected = false
-      do {
-        try oracle.validate(capture: base, exported: replacingRecords(exported, records: records),
-                            pointer: export.transactionID,
-                            envelopeSHA256: export.envelopeSHA256,
-                            captureRevision: base.revision)
-      } catch { rejected = true }
-      try require(rejected, "a mid mismatch against the capture is rejected")
+      try expectAssociationRejection(
+        "mid mismatch", "association: record projection", oracle: oracle, capture: base,
+        exported: replacingRecords(exported, records: records), pointer: export.transactionID,
+        envelopeSHA256: export.envelopeSHA256, captureRevision: base.revision)
       negatives += 1
     }
     do {
       var records = exported.records
       records[1] = replacingStorageKey(records[1], units: nil)
-      var rejected = false
-      do {
-        try oracle.validate(capture: base, exported: replacingRecords(exported, records: records),
-                            pointer: export.transactionID,
-                            envelopeSHA256: export.envelopeSHA256,
-                            captureRevision: base.revision)
-      } catch { rejected = true }
-      try require(rejected, "a storage-key mismatch against the capture is rejected")
+      try expectAssociationRejection(
+        "storage-key mismatch", "association: record projection", oracle: oracle, capture: base,
+        exported: replacingRecords(exported, records: records), pointer: export.transactionID,
+        envelopeSHA256: export.envelopeSHA256, captureRevision: base.revision)
       negatives += 1
     }
     do {
-      var rejected = false
-      do {
-        try oracle.validate(capture: base, exported: exported, pointer: export.transactionID,
-                            envelopeSHA256: String(repeating: "0", count: 64),
-                            captureRevision: base.revision)
-      } catch { rejected = true }
-      try require(rejected, "a digest mismatch is rejected")
+      var records = exported.records
+      records[1] = replacingGeneration(records[1], generation: records[1].generation &+ 1)
+      try expectAssociationRejection(
+        "generation mismatch", "association: record projection", oracle: oracle, capture: base,
+        exported: replacingRecords(exported, records: records), pointer: export.transactionID,
+        envelopeSHA256: export.envelopeSHA256, captureRevision: base.revision)
       negatives += 1
     }
     do {
-      var rejected = false
-      do {
-        try oracle.validate(capture: base, exported: exported, pointer: export.transactionID,
-                            envelopeSHA256: export.envelopeSHA256,
-                            captureRevision: base.revision &+ 1)
-      } catch { rejected = true }
-      try require(rejected, "a capture revision mismatch is rejected")
+      try expectAssociationRejection(
+        "digest mismatch", "association: byte digest binding", oracle: oracle, capture: base,
+        exported: exported, pointer: export.transactionID,
+        envelopeSHA256: String(repeating: "0", count: 64), captureRevision: base.revision)
+      negatives += 1
+    }
+    do {
+      try expectAssociationRejection(
+        "capture revision mismatch", "association: capture revision", oracle: oracle, capture: base,
+        exported: exported, pointer: export.transactionID,
+        envelopeSHA256: export.envelopeSHA256, captureRevision: base.revision &+ 1)
       negatives += 1
     }
     checks += negatives

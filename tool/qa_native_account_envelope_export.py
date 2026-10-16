@@ -525,6 +525,24 @@ def check_driver_static_bindings():
         "bootstrap driver must assert the transaction enum literal"
     assert "PiliAccountEnvelopeRecoveryJournal.bootstrapKind" in bootstrap_source, \
         "bootstrap driver must bind the staging lower-layer constant"
+    assert "private struct FixtureManifest: Codable" in bootstrap_source, \
+        "bootstrap driver must independently encode the actual Codable manifest wire"
+    assert "encoder.encode(FixtureManifest(" in bootstrap_source, \
+        "the manifest byte oracle must encode the actual wire representation, not lowercase JSON"
+    assert '"transactionID": transactionID.uuidString.lowercased()' not in bootstrap_source, \
+        "the manifest oracle must not lowercase the UUID serialization"
+    assert "writeAttempts == 4 && removeAttempts == 1" in bootstrap_source, \
+        "the clean/recovered commit rows must include the verified journal removal"
+    assert "PiliAccountShadowTransactionError.unresolvedPublication" in bootstrap_source, \
+        "the cold-owner row must assert the exact owner-side fence error"
+    assert "expectAssociationRejection" in bootstrap_source \
+        and "association: record projection" in bootstrap_source, \
+        "association negatives must use exact typed reasons including the generation row"
+    assert "recordCommitThenThrow" in bootstrap_source and "failDescriptorReadAt" in bootstrap_source, \
+        "candidate after-commit IO-throw and descriptor read IO seams must exist"
+    assert "pausePointerReadAt" in bootstrap_source and "pauseRecordReadAt" in bootstrap_source \
+        and "pauseDescriptorReadAt" in bootstrap_source, \
+        "refusing-result cancellation rows must control pointer/record/descriptor read pauses"
     assert "failJournalRemoves(true)" in bootstrap_source and "failJournalReadAt(3)" in bootstrap_source, \
         "bootstrap driver must distinguish a refused remove from a committed-remove verification failure"
     assert "honest state: the committed removal leaves no retained journal bytes" in bootstrap_source, \
