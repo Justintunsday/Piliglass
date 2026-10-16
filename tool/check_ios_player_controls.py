@@ -11,6 +11,20 @@ import preview_ios_navigation as navigation
 
 ROOT = Path(__file__).resolve().parents[1]
 
+# Production fixes the chrome auto-hide delay to 3/5/8 seconds and maps any
+# other value to 3. The fixture must configure a supported value, and the UI
+# test asserts the app-observed effective value, so a silent fallback cannot
+# hide (the former 60.0 fixture never obtained its intended delay).
+FIXTURE_HIDE_DELAY = 8.0
+
+
+def production_hide_delay_values():
+    source = (ROOT / 'ios/Runner/PiliNativePlayer.swift').read_text(encoding='utf-8')
+    block = source[source.index('static var hideDelay: Double {'):]
+    block = block[:block.index('\n  }')]
+    values = block[block.index('return [') + len('return ['):block.index(']')]
+    return [float(value.strip()) for value in values.split(',')]
+
 FIXTURES = r'''
 import AVFoundation
 import AVKit
@@ -112,7 +126,10 @@ final class PlayerPreviewApp: UIResponder, UIApplicationDelegate {
 
   func application(_ application: UIApplication,
                    didFinishLaunchingWithOptions options: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
-    UserDefaults.standard.set(60.0, forKey: PiliNativePlayerPreferences.hideDelayKey)
+    // Production hideDelay accepts only [3, 5, 8] seconds and silently falls
+    // back to 3 for anything else; configure the supported maximum so the real
+    // chrome hide timer is deterministic and never a hidden fallback.
+    UserDefaults.standard.set(__FIXTURE_HIDE_DELAY__, forKey: PiliNativePlayerPreferences.hideDelayKey)
     let controller = PiliNativePlayerViewController(session: session, fullscreen: !embedded)
     // Use the UIKit controller as the window root so its supported orientations
     // apply directly, without a SwiftUI preview host retaining a portrait frame.
@@ -143,7 +160,7 @@ final class PlayerPreviewApp: UIResponder, UIApplicationDelegate {
   }
 
   func updateProbe() {
-    probe.text = "playing=\(session.isPlaying);rate=\(session.playbackRate);time=\(Int(session.currentTime));rates=\(session.engine.rates)"
+    probe.text = "playing=\(session.isPlaying);rate=\(session.playbackRate);time=\(Int(session.currentTime));rates=\(session.engine.rates);hideDelay=\(PiliNativePlayerPreferences.hideDelay)"
   }
 }
 '''
@@ -161,6 +178,9 @@ final class PlayerControlsTests: XCTestCase {
     app.launchArguments = ["-AppleLanguages", "(zh-Hans)", "-AppleLocale", "zh_CN"] + (embedded ? ["embedded"] : [])
     app.launch()
     XCTAssertTrue(state.waitForExistence(timeout: 10))
+    XCTAssertTrue(
+      state.label.contains("hideDelay=__FIXTURE_HIDE_DELAY__"),
+      "Configured fixture hide delay must equal the production-effective value, not a silent fallback: \(state.label)")
     if !embedded {
       let landscape = NSPredicate { _, _ in self.app.frame.width > self.app.frame.height }
       expectation(for: landscape, evaluatedWith: app)
@@ -227,12 +247,20 @@ def production_swift():
                       source.index('struct PiliNativePlayerView:')]
     preferences = source[source.index('enum PiliNativePlaybackEndMode:'):
                          source.index('@MainActor\nfinal class PiliNativePlayerSession')]
-    return navigation.home.LOCALIZATION + '\n' + FIXTURES.replace('// PRODUCTION_SPEED_METHODS', speed) + preferences + controls
+    fixtures = FIXTURES.replace('__FIXTURE_HIDE_DELAY__', str(FIXTURE_HIDE_DELAY))
+    return navigation.home.LOCALIZATION + '\n' + fixtures.replace('// PRODUCTION_SPEED_METHODS', speed) + preferences + controls
 
 
 if __name__ == '__main__':
     if platform.system() != 'Darwin':
         raise SystemExit('Player control UI tests require macOS and Xcode.')
+    supported_hide_delays = production_hide_delay_values()
+    if FIXTURE_HIDE_DELAY not in supported_hide_delays:
+        raise SystemExit(
+            f'Fixture hide delay {FIXTURE_HIDE_DELAY} is not production-supported '
+            f'{supported_hide_delays}; an unsupported value silently falls back to 3 '
+            'and would invalidate the real gesture preconditions.'
+        )
     devices = json.loads(navigation.home.run('xcrun', 'simctl', 'list', 'devices', 'available', '-j'))['devices']
     phones = [device for runtime in devices.values() for device in runtime if 'iPhone' in device['name']]
     device = next((phone for phone in phones if phone['state'] == 'Booted'), phones[0])
@@ -242,5 +270,5 @@ if __name__ == '__main__':
     navigation.OUTPUT = ROOT / 'build/player-controls-preview'
     navigation.BUNDLE_ID = 'dev.piliglass.playerpreview'
     navigation.production_swift = production_swift
-    navigation.TESTS = TESTS
+    navigation.TESTS = TESTS.replace('__FIXTURE_HIDE_DELAY__', str(FIXTURE_HIDE_DELAY))
     navigation.main()
