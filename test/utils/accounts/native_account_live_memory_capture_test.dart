@@ -9,6 +9,7 @@ import 'package:PiliPlus/utils/accounts/account_request_state.dart';
 import 'package:cookie_jar/cookie_jar.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'account_credential_reader_fixtures.dart';
 import 'account_test_storage.dart';
 
 LoginAccount _account(String key, {Set<AccountType>? types}) => LoginAccount(
@@ -255,5 +256,34 @@ void main() {
     account.cookieJar.hostCookies['after-capture'] = {};
     expect(jar, copy);
     expect(jar['hostBuckets'], isEmpty);
+  });
+
+  test('a denied credential reader refuses the whole shadow capture without raw values', () async {
+    await Accounts.installCredentials(_account('95001'));
+    final revision = Accounts.requestRevision;
+    expect(
+      () => Accounts.captureLiveMemoryShadow(
+        reader: const DeniedCredentialReader(),
+      ),
+      throwsA(isA<AccountLiveMemoryShadowException>().having(
+        (e) => e.code, 'code', 'unavailable')),
+    );
+    expect(Accounts.requestRevision, revision);
+    // The default reader keeps producing the same bound credential units.
+    final capture = Accounts.captureLiveMemoryShadow().value;
+    final records = (capture['records'] as List).cast<Map>();
+    final login = records.firstWhere((record) => record['isLogin'] == true);
+    expect(
+      String.fromCharCodes(
+        (login['accessKeyUnits'] as List).cast<int>(),
+      ),
+      'synthetic-access-95001',
+    );
+    expect(
+      String.fromCharCodes(
+        (login['refreshTokenUnits'] as List).cast<int>(),
+      ),
+      'synthetic-refresh-95001',
+    );
   });
 }

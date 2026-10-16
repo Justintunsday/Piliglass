@@ -11,8 +11,10 @@ final class CountingCredentialReader implements AccountCredentialReader {
   int captures = 0;
   int csrfReads = 0;
   int accessKeyReads = 0;
+  int refreshReads = 0;
   int boundCsrfReads = 0;
   int boundAccessKeyReads = 0;
+  int boundRefreshReads = 0;
 
   @override
   AccountCredentialContext? captureRequest(
@@ -42,6 +44,15 @@ final class CountingCredentialReader implements AccountCredentialReader {
   }
 
   @override
+  AccountBoundCredential<String?> boundRefreshFor(
+    Account owner,
+    AccountRequestStamp<Account> stamp,
+  ) {
+    boundRefreshReads++;
+    return inner.boundRefreshFor(owner, stamp);
+  }
+
+  @override
   String? csrfFor(Account owner, AccountRequestStamp<Account> stamp) {
     csrfReads++;
     return inner.csrfFor(owner, stamp);
@@ -51,6 +62,12 @@ final class CountingCredentialReader implements AccountCredentialReader {
   String? accessKeyFor(Account owner, AccountRequestStamp<Account> stamp) {
     accessKeyReads++;
     return inner.accessKeyFor(owner, stamp);
+  }
+
+  @override
+  String? refreshFor(Account owner, AccountRequestStamp<Account> stamp) {
+    refreshReads++;
+    return inner.refreshFor(owner, stamp);
   }
 
   @override
@@ -83,11 +100,21 @@ final class DeniedCredentialReader implements AccountCredentialReader {
       const AccountBoundCredential.rejected();
 
   @override
+  AccountBoundCredential<String?> boundRefreshFor(
+    Account owner,
+    AccountRequestStamp<Account> stamp,
+  ) =>
+      const AccountBoundCredential.rejected();
+
+  @override
   String? csrfFor(Account owner, AccountRequestStamp<Account> stamp) => null;
 
   @override
   String? accessKeyFor(Account owner, AccountRequestStamp<Account> stamp) =>
       null;
+
+  @override
+  String? refreshFor(Account owner, AccountRequestStamp<Account> stamp) => null;
 
   @override
   List<AccountCredentialSummary> visibleAccounts() => const [];

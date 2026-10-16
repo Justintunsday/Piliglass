@@ -7,6 +7,7 @@ import 'package:PiliPlus/utils/accounts.dart';
 import 'package:PiliPlus/utils/accounts/account.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'account_credential_reader_fixtures.dart';
 import 'account_test_storage.dart';
 
 void main() {
@@ -48,5 +49,24 @@ void main() {
     final directory = Directory('build/native-account-contracts');
     await directory.create(recursive: true);
     await File('${directory.path}/hive-reopened.json').writeAsString(jsonEncode(export));
+  });
+
+  test('a denied credential reader fails the staging export closed and the default reader keeps bound values', () async {
+    final restored = Accounts.account.get('601')!;
+    restored.activated = true;
+    AnonymousAccount().activated = true;
+    await Accounts.refresh();
+    final denied = NativeAccountSnapshotService(
+      credentialReader: const DeniedCredentialReader(),
+    );
+    await expectLater(
+      denied.stagingExport(),
+      throwsA(isA<NativeAccountSnapshotException>().having(
+        (error) => error.code, 'code', 'snapshotChanged')),
+    );
+    final export = await NativeAccountSnapshotService().stagingExport();
+    final entries = (export['entries'] as List).cast<Map>();
+    final entry = entries.firstWhere((e) => e['accessKey'] == 'synthetic-hive-access');
+    expect(entry['refreshToken'], 'synthetic-hive-refresh');
   });
 }
