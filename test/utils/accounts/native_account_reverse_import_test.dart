@@ -67,7 +67,9 @@ int _chargedUnits(Map<String, Object?> envelope) {
         walk(value);
       }
     } else if (node is List) {
-      for (final child in node) walk(child);
+      for (final child in node) {
+        walk(child);
+      }
     }
   }
   walk(envelope);
