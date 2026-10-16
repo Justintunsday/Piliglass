@@ -17,8 +17,11 @@ import 'account_test_storage.dart';
 // the REAL coordinator, capture and restore gates only: it is not a
 // production session API, not a lease and not an authorization. Every
 // controlled future, grant, checkpoint and port reaches terminal cleanup in
-// `finally`, including failed assertion paths; no timers and no
-// elapsed-time noncompletion oracles are used.
+// `finally`, including failed assertion paths; gated waits attach immediate
+// handled outcome observers or a phase-or-terminal helper so an early
+// terminal error fails promptly with its exact identity instead of hanging
+// or skipping the ownership release. No timers and no elapsed-time
+// noncompletion oracles are used.
 LoginAccount _account(int mid) => LoginAccount(
   BiliCookieJar.fromJson({
     'DedeUserID': '$mid',
@@ -151,6 +154,55 @@ Future<void> _prepareEmptyTarget() async {
   AnonymousAccount().activated = true;
 }
 
+/// Attaches an immediate handled terminal observer to [future]: an error can
+/// no longer surface as an unhandled asynchronous error while the test still
+/// performs other assertions, and awaiting the returned future drains the
+/// SAME [future] to its terminal outcome without throwing. The success path
+/// still awaits the original future directly so a terminal error is never
+/// reported as success.
+Future<void> _observeTerminal<T>(Future<T> future) {
+  return future.then<void>((_) {}, onError: (Object _) {});
+}
+
+/// Completes normally when the gated [started] phase opens. If [terminal]
+/// completes first, fails promptly with the SAME public error object (or a
+/// phase violation for an early success) instead of waiting on a phase that
+/// can never start. Observes real future completion only: no timers, sleeps
+/// or fabricated phase completion.
+Future<void> _awaitStartedOrTerminal({
+  required Future<void> started,
+  required Future<void> terminal,
+}) async {
+  final outcome = Completer<int>();
+  final failure = Completer<Object>();
+  final trace = Completer<StackTrace>();
+  started.then((_) {
+    if (!outcome.isCompleted) {
+      outcome.complete(0);
+    }
+  });
+  terminal.then(
+    (_) {
+      if (!outcome.isCompleted) {
+        outcome.complete(1);
+      }
+    },
+    onError: (Object error, StackTrace stackTrace) {
+      if (!outcome.isCompleted) {
+        failure.complete(error);
+        trace.complete(stackTrace);
+        outcome.complete(2);
+      }
+    },
+  );
+  final kind = await outcome.future;
+  if (kind == 0) return;
+  if (kind == 1) {
+    throw StateError('terminal completion before the gated phase started');
+  }
+  Error.throwWithStackTrace(await failure.future, await trace.future);
+}
+
 void main() {
   late AccountTestStorage storage;
 
@@ -184,8 +236,11 @@ void main() {
     expect(coordinator.liveOperationCount, 0);
     // Acquire-after-abort stays available: the aborted grant was cleaned up.
     final lease = await harness.acquire();
-    expect(coordinator.tryAdmit(), isNull);
-    lease.end();
+    try {
+      expect(coordinator.tryAdmit(), isNull);
+    } finally {
+      lease.end();
+    }
     final after = coordinator.tryAdmit();
     expect(after, isNotNull);
     after!.release();
@@ -195,8 +250,11 @@ void main() {
     final closed = AccountWriteBackCoordinator();
     final closedHarness = _SessionOwnershipHarness(closed);
     final closedToken = await closed.beginMaintenance();
-    expect(closedToken, isNotNull);
-    closedToken!.end(permanent: true);
+    try {
+      expect(closedToken, isNotNull);
+    } finally {
+      closedToken?.end(permanent: true);
+    }
     expect(closed.isClosed, true);
     await expectLater(closedHarness.acquire(), throwsA(isA<StateError>()));
     expect(closed.isMaintenanceActive, false);
@@ -268,14 +326,17 @@ void main() {
     final coordinator = AccountWriteBackCoordinator();
     final harness = _SessionOwnershipHarness(coordinator);
     Future<_SessionLease>? second;
-    await harness.withSession((_) {
-      // Registers the second acquirer's waiter synchronously, before any
-      // other expectation, so failure paths always retain the handle.
-      second = harness.acquire();
-      expect(coordinator.isMaintenanceActive, true);
-      return Future<void>.value();
-    });
     try {
+      // The ownership cleanup scope covers the session await itself: if the
+      // body or an early verification fails, withSession still ends FIRST
+      // and the granted SECOND is ended below instead of leaking.
+      await harness.withSession((_) {
+        // Registers the second acquirer's waiter synchronously, before any
+        // other expectation, so failure paths always retain the handle.
+        second = harness.acquire();
+        expect(coordinator.isMaintenanceActive, true);
+        return Future<void>.value();
+      });
       // Ownership transferred to the queued acquirer without reopening it.
       expect(coordinator.isMaintenanceActive, true);
       expect(coordinator.tryAdmit(), isNull);
@@ -286,8 +347,11 @@ void main() {
       expect(secondLease.isEnded, true);
     } finally {
       // Failure-path safety: the queued grant still reaches terminal cleanup.
-      final secondLease = await second!;
-      secondLease.end();
+      final queued = second;
+      if (queued != null) {
+        final secondLease = await queued;
+        secondLease.end();
+      }
     }
     expect(coordinator.isMaintenanceActive, false);
     final after = coordinator.tryAdmit();
@@ -312,10 +376,77 @@ void main() {
       secondLease.end();
     } finally {
       // Failure-path safety: the queued grant still reaches terminal cleanup.
-      final secondLease = await second!;
-      secondLease.end();
+      final queued = second;
+      if (queued != null) {
+        final secondLease = await queued;
+        secondLease.end();
+      }
     }
     expect(coordinator.isMaintenanceActive, false);
+    final after = coordinator.tryAdmit();
+    expect(after, isNotNull);
+    after!.release();
+  });
+
+  test('an early callback failure after the second registration still ends the queued grant', () async {
+    final coordinator = AccountWriteBackCoordinator();
+    final harness = _SessionOwnershipHarness(coordinator);
+    final failure = StateError('synthetic early callback failure');
+    Future<_SessionLease>? second;
+    final session = harness.withSession((_) {
+      second = harness.acquire();
+      throw failure;
+    });
+    try {
+      // The exact original failure identity must surface.
+      await expectLater(session, throwsA(same(failure)));
+      // withSession ended FIRST before the session settled, so the queued
+      // SECOND was granted; it must still reach terminal cleanup here.
+      final secondLease = await second!;
+      expect(coordinator.isMaintenanceActive, true);
+      secondLease.end();
+    } finally {
+      // Failure-path safety: the queued grant still reaches terminal cleanup.
+      final queued = second;
+      if (queued != null) {
+        final secondLease = await queued;
+        secondLease.end();
+      }
+    }
+    expect(coordinator.isMaintenanceActive, false);
+    expect(coordinator.admittedCount, 0);
+    final after = coordinator.tryAdmit();
+    expect(after, isNotNull);
+    after!.release();
+  });
+
+  test('a failing verification after the second registration still ends the queued grant', () async {
+    final coordinator = AccountWriteBackCoordinator();
+    final harness = _SessionOwnershipHarness(coordinator);
+    Future<_SessionLease>? second;
+    final session = harness.withSession((_) {
+      second = harness.acquire();
+      // Controlled negative: this verification is deliberately false while
+      // the first session holds the exclusive barrier, forcing the
+      // formerly-skipped queued-grant cleanup path.
+      expect(coordinator.tryAdmit(), isNotNull);
+      return Future<void>.value();
+    });
+    try {
+      await expectLater(session, throwsA(isA<TestFailure>()));
+      final secondLease = await second!;
+      expect(coordinator.isMaintenanceActive, true);
+      secondLease.end();
+    } finally {
+      // Failure-path safety: the queued grant still reaches terminal cleanup.
+      final queued = second;
+      if (queued != null) {
+        final secondLease = await queued;
+        secondLease.end();
+      }
+    }
+    expect(coordinator.isMaintenanceActive, false);
+    expect(coordinator.admittedCount, 0);
     final after = coordinator.tryAdmit();
     expect(after, isNotNull);
     after!.release();
@@ -352,6 +483,9 @@ void main() {
     final lease = await harness.acquire();
     final gate = Completer<void>();
     final captured = NativeAccountLiveMemoryCaptureService(checkpoint: () => gate.future).capture();
+    // Immediate handled observer: a terminal capture error cannot surface as
+    // an unhandled asynchronous error while the writer assertions run.
+    final capturedObserver = _observeTerminal(captured);
     final frozen = isA<StateError>().having((error) => error.message, 'message', 'Account write-back is frozen');
     try {
       final revision = Accounts.requestRevision;
@@ -372,17 +506,54 @@ void main() {
       final value = await captured;
       expect((value['storedOrder'] as List).length, 1);
     } finally {
-      // Failure-path safety: the checkpoint is always released and the
-      // pending capture always drained before the lease ends.
+      // Failure-path safety: the checkpoint is always released, the same real
+      // capture is awaited to its terminal outcome, and the token ends
+      // independently of that outcome.
       if (!gate.isCompleted) {
         gate.complete();
       }
-      await captured;
-      lease.end();
+      try {
+        await captured;
+      } finally {
+        lease.end();
+      }
+      await capturedObserver;
     }
     // Only coordinator-covered writers were fenced; the capture itself was
     // never admission-gated and verified successfully.
     expect(coordinator.isMaintenanceActive, false);
+    final after = coordinator.tryAdmit();
+    expect(after, isNotNull);
+    after!.release();
+  });
+
+  test('a terminal capture checkpoint failure while maintenance is held still ends the session lease', () async {
+    final coordinator = AccountWriteBackCoordinator();
+    final harness = _SessionOwnershipHarness(coordinator);
+    await Accounts.installCredentials(_account(940030), coordinator: coordinator);
+    final lease = await harness.acquire();
+    final checkpointFailure = StateError('synthetic capture checkpoint failure');
+    final captured = NativeAccountLiveMemoryCaptureService(
+      checkpoint: () => Future<void>.error(checkpointFailure),
+    ).capture();
+    // Immediate handled observer before the held session awaits the capture.
+    final capturedObserver = _observeTerminal(captured);
+    try {
+      // The real capture is terminally failed while the session still owns
+      // the barrier; the old finally skipped lease.end exactly on this await.
+      await expectLater(captured, throwsA(same(checkpointFailure)));
+      expect(coordinator.tryAdmit(), isNull);
+    } finally {
+      // Failure-path safety: drain the already-asserted terminal capture and
+      // end the token independently of that outcome.
+      try {
+        await capturedObserver;
+      } finally {
+        lease.end();
+      }
+    }
+    expect(coordinator.isMaintenanceActive, false);
+    expect(coordinator.admittedCount, 0);
     final after = coordinator.tryAdmit();
     expect(after, isNotNull);
     after!.release();
@@ -454,8 +625,14 @@ void main() {
       selections: [0, 1, 0, 0],
       persistencePort: port,
     );
+    // Immediate handled observer: the restore's terminal error cannot surface
+    // as an unhandled asynchronous error while the window reads run.
+    final restoreObserver = _observeTerminal(restore);
     try {
-      await port.started.future;
+      // Phase-or-terminal observation: a pre-port terminal rejection fails
+      // promptly with its exact public error instead of waiting on a phase
+      // that can never start.
+      await _awaitStartedOrTerminal(started: port.started.future, terminal: restore);
       // The captured-restore window is open. Capture fails closed with its
       // own typed busy error; the snapshot service has a different mapping.
       expect(
@@ -474,13 +651,64 @@ void main() {
       expect(Accounts.requestRevision, revision);
       expect(port.release.isCompleted, false);
       expect(Accounts.installedAccounts(), isEmpty);
+      // Success path: the same real restore must be observed directly so a
+      // terminal error is never reported as success.
+      port.release.complete();
+      await restore;
     } finally {
       if (!port.release.isCompleted) {
         port.release.complete();
       }
-      await restore;
+      await restoreObserver;
     }
     // The busy state was terminally cleared by the completed restore.
+    Accounts.captureLiveMemoryShadow().verifyCurrent();
+  });
+
+  test('a real pre-port public restore rejection fails promptly and leaves no restore window', () async {
+    await _prepareEmptyTarget();
+    AnonymousAccount().type.clear();
+    final anonymous = AnonymousAccount();
+    final port = _GatedRestorePort();
+    final duplicate = _account(940040);
+    final restore = Accounts.restoreEmptyCaptured(
+      // Controlled invalid public fixture (the same public candidate twice):
+      // the real API must reject before its write phase without any private
+      // state mutation.
+      accounts: [duplicate, duplicate],
+      ownerOrdinals: [1, 2],
+      anonymousJar: anonymous.cookieJar,
+      anonymousPurposes: Set<AccountType>.of(anonymous.type),
+      anonymousActivated: true,
+      selections: [0, 1, 0, 0],
+      persistencePort: port,
+    );
+    final restoreObserver = _observeTerminal(restore);
+    try {
+      // The old single await on port.started could never reach its finally
+      // for this real pre-port rejection; phase-or-terminal observation must
+      // fail promptly with the exact public error.
+      await expectLater(
+        _awaitStartedOrTerminal(started: port.started.future, terminal: restore),
+        throwsA(
+          isA<ArgumentError>().having(
+            (error) => error.message,
+            'message',
+            'Captured restore requires fresh unique candidates',
+          ),
+        ),
+      );
+      expect(port.started.isCompleted, false);
+      expect(port.release.isCompleted, false);
+    } finally {
+      if (!port.release.isCompleted) {
+        port.release.complete();
+      }
+      await restoreObserver;
+    }
+    // No restore window may be left behind and the target stays usable.
+    expect(port.release.isCompleted, true);
+    expect(Accounts.installedAccounts(), isEmpty);
     Accounts.captureLiveMemoryShadow().verifyCurrent();
   });
 }
