@@ -28,9 +28,33 @@
     更新为 replacement（`lib/utils/accounts.dart:299-304`），因此预绑定替换也可落到新
     owner 上发出。
   - B1g 计划的"同一同步块/无 await 交错 ⇒ 无生产修复预期"假设**不成立**，本文件为修正。
-- 上述为源码级风险，尚未有实际 Dart 运行证据；本组先以真实回归 **settle** 运行行为：
-  若实际运行否定候选（例如未修复也始终保持一致 A 或零 fetch），则保留负证据并收窄说明、
-  不盲修；若确认（出现混合/旧 key 新 owner 或未取消），再执行第 2 段聚焦修复。
+- 上述为源码级风险；实际运行判定见下节——settlement run 已完成，候选**条件确认**。
+
+## Settlement run 实际诊断结果（`12738bc`，已执行；条件确认）
+
+2026-10-16。TOP handoff + `review-12738bca2fee38633dea38005f37db7a22ca28ba-codex/REVIEW.md`
+（TERMINAL DISPOSITION）实际复核：
+
+- release [38874938999](https://github.com/Justintunsday/Piliglass/actions/runs/38874938999)
+  FAILURE（SIGNING/BODY_CODEC/ACCOUNT_NATIVE/COOKIES/ORDERED_COOKIES/COOKIE_MUTATIONS/
+  LOGIN/ACCOUNT_ENVELOPE_OUTCOME 8 组 success；ACCOUNT_DART=failure → main 正确 exit1，
+  continue-on-error 步骤元数据 success 不代表 pass）；preview
+  [38874943713](https://github.com/Justintunsday/Piliglass/actions/runs/38874943713)
+  SUCCESS4/4（20 UI 全过；不关闭 account 缺陷）。
+- 实际 strict analyze No issues；runtime72 passed；Flutter account suite **实际执行 311 =
+  305 passed / 6 FAILED**，六个失败**恰好**为本轮新预绑定 case（非编译错误、非推断）：
+  1. TV 无屏障·立即切换：已发送请求的 owner identity ≠ A（helper line130）；
+  2. TV barrier·预绑定切换：同样 owner identity 不符（line130）；
+  3. TV 预绑定同 MID 替换：要求零 fetch 实际 **fetched=true**（line467）；
+  4. feedDislike 预绑定切换：发送 owner ≠ gate owner（line171）；
+  5. dislikeVideo 预绑定切换：同上（line171）；
+  6. feedDislike 预绑定替换：要求零 fetch 实际 **fetched=true**（line583）。
+- 精度：owner 断言位于 query/header/Cookie 断言之前，原始日志只显示泛化 LoginAccount 实例，
+  **未观察到**后续全部混合字段（不得宣称 A-query/B-cookie 全字段实测）；两个替换 case 证明
+  的是**未授权的 fetch 进入**，不是之后的服务端成功写入。既有 positive、新上下文 B、
+  installed-null-key web 与 recommend gate 等 case 通过。
+- 该结果为**离线真实 Dio/VideoHttp 生产代码路径**在 CI 的实际执行证据（无真实网络/账户写入），
+  条件确认：执行预绑定窗口修复（第 2 段）。历史失败日志/计数保留，不追溯改判。
 
 ## 第 1 段：真实 Dart/VideoHttp 预绑定回归（settlement run，诊断轮）
 
@@ -66,7 +90,7 @@
 settlement run 只含测试、不含生产修改；预期（源码级候选）新 case 在未修复时失败并给出
 实际混合观察；若实际运行全部通过，则保留该实际证据、收窄说明、不做生产修改。
 
-## 第 2 段：若确认 ⇒ 聚焦生产修复（仅 `lib/http/video.dart` 四个 builder）
+## 第 2 段（条件已确认，执行中）：聚焦生产修复（仅 `lib/http/video.dart` 四个 builder）
 
 一次捕获与凭据读取同源的 owner，并把该 owner 作为当次请求的显式绑定传给既有公开机制
 `Options(extra: {'account': owner})`（不 reread 槽、不碰 AccountManager 私有绑定）：
@@ -80,8 +104,16 @@ settlement run 只含测试、不含生产修改；预期（源码级候选）�
 
 预绑定期间 owner 被 revoke/替换 ⇒ 既有 `captureRequest` 返回 null ⇒ cancel/零 fetch
 （N3/A3 契约）；绑定后的合法 A 响应写回、`Request` 错误归一化、fallback、AppSign/Cookie
-wire 语义全部保留；既有 9 例与 B1f/R43/R44–R47 已接受组不重开、不改断言。若第 1 段实际
-运行否定候选，则不执行本段。
+wire 语义全部保留；既有 9 例与 B1f/R43/R44–R47 已接受组不重开、不改断言。
+
+修复同 commit 的直接回归（不得以共享 interceptor 推断四 builder 全部闭合）：
+
+- `feedDislikeCancel` 直接预绑定切换 + 预绑定替换两行（settlement 中该 builder 只有
+  AFTER-binding case）；
+- `feedDislikeCancel` 与 `dislikeVideo` 各补一条 installed-null-key login gate 直接对比
+  （null-key app 覆盖不再仅限 recommend/feedDislike）；已有 tvPlayUrl web null-key 与
+  feedDislike null-key 保留；
+- 全部既有断言（含六个诊断失败 case 原样）保留；不弱化、不 relabel。
 
 ## 边界（不闭合）
 
@@ -94,7 +126,8 @@ Dart fallback、Aether 独立、不读/改 `youtube/`、无 UI visual/真实账�
 
 ## 验收
 
-两段各自小 commit/push；诊断轮与修复轮均显式 BOTH workflows（各一次），读实际 evidence
-（account 计数与命名 case、strict analyze、native/hash/goldens、九 outcome、BUILD/FFmpeg、
-preview 20/11/压力）→ 最终修复后的新代码 SHA 交 Codex 独立复审（含诊断轮红/绿实际观察）；
-不自我验收、不重跑 unchanged `08e50b9`、不推进 authority/下一组。
+- 诊断轮 `12738bc` 已执行（红：六个 case 实际失败，事实与精度见上节）；修复轮新代码 SHA
+  显式 BOTH workflows（各一次），读实际 evidence（account 计数与命名 case、strict
+  analyze、native/hash/goldens、九 outcome、BUILD/FFmpeg、preview 20/11/压力）→ 最终修复
+  后的新代码 SHA 交 Codex 独立复审（含诊断轮实际红证据）；不自我验收、不重跑 unchanged
+  `12738bc`/`08e50b9`、不推进 authority/下一组。
