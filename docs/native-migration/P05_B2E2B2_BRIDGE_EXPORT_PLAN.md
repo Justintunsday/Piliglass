@@ -58,10 +58,13 @@ durable identity（缺失/不匹配 → 拒绝、零写）；identity 只作关�
 - **选项 A**：扩展 legacy staging export，按 entry/record 增加可选 `durableIdentity` 字段
   （双端 schema 升级 + 严格 reject 规则）。风险：把两个命名空间压进同一 legacy wire，
   需同时改 Dart 生产者、Swift codec、staging store 与全部现有 fixtures。
-- **选项 B（提案偏好）**：新增 envelope-wire 命令：Swift 在冻结指针快照（transactionID）下以
-  `codec.encode(shadow)` 导出 schema-3 线，Dart 以**现有** schema-3 严格 decoder 消费
-  （B2e-2b-1 已完成）；identity 字段天然只在信封命名空间内。需要在 Block3 定义 freeze/drain
-  次序、命令命名、拒绝码与 cross-runtime fixture（Swift 产出 → Dart 测试消费）的 CI 编排。
+- **选项 B（提案偏好）**：新增 envelope-wire 只读导出：Swift 在 pinned current pointer
+  （expectedTransactionID）下导出该 immutable pointer 的**已存字节**（不重新 encode；
+  schema-3 严格校验；精确定义见
+  [P05_B2E2B3_SCHEMA3_ENVELOPE_WIRE_CONTRACT_PLAN.md](P05_B2E2B3_SCHEMA3_ENVELOPE_WIRE_CONTRACT_PLAN.md)
+  修订版），Dart 以**现有** schema-3 严格 decoder 消费（B2e-2b-1 已完成）；identity 字段天然只在
+  信封命名空间内。cross-runtime fixture（Swift 产出 → Dart 消费）并入 envelope pipeline 同一
+  mandatory outcome（见 B2E2B3 §3.3）；Block3 的 freeze/drain 次序仍为独立门。
 - 崩溃/重启对齐（仅限**显式恢复操作**）：只读导出/读取**不得**自动调用
   `resolveUnresolvedPublication` 或清除 journal/fence；armed persistent unknown → fail closed、
   保留 journal/fence（精确定义见
