@@ -21,11 +21,17 @@ private actor MemorySecrets: PiliAccountSecretStore {
 @MainActor
 private final class FixtureInvoker: PiliBridgeMethodInvoking {
   let value: PiliBridgeValue
+  let expectedMethod: String
   var calls = 0
-  init(value: PiliBridgeValue) { self.value = value }
+  var lastMethod: String?
+  init(value: PiliBridgeValue, expectedMethod: String = "loadNativeAccountSelection") {
+    self.value = value
+    self.expectedMethod = expectedMethod
+  }
   func invoke(_ method: String, arguments: [String: PiliBridgeValue]?) async throws -> PiliBridgeValue {
-    guard method == "loadNativeAccountSelection", arguments == nil else { throw FixtureFailure.failed("repository method") }
+    guard method == expectedMethod, arguments == nil else { throw FixtureFailure.failed("repository method") }
     calls += 1
+    lastMethod = method
     return value
   }
 }
@@ -59,9 +65,17 @@ private struct NativeAccountsFixture {
       let received = try await repository.selectionSnapshot()
       try check(received == snapshot && invoker.calls == 1, "production repository consumes actual bridge snapshot")
       try strictCases(snapshotValue)
+      let stagingInvoker = FixtureInvoker(value: raw, expectedMethod: "exportNativeAccountStaging")
+      let stagingRepository = PiliAccountFlutterRepository(invoker: stagingInvoker)
+      let fetched = try await stagingRepository.exportStaging()
+      try check(fetched == exported && stagingInvoker.calls == 1 &&
+                stagingInvoker.lastMethod == "exportNativeAccountStaging",
+                "production repository consumes the actual Dart staging export")
+      try stagingExportStrictCases(raw)
       try await sessionCases(snapshot)
       try await stagingCases(exported)
     }
+    try await stagingFetchErrorCases()
     let live = exports[0].entries.flatMap { $0.cookies.cookies }
     try check(live.filter { $0.name == "duplicate" }.count == 2, "duplicate name/path retained")
     try check(live.contains { $0.name == "host" && $0.hostOnly && $0.cookieDomain == nil && $0.expiresMicroseconds != nil }, "host-only expiry retained")
@@ -146,6 +160,53 @@ private struct NativeAccountsFixture {
       throw FixtureFailure.failed("accepted cancelled staging import")
     } catch is CancellationError { checks += 1 }
     try check(await secrets.count() == 0, "cancelled import keeps Dart authority and no shadow records")
+  }
+
+  static func stagingExportStrictCases(_ raw: PiliBridgeValue) throws {
+    guard case .dictionary(let original) = raw else { throw FixtureFailure.failed("dictionary") }
+    let changes: [(String, PiliBridgeValue)] = [("schemaVersion", .integer(2)), ("nativeWritesAllowed", .bool(true))]
+    for (key, value) in changes {
+      var bad = original
+      bad[key] = value
+      do {
+        _ = try PiliAccountStagingBridgeCodec.decode(.dictionary(bad))
+        throw FixtureFailure.failed("accepted invalid staging export \(key)")
+      } catch is PiliAccountRepositoryError { checks += 1 }
+    }
+    var emptyEntries = original
+    emptyEntries["entries"] = .array([])
+    do {
+      _ = try PiliAccountStagingBridgeCodec.decode(.dictionary(emptyEntries))
+      throw FixtureFailure.failed("accepted empty staging entries")
+    } catch is PiliAccountRepositoryError { checks += 1 }
+  }
+
+  static func stagingFetchErrorCases() async throws {
+    let errorValue: PiliBridgeValue = .dictionary([
+      "state": .string("error"), "code": .string("snapshotChanged"), "nativeWritesAllowed": .bool(false),
+    ])
+    let repository = PiliAccountFlutterRepository(
+      invoker: FixtureInvoker(value: errorValue, expectedMethod: "exportNativeAccountStaging"))
+    do {
+      _ = try await repository.exportStaging()
+      throw FixtureFailure.failed("accepted staging export error state")
+    } catch PiliAccountRepositoryError.serviceFailure(let code) {
+      try check(code == "snapshotChanged", "staging export error code preserved")
+    }
+    let malformed: [PiliBridgeValue] = [
+      .dictionary(["state": .string("error"), "code": .string("snapshotChanged"),
+                   "nativeWritesAllowed": .bool(false), "extra": .null]),
+      .dictionary(["state": .string("error"), "code": .string("snapshotChanged"),
+                   "nativeWritesAllowed": .bool(true)]),
+    ]
+    for value in malformed {
+      let malformedRepository = PiliAccountFlutterRepository(
+        invoker: FixtureInvoker(value: value, expectedMethod: "exportNativeAccountStaging"))
+      do {
+        _ = try await malformedRepository.exportStaging()
+        throw FixtureFailure.failed("accepted malformed staging error state")
+      } catch PiliAccountRepositoryError.invalidSnapshot { checks += 1 }
+    }
   }
 
   static func keychainCase() async throws {
