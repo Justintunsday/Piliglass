@@ -244,7 +244,8 @@ shadow 组件：未接 authority、无生产 caller，durable identity 消费/�
 receipt/unknown ack、Block 3/4/5 仍未交付；四能力 flag 保持 false，P05 未整体完成。
 
 **B2e-2b-3 create-only bootstrap（schema2、CURRENT pointer ABSENT）+ 双阶段跨运行时证明 + R70–R73 在 `2970fc5` 获 Codex 有限 PASS（仅该 bounded bootstrap/两阶段真实消费者范围；不等于 whole Block2/3/P05/authority/生产 composition/global retain fence/startup-revert-GC/process kill/设备）**：
-- 生产（`ef313a1` 引入；`4a12858`/`2970fc5` 只补 driver/QA，无新生产面）：staging 新增
+- 生产（`ef313a1` 引入 bootstrap 生产面；`4a12858` 另含 26 行 staging 生产修复——R72 bootstrap
+  post-await 取消排序 + pre-journal checkpoint，非新 API/authority；`2970fc5` 为 test/driver/QA-only）：staging 新增
   `bootstrapShadow(_:candidateTransactionID:)`——单 shared-vault fence 内 schema2-only、CURRENT
   pointer absent（私有 `ShadowPublicationExpectation`：raw `.uncorrelated` / correlated
   `.exact(UUID)` / bootstrap `.absent` 并存）、record+descriptor 双重 collision 拒绝、fresh
