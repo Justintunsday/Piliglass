@@ -455,7 +455,11 @@ abstract final class VideoHttp {
     required String bvid,
     required bool type,
   }) async {
-    if (Accounts.accessKeyOf(Accounts.main).isNullOrEmpty) {
+    // Capture the owner the gate reads and pin it for this request: the Dio
+    // interceptor resolves the purpose slot in a later async stage, so an
+    // unpinned request could be dispatched with another owner's credentials.
+    final account = Accounts.main;
+    if (Accounts.accessKeyOf(account).isNullOrEmpty) {
       return const Error('请退出账号后重新登录');
     }
     final res = await Request().post(
@@ -464,7 +468,10 @@ abstract final class VideoHttp {
         'aid': IdUtils.bv2av(bvid).toString(),
         'dislike': type ? '0' : '1',
       },
-      options: Options(contentType: Headers.formUrlEncodedContentType),
+      options: Options(
+        contentType: Headers.formUrlEncodedContentType,
+        extra: {'account': account},
+      ),
     );
     if (res.data is! String && res.data['code'] == 0) {
       return const Success(null);
@@ -480,7 +487,10 @@ abstract final class VideoHttp {
     int? reasonId,
     int? feedbackId,
   }) async {
-    if (Accounts.accessKeyOf(Accounts.get(AccountType.recommend)).isNullOrEmpty) {
+    // Pin the owner whose access key the gate validates; the interceptor binds
+    // asynchronously and must not reroute the request to another owner.
+    final account = Accounts.get(AccountType.recommend);
+    if (Accounts.accessKeyOf(account).isNullOrEmpty) {
       return const Error('请退出账号后重新登录');
     }
     assert((reasonId != null) ^ (feedbackId != null));
@@ -494,6 +504,7 @@ abstract final class VideoHttp {
         'build': 1,
         'mobi_app': 'android',
       },
+      options: Options(extra: {'account': account}),
     );
     if (res.data['code'] == 0) {
       return const Success(null);
@@ -509,7 +520,8 @@ abstract final class VideoHttp {
     int? reasonId,
     int? feedbackId,
   }) async {
-    if (Accounts.accessKeyOf(Accounts.get(AccountType.recommend)).isNullOrEmpty) {
+    final account = Accounts.get(AccountType.recommend);
+    if (Accounts.accessKeyOf(account).isNullOrEmpty) {
       return const Error('请退出账号后重新登录');
     }
     final res = await Request().get(
@@ -522,6 +534,7 @@ abstract final class VideoHttp {
         'build': 1,
         'mobi_app': 'android',
       },
+      options: Options(extra: {'account': account}),
     );
     if (res.data['code'] == 0) {
       return const Success(null);
@@ -1050,7 +1063,11 @@ abstract final class VideoHttp {
     required int playurlType, // ugc 1, pgc 2
     int? qn,
   }) async {
-    final accessKey = Accounts.accessKeyOf(Accounts.get(AccountType.video));
+    // The access key and signature below are read synchronously from this
+    // owner; pin the same owner for the request binding so the later async
+    // interceptor stage cannot blend another owner's headers/Cookie/stamp.
+    final account = Accounts.get(AccountType.video);
+    final accessKey = Accounts.accessKeyOf(account);
     final params = {
       'access_key': ?accessKey,
       'actionKey': 'appkey',
@@ -1066,7 +1083,11 @@ abstract final class VideoHttp {
       'qn': qn ?? 80,
     };
     AppSign.appSign(params);
-    final res = await Request().get(Api.tvPlayUrl, queryParameters: params);
+    final res = await Request().get(
+      Api.tvPlayUrl,
+      queryParameters: params,
+      options: Options(extra: {'account': account}),
+    );
     if (res.data['code'] == 0) {
       return Success(PlayUrlModel.fromJson(res.data['data']));
     } else {

@@ -601,6 +601,88 @@ void main() {
     expect((state as Error).errMsg, '请退出账号后重新登录');
     expect(adapter.fetchCount, 0);
   });
+
+  test('feedDislikeCancel keeps the gate owner when the recommend slot switches before binding', () async {
+    final recommendA = _account(388, session: 'cancel-a');
+    final recommendB = _account(389, session: 'cancel-b');
+    await Accounts.installCredentials(recommendA);
+    await Accounts.installCredentials(recommendB);
+    Accounts.selectTemporarily(AccountType.recommend, recommendA);
+    final barrier = installBarrier();
+
+    final stateFuture = VideoHttp.feedDislikeCancel(
+      goto: 'video',
+      id: 83,
+      feedbackId: 4,
+    );
+    await barrier.entered.future;
+    Accounts.selectTemporarily(AccountType.recommend, recommendB);
+    barrier.release();
+
+    await expectPrebindAppOutcome(
+      stateFuture,
+      recommendA,
+      'cancel-a',
+      Api.feedDislikeCancel,
+    );
+  });
+
+  test('feedDislikeCancel cancels instead of sending after a pre-binding recommend replacement', () async {
+    final recommend = _account(391, session: 'cancel-replace');
+    await Accounts.installCredentials(recommend);
+    Accounts.selectTemporarily(AccountType.recommend, recommend);
+    final barrier = installBarrier();
+
+    final stateFuture = VideoHttp.feedDislikeCancel(
+      goto: 'video',
+      id: 84,
+      feedbackId: 5,
+    );
+    await barrier.entered.future;
+    final replacement = _account(391, session: 'cancel-replacement');
+    await Accounts.installCredentials(replacement);
+    expect(Accounts.ownsCredentials(recommend), isFalse);
+    barrier.release();
+
+    final outcome = await settleOutcome(stateFuture);
+    expect(
+      outcome.fetched,
+      isFalse,
+      reason: 'a replaced pre-binding gate owner must cancel before any fetch',
+    );
+    expect(await stateFuture, isA<Error>());
+    expect(adapter.fetchCount, 0);
+  });
+
+  test('a null-key installed recommend login still rejects the cancel gate before sending', () async {
+    final nullKey = _nullKeyAccount(392, session: 'cancel-null-key');
+    final main = _account(393, session: 'main-owner');
+    await Accounts.installCredentials(nullKey);
+    await Accounts.installCredentials(main);
+    Accounts.selectTemporarily(AccountType.main, main);
+    Accounts.selectTemporarily(AccountType.recommend, nullKey);
+    final state = await VideoHttp.feedDislikeCancel(
+      goto: 'video',
+      id: 4,
+      reasonId: 4,
+    );
+    expect(state, isA<Error>());
+    expect((state as Error).errMsg, '请退出账号后重新登录');
+    expect(adapter.fetchCount, 0);
+  });
+
+  test('a null-key installed main login still rejects the dislike gate before sending', () async {
+    final nullKey = _nullKeyAccount(394, session: 'main-null-key');
+    final video = _account(395, session: 'video-owner');
+    await Accounts.installCredentials(nullKey);
+    await Accounts.installCredentials(video);
+    Accounts.selectTemporarily(AccountType.main, nullKey);
+    Accounts.selectTemporarily(AccountType.video, video);
+    final state = await VideoHttp.dislikeVideo(bvid: 'BV1xx411c7mD', type: true);
+    expect(state, isA<Error>());
+    expect((state as Error).errMsg, '请退出账号后重新登录');
+    expect(adapter.fetchCount, 0);
+  });
 }
 
 class _PendingRequest {
