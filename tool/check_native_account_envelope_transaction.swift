@@ -779,7 +779,7 @@ private actor ForwardingWriteCountingSecrets: PiliAccountSecretStore {
           purpose: racePurposeA, previousKeyUnits: nil, previousExpectedGeneration: nil)
       }
       let raceWatcher = completionWatcher(pauser: racePauser, task: raceTask)
-      var winnerReceipt: PiliAccountEnvelopeStagingReceipt?
+      var winnerReceipt: PiliAccountShadowTransactionReceipt?
       var expectedWinner: PiliAccountLiveMemoryShadow?
       do {
         switch await racePauser.waitUntilPaused() {
