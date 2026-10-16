@@ -336,10 +336,15 @@ void main() {
         expect(coordinator.isMaintenanceActive, true);
         return Future<void>.value();
       });
-      // Ownership transferred to the queued acquirer without reopening it.
+      // The coordinator releases the barrier synchronously in end() while the
+      // queued continuation claims it asynchronously, so observe the actual
+      // SECOND terminal grant before asserting the held state. The permitted
+      // inter-token admission gap is covered by the dedicated regression
+      // below; atomic handoff / a continuous fence remains FUTURE OPEN and is
+      // not supplied by this coordinator.
+      final secondLease = await second!;
       expect(coordinator.isMaintenanceActive, true);
       expect(coordinator.tryAdmit(), isNull);
-      final secondLease = await second!;
       expect(secondLease.isEnded, false);
       expect(coordinator.tryAdmit(), isNull);
       secondLease.end();
@@ -353,6 +358,58 @@ void main() {
       }
     }
     expect(coordinator.isMaintenanceActive, false);
+    final after = coordinator.tryAdmit();
+    expect(after, isNotNull);
+    after!.release();
+  });
+
+  test('the public inter-token gap admits a real operation before the queued second owner claims the barrier', () async {
+    final coordinator = AccountWriteBackCoordinator();
+    final first = coordinator.beginMaintenance();
+    var secondGranted = false;
+    final second = coordinator.beginMaintenance();
+    final secondObserver = second.then((token) {
+      secondGranted = token != null;
+    });
+    AccountWriteBackOperation? gapOperation;
+    try {
+      final firstToken = await first;
+      expect(firstToken, isNotNull);
+      // Ending FIRST releases the barrier synchronously; the queued SECOND can
+      // only claim it from its asynchronous continuation afterwards.
+      firstToken?.end(permanent: false);
+      expect(coordinator.isMaintenanceActive, false);
+      // Permitted inter-token admission gap: a real operation is admitted
+      // before the queued waiter resumes. Atomic baton passing / a continuous
+      // fence is FUTURE OPEN and is not supplied by this coordinator.
+      gapOperation = coordinator.tryAdmit();
+      expect(gapOperation, isNotNull);
+      // Controlled microtask boundary only: SECOND claims the barrier now but
+      // its grant waits for the held intervening operation.
+      await Future<void>.value();
+      expect(coordinator.isMaintenanceActive, true);
+      expect(coordinator.tryAdmit(), isNull);
+      expect(secondGranted, false);
+      gapOperation!.release();
+      final secondToken = await second;
+      await secondObserver;
+      expect(secondGranted, true);
+      expect(secondToken, isNotNull);
+      expect(coordinator.tryAdmit(), isNull);
+      secondToken?.end(permanent: false);
+    } finally {
+      // Failure-path safety: every retained token, future and operation
+      // reaches terminal cleanup.
+      gapOperation?.release();
+      final firstToken = await first;
+      firstToken?.end(permanent: false);
+      final secondToken = await second;
+      secondToken?.end(permanent: false);
+      await secondObserver;
+    }
+    expect(coordinator.isMaintenanceActive, false);
+    expect(coordinator.admittedCount, 0);
+    expect(coordinator.isClosed, false);
     final after = coordinator.tryAdmit();
     expect(after, isNotNull);
     after!.release();
