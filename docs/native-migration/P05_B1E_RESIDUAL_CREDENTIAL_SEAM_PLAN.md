@@ -28,6 +28,20 @@
 LoginUtils 延迟副作用、Hive maintenance）、B2e-2b bridge export/frozen-revision、Block3
 composition/handoff/revert/startup/GC、Block4/Block5 全部未闭合。
 
+### R39 清单修正（2026-10-16，取代上表对应数字）
+
+上表数字来自非递归 glob，遗漏 pages/widgets 调用点；经递归复核（`lib/` 递归、排除
+`youtube/`、文本匹配非 AST、分类定义/注释/live）修正为：
+
+- `csrfOf`：raw 124 匹配/18 文件 = 定义 1（`accounts.dart:103`）+ 注释 3
+  （`video.dart:368`、`msg.dart:379`、`dynamics.dart:137`）+ **live 调用 120/17 文件**。
+- `accessKeyOf`：raw 19/9 文件 = 定义 1（`accounts.dart:120`）+ **live 调用 18/8 文件**。
+- 补记实际消费者：`pages/member_profile/view.dart:348` accessKeyOf、`:523` csrfOf、
+  `common/widgets/video_popup_menu.dart:104` accessKeyOf（均走既有 wrapper；本组不改 UI、
+  不批量迁移）。
+- 文本匹配数不是 AST live-call 计数，不证明 coverage；详见
+  [P05_B1E_REVIEW_3658406_REPAIR_PLAN.md](P05_B1E_REVIEW_3658406_REPAIR_PLAN.md) §2。
+
 ## 切片契约（B1e：refresh tagged binding + 导出消费者对齐）
 
 1. `account_credential_reader.dart`：
