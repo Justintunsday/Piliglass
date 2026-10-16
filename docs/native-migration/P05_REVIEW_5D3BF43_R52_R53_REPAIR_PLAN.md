@@ -21,13 +21,17 @@ edits 之前保存**；只修 driver/test 工具缺陷，不需要生产 seam �
 
 ## R52 修复（词法/DI 携带；无 force unwrap、无假 receipt、不删断言）
 
-- C1 阶段在 inner `do` 之前声明 `var winnerReceipt: PiliAccountEnvelopeStagingReceipt?` 与
+- C1 阶段在 inner `do` 之前声明 `var winnerReceipt: PiliAccountShadowTransactionReceipt?` 与
   `var expectedWinner: PiliAccountLiveMemoryShadow?`；inner `do` 内用本地
   `winnerReceiptValue`/`expectedWinnerValue` 赋值并完成 do 内全部断言；do/catch 之后
   `guard let confirmedWinnerReceipt = winnerReceipt, let confirmedWinner = expectedWinner
   else { throw TransactionFixtureError.failed("C1 race produced no verified winner") }`，
   cancel/merge 使用 confirmed 绑定。禁止 force unwrap、默认/伪造 receipt、把 winner 读回当
   oracle。
+  （R54 更正：本文件初稿此处曾误写 `PiliAccountEnvelopeStagingReceipt`；实际
+  `applyPurposeChange`（TransactionStore:686+）返回 `PiliAccountShadowTransactionReceipt`
+  （:125-132），两者仅共享 `transactionID`、不可互赋；030 的实际编译错误 794 即此标注，
+  已按 R54 修正。）
 
 ## R53 修复（共享 helper；全部终态都必须通知）
 
