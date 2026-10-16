@@ -58,7 +58,10 @@ toggle；只拒 accessKey/refresh 两者之一，其余成员全部 delegate）�
    - descriptor 已接受、staging-entry **仅 refresh** 被拒（allowance=2；accessKey 保持
      bound）→ `snapshotChanged`、reads=3/3、revision 零效应、默认 reader 输出不变
      （证明 `_stagingEntry` 拒绝分支实际执行，删掉该守卫测试必须失败）；
-   - converse：entry **仅 accessKey** 被拒（allowance=2）→ `snapshotChanged`、reads=3/2；
+   - converse：entry **仅 accessKey** 被拒（allowance=2）→ `snapshotChanged`、reads=3/3
+     （`_stagingEntry` 在 guard 前无条件读两个凭据：entry accessKey#3 被拒后 refresh#3
+     仍执行且保持 bound，随后 guard 抛错；精确 3/3 亦检测 delayed rejection——若守卫被
+     移除会继续 entries/verify 而超过 3）；
    - post-checkpoint：checkpoint 回调翻转**同一** reader → `_verify` 重捕获被拒 →
      `snapshotChanged`、reads 证明 descriptors+entries 曾 bound、revision 零效应。
 2. `native_account_live_memory_capture_test.dart`：
