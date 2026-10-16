@@ -161,9 +161,10 @@ final class _EnvelopeReader {
         _optionalUnits(record['accessKeyUnits'], 65536);
         _optionalUnits(record['refreshTokenUnits'], 65536);
         if (schemaThree) {
+          // Units were charged exactly once in `_preflight`; keep only the
+          // shape, canonical and uniqueness checks in the record pass.
           final canonical = _canonicalDurableIdentity(identity);
           _expect(identities.add(canonical));
-          budget.reserveUnits(36);
           durableIdentities.add(canonical);
         } else {
           durableIdentities.add(null);
@@ -202,13 +203,17 @@ final class _EnvelopeReader {
 
   /// All resource accounting happens before strings/Cookies/owned DTO copies.
   /// Reuses the exporter ledger and bounded UTF8 sink for the same ceilings.
+  /// `durableIdentity` carries UTF16 units without the `*Units` suffix; it joins
+  /// this single cumulative ledger here, before any record/String/Set
+  /// projection, and is not charged again in the record pass.
   void _preflight(Object? node, int depth) {
     _expect(depth <= 32, 'resourceLimit');
     budget.reserveNodes(1);
     if (node is Map) {
       for (final entry in node.entries) {
         _expect(entry.key is String);
-        if ((entry.key as String).endsWith('Units') && entry.value is List) {
+        final key = entry.key as String;
+        if ((key.endsWith('Units') || key == 'durableIdentity') && entry.value is List) {
           budget.reserveUnits((entry.value as List).length);
         }
         _preflight(entry.value, depth + 1);
