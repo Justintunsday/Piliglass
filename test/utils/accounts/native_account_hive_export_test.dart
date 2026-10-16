@@ -52,7 +52,7 @@ void main() {
   });
 
   test('a denied credential reader fails the staging export closed and the default reader keeps bound values', () async {
-    Accounts.account.get('601')!..activated = true;
+    Accounts.account.get('601')!.activated = true;
     AnonymousAccount().activated = true;
     await Accounts.refresh();
     final denied = NativeAccountSnapshotService(
@@ -70,7 +70,7 @@ void main() {
   });
 
   test('staging entry rejects a refresh-only denial after descriptors were accepted', () async {
-    Accounts.account.get('601')!..activated = true;
+    Accounts.account.get('601')!.activated = true;
     AnonymousAccount().activated = true;
     await Accounts.refresh();
     final scripted = ScriptedCredentialReader(boundRefreshAllowance: 2);
@@ -94,7 +94,7 @@ void main() {
   });
 
   test('staging entry rejects an access-key-only denial after descriptors were accepted', () async {
-    Accounts.account.get('601')!..activated = true;
+    Accounts.account.get('601')!.activated = true;
     AnonymousAccount().activated = true;
     await Accounts.refresh();
     final scripted = ScriptedCredentialReader(boundAccessKeyAllowance: 2);
@@ -105,13 +105,18 @@ void main() {
       throwsA(isA<NativeAccountSnapshotException>().having(
         (error) => error.code, 'code', 'snapshotChanged')),
     );
+    // `_stagingEntry` executes BOTH bound reads before its guard: the entry
+    // access-key read (#3) is rejected, the refresh read (#3) still runs and
+    // stays bound, and only then does the guard throw. The exact 3/3 pair also
+    // detects a delayed rejection: with the guard removed, further entries or
+    // the verify recapture would push the counters past 3.
     expect(scripted.boundAccessKeyReads, 3);
-    expect(scripted.boundRefreshReads, 2);
+    expect(scripted.boundRefreshReads, 3);
     expect(Accounts.requestRevision, revision);
   });
 
   test('post-checkpoint verification uses the same reader and fails closed on a stateful denial', () async {
-    Accounts.account.get('601')!..activated = true;
+    Accounts.account.get('601')!.activated = true;
     AnonymousAccount().activated = true;
     await Accounts.refresh();
     final scripted = ScriptedCredentialReader();
