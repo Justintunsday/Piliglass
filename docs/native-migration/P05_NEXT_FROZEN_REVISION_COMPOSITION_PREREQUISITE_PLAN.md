@@ -144,8 +144,9 @@ Dart validation。以下是该 future 的 OPEN 设计要求清单（尚未批准
 现有 API 的既有边界（源码事实，保持 binding）：`freeze()` 无 thaw（终止性）；`quiesce()`
 允许新 admission（非排他）；`beginMaintenance()` 是**现有 API 中唯一排他原语**——这一事实
 只说明 S1 测试使用它，**不构成**“maintenance-only 已足够构成生产 frozen-revision session”
-的结论；`end(false)` 不清 `_frozen`、不触碰 journal；abandoned acquisition 泄漏 token
-（§4.3 case B 的 test-local 复现）。
+的结论；`end(false)` 不清 `_frozen`、不触碰 journal；**丢弃 `beginMaintenance()` 句柄**会令
+已声明的 maintenance 无法释放——§4.3 case B 用**保留句柄**的 withheld-owner 演示 + 完整
+terminal 恢复验证该清理义务（不演示不可恢复泄漏、不丢弃句柄）。
 
 **S1 的 lifetime 边界（明确）**：S1 只用 test-local coordinator/capture 回调验证 FUTURE
 caller 的清理义务；**不声称/不实现** unknown Native retention、全局 frozen revision、真实
@@ -211,8 +212,12 @@ API、不是 lease、不是 authorization。
   - `Future<T> withSession<T>(Future<T> Function(_SessionLease lease) body)`——`try/finally`
     保证 success/throw 路径 `end()` 恰一次。
 - 所有权语义：获得 lease = 排他占用 maintenance（拒绝新 admission）；end 后恢复 admission
-  （freeze/closed 除外）；**不等待**的 `beginMaintenance()` 会永久泄漏 `isMaintenanceActive`
-  （无公开 lever），因此 helper 必须 await 并履行 abort/throw 路径的 end 义务。
+  （freeze/closed 除外）。**句柄纪律**：`beginMaintenance()` 一旦被调用就已同步声明
+  exclusivity，丢弃/不等待该 future 会让声明无法释放（无公开 lever）——因此 helper **必须
+  保留句柄、await 到 terminal 授予并恰一次 end**，abort/throw 路径也不例外；测试不使用
+  `unawaited`、不丢失句柄，也不断言不可恢复泄漏（case B 以保留句柄的恢复为准）。语义必须
+  显式且诚实：closed coordinator 无 token、抛 `StateError`；signal 在获取前已 abort 时仍
+  await 到 terminal 授予、end 恰一次后才抛 `_SessionAbort`（**不是**瞬时取消真实 future）。
 
 ### 4.3 判别性 NEW 用例（每条含阶段入口/信号/精确 oracle；全部用真实 coordinator/capture）
 
@@ -223,12 +228,21 @@ API、不是 lease、不是 authorization。
   `expectLater(pending, throwsA(isA<_SessionAbort>()))`；断言 `isMaintenanceActive == false`、
   `admittedCount == 0`（无永久泄漏）；随后 `lease = await harness.acquire()` 成功、
   `tryAdmit() == null`，`lease.end()` 后 `tryAdmit() != null`。
-- **B. abandoned pending acquisition 泄漏（危险面，有意 confined）**：`admitted =
-  coordinator.tryAdmit()!`；`unawaited(coordinator.beginMaintenance())`（放弃等待、不 end）；
-  `admitted.release()`；显式微任务边界后断言 `isMaintenanceActive == true`、
-  `tryAdmit() == null`、`isClosed == false`；第二个 `beginMaintenance()` 的完成标志保持
-  false（无公开 lever 可恢复）。只使用 isolated coordinator 实例；无 timer、无共享静态状态；
-  实例随测试丢弃。
+- **A2. helper 获取失败状态（显式、诚实）**：closed coordinator → `StateError` 且无 token
+  泄漏；signal 在获取前已 abort → 仍 await 到 terminal 授予、end 恰一次后才抛
+  `_SessionAbort`（不是瞬时取消真实 future）；随后 `isMaintenanceActive == false` 且后续
+  admission 正常。
+- **B. withheld-owner / abandoned-observer 危险面演示（保留恢复句柄；review 取代原 recipe）**：
+  `admitted = coordinator.tryAdmit()!`；`first = coordinator.beginMaintenance()`（保留 future；
+  它在 drain 前已同步声明 exclusivity，授予被 withheld）；`second = coordinator.beginMaintenance()`
+  （保留 future + 同步观察者 `secondGranted`）；显式微任务边界后断言
+  `isMaintenanceActive == true`、`admittedCount == 1`、`tryAdmit() == null`、
+  `secondGranted == false`。`finally` 中完整恢复：`admitted.release()` → `await first` 得
+  token → `end(permanent:false)` → `await second` 得 token → `end(permanent:false)` → await
+  观察者；随后断言 idle（`isMaintenanceActive == false`、`admittedCount == 0`、
+  `isClosed == false`）且后续 admission 正常。**禁止** `unawaited`/丢失句柄/留下未完成
+  second/timer/sleep；不得在成功恢复后声称永久泄漏——被演示的是“保留句柄并终局清理是
+  调用方义务”。
 - **C1. success 后 queued second acquirer 继续**：`withSession` 的 body 内启动
   `second = harness.acquire()`（`_maintenance` 为 true，waiter 同步注册）；body 正常结束 →
   `lease2 = await second` 获得 token；持有时 `tryAdmit() == null`；`lease2.end()` 后
@@ -296,18 +310,20 @@ API、不是 lease、不是 authorization。
 | capture busy（pending install / anonymous reset） | `native_account_live_memory_capture_test.dart`（:111） |
 | raw cookie mutation + gated checkpoint 拒绝 | 同上（:128） |
 | frozen SET/selectTemporarily/refresh/install/delete 零效果 | `account_write_barrier_test.dart`（:162/:178/:194/:209/:223/:325/:339/:356） |
-| already-granted holder 不 end 时后续 waiter 等 holder | `account_maintenance_gate_test.dart`（:111 的 last-release 边界）；泄漏文本见 §2 |
+| already-granted holder 不 end 时后续 waiter 等 holder | `account_maintenance_gate_test.dart`（:111 的 last-release 边界）；句柄纪律见 §2/§4.2 |
 
-S1 新增的只有：pending acquisition 被 abort 的清理（A）、pending acquisition 被放弃的泄漏
-危险面（B）、helper 的 success/throw + queued second（C1/C2）、freeze 在清理路径保持（D）、
+S1 新增的只有：pending acquisition 被 abort 的清理（A）、helper 获取失败状态（A2）、
+withheld-owner/abandoned-observer 危险面 + 保留句柄的 terminal 恢复（B）、helper 的
+success/throw + queued second（C1/C2）、freeze 在清理路径保持（D）、
 屏障覆盖真实 admitted mutation（E）、乐观 capture vs 合法 admitted mutation 的独立 oracle
 （F/G）、public restore 窗口的 busy/snapshotChanged 映射与终止性清理（H）。
 
 ### 4.5 清理纪律与本地验证
 
-- 每个 lease 在 `finally` end；每个 gated checkpoint/port 在 `finally` 放行并 drain
-  （**包括失败断言路径**）；case B 的有意泄漏只限 isolated coordinator 实例，无 timer、
-  无共享静态状态。
+- 每个 lease 在 `finally` end；每个 gated checkpoint/port 与 queued acquirer 在 `finally`
+  放行/drain（**包括失败断言路径**）；case B 的 `first`/`second` 两个保留句柄在 `finally`
+  走到 terminal 授予并各 end 恰一次；全程无 timer/sleep、无 `unawaited`、无丢失句柄、
+  无未完成 future 遗留。
 - 判别只允许显式 Completer/微任务边界（沿用既有 `await Future<void>.value()` 风格）；
   **禁止** sleep/elapsed-time 非完成 oracle、禁止扩大任何 timeout。
 - 本地验证：无本地 Dart SDK，仅静态审阅 + 逐条核对 API/错误类型；mock/静态不得替代 CI。
