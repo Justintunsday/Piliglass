@@ -261,8 +261,7 @@ void main() {
 
     final coordinator = AccountWriteBackCoordinator();
     final harness = _SessionOwnershipHarness(coordinator);
-    final signal = _SessionAbortSignal();
-    signal.abort();
+    final signal = _SessionAbortSignal()..abort();
     await expectLater(harness.acquire(abort: signal), throwsA(isA<_SessionAbort>()));
     // Ownership was obtained first, ended exactly once, and only then the
     // abort surfaced; no real future was cancelled.
