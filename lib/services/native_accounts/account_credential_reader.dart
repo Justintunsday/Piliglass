@@ -104,6 +104,13 @@ abstract interface class AccountCredentialReader {
     AccountRequestStamp<Account> stamp,
   );
 
+  /// Tagged refresh-token read. A bound value may be null: a nullable token
+  /// that is legitimately absent is bound data, not a rejection.
+  AccountBoundCredential<String?> boundRefreshFor(
+    Account owner,
+    AccountRequestStamp<Account> stamp,
+  );
+
   /// Legacy nullable wrapper: null when the reader rejects the stamp. csrf is
   /// non-null whenever bound, so null here is always a rejection.
   String? csrfFor(Account owner, AccountRequestStamp<Account> stamp);
@@ -112,6 +119,11 @@ abstract interface class AccountCredentialReader {
   /// the bound access key is legitimately absent. It cannot distinguish the
   /// two; use [boundAccessKeyFor] when the distinction matters.
   String? accessKeyFor(Account owner, AccountRequestStamp<Account> stamp);
+
+  /// Legacy nullable wrapper: null when the reader rejects the stamp or when
+  /// the bound refresh token is legitimately absent. It cannot distinguish the
+  /// two; use [boundRefreshFor] when the distinction matters.
+  String? refreshFor(Account owner, AccountRequestStamp<Account> stamp);
 
   List<AccountCredentialSummary> visibleAccounts();
 }
@@ -160,6 +172,15 @@ final class DartAccountCredentialReader implements AccountCredentialReader {
   }
 
   @override
+  AccountBoundCredential<String?> boundRefreshFor(
+    Account owner,
+    AccountRequestStamp<Account> stamp,
+  ) {
+    if (!_isBound(owner, stamp)) return const AccountBoundCredential.rejected();
+    return AccountBoundCredential.bound(owner.refresh);
+  }
+
+  @override
   String? csrfFor(Account owner, AccountRequestStamp<Account> stamp) {
     final bound = boundCsrfFor(owner, stamp);
     return bound.isBound ? bound.value : null;
@@ -168,6 +189,12 @@ final class DartAccountCredentialReader implements AccountCredentialReader {
   @override
   String? accessKeyFor(Account owner, AccountRequestStamp<Account> stamp) {
     final bound = boundAccessKeyFor(owner, stamp);
+    return bound.isBound ? bound.value : null;
+  }
+
+  @override
+  String? refreshFor(Account owner, AccountRequestStamp<Account> stamp) {
+    final bound = boundRefreshFor(owner, stamp);
     return bound.isBound ? bound.value : null;
   }
 

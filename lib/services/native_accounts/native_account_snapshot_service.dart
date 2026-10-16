@@ -1,6 +1,7 @@
 import 'dart:collection';
 
 import 'package:PiliPlus/models/common/account_type.dart';
+import 'package:PiliPlus/services/native_accounts/account_credential_reader.dart';
 import 'package:PiliPlus/utils/accounts.dart';
 import 'package:PiliPlus/utils/accounts/account.dart';
 import 'package:PiliPlus/utils/accounts/account_request_state.dart';
@@ -13,11 +14,15 @@ final class NativeAccountSnapshotException implements Exception {
 
 /// Read-only capture of the real Hive owners. This service never installs credentials.
 final class NativeAccountSnapshotService {
-  NativeAccountSnapshotService({Future<void> Function()? checkpoint})
-    : _checkpoint = checkpoint ?? _yield;
+  NativeAccountSnapshotService({
+    Future<void> Function()? checkpoint,
+    AccountCredentialReader credentialReader = accountCredentialReader,
+  })  : _checkpoint = checkpoint ?? _yield,
+        _credentialReader = credentialReader;
 
   final String authorityEpoch = const Uuid().v4();
   final Future<void> Function() _checkpoint;
+  final AccountCredentialReader _credentialReader;
   final Expando<String> _tokens = Expando('native account owner tokens');
 
   static Future<void> _yield() => Future<void>.value();
@@ -53,16 +58,7 @@ final class NativeAccountSnapshotService {
     final capture = _capture();
     final entries = [
       for (final account in capture.accounts)
-        {
-          'identity': _identity(capture.stamps[account]!),
-          'accessKey': account.accessKey,
-          'refreshToken': account.refresh,
-          'ignoreExpires': account.cookieJar.ignoreExpires,
-          // The Hive adapter already discarded non-root attributes on reopen.
-          // Remaining in-memory attributes below are retained, never reconstructed.
-          'legacyHiveAttributesIncomplete': true,
-          'cookies': _cookies(account),
-        },
+        _stagingEntry(account, capture.stamps[account]!),
     ];
     await _checkpoint();
     _verify(capture);
@@ -72,6 +68,30 @@ final class NativeAccountSnapshotService {
       'nativeWritesAllowed': false,
       'snapshot': capture.value,
       'entries': entries,
+    };
+  }
+
+  /// Credential values for the staging export are read through the tagged
+  /// reader for the captured stamp: a rejected context fails the export closed
+  /// instead of leaking a raw access key or refresh token.
+  Map<String, Object?> _stagingEntry(
+    Account account,
+    AccountRequestStamp<Account> stamp,
+  ) {
+    final accessKey = _credentialReader.boundAccessKeyFor(account, stamp);
+    final refresh = _credentialReader.boundRefreshFor(account, stamp);
+    if (!accessKey.isBound || !refresh.isBound) {
+      throw const NativeAccountSnapshotException('snapshotChanged');
+    }
+    return {
+      'identity': _identity(stamp),
+      'accessKey': accessKey.value,
+      'refreshToken': refresh.value,
+      'ignoreExpires': account.cookieJar.ignoreExpires,
+      // The Hive adapter already discarded non-root attributes on reopen.
+      // Remaining in-memory attributes below are retained, never reconstructed.
+      'legacyHiveAttributesIncomplete': true,
+      'cookies': _cookies(account),
     };
   }
 
@@ -154,15 +174,22 @@ final class NativeAccountSnapshotService {
     'generation': stamp.generation,
   };
 
-  Map<String, Object?> _descriptor(Account account, AccountRequestStamp<Account> stamp) => {
-    'identity': _identity(stamp),
-    'mid': account.mid,
-    'isLogin': account.isLogin,
-    'activated': account.activated,
-    'hasAccessKey': account.accessKey?.isNotEmpty ?? false,
-    'hasRefreshToken': account.refresh?.isNotEmpty ?? false,
-    'persistedPurposes': [for (final purpose in AccountType.values) if (account is LoginAccount && account.type.contains(purpose)) purpose.name],
-  };
+  Map<String, Object?> _descriptor(Account account, AccountRequestStamp<Account> stamp) {
+    final accessKey = _credentialReader.boundAccessKeyFor(account, stamp);
+    final refresh = _credentialReader.boundRefreshFor(account, stamp);
+    if (!accessKey.isBound || !refresh.isBound) {
+      throw const NativeAccountSnapshotException('snapshotChanged');
+    }
+    return {
+      'identity': _identity(stamp),
+      'mid': account.mid,
+      'isLogin': account.isLogin,
+      'activated': account.activated,
+      'hasAccessKey': accessKey.value?.isNotEmpty ?? false,
+      'hasRefreshToken': refresh.value?.isNotEmpty ?? false,
+      'persistedPurposes': [for (final purpose in AccountType.values) if (account is LoginAccount && account.type.contains(purpose)) purpose.name],
+    };
+  }
 
   static List<Map<String, Object?>> _cookies(Account account) {
     final result = <Map<String, Object?>>[];

@@ -10,6 +10,7 @@ final class AccountLiveMemoryShadowCapture {
     this._stamps,
     this._selected,
     this._history,
+    this._credentialReader,
   );
 
   final Map<String, Object?> value;
@@ -19,11 +20,12 @@ final class AccountLiveMemoryShadowCapture {
   final List<AccountRequestStamp<Account>> _stamps;
   final List<Account> _selected;
   final Account _history;
+  final AccountCredentialReader _credentialReader;
 
   /// Full recapture detects raw jar/type/activated changes without notification.
   /// Equal endpoints do not prove writers were frozen during an await.
   void verifyCurrent() {
-    final current = _captureAccountLiveMemoryShadow();
+    final current = _captureAccountLiveMemoryShadow(_credentialReader);
     if (!identical(_box, current._box) ||
         _revision != current._revision ||
         !_sameReferences(_records, current._records) ||
@@ -41,7 +43,9 @@ final class AccountLiveMemoryShadowException implements Exception {
   final String code;
 }
 
-AccountLiveMemoryShadowCapture _captureAccountLiveMemoryShadow() {
+AccountLiveMemoryShadowCapture _captureAccountLiveMemoryShadow(
+  AccountCredentialReader reader,
+) {
   final Box<LoginAccount> box;
   try {
     box = Accounts.account;
@@ -125,6 +129,14 @@ AccountLiveMemoryShadowCapture _captureAccountLiveMemoryShadow() {
   final entries = <Map<String, Object?>>[];
   for (var i = 0; i < records.length; i++) {
     final account = records[i];
+    // Credential fields are read through the same tagged seam as every other
+    // consumer: a stamp the reader no longer binds fails closed here instead
+    // of leaking a raw access key or refresh token into the shadow wire.
+    final accessKey = reader.boundAccessKeyFor(account, stamps[i]);
+    final refresh = reader.boundRefreshFor(account, stamps[i]);
+    if (!accessKey.isBound || !refresh.isBound) {
+      throw const AccountLiveMemoryShadowException('unavailable');
+    }
     entries.add({
       'record': i,
       'generation': stamps[i].generation,
@@ -133,8 +145,8 @@ AccountLiveMemoryShadowCapture _captureAccountLiveMemoryShadow() {
           : null,
       'mid': account.mid,
       'isLogin': account.isLogin,
-      'accessKeyUnits': budget.optionalUnits(account.accessKey, 65536),
-      'refreshTokenUnits': budget.optionalUnits(account.refresh, 65536),
+      'accessKeyUnits': budget.optionalUnits(accessKey.value, 65536),
+      'refreshTokenUnits': budget.optionalUnits(refresh.value, 65536),
       'persistedPurposes': [for (final purpose in account.type) purpose.name],
       'activated': account.activated,
       'jar': NativeOrderedCookieJarExporter.export(
@@ -181,6 +193,7 @@ AccountLiveMemoryShadowCapture _captureAccountLiveMemoryShadow() {
     List.unmodifiable(stamps),
     List.unmodifiable(selected),
     history,
+    reader,
   );
 }
 

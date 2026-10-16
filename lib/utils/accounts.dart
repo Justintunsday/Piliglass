@@ -17,8 +17,9 @@ import 'package:hive_ce/hive.dart';
 part 'accounts/account_live_memory_shadow.dart';
 
 abstract final class Accounts {
-  static AccountLiveMemoryShadowCapture captureLiveMemoryShadow() =>
-      _captureAccountLiveMemoryShadow();
+  static AccountLiveMemoryShadowCapture captureLiveMemoryShadow({
+    AccountCredentialReader reader = accountCredentialReader,
+  }) => _captureAccountLiveMemoryShadow(reader);
 
   static late final Box<LoginAccount> account;
   static final List<Account> _accountMode = List.filled(
@@ -83,6 +84,18 @@ abstract final class Accounts {
     return reader.boundAccessKeyFor(owner, stamp);
   }
 
+  /// Tagged bound refresh token for one owner, mirroring [boundAccessKey]: a
+  /// bound value may be null (legitimately absent nullable token), and a
+  /// rejected stamp must never be replaced by the raw owner field.
+  static AccountBoundCredential<String?> boundRefresh(
+    Account owner, {
+    AccountCredentialReader reader = accountCredentialReader,
+  }) {
+    final stamp = _requestState.capture(owner);
+    if (stamp == null) return const AccountBoundCredential.notInstalled();
+    return reader.boundRefreshFor(owner, stamp);
+  }
+
   /// Legacy-compatible csrf read. A not-installed owner keeps the historical
   /// direct field (including its throw when the jar entry is absent); a stamp
   /// the reader rejects throws a [StateError] instead of falling back to a raw
@@ -112,6 +125,21 @@ abstract final class Accounts {
     if (stamp != null) return reader.accessKeyFor(owner, stamp);
     if (owner is LoginAccount && _retired[owner] == true) return null;
     return owner.accessKey;
+  }
+
+  /// Legacy-compatible refresh-token read with the same rules as [accessKeyOf]:
+  /// a bound owner's reader result is used as-is (a null token is data), a
+  /// rejected stamp returns null so its stale direct field is never
+  /// resurrected, and only an uninstalled non-retired owner falls back to the
+  /// direct field.
+  static String? refreshOf(
+    Account owner, {
+    AccountCredentialReader reader = accountCredentialReader,
+  }) {
+    final stamp = _requestState.capture(owner);
+    if (stamp != null) return reader.refreshFor(owner, stamp);
+    if (owner is LoginAccount && _retired[owner] == true) return null;
+    return owner.refresh;
   }
 
   /// Pure read-only snapshot of the stored account box in box order.
