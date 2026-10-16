@@ -30,9 +30,13 @@
   （read→transform→send 的真实过点）。
 - `Api.tvPlayUrl` 是 web 路径 ⇒ Cookie/headers + 响应 Set-Cookie 写回绑定 owner；
   `access_key` 由 builder 自己注入（拦截器 web 分支不注入 key）。
-- 本组探测**预期不产生生产修复**：gate 读取的 owner 与拦截器绑定的 owner 在四个 builder
-  中同源（同一同步块、无 await 交错）；若受控执行暴露真实不一致，将同组聚焦修复并如实
-  记录（不弱化断言、不改生产 authority）。
+- ~~本组探测**预期不产生生产修复**：gate 读取的 owner 与拦截器绑定的 owner 在四个 builder
+  中同源（同一同步块、无 await 交错）~~ **R48 修正（2026-10-16）**：该假设不成立——Dio
+  5.11.1 `fetch()` 把 interceptor 回调包装进 `Future(() async ...)` 链，
+  `AccountManager.onRequest` 在后续事件循环 turn 才解析当前槽；builder 同步读 key/sign 与
+  绑定之间**存在真实预绑定窗口**（详见
+  [P05_R48_PREBINDING_WINDOW_REPAIR_PLAN.md](P05_R48_PREBINDING_WINDOW_REPAIR_PLAN.md)）。
+  若受控执行暴露真实不一致，将同组聚焦修复并如实记录（不弱化断言、不改生产 authority）。
 
 ## 实现（只增测试）
 
