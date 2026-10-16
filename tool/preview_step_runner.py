@@ -8,9 +8,13 @@ the job log and no artifacts were exported for the always-upload steps.
 
 This module tees child output incrementally to a local log and to stdout,
 writes timestamped phase markers to a second file, preserves nonzero failures
-exactly, and stops a child process group with a bounded SIGTERM -> grace ->
-SIGKILL sequence when the step is cancelled or times out. It performs no
-simulator or XCTest work and never converts a failure into success.
+exactly, and stops the owned process group with a bounded SIGTERM -> grace ->
+SIGKILL sequence when the step is cancelled or times out. Cancellation and
+deadline checks run on every loop iteration, independent of output
+availability; stdout EOF is a stream state, never child completion, so a
+live child keeps being polled (and can still be cancelled/timed out) until it
+actually exits. It performs no simulator or XCTest work and never converts a
+failure into success.
 """
 from __future__ import annotations
 
@@ -56,34 +60,90 @@ class PhaseLog:
         print(f'[phase] {line}'.rstrip(), flush=True)
 
 
-def terminate_process_group(process, grace=DEFAULT_TERM_GRACE_SECONDS):
-    """Bounded stop of a start_new_session child; returns a status string."""
-    if process.poll() is not None:
-        return 'exited'
-    if hasattr(os, 'killpg'):
+def _capture_process_group(process):
+    """Owned PGID captured while the leader is alive, or None off POSIX."""
+    getpgid = getattr(os, 'getpgid', None)
+    if getpgid is None:
+        return None
+    try:
+        return getpgid(process.pid)
+    except (ProcessLookupError, PermissionError, OSError):
+        return None
+
+
+def _group_alive(pgid):
+    if pgid is None or not hasattr(os, 'killpg'):
+        return False
+    try:
+        os.killpg(pgid, 0)
+        return True
+    except (ProcessLookupError, PermissionError):
+        return False
+    except OSError:
+        return False
+
+
+def _signal_process_group(process, pgid, signal_value):
+    """Signal only the owned group (or the direct child outside POSIX)."""
+    if pgid is not None and hasattr(os, 'killpg'):
         try:
-            os.killpg(os.getpgid(process.pid), signal.SIGTERM)
+            os.killpg(pgid, signal_value)
+            return True
         except (ProcessLookupError, PermissionError):
-            return 'exited'
-    else:  # pragma: no cover - local fallback outside POSIX
-        process.terminate()
+            return False
+        except OSError:
+            return False
+    try:
+        if signal_value == getattr(signal, 'SIGTERM', None):
+            process.terminate()
+        else:
+            process.kill()
+        return True
+    except OSError:
+        return False
+
+
+def terminate_process_group(process, pgid=None, grace=DEFAULT_TERM_GRACE_SECONDS):
+    """Bounded SIGTERM -> grace -> SIGKILL stop of the owned process group.
+
+    The group id is captured while the child is alive, so cleanup still reaches
+    descendants that ignore SIGTERM after the leader itself has exited. Only the
+    owned group is signalled: never an unrelated pid or group."""
+    if pgid is None:
+        pgid = _capture_process_group(process)
+    if process.poll() is None or _group_alive(pgid):
+        _signal_process_group(process, pgid, signal.SIGTERM)
+    else:
+        return 'exited'
     deadline = time.monotonic() + grace
     while time.monotonic() < deadline:
-        if process.poll() is not None:
+        if process.poll() is not None and not _group_alive(pgid):
             return 'terminated'
         time.sleep(0.05)
-    if hasattr(os, 'killpg') and hasattr(signal, 'SIGKILL'):
-        try:
-            os.killpg(os.getpgid(process.pid), signal.SIGKILL)
-        except (ProcessLookupError, PermissionError):
-            pass
-    else:  # pragma: no cover - local fallback outside POSIX
-        process.kill()
+    kill_signal = getattr(signal, 'SIGKILL', signal.SIGTERM)
+    _signal_process_group(process, pgid, kill_signal)
+    deadline = time.monotonic() + grace
+    while time.monotonic() < deadline:
+        if process.poll() is not None and not _group_alive(pgid):
+            return 'killed'
+        time.sleep(0.05)
+    return 'kill-pending'
+
+
+def run_bounded_cleanup(command, phases, name, timeout=600):
+    """Best-effort bounded cleanup command; never raises and never masks the
+    primary step outcome. Diagnostics cannot guarantee uploads after an outer
+    hard cancel, so this is recorded as local evidence only."""
     try:
-        process.wait(timeout=grace)
+        completed = subprocess.run(command, check=False, timeout=timeout)
     except subprocess.TimeoutExpired:
-        return 'kill-pending'
-    return 'killed'
+        phases.mark(f'{name}: timed out (bounded {timeout}s)')
+        return None
+    except Exception as error:  # a missing binary must not mask the step
+        phases.mark(f'{name}: failed ({error.__class__.__name__})')
+        return None
+    phases.mark(f'{name}: exit {completed.returncode}')
+    return completed.returncode
 
 
 def _drain(lines, log, tail):
@@ -107,10 +167,13 @@ def run_streaming(command, log_path, phases, name, *,
     """Run one step while streaming output to the log and to stdout.
 
     Returns the child's exact exit code; a nonzero code is preserved as a
-    failure (never masked). ``timeout`` is optional and unused by the
-    navigation step, whose only bound stays the workflow job budget. A
-    cancelled step is stopped with the same bounded cleanup and re-raised as
-    ``StepCancelled`` so CI still fails.
+    failure (never masked). Cancellation and deadline checks run on every
+    iteration, independent of output availability, and stdout EOF does not
+    count as completion: the loop keeps bounded polling until the child really
+    exits, so a cancel/timeout racing with EOF or exit cannot report success.
+    ``timeout`` is optional and unused by the navigation step, whose only bound
+    stays the workflow job budget. A cancelled step is stopped with the same
+    bounded cleanup and re-raised as ``StepCancelled`` so CI still fails.
     """
     log_path = Path(log_path)
     log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -134,6 +197,7 @@ def run_streaming(command, log_path, phases, name, *,
             bufsize=1,
             start_new_session=(os.name == 'posix'),
         )
+        pgid = _capture_process_group(process)
         lines = queue.Queue()
 
         def pump():
@@ -163,18 +227,25 @@ def run_streaming(command, log_path, phases, name, *,
         stop_reason = None
         try:
             while True:
+                # Checks run on every iteration, independent of output
+                # availability, so busy/backlogged output cannot suppress a
+                # cancellation or an expired deadline.
+                if cancel_event.is_set():
+                    stop_reason = 'cancelled'
+                    break
+                if deadline is not None and time.monotonic() >= deadline:
+                    stop_reason = 'timeout'
+                    break
                 try:
                     line = lines.get(timeout=_READ_POLL_SECONDS)
                 except queue.Empty:
-                    if cancel_event.is_set():
-                        stop_reason = 'cancelled'
-                        break
-                    if deadline is not None and time.monotonic() >= deadline:
-                        stop_reason = 'timeout'
+                    if process.poll() is not None:
                         break
                     continue
                 if line is None:
-                    break
+                    # stdout EOF is a stream state, not child completion: keep
+                    # bounded polling (checks above) until the child exits.
+                    continue
                 log.write(line)
                 log.flush()
                 tail.append(line)
@@ -184,7 +255,7 @@ def run_streaming(command, log_path, phases, name, *,
                 sys.stdout.write(line)
                 sys.stdout.flush()
             if stop_reason is not None:
-                outcome = terminate_process_group(process, term_grace)
+                outcome = terminate_process_group(process, pgid, term_grace)
                 _drain(lines, log, tail)
                 phases.mark(f'{name}: {stop_reason}; child {outcome}')
                 if stop_reason == 'timeout':
@@ -200,5 +271,6 @@ def run_streaming(command, log_path, phases, name, *,
         finally:
             for signal_value, handler in previous_handlers.items():
                 signal.signal(signal_value, handler)
-            if process.poll() is None:
-                terminate_process_group(process, term_grace)
+            # Bounded cleanup on every exit path: even a normally-finished
+            # leader can leave ignoring-SIGTERM descendants in the owned group.
+            terminate_process_group(process, pgid, term_grace)

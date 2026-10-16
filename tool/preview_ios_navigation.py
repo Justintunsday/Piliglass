@@ -8,7 +8,6 @@ import json
 from pathlib import Path
 from ios_native_sources import read_native_root
 import platform
-import subprocess
 
 import preview_ios_home as home
 import preview_step_runner
@@ -541,17 +540,15 @@ def main():
              '-resultBundlePath',str(result),'-derivedDataPath',str(OUTPUT/'DerivedData')],
             OUTPUT / 'xcodebuild.log', phases, 'xcodebuild-test')
     finally:
-        # Keep the xcresult attachments on every exit path (failure, timeout or
-        # cancellation), not only after a normal return, so the workflow's
-        # always-upload steps still receive the evidence. Bounded so cleanup can
-        # never hang the step itself.
+        # Non-cancelled failure/timeout paths still export the xcresult
+        # attachments for the workflow's always-upload steps. A hard job
+        # cancellation can still skip uploads entirely; cleanup is best-effort
+        # and must never mask the primary step outcome.
         if result.exists():
-            phases.mark('exporting xcresult attachments')
-            try:
-                subprocess.run(['xcrun','xcresulttool','export','attachments','--path',str(result),
-                                '--output-path',str(OUTPUT/'attachments')],check=False,timeout=600)
-            except subprocess.TimeoutExpired:
-                phases.mark('attachments export timed out (bounded 600s)')
+            preview_step_runner.run_bounded_cleanup(
+                ['xcrun','xcresulttool','export','attachments','--path',str(result),
+                 '--output-path',str(OUTPUT/'attachments')],
+                phases, 'attachments-export', timeout=600)
     if code:
         raise SystemExit(code)
 
