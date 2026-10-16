@@ -323,6 +323,31 @@ adapter，见 §10）、Hive compaction/close、LoginUtils 副作用。
   前驱 8cf6629/085d883 preview failure 保留；无真机/authority 结论；四 flag false。
 - 记录为 docs-only commit，不代表 code CI SHA；实际测试 SC SHA 为上述两个代码 SHA。
 
+## 17. 2026-10-16 B1e refresh/export reader seam + R39–R42（`c6eb327`；Codex 有限 PASS）
+
+- 同代码 SHA `c6eb32769b69290a8991281db295c54e14bb6fb0`：release
+  [38843199175](https://github.com/Justintunsday/Piliglass/actions/runs/38843199175)
+  success5/5 与 preview
+  [38843202056](https://github.com/Justintunsday/Piliglass/actions/runs/38843202056)
+  success4/4（均首次尝试、无 job 重跑）；九强制 outcome 全 success、`BUILD SUCCEEDED`、
+  Runner.app 109.1MB、Aether FFmpeg 先于 media-kit；账户 **284** tests/runtime 72/
+  strict analyze clean；envelope 109/44/40/**245**(68+177)/**292**/51；producer
+  8/10/2；89 raw Git blob 87 match+2 声明 pubspec；golden `cd7b0d…`/`044f33…`；preview
+  9+3+6+2=20 tests 0 failure（**两个 player 用例实际通过**：embedded 19.6s、landscape
+  17.6s）、11 owned reports/22 stream files/layout flags/压力 `failures[]`。
+- 内容：refresh tagged nullable binding（no-stamp legacy/rejected 不回退 raw/bound(null)
+  合法）；snapshot descriptor/secret-entry 与 shadow export 同一 reader seam fail closed、
+  同一注入 reader 的 post-checkpoint/`verifyCurrent` 复验；R39 文本清单修正；R40/R41
+  定向负例与精确 3/3 计数；R42 fixture 8.0（生产支持值）+ configured-vs-effective 断言。
+- 前驱保留：`3658406`/`209885f` strict-analysis fatal + aggregate 失败；`ae73dcf`
+  release 绿但 preview 19/20（player-controls landscape）。
+- 精度：AX 树 chrome/720P **缺失**为观察；alpha=0 为生产代码支持的推断而非直接遥测；
+  本次绿色不是历史 tap/AX/timer 因果证明（H1–H4 未证）。
+- 边界：**不构成 whole Block1/P05**；endpoint csrfOf/accessKeyOf tagged 迁移、writer 边界
+  审计、B2e-2b durable bridge/frozen revision、Block3 composition/handoff/revert/startup/
+  GC、Block4/5 与 authority 未闭合；四 flag false；本记录为 docs-only commit，不代表
+  code CI SHA（实际测试 SHA 为 `c6eb327`）。
+
 ## 16. 2026-10-16 B2e-2b-1 schema-3 reverse-import 严格解码 + R38 预投影记账（`ea60931`；Codex 有限 PASS）
 
 - 同代码 SHA `ea609317e499a200b1d1fcc55d5a9127aba9e44d`：release

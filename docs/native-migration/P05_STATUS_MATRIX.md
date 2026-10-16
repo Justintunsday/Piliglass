@@ -335,6 +335,20 @@ aggregate 4-failure（preview 4/4 不替代）。**边界**：`apply()` 不携�
 非 Swift→Dart 端到端 handoff；bridge export/frozen-revision/startup/revert/GC/
 composition、full B2e-2b/P05/authority 未闭合；四 flag false。
 
+**B1e refresh/export reader seam + R39–R42 在 `c6eb327` 获 Codex 有限 PASS（仅该 seam/清单/负例/fixture）**：
+refresh tagged nullable binding + snapshot/shadow 同一 reader seam fail closed + 同一注入
+reader 复验；R39 文本清单修正（raw 124/18、19/9；live 120/17、18/8）；R40/R41 定向负例与
+精确 3/3 计数；R42 fixture 8.0（生产支持值）+ configured-vs-effective 断言。证据：release
+[38843199175](https://github.com/Justintunsday/Piliglass/actions/runs/38843199175) 5/5 与
+preview [38843202056](https://github.com/Justintunsday/Piliglass/actions/runs/38843202056)
+4/4（首次）；九 outcome/BUILD 109.1MB/FFmpeg；账户 **284**/72/analyze clean；envelope
+109/44/40/**245**(68+177)/**292**/51；producer 8/10/2；89 raw blob 87+2；golden
+`cd7b0d…`/`044f33…`；preview 20 tests（**两 player 用例实际通过**）/11 reports/`failures=[]`。
+前驱保留：3658406/209885f strict-analysis fatal；ae73dcf 19/20 player failure。
+**精度**：ae73dcf 失败时观察到的只是 AX 树 chrome/720P **缺失**；alpha=0 为生产代码支持的
+推断而非直接遥测；本次绿色不是历史 tap/AX/timer 因果证明。**边界**：非 whole Block1/
+endpoints/writers/composition/Block4/5/P05/authority；四 flag false。
+
 **Block 1 / B1d 切片（页面读取、延迟副作用、maintenance gate）已在 `98e6f9b` 验收**：
 `Accounts.installedAccounts()` 纯只读 seam + 页面 `isEmpty/isNotEmpty` 切
 `visibleAccounts()`（login/mine/setting/about，内容/顺序/读取时机不变、零

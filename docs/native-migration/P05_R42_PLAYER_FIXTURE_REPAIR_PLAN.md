@@ -16,9 +16,10 @@
   13.41s 发起，但 "Check for interrupting elements" 持续到 **20.90s 才 Synthesize event**；
   `waitForExistence(720P, 8s)` 21.34s 起每 ~1s 检查至 29.37s 均不存在；29.40s 层级快照。
 - 失败时 AX 层级（attachment 5F9CBB1C…txt，本 session 复核）：仅 Window(874x402)/嵌套
-  Others + **lock button** + probe `playing=true;rate=1.5;time=61;rates=[]`；chrome
-  （含 720P 质量按钮）均 alpha=0 不在树上。`testEmbeddedGestures` 通过；landscape 用例在
-  launch helper 的 720P 存在断言失败，之后的手势/lock 断言未执行。
+  Others + **lock button** + probe `playing=true;rate=1.5;time=61;rates=[]`；AX 树中
+  **观察到的**只是 chrome/720P 元素**缺失**（注意：`chromeViews` alpha=0/隐藏 chrome
+  是生产代码支持的**推断**，并非直接采样的 alpha 遥测）。`testEmbeddedGestures` 通过；
+  landscape 用例在 launch helper 的 720P 存在断言失败，之后的手势/lock 断言未执行。
 - **R42 具体缺陷（proven fixture defect）**：`tool/check_ios_player_controls.py` FIXTURES
   写入 `UserDefaults.standard.set(60.0, forKey: PiliNativePlayerPreferences.hideDelayKey)`；
   生产 `PiliNativePlayerPreferences.hideDelay`（`ios/Runner/PiliNativePlayer.swift` 524–527）
@@ -53,3 +54,17 @@
   docs-only 证据（与代码 SHA 分离）→ Codex 独立复审。本修复**不**声称已修复/证明历史
   失败的根因；绿色重跑不是因果证明。
 - 四 flag false；不改生产 UI visual/player policy、不碰 `youtube/`、不真实账户/设备伪造。
+
+## 修复结果（limited PASS，2026-10-16）
+
+- 代码 SHA `c6eb327`（harness-only；前置计划 `d1fb50c`）经 release
+  [38843199175](https://github.com/Justintunsday/Piliglass/actions/runs/38843199175) 5/5
+  与 preview [38843202056](https://github.com/Justintunsday/Piliglass/actions/runs/38843202056)
+  4/4（首次尝试）实际执行：**两个 player 用例实际通过**（embedded 19.6s、landscape
+  17.6s；720P 于 8.24s 找到），configured-effective/手势/lock 断言均在通过路径执行；
+  Codex 独立复核 FINAL DISPOSITION = limited PASS（仅该 fixture 修复范围）。
+- 精度（Codex 明确要求并已写入 `PROGRESS.md`）：ae73dcf 失败时观察到的只是 AX 树
+  chrome/720P **缺失**；alpha=0/隐藏 chrome 是生产代码支持的**推断**而非直接 alpha
+  遥测；本次绿色**不是**历史 tap/AX/timer 链条的因果证明，H1–H4 假说保持未证。
+- `8.0` 是生产支持值内的 fixture 策略选择，**不是**超时放宽或生产策略变更；10/10/8/8
+  超时、20 分钟预算与全部断言未动。

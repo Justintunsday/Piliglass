@@ -243,6 +243,35 @@ sourceSHA=workflowSHA=9724ddb；preview 20 tests 0 failures、压力 `failures=[
 shadow 组件：未接 authority、无生产 caller，durable identity 消费/恢复语义、账号级队列与
 receipt/unknown ack、Block 3/4/5 仍未交付；四能力 flag 保持 false，P05 未整体完成。
 
+**B1e refresh/export reader seam + R39 清单 + R40/R41 negatives + R42 fixture 修复在 `c6eb327` 获 Codex 有限 PASS（仅该 seam/修复范围；不等于 whole Block1/P05）**：
+- 内容：refresh tagged nullable binding（no-stamp legacy / rejected 不回退 raw / bound(null) 合法）；
+  snapshot descriptor/secret-entry 与 shadow export 经同一 reader seam 读取并 fail closed，
+  保留同一注入 reader 的 `verifyCurrent`/post-checkpoint 复验；R39 文本清单修正；R40/R41
+  定向负例与精确 3/3 计数；R42 fixture 改为生产支持值 8.0 并加 configured-vs-effective
+  断言（导入真实生产偏好 slice）。
+- 实际证据（`sourceSHA=workflowSHA=c6eb327`）：release
+  [38843199175](https://github.com/Justintunsday/Piliglass/actions/runs/38843199175)
+  SUCCESS5/5 与 preview
+  [38843202056](https://github.com/Justintunsday/Piliglass/actions/runs/38843202056)
+  SUCCESS4/4（均首次尝试）；九强制 outcome 全 success、BUILD SUCCEEDED、Runner.app
+  109.1MB、Aether FFmpeg 先于 media-kit（实际日志复核）；账户 **284** tests/runtime 72/
+  strict analyze clean；envelope 109/44/40/**245**(68+177)/**292**/51；producer 8/10/2；
+  89 raw Git blob 87 match+2 声明 pubspec；golden `cd7b0d…`/`044f33…`；preview
+  9+3+6+2=20 tests 0 failure（**两个 player 用例实际通过**：embedded 19.6s、landscape
+  17.6s，720P 于 8.24s 被找到；configured-hidden/gesture/lock 断言均在通过路径执行）、
+  11 owned reports/22 stream files/layout flags/压力 `failures[]`。
+- 前驱如实保留：`3658406`/`209885f` strict-analysis fatal（curly-braces/cascade）与
+  aggregate 失败；`ae73dcf` release 绿但 preview 19/20（player-controls landscape 在 launch
+  helper 720P 断言失败）。
+- 精度修正（Codex 明确要求）：ae73dcf 失败时观察到的**只是 AX 树中 chrome/720P 缺失**；
+  "alpha=0/隐藏 chrome" 是由生产代码支持的**推断**，并非直接采样的 alpha 遥测；本次绿色
+  证明修正后的 fixture/断言实际执行，但**不是**历史 tap/AX/timer 链条的因果证明；
+  H1–H4 假说保持未证。
+- 边界：limited PASS 仅该 reader seam/清单/负例/fixture 范围；全部 endpoint csrfOf/
+  accessKeyOf 调用点 tagged 迁移、writer 边界审计、B2e-2b durable bridge/frozen revision、
+  Block3 composition/handoff/revert/startup/GC、Block4、Block5 真机与 authority 均未闭合；
+  四 flag false；本记录为 docs-only，不代表 code CI SHA（实际测试 SHA 为 `c6eb327`）。
+
 **B2e-2b-1 schema-3 reverse-import durable-identity 严格解码 + R38 预投影记账在 `ea60931` 获 Codex 有限 PASS（仅该 decode/carriage 范围）；apply 仍不携带 durable labels**：
 - 沿革：`f12946a`/`450efdd`/`ed89e9f` 实现 schema-3 strict decode + 3 组测试并有绿色
   release38824131940/preview38824134718，但 Codex 独立复核发现 R38——`durableIdentity`
