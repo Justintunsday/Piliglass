@@ -275,3 +275,16 @@ SOURCE define；**新**独立 240 上界）→ consumed 记录严格校验（精
 2. 获批后：实现 → 本地 Python mock QA（两阶段，如实标注 mock）→ commit/push 新 code SHA →
    **STOP BEFORE CI** 交 Codex SOURCE PREFLIGHT → 通过后同一 SHA 各派发 ios.yml /
    ios-home-preview.yml 一次 → Codex 独立实际证据复审 → 有限验收后再进依赖组。
+
+## 8. 实施状态（2026-10-17，docs-only 记录）
+
+- 本计划已按 R66–R69 修订获批并实现：实现 SHA `ef313a1`（R70–R73 修复后为 `4a12858`，
+  R73 残余 descriptor after-commit/NIL collision cancel 修复后为 `2970fc5`）。
+- 实际证据：release `38954606514` 5/5 attempt1 + preview `38954610956` 4/4 attempt2
+  （attempt1 唯一 image-preview orientation timeout 保留、仅该失败 job 单次重跑）；实际
+  bootstrap **238** checks、export 128、两条独立 consumer 6+6、post-ALL 六哈希、95/14
+  ledger、goldens 均经 Codex 独立读取。
+- Codex FINAL DISPOSITION：**LIMITED PASS，仅 bounded create-only bootstrap + 两阶段真实
+  消费者**（`review-2970fc5…-codex`）。本文件的 §6 OPEN 项、四 flag false 与全部精度
+  边界不变；下一组契约见
+  [P05_NEXT_FROZEN_REVISION_COMPOSITION_PREREQUISITE_PLAN.md](P05_NEXT_FROZEN_REVISION_COMPOSITION_PREREQUISITE_PLAN.md)。

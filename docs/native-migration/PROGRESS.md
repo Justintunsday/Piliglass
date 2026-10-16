@@ -243,6 +243,51 @@ sourceSHA=workflowSHA=9724ddb；preview 20 tests 0 failures、压力 `failures=[
 shadow 组件：未接 authority、无生产 caller，durable identity 消费/恢复语义、账号级队列与
 receipt/unknown ack、Block 3/4/5 仍未交付；四能力 flag 保持 false，P05 未整体完成。
 
+**B2e-2b-3 create-only bootstrap（schema2、CURRENT pointer ABSENT）+ 双阶段跨运行时证明 + R70–R73 在 `2970fc5` 获 Codex 有限 PASS（仅该 bounded bootstrap/两阶段真实消费者范围；不等于 whole Block2/3/P05/authority/生产 composition/global retain fence/startup-revert-GC/process kill/设备）**：
+- 生产（`ef313a1` 引入；`4a12858`/`2970fc5` 只补 driver/QA，无新生产面）：staging 新增
+  `bootstrapShadow(_:candidateTransactionID:)`——单 shared-vault fence 内 schema2-only、CURRENT
+  pointer absent（私有 `ShadowPublicationExpectation`：raw `.uncorrelated` / correlated
+  `.exact(UUID)` / bootstrap `.absent` 并存）、record+descriptor 双重 collision 拒绝、fresh
+  journal read（export 同型分类）、pre-IO 与各 post-await cancel 检查；journal kind 为下层固定
+  常量 `PiliAccountEnvelopeRecoveryJournal.bootstrapKind`，TransactionStore 原 enum 只加字面
+  `case bootstrap = "bootstrap"`（driver 断言相等 + 真实冷加载识别）；staging enum 新增
+  `bootstrapRefused`/`invalidBootstrap`。
+- driver（`tool/check_native_account_envelope_bootstrap.swift`，实际 CI **238** checks）：独立
+  Codable manifest 字节 oracle（Foundation UUID 大写 + 固定 hex-letter ID）、record/descriptor
+  commit-then-throw、journal 写/验证/清除矩阵、NIL/present collision 取消、final pre-pointer
+  取消、verified-commit 无追溯取消、cold-vs-initialized owner fence、真实 `publicationUnknown`
+  follower fan-out、同 vault contention 全 winner 字典、association typed negatives（含
+  generation mismatch）；真实 Keychain P0→adopt→P1→export + 同进程新实例重开。R70（独立字节
+  oracle + 1 次 journal remove）、R71（冷 owner `unresolvedPublication` vs 已初始化 owner
+  staging `unresolvedRecovery` + arm）、R72（bootstrap post-await 取消排序 + pre-journal
+  checkpoint）、R73（descriptor after-commit + NIL collision cancel 等）已修入。
+- pipeline：`verify_crossruntime_stage`（显式 source/workflow SHA/sources 输入）执行 export +
+  bootstrap 两阶段；两条独立 retained consumed 记录（rename+hash）、post-ALL 六产物复核后
+  才写 passed summary；export 128/consumer 6 与 bootstrap 238/consumer 6 为实际观测。
+- 实际证据（`review-2970fc5…-codex` FINAL DISPOSITION，Codex 独立读取 main+全部四条 preview
+  raw 日志、8 个 Swift6 strict compile/result、双 consumer、六哈希、95/14 ledger、goldens）：
+  release [38954606514](https://github.com/Justintunsday/Piliglass/actions/runs/38954606514)
+  5/5 attempt1；preview
+  [38954610956](https://github.com/Justintunsday/Piliglass/actions/runs/38954610956) 4/4
+  attempt2——attempt1 唯一失败 `image-preview`（orientation confirmation timeout，在
+  app/gallery 断言之前）artifact `12071330809` 保留，**仅该失败 job 重跑一次**（新 job
+  `117167191405`，image 3/0 fail 229.593s，artifact `12072511310`）；其余 17 个测试复用同
+  297 attempt1（非 6b）。九 outcome 全 success、BUILD SUCCEEDED/Runner.app 109.1MB/executed
+  FFmpeg；账户 **322**/runtime 72/strict No issues；codec109/44 负例/1 synthetic、staging40、
+  transactions **285**(108+177)、queue292、authority51、export128、bootstrap238、producer
+  8/10/2；export UUID `503f3d75…`/6221B、bootstrap UUID `2cb67736…`/6224B（六哈希见 review）；
+  95 raw 93 match+2 声明 pubspec、legacy 88/14 全 match（重叠不求和）；preview 20（nav 9 +
+  image 3 + account 6 + player 2）；11 owned launches/22 streams/last-row 4097==bottom/压力
+  `failures[]`；Mac QA 45/45（synthetic 进程 QA，非 45 设备测试）。
+- 精度/边界（保持）：CURRENT pointer absent ≠ virgin namespace/ABA/highwater reset 授权；
+  staging journal 是 durable namespace fence，非全局 writer admission fence；不确定移除可实际
+  缺席；同进程 Keychain 新实例 ≠ process kill；离线 consumer/test-only association ≠ 真实
+  frozen-revision Dart→Native→Dart composition；无生产 bootstrap caller/authority；warning
+  保留（bootstrap snapshotBefore717、export vault1104、identity adoptedDelete636，非
+  zero-warning）；R70–R73 在 297 内完成，`ef313a1`/`4a12858` 未单独被接受（source-preflight
+  历史保留）。四 flag false；本记录为 docs-only（实际测试 SHA `2970fc5`）。下一组契约计划见
+  [P05_NEXT_FROZEN_REVISION_COMPOSITION_PREREQUISITE_PLAN.md](P05_NEXT_FROZEN_REVISION_COMPOSITION_PREREQUISITE_PLAN.md)。
+
 **B2e-2b-3 原子只读 schema3 当前指针导出 + 真实跨运行时消费 + R62–R65 在 `6b39ac1` 获 Codex 有限 PASS（仅该只读导出/selected `stored-10-2-owner-2-10` 跨运行时 fixture/R62–R65 范围；不等于 whole Block2/3/P05/authority/生产 bootstrap/binding/handoff/GC/process kill/设备）**：
 - 生产：`PiliAccountEnvelopeStagingStore.exportCurrentShadow(expectedTransactionID:)`——单
   shared-vault fence、fresh persistent journal fail-closed（present/corrupt/unreadable 全保留

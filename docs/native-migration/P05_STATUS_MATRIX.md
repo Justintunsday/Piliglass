@@ -424,6 +424,36 @@ cancel-responsive/硬期限证明；同进程 Keychain 实例 ≠ process kill�
 **边界**：不等于 whole Block1/2/P05/schema3 专属竞态/process kill/authority/handoff-revert-GC/
 设备；四 flag false；docs-only 记录（实际测试 SHA `3818948`）。
 
+**B2e-2b-3 create-only bootstrap（schema2、CURRENT pointer ABSENT）+ 双阶段跨运行时证明 + R70–R73 在 `2970fc5` 获 Codex 有限 PASS（仅该 bounded bootstrap/两阶段真实消费者范围）**：
+staging `bootstrapShadow`: 单 shared-vault fence、schema2-only、CURRENT pointer absent（raw
+`.uncorrelated`/correlated `.exact(UUID)`/bootstrap `.absent` 私有 expectation 并存）、
+record+descriptor collision 拒绝、fresh journal fail-closed、pre/post-await cancel 排序 +
+pre-journal checkpoint；下层固定 `bootstrapKind` + TransactionStore 字面 `case bootstrap`
+（driver 断言相等 + 真实冷加载识别）。driver 实际 **238** checks：独立 Codable manifest 字节
+oracle（大写 UUID/固定 hex-letter ID）、commit-then-throw、journal/NIL/present/final-pre-pointer
+取消、verified-commit 无追溯取消、cold-vs-initialized owner fence、真实 unknown fan-out、同
+vault 全 winner 字典、association typed negatives（含 generation mismatch）、真实 Keychain
+reopen。pipeline `verify_crossruntime_stage` 两阶段 + 两条独立 retained consumed 记录 +
+post-ALL 六产物复核。证据：release
+[38954606514](https://github.com/Justintunsday/Piliglass/actions/runs/38954606514) 5/5
+attempt1 与 preview
+[38954610956](https://github.com/Justintunsday/Piliglass/actions/runs/38954610956) 4/4
+attempt2（attempt1 唯一 `image-preview` orientation timeout 保留 artifact `12071330809`；
+**仅该失败 job 重跑一次**，新 job `117167191405` → image 3/0 fail 229.593s/artifact
+`12072511310`；其余 17 测试复用同 297 attempt1）；九 outcome/BUILD 109.1MB/executed FFmpeg；
+账户 **322**/72/strict clean；codec109/44/1、staging40、transactions **285**(108+177)、
+queue292、authority51、export128、bootstrap238、producer 8/10/2；export UUID `503f3d75…`/
+6221B、bootstrap UUID `2cb67736…`/6224B；95 raw 93 match+2、legacy 88/14 全 match（重叠不
+求和）；preview 20（9+3+6+2）；11 owned launches/22 streams/`failures[]`；MacQA 45/45
+（synthetic）。前驱保留：`ef313a1`/`4a12858` source-preflight 未单独接受。**精度**：CURRENT
+pointer absent ≠ virgin namespace/ABA/highwater reset；journal 是 durable namespace fence 非
+全局 admission fence；不确定移除可实际缺席；同进程 Keychain 新实例 ≠ process kill；离线
+consumer/test-only association ≠ 真实 frozen-revision composition；warning 保留（非
+zero-warning）。**边界**：不等于 whole Block2/3/P05/authority/生产 composition/global retain
+fence/startup-revert-GC/process kill/设备；四 flag false；docs-only 记录（实际测试 SHA
+`2970fc5`）。下一组契约见
+[P05_NEXT_FROZEN_REVISION_COMPOSITION_PREREQUISITE_PLAN.md](P05_NEXT_FROZEN_REVISION_COMPOSITION_PREREQUISITE_PLAN.md)。
+
 **B2e-2b-3 原子只读 schema3 当前指针导出 + 真实跨运行时消费 + R62–R65 在 `6b39ac1` 获 Codex 有限 PASS（仅该只读导出/selected `stored-10-2-owner-2-10` fixture/R62–R65）**：
 `exportCurrentShadow(expectedTransactionID:)`：单 shared-vault fence、fresh persistent
 journal fail-closed（present/corrupt/unreadable 保留字节、绝不 resolve/clear/replay）、pinned

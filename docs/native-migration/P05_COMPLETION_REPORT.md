@@ -323,6 +323,42 @@ adapter，见 §10）、Hive compaction/close、LoginUtils 副作用。
   前驱 8cf6629/085d883 preview failure 保留；无真机/authority 结论；四 flag false。
 - 记录为 docs-only commit，不代表 code CI SHA；实际测试 SC SHA 为上述两个代码 SHA。
 
+## 24. 2026-10-17 B2e-2b-3 create-only bootstrap + 双阶段跨运行时证明 + R70–R73（`2970fc5`；Codex 有限 PASS）
+
+- 范围：schema2 create-only CURRENT-pointer-ABSENT bootstrap（下层固定 `bootstrapKind` +
+  TransactionStore 字面 `case bootstrap` + 真实冷加载识别；raw `.uncorrelated`/correlated
+  `.exact(UUID)`/bootstrap `.absent` 私有 expectation 并存；record+descriptor collision
+  拒绝；fresh journal fail-closed；pre/post-await 取消排序 + pre-journal checkpoint），
+  以及 `verify_crossruntime_stage` 两阶段 pipeline（export + bootstrap 各自真实 Dart consumer、
+  两条独立 retained consumed 记录、post-ALL 六产物 hash 复核后才写 passed summary）。
+- driver：`tool/check_native_account_envelope_bootstrap.swift` 实际 **238** checks（独立
+  Codable manifest 字节 oracle/大写 UUID/固定 hex-letter ID、commit-then-throw、journal 与
+  取消全矩阵、cold-vs-initialized owner fence、真实 unknown follower fan-out、同 vault 全
+  winner 字典、association typed negatives 含 generation mismatch、真实 Keychain reopen）。
+  R70–R73（字节 oracle + 1 次 journal remove；冷/已初始化 owner 区分；post-await 顺序；
+  descriptor after-commit + NIL collision cancel 等）修入且不重开。
+- 证据（`review-2970fc5…-codex` FINAL DISPOSITION，Codex 独立读取 main+全部四条 preview
+  raw 日志、8 个 Swift6 strict compile/result、双 consumer、六哈希、95/14 ledger、goldens）：
+  release [38954606514](https://github.com/Justintunsday/Piliglass/actions/runs/38954606514)
+  5/5 attempt1；preview
+  [38954610956](https://github.com/Justintunsday/Piliglass/actions/runs/38954610956) 4/4
+  attempt2——attempt1 唯一 `image-preview` orientation timeout（在 app/gallery 断言之前）
+  artifact `12071330809` 保留，**仅该失败 job 重跑一次**（新 job `117167191405`，image
+  3/0 fail 229.593s，artifact `12072511310`）；其余 17 测试复用同 297 attempt1。九 outcome
+  全 success、BUILD SUCCEEDED/109.1MB/executed FFmpeg；账户 **322**/72/strict clean；
+  codec109/44/1、staging40、transactions **285**(108+177)、queue292、authority51、export128、
+  bootstrap238、producer 8/10/2；export UUID `503f3d75…`/6221B、bootstrap UUID
+  `2cb67736…`/6224B；preview 20（9+3+6+2）、11 owned launches/22 streams/`failures[]`；
+  MacQA 45/45（synthetic）。
+- 边界：CURRENT pointer absent ≠ virgin namespace/ABA/highwater reset 授权；staging journal
+  是 durable namespace fence 而非全局 writer admission fence；不确定移除可实际缺席；同进程
+  Keychain 新实例 ≠ process kill；离线 consumer/test-only association ≠ 真实 frozen-revision
+  Dart→Native→Dart composition；无生产 bootstrap caller/authority；warning 保留
+  （bootstrap snapshotBefore717/export 1104/identity adoptedDelete636，非 zero-warning）；
+  `ef313a1`/`4a12858` source-preflight 未单独被接受。四 flag false；docs-only 记录（实际测试
+  SHA `2970fc5`）。下一组契约见
+  [P05_NEXT_FROZEN_REVISION_COMPOSITION_PREREQUISITE_PLAN.md](P05_NEXT_FROZEN_REVISION_COMPOSITION_PREREQUISITE_PLAN.md)。
+
 ## 23. 2026-10-17 B2e-2b-3 原子只读 schema3 导出 + R62–R65（`6b39ac1`；Codex 有限 PASS）
 
 - 生产：`PiliAccountEnvelopeStagingStore.exportCurrentShadow(expectedTransactionID:)`——单
