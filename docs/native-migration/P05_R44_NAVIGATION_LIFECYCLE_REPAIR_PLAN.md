@@ -46,7 +46,8 @@ tail 16000 字符的 print 与 xcresult attachments export **只在子进程正�
      deadline）；production 以 job 级 25min 预算为准。
 2. `preview_ios_navigation.py main()`：xcodebuild 改用 `run_streaming`；attachments export
    移入 `finally`（任何退出路径上有 xcresult 就尝试，`check=False` + 有界 `timeout=600`），
-   使**非取消**的失败也会导出证据（可被 always-upload 上传）；nonzero 仍
+   使**非取消**的失败/超时路径导出证据（可被 always-upload 上传）；**硬性 job cancel
+   （25min 硬杀）仍可能跳过 upload，此机制不保证外层上传**；nonzero 仍
    `raise SystemExit(code)`。
 3. 本地负例 QA：新增 `tool/check_preview_step_runner.py`（success / nonzero /
    timeout / cancel + 进程已终止断言），用 `py` 在本机实际运行并保留输出——**本地 mock QA
