@@ -119,3 +119,80 @@ final class DeniedCredentialReader implements AccountCredentialReader {
   @override
   List<AccountCredentialSummary> visibleAccounts() => const [];
 }
+
+/// Deterministic phase-policy double for the export seams: delegates to
+/// [inner] until a counted read exceeds its allowance or a toggle flips, then
+/// rejects ONLY that credential. csrf and every non-credential member always
+/// delegate, so tests can reach the staging-entry / post-checkpoint /
+/// verifyCurrent phases that a blanket denial never exercises. Test-only: it
+/// is never wired into production composition and grants no authority.
+final class ScriptedCredentialReader implements AccountCredentialReader {
+  ScriptedCredentialReader({
+    this.inner = accountCredentialReader,
+    this.boundAccessKeyAllowance = 1 << 20,
+    this.boundRefreshAllowance = 1 << 20,
+  });
+
+  final AccountCredentialReader inner;
+  final int boundAccessKeyAllowance;
+  final int boundRefreshAllowance;
+  bool denyAccessKey = false;
+  bool denyRefresh = false;
+  int boundAccessKeyReads = 0;
+  int boundRefreshReads = 0;
+
+  @override
+  AccountCredentialContext? captureRequest(
+    Account owner,
+    AccountRequestStamp<Account> stamp,
+  ) => inner.captureRequest(owner, stamp);
+
+  @override
+  AccountBoundCredential<String> boundCsrfFor(
+    Account owner,
+    AccountRequestStamp<Account> stamp,
+  ) => inner.boundCsrfFor(owner, stamp);
+
+  @override
+  AccountBoundCredential<String?> boundAccessKeyFor(
+    Account owner,
+    AccountRequestStamp<Account> stamp,
+  ) {
+    boundAccessKeyReads++;
+    if (denyAccessKey || boundAccessKeyReads > boundAccessKeyAllowance) {
+      return const AccountBoundCredential.rejected();
+    }
+    return inner.boundAccessKeyFor(owner, stamp);
+  }
+
+  @override
+  AccountBoundCredential<String?> boundRefreshFor(
+    Account owner,
+    AccountRequestStamp<Account> stamp,
+  ) {
+    boundRefreshReads++;
+    if (denyRefresh || boundRefreshReads > boundRefreshAllowance) {
+      return const AccountBoundCredential.rejected();
+    }
+    return inner.boundRefreshFor(owner, stamp);
+  }
+
+  @override
+  String? csrfFor(Account owner, AccountRequestStamp<Account> stamp) =>
+      inner.csrfFor(owner, stamp);
+
+  @override
+  String? accessKeyFor(Account owner, AccountRequestStamp<Account> stamp) {
+    final bound = boundAccessKeyFor(owner, stamp);
+    return bound.isBound ? bound.value : null;
+  }
+
+  @override
+  String? refreshFor(Account owner, AccountRequestStamp<Account> stamp) {
+    final bound = boundRefreshFor(owner, stamp);
+    return bound.isBound ? bound.value : null;
+  }
+
+  @override
+  List<AccountCredentialSummary> visibleAccounts() => inner.visibleAccounts();
+}

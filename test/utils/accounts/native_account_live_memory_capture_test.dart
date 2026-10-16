@@ -12,10 +12,10 @@ import 'package:flutter_test/flutter_test.dart';
 import 'account_credential_reader_fixtures.dart';
 import 'account_test_storage.dart';
 
-LoginAccount _account(String key, {Set<AccountType>? types}) => LoginAccount(
+LoginAccount _account(String key, {Set<AccountType>? types, bool withRefresh = true}) => LoginAccount(
   BiliCookieJar.fromJson({'DedeUserID': key, 'bili_jct': 'synthetic-csrf',
     'SESSDATA': 'synthetic-session-$key'}),
-  'synthetic-access-$key', 'synthetic-refresh-$key', types,
+  'synthetic-access-$key', withRefresh ? 'synthetic-refresh-$key' : null, types,
 )..activated = true;
 
 List<String> _keys(Map value, String field) => [
@@ -285,5 +285,50 @@ void main() {
       ),
       'synthetic-refresh-95001',
     );
+  });
+
+  test('a refresh-only denial refuses the shadow capture while the access key stays bound', () async {
+    await Accounts.installCredentials(_account('95002'));
+    final scripted = ScriptedCredentialReader()..denyRefresh = true;
+    final revision = Accounts.requestRevision;
+    expect(
+      () => Accounts.captureLiveMemoryShadow(reader: scripted),
+      throwsA(isA<AccountLiveMemoryShadowException>().having(
+        (e) => e.code, 'code', 'unavailable')),
+    );
+    // The anonymous record's access key was read and stayed bound; the refusal
+    // comes from that record's refresh read.
+    expect(scripted.boundAccessKeyReads, 1);
+    expect(scripted.boundRefreshReads, 1);
+    expect(Accounts.requestRevision, revision);
+  });
+
+  test('a bound null refresh token exports as null while its access key stays bound', () async {
+    await Accounts.installCredentials(_account('95003', withRefresh: false));
+    final capture = Accounts.captureLiveMemoryShadow().value;
+    final records = (capture['records'] as List).cast<Map>();
+    final login = records.firstWhere((record) => record['isLogin'] == true);
+    expect(login['refreshTokenUnits'], isNull);
+    expect(
+      String.fromCharCodes((login['accessKeyUnits'] as List).cast<int>()),
+      'synthetic-access-95003',
+    );
+  });
+
+  test('shadow verifyCurrent reuses the same reader and rejects a stateful denial', () async {
+    await Accounts.installCredentials(_account('95004'));
+    final scripted = ScriptedCredentialReader();
+    final capture = Accounts.captureLiveMemoryShadow(reader: scripted);
+    final recordedReads = scripted.boundRefreshReads;
+    expect(recordedReads, greaterThan(0));
+    final revision = Accounts.requestRevision;
+    scripted.denyRefresh = true;
+    expect(
+      capture.verifyCurrent,
+      throwsA(isA<AccountLiveMemoryShadowException>().having(
+        (e) => e.code, 'code', 'unavailable')),
+    );
+    expect(scripted.boundRefreshReads, greaterThan(recordedReads));
+    expect(Accounts.requestRevision, revision);
   });
 }

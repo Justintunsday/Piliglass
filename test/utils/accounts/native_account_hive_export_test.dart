@@ -52,8 +52,7 @@ void main() {
   });
 
   test('a denied credential reader fails the staging export closed and the default reader keeps bound values', () async {
-    final restored = Accounts.account.get('601')!;
-    restored.activated = true;
+    Accounts.account.get('601')!..activated = true;
     AnonymousAccount().activated = true;
     await Accounts.refresh();
     final denied = NativeAccountSnapshotService(
@@ -68,5 +67,70 @@ void main() {
     final entries = (export['entries'] as List).cast<Map>();
     final entry = entries.firstWhere((e) => e['accessKey'] == 'synthetic-hive-access');
     expect(entry['refreshToken'], 'synthetic-hive-refresh');
+  });
+
+  test('staging entry rejects a refresh-only denial after descriptors were accepted', () async {
+    Accounts.account.get('601')!..activated = true;
+    AnonymousAccount().activated = true;
+    await Accounts.refresh();
+    final scripted = ScriptedCredentialReader(boundRefreshAllowance: 2);
+    final service = NativeAccountSnapshotService(credentialReader: scripted);
+    final revision = Accounts.requestRevision;
+    await expectLater(
+      service.stagingExport(),
+      throwsA(isA<NativeAccountSnapshotException>().having(
+        (error) => error.code, 'code', 'snapshotChanged')),
+    );
+    // Two descriptor reads were accepted (anonymous + 601); the third refresh
+    // read is the first staging-entry secret read and was rejected, so no
+    // partial wire was returned and the access key stayed bound.
+    expect(scripted.boundRefreshReads, 3);
+    expect(scripted.boundAccessKeyReads, 3);
+    expect(Accounts.requestRevision, revision);
+    final export = await NativeAccountSnapshotService().stagingExport();
+    final entries = (export['entries'] as List).cast<Map>();
+    final entry = entries.firstWhere((e) => e['accessKey'] == 'synthetic-hive-access');
+    expect(entry['refreshToken'], 'synthetic-hive-refresh');
+  });
+
+  test('staging entry rejects an access-key-only denial after descriptors were accepted', () async {
+    Accounts.account.get('601')!..activated = true;
+    AnonymousAccount().activated = true;
+    await Accounts.refresh();
+    final scripted = ScriptedCredentialReader(boundAccessKeyAllowance: 2);
+    final service = NativeAccountSnapshotService(credentialReader: scripted);
+    final revision = Accounts.requestRevision;
+    await expectLater(
+      service.stagingExport(),
+      throwsA(isA<NativeAccountSnapshotException>().having(
+        (error) => error.code, 'code', 'snapshotChanged')),
+    );
+    expect(scripted.boundAccessKeyReads, 3);
+    expect(scripted.boundRefreshReads, 2);
+    expect(Accounts.requestRevision, revision);
+  });
+
+  test('post-checkpoint verification uses the same reader and fails closed on a stateful denial', () async {
+    Accounts.account.get('601')!..activated = true;
+    AnonymousAccount().activated = true;
+    await Accounts.refresh();
+    final scripted = ScriptedCredentialReader();
+    final service = NativeAccountSnapshotService(
+      checkpoint: () async {
+        scripted.denyRefresh = true;
+      },
+      credentialReader: scripted,
+    );
+    final revision = Accounts.requestRevision;
+    await expectLater(
+      service.stagingExport(),
+      throwsA(isA<NativeAccountSnapshotException>().having(
+        (error) => error.code, 'code', 'snapshotChanged')),
+    );
+    // Descriptors and entries ran bound (four reads); the fifth refresh read
+    // is the post-checkpoint `_verify` recapture and was rejected.
+    expect(scripted.boundRefreshReads, 5);
+    expect(scripted.boundAccessKeyReads, 5);
+    expect(Accounts.requestRevision, revision);
   });
 }
