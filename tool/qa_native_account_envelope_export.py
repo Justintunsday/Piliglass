@@ -540,6 +540,11 @@ def check_driver_static_bindings():
         "association negatives must use exact typed reasons including the generation row"
     assert "recordCommitThenThrow" in bootstrap_source and "failDescriptorReadAt" in bootstrap_source, \
         "candidate after-commit IO-throw and descriptor read IO seams must exist"
+    assert "descriptorCommitThenThrow" in bootstrap_source, \
+        "the descriptor write commit-then-throw seam must exist for the per-phase matrix"
+    for label in ("record-nil-collision-cancel", "descriptor-nil-collision-cancel"):
+        assert label in bootstrap_source, \
+            f"the successful-NIL collision-read cancellation row is missing: {label}"
     assert "pausePointerReadAt" in bootstrap_source and "pauseRecordReadAt" in bootstrap_source \
         and "pauseDescriptorReadAt" in bootstrap_source, \
         "refusing-result cancellation rows must control pointer/record/descriptor read pauses"

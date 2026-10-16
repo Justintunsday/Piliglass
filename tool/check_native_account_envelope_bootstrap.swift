@@ -42,6 +42,7 @@ private actor BootstrapFaultVault: PiliAccountSecretStore {
   private var recordReadPauseAt = 0
   private var recordReadSuspended: CheckedContinuation<Void, Never>?
   private var descriptorWriteFailures = 0
+  private var descriptorWriteCommitThenThrow = false
   private var descriptorReadCount = 0
   private var descriptorReadMismatchAt = 0
   private var descriptorReadFailAt = 0
@@ -102,6 +103,7 @@ private actor BootstrapFaultVault: PiliAccountSecretStore {
     recordReadSuspended = nil
   }
   func failDescriptorWrites(_ count: Int) { descriptorWriteFailures = count }
+  func descriptorCommitThenThrow(_ enabled: Bool) { descriptorWriteCommitThenThrow = enabled }
   func descriptorReadBackMismatchAt(_ ordinal: Int) { descriptorReadMismatchAt = ordinal }
   func failDescriptorReadAt(_ ordinal: Int) { descriptorReadFailAt = ordinal }
   func pauseDescriptorReadAt(_ ordinal: Int) { descriptorReadPauseAt = ordinal }
@@ -285,6 +287,10 @@ private actor BootstrapFaultVault: PiliAccountSecretStore {
         throw BootstrapFixtureError.injected
       }
       values[key] = data
+      if descriptorWriteCommitThenThrow {
+        descriptorWriteCommitThenThrow = false
+        throw BootstrapFixtureError.injected
+      }
       return
     }
     if key.hasPrefix("account-envelope-shadow-v2.") {
@@ -1152,6 +1158,35 @@ private struct ExportAssociationFixtureOracle {
                   "the descriptor read-back error attempts three writes and three removals")
       checks += 1
     }
+    do {
+      // Descriptor commit-then-throw: the descriptor bytes exist before the
+      // injected error, so the cleanup must remove both record AND descriptor
+      // and restore the complete pre-attempt dictionary before rethrowing.
+      let vault = BootstrapFaultVault()
+      let staging = PiliAccountEnvelopeStagingStore(secrets: vault)
+      let pointerID = fixedBootstrapID
+      let initial = await vault.storedSnapshot()
+      await vault.resetCounters()
+      await vault.descriptorCommitThenThrow(true)
+      var surface = false
+      do { _ = try await staging.bootstrapShadow(data, candidateTransactionID: pointerID) }
+      catch { surface = isInjected(error) }
+      try require(surface, "a descriptor write that commits then throws surfaces the original error")
+      checks += 1
+      let snapshotAfter = await vault.storedSnapshot()
+      try require(snapshotAfter == initial,
+                  "the committed-then-failed descriptor is cleaned up to the pre-attempt state")
+      checks += 1
+      let writeAttempts = await vault.writeAttemptCount()
+      let removeAttempts = await vault.removeAttemptCount()
+      try require(writeAttempts == 3 && removeAttempts == 3,
+                  "the committed-then-failed descriptor attempts three writes and three removals")
+      checks += 1
+      let cleanup = try await staging.bootstrapShadow(data, candidateTransactionID: pointerID)
+      try require(cleanup.transactionID == pointerID,
+                  "a valid bootstrap succeeds after the descriptor commit-then-throw cleanup")
+      checks += 1
+    }
     return checks
   }
 
@@ -1926,6 +1961,65 @@ private struct ExportAssociationFixtureOracle {
       let cleanup = try await staging.bootstrapShadow(data, candidateTransactionID: reusedID)
       try require(cleanup.transactionID == reusedID,
                   "fence released after the orphan-descriptor cancel")
+      checks += 1
+    }
+    do {
+      // Successful-NIL record-collision read #1: a cancellation delivered after
+      // proving ABSENCE must surface exactly, with nothing written before
+      // journaling.
+      let vault = BootstrapFaultVault()
+      let staging = PiliAccountEnvelopeStagingStore(secrets: vault)
+      let pointerID = fixedBootstrapID
+      let snapshotBefore = await vault.storedSnapshot()
+      await vault.resetCounters()
+      await vault.pauseRecordReadAt(1)
+      var cancelled = false
+      do {
+        _ = try await runControlledBootstrap(
+          label: "record-nil-collision-cancel", vault: vault, staging: staging, input: data,
+          candidateTransactionID: pointerID, cancelBeforeResume: true) { 0 }
+      } catch is CancellationError { cancelled = true }
+      try require(cancelled,
+                  "a cancelled successful-NIL record-collision read surfaces CancellationError")
+      checks += 1
+      let snapshotAfter = await vault.storedSnapshot()
+      let writeAttempts = await vault.writeAttemptCount()
+      let removeAttempts = await vault.removeAttemptCount()
+      try require(snapshotAfter == snapshotBefore && writeAttempts == 0 && removeAttempts == 0,
+                  "the NIL record-collision cancel changes no byte and attempts no mutation")
+      checks += 1
+      let cleanup = try await staging.bootstrapShadow(data, candidateTransactionID: pointerID)
+      try require(cleanup.transactionID == pointerID,
+                  "a valid bootstrap succeeds after the NIL record-collision cancel")
+      checks += 1
+    }
+    do {
+      // Successful-NIL descriptor-collision read #1 (the record read already
+      // proved absence): same exact cancellation and zero-effect contract.
+      let vault = BootstrapFaultVault()
+      let staging = PiliAccountEnvelopeStagingStore(secrets: vault)
+      let pointerID = fixedBootstrapID
+      let snapshotBefore = await vault.storedSnapshot()
+      await vault.resetCounters()
+      await vault.pauseDescriptorReadAt(1)
+      var cancelled = false
+      do {
+        _ = try await runControlledBootstrap(
+          label: "descriptor-nil-collision-cancel", vault: vault, staging: staging, input: data,
+          candidateTransactionID: pointerID, cancelBeforeResume: true) { 0 }
+      } catch is CancellationError { cancelled = true }
+      try require(cancelled,
+                  "a cancelled successful-NIL descriptor-collision read surfaces CancellationError")
+      checks += 1
+      let snapshotAfter = await vault.storedSnapshot()
+      let writeAttempts = await vault.writeAttemptCount()
+      let removeAttempts = await vault.removeAttemptCount()
+      try require(snapshotAfter == snapshotBefore && writeAttempts == 0 && removeAttempts == 0,
+                  "the NIL descriptor-collision cancel changes no byte and attempts no mutation")
+      checks += 1
+      let cleanup = try await staging.bootstrapShadow(data, candidateTransactionID: pointerID)
+      try require(cleanup.transactionID == pointerID,
+                  "a valid bootstrap succeeds after the NIL descriptor-collision cancel")
       checks += 1
     }
     do {
