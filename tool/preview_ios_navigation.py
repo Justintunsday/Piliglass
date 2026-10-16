@@ -222,8 +222,11 @@ final class MenuNavigationTests: XCTestCase {
     XCTAssertTrue(tab.waitForExistence(timeout: 8))
     tab.tap()
     // A synthesized tap is not proof of a page switch: require the tab to be
-    // actually selected before any Mine-page control is touched. Bounded to the
-    // existing 8-second wait budget semantics; no extra tap or retry is added.
+    // actually selected before any Mine-page control is touched. This is an
+    // additional bounded postcondition after the 8s existence wait above (two
+    // sequential 8s bounds, existence then selection), not a shared single 8s
+    // window. No extra tap or retry is added; every other wait value and the
+    // 25-minute job budget are unchanged.
     expectation(for: NSPredicate(format: "isSelected == true"), evaluatedWith: tab)
     waitForExpectations(timeout: 8)
   }

@@ -132,16 +132,18 @@ final class ImagePreviewTests: XCTestCase {
       "the zoomable image must be hittable before the zoom gesture")
     print("zoom-before value=\(image.value ?? "nil") hittable=\(image.isHittable) frame=\(image.frame)")
     image.doubleTap()
-    // Same 5-second bound and predicate as before, with the observed value
-    // carried into the failure message so a repeated failure distinguishes a
-    // missed gesture from an unchanged zoom state. The gesture is sent once.
-    let zoomed = NSPredicate(format: "value != %@", "1.0 倍")
-    let deadline = Date().addingTimeInterval(5)
-    while !zoomed.evaluate(with: image) && Date() < deadline {
-      RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+    // Original gate semantics: the predicate is evaluated by XCTest's timed
+    // predicate waiter for exactly 5 seconds and the waiter result at the
+    // deadline is the only acceptance signal (no fresh predicate evaluation
+    // after the loop/clock expires). The gesture is sent once. The failure
+    // message only reports observed preconditions/outcome; it does not
+    // establish why the zoom value did or did not change (cause unknown).
+    let zoomed = XCTNSPredicateExpectation(
+      predicate: NSPredicate(format: "value != %@", "1.0 倍"), object: image)
+    let zoomResult = XCTWaiter().wait(for: [zoomed], timeout: 5)
+    if zoomResult != .completed {
+      XCTFail("double tap must change the zoomed value within 5 seconds (waiter=\(zoomResult)); observed=\(image.value ?? "nil") hittable=\(image.isHittable) frame=\(image.frame)")
     }
-    XCTAssertTrue(zoomed.evaluate(with: image),
-      "double tap must change the zoomed value within 5 seconds; observed=\(image.value ?? "nil") hittable=\(image.isHittable) frame=\(image.frame)")
     capture("long-image-zoomed")
     image.doubleTap()
     assertValue(image, "value", "1.0 倍")

@@ -44,8 +44,11 @@
    （正常/非零/缺失可执行/超时）驱动**实际函数**，断言 primary outcome 原样保留、export
    失败不掩盖、成功路径正常返回（不再只测 helper）。
 4. **navigation harness precondition（证据驱动）**：`openMine()` 在单次 tap 之后增加
-   **选中页后置条件**：有界 8s 等待 `isSelected == true`（沿用既有 8s 等待预算，无新增
-   tap/无重试/无更长 deadline），使"真实切换成功"成为后续 tap 的前置；不动其余断言。
+   **选中页后置条件**：有界 8s 等待 `isSelected == true`（无新增 tap/无重试/无更长
+   deadline），使"真实切换成功"成为后续 tap 的前置；不动其余断言。
+   > R47 精度修正（2026-10-16）：该后置条件是存在性 8s **之后另加**的一次有界 8s 等待
+   > （两次顺序 8s 上界），**不是**共享同一 8s 窗口、也不是零新增等待；单次 tap、既有
+   > 各 8s 取值与 25min job 预算均不变。
 5. **image harness 诊断（证据驱动、保留语义）**：fitted 1.0 的 16s 等待不变；在
    doubleTap 前增加 hittability 前置断言；5s zoom 断言改为等义的有界观测（同一 5s 上界、
    同一谓词、失败信息携带实际 observed value/hittable），不重试 tap、不放宽/跳过断言；
