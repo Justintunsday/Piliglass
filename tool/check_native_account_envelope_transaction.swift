@@ -57,10 +57,13 @@ private actor PrePublicationPauser {
   private var earlyExit: String?
   private var suspended: CheckedContinuation<Void, Never>?
   private var pauseObserver: CheckedContinuation<Outcome, Never>?
+  private var registrationObserver: CheckedContinuation<Void, Never>?
 
   func suspendOnce() async {
     guard !reached else { return }
     reached = true
+    registrationObserver?.resume()
+    registrationObserver = nil
     await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
       suspended = continuation
       pauseObserver?.resume(returning: .paused)
@@ -73,6 +76,19 @@ private actor PrePublicationPauser {
     if reached { return .paused }
     return await withCheckedContinuation { (continuation: CheckedContinuation<Outcome, Never>) in
       pauseObserver = continuation
+      registrationObserver?.resume()
+      registrationObserver = nil
+    }
+  }
+
+  /// Test-tool only: returns once a later pause or completion signal cannot be
+  /// missed because the observer is registered (or the seam already resolved).
+  /// It makes the registration-before-completion ordering deterministic in the
+  /// direct regressions without sleeps.
+  func waitForObserverRegistration() async {
+    if pauseObserver != nil || reached || earlyExit != nil { return }
+    await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+      registrationObserver = continuation
     }
   }
 
@@ -84,8 +100,30 @@ private actor PrePublicationPauser {
   func completedBeforePause(_ message: String) {
     guard !reached else { return }
     earlyExit = message
+    registrationObserver?.resume()
+    registrationObserver = nil
     pauseObserver?.resume(returning: .completedBeforePause(message))
     pauseObserver = nil
+  }
+}
+
+/// Test-tool only one-shot gate: a deterministic way to hold a synthetic task
+/// before its terminal result without sleeps or scheduling assumptions.
+private actor CompletionGate {
+  private var opened = false
+  private var waiter: CheckedContinuation<Void, Never>?
+
+  func wait() async {
+    if opened { return }
+    await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+      waiter = continuation
+    }
+  }
+
+  func open() {
+    opened = true
+    waiter?.resume()
+    waiter = nil
   }
 }
 
@@ -193,6 +231,24 @@ private actor ForwardingWriteCountingSecrets: PiliAccountSecretStore {
     let heartbeat = selections[1]
     let history = current.records[heartbeat].isLogin ? heartbeat : selections[0]
     return raceShadow(current, selections: selections, history: history)
+  }
+
+  /// Test-tool only: reports EVERY terminal result of the watched task to the
+  /// pauser, success and failure alike, so an early completion can never leave
+  /// `waitUntilPaused()` suspended forever. A result after the pause was
+  /// reached is a no-op by the pauser's own guard.
+  private static func completionWatcher<Success: Sendable>(
+    pauser: PrePublicationPauser,
+    task: Task<Success, any Error>
+  ) -> Task<Void, Never> {
+    Task {
+      do {
+        _ = try await task.value
+        await pauser.completedBeforePause("transaction succeeded before the pause")
+      } catch {
+        await pauser.completedBeforePause(String(describing: error))
+      }
+    }
   }
 
   static func main() async throws {
@@ -722,10 +778,9 @@ private actor ForwardingWriteCountingSecrets: PiliAccountSecretStore {
           recordKeyUnits: raceKey, expectedGeneration: base.records[2].generation,
           purpose: racePurposeA, previousKeyUnits: nil, previousExpectedGeneration: nil)
       }
-      let raceWatcher = Task {
-        do { _ = try await raceTask.value }
-        catch { await racePauser.completedBeforePause(String(describing: error)) }
-      }
+      let raceWatcher = completionWatcher(pauser: racePauser, task: raceTask)
+      var winnerReceipt: PiliAccountEnvelopeStagingReceipt?
+      var expectedWinner: PiliAccountLiveMemoryShadow?
       do {
         switch await racePauser.waitUntilPaused() {
         case .paused: break
@@ -733,20 +788,22 @@ private actor ForwardingWriteCountingSecrets: PiliAccountSecretStore {
           throw TransactionFixtureError.failed("race transaction finished before the pause: \(message)")
         }
         let writesAtPause = await raceSecrets.writes()
-        let winnerReceipt = try await raceStoreB.applyPurposeChange(
+        let winnerReceiptValue = try await raceStoreB.applyPurposeChange(
           recordKeyUnits: raceKey, expectedGeneration: base.records[2].generation,
           purpose: racePurposeB, previousKeyUnits: nil, previousExpectedGeneration: nil)
+        winnerReceipt = winnerReceiptValue
         let writesAfterWinner = await raceSecrets.writes()
         try check(writesAfterWinner > writesAtPause,
                   "competing publisher performs durable writes during the pause")
         guard let winner = try await raceVault.loadShadowSnapshot() else {
           throw TransactionFixtureError.failed("missing race winner snapshot")
         }
-        let expectedWinner = expectedPurposeChange(
+        let expectedWinnerValue = expectedPurposeChange(
           base, index: 2, purpose: racePurposeB, previousIndex: nil)
-        try check(winner.transactionID == winnerReceipt.transactionID,
+        expectedWinner = expectedWinnerValue
+        try check(winner.transactionID == winnerReceiptValue.transactionID,
                   "winner pointer names the competing publication")
-        try check(winner.envelope == expectedWinner,
+        try check(winner.envelope == expectedWinnerValue,
                   "winner equals the independently derived purpose-change envelope")
         await racePauser.resume()
         do {
@@ -762,9 +819,9 @@ private actor ForwardingWriteCountingSecrets: PiliAccountSecretStore {
         guard let afterStale = try await raceVault.loadShadowSnapshot() else {
           throw TransactionFixtureError.failed("missing post-stale snapshot")
         }
-        try check(afterStale.transactionID == winnerReceipt.transactionID,
+        try check(afterStale.transactionID == winnerReceiptValue.transactionID,
                   "stale rejection keeps the winning pointer")
-        try check(afterStale.envelope == expectedWinner,
+        try check(afterStale.envelope == expectedWinnerValue,
                   "stale rejection leaves the complete winner state")
         await raceWatcher.value
       } catch {
@@ -773,6 +830,9 @@ private actor ForwardingWriteCountingSecrets: PiliAccountSecretStore {
         await raceWatcher.value
         await raceStoreA.setPrePublicationDeliveryHook(nil)
         throw error
+      }
+      guard let confirmedWinnerReceipt = winnerReceipt, let confirmedWinner = expectedWinner else {
+        throw TransactionFixtureError.failed("C1 race produced no verified winner")
       }
 
       // Cancellation control on the same seam: A paused with no competing
@@ -787,10 +847,7 @@ private actor ForwardingWriteCountingSecrets: PiliAccountSecretStore {
           recordKeyUnits: raceKey, expectedGeneration: base.records[2].generation,
           purpose: racePurposeA, previousKeyUnits: nil, previousExpectedGeneration: nil)
       }
-      let cancelWatcher = Task {
-        do { _ = try await cancelTask.value }
-        catch { await cancelPauser.completedBeforePause(String(describing: error)) }
-      }
+      let cancelWatcher = completionWatcher(pauser: cancelPauser, task: cancelTask)
       do {
         switch await cancelPauser.waitUntilPaused() {
         case .paused: break
@@ -813,8 +870,8 @@ private actor ForwardingWriteCountingSecrets: PiliAccountSecretStore {
         guard let afterCancel = try await raceVault.loadShadowSnapshot() else {
           throw TransactionFixtureError.failed("missing post-cancel snapshot")
         }
-        try check(afterCancel.transactionID == winnerReceipt.transactionID &&
-                  afterCancel.envelope == expectedWinner,
+        try check(afterCancel.transactionID == confirmedWinnerReceipt.transactionID &&
+                  afterCancel.envelope == confirmedWinner,
                   "cancellation leaves the durable winner untouched")
         await cancelWatcher.value
       } catch {
@@ -836,7 +893,7 @@ private actor ForwardingWriteCountingSecrets: PiliAccountSecretStore {
         throw TransactionFixtureError.failed("missing post-merge snapshot")
       }
       let expectedMerge = expectedPurposeChange(
-        expectedWinner, index: 2, purpose: racePurposeA, previousIndex: nil)
+        confirmedWinner, index: 2, purpose: racePurposeA, previousIndex: nil)
       try check(mergeReceipt.transactionID == afterMerge.transactionID,
                 "later publication names the fresh pointer")
       try check(mergeReceipt.record == base.records[2].record,
@@ -896,10 +953,7 @@ private actor ForwardingWriteCountingSecrets: PiliAccountSecretStore {
           recordKeyUnits: tempKey, expectedGeneration: base.records[2].generation,
           purpose: tempPurposeA, previousKeyUnits: nil, previousExpectedGeneration: nil)
       }
-      let tempWatcher = Task {
-        do { _ = try await tempTask.value }
-        catch { await tempPauser.completedBeforePause(String(describing: error)) }
-      }
+      let tempWatcher = completionWatcher(pauser: tempPauser, task: tempTask)
       do {
         switch await tempPauser.waitUntilPaused() {
         case .paused: break
@@ -952,6 +1006,145 @@ private actor ForwardingWriteCountingSecrets: PiliAccountSecretStore {
     } catch {
       await tempStoreA.setPrePublicationDeliveryHook(nil)
       try? await tempVault.discardShadow()
+      throw error
+    }
+
+    // R53 direct regressions: every terminal result (success and failure) is
+    // reported through the shared completion watcher in both orderings, an
+    // early success can never leave `waitUntilPaused()` suspended, and an
+    // explicitly resumed one-shot pause keeps completing normally. The tasks
+    // are real store operations on a dedicated namespace; the CompletionGate
+    // holds them deterministically without sleeps or Task.yield.
+    let pauserNamespace = UUID()
+    let pauserVault = PiliAccountEnvelopeStagingStore(
+      secrets: PiliAccountKeychainSecretStore(stagingNamespace: pauserNamespace))
+    let pauserStore = PiliAccountEnvelopeTransactionStore(vault: pauserVault)
+    do {
+      try await pauserVault.importShadow(codec.encode(base))
+      guard let pauserKey = base.records[2].storageKeyUnits else {
+        throw TransactionFixtureError.failed("pauser regression key missing")
+      }
+      let pauserInitial = base.records[2].persistedPurposes
+      let pauserPurposes = PiliAccountPurpose.allCases.filter { !pauserInitial.contains($0) }
+      guard pauserPurposes.count >= 3 else {
+        throw TransactionFixtureError.failed("pauser regression purposes missing")
+      }
+      let missingPauserKey = PiliCookieUTF16(units: Array("pauser-missing".utf16))
+
+      // 1. Early success with completion before the observer registers.
+      let earlySuccess = PrePublicationPauser()
+      let earlySuccessTask = Task {
+        try await pauserStore.applyPurposeChange(
+          recordKeyUnits: pauserKey, expectedGeneration: base.records[2].generation,
+          purpose: pauserPurposes[0], previousKeyUnits: nil, previousExpectedGeneration: nil)
+      }
+      let earlySuccessWatcher = completionWatcher(pauser: earlySuccess, task: earlySuccessTask)
+      _ = try await earlySuccessTask.value
+      await earlySuccessWatcher.value
+      switch await earlySuccess.waitUntilPaused() {
+      case .paused:
+        throw TransactionFixtureError.failed("completed early success was reported as a pause")
+      case .completedBeforePause(let message):
+        try check(message.contains("succeeded"), "early success is reported through the helper")
+      }
+      let afterEarlySuccess = try await pauserVault.loadShadow()
+      try check(afterEarlySuccess?.records[2].persistedPurposes.contains(pauserPurposes[0]) == true,
+                "early success regression really published")
+
+      // 2. Early failure with completion before the observer registers.
+      let earlyFailure = PrePublicationPauser()
+      let earlyFailureTask = Task {
+        try await pauserStore.applyPurposeChange(
+          recordKeyUnits: missingPauserKey, expectedGeneration: base.records[2].generation,
+          purpose: pauserPurposes[1], previousKeyUnits: nil, previousExpectedGeneration: nil)
+      }
+      let earlyFailureWatcher = completionWatcher(pauser: earlyFailure, task: earlyFailureTask)
+      do {
+        _ = try await earlyFailureTask.value
+        throw TransactionFixtureError.failed("early failure regression unexpectedly succeeded")
+      } catch PiliAccountShadowTransactionError.unknownRecordKey { checks += 1 }
+      await earlyFailureWatcher.value
+      switch await earlyFailure.waitUntilPaused() {
+      case .paused:
+        throw TransactionFixtureError.failed("completed early failure was reported as a pause")
+      case .completedBeforePause(let message):
+        try check(message.contains("unknownRecordKey"),
+                  "early failure keeps its exact error description")
+      }
+
+      // 3. Early failure with the observer registered first.
+      let registeredFailure = PrePublicationPauser()
+      let failureGate = CompletionGate()
+      let gatedFailureTask = Task {
+        await failureGate.wait()
+        return try await pauserStore.applyPurposeChange(
+          recordKeyUnits: missingPauserKey, expectedGeneration: base.records[2].generation,
+          purpose: pauserPurposes[1], previousKeyUnits: nil, previousExpectedGeneration: nil)
+      }
+      let gatedFailureWatcher = completionWatcher(pauser: registeredFailure, task: gatedFailureTask)
+      let registeredFailureOutcome = Task { await registeredFailure.waitUntilPaused() }
+      await registeredFailure.waitForObserverRegistration()
+      await failureGate.open()
+      await gatedFailureWatcher.value
+      switch await registeredFailureOutcome.value {
+      case .paused:
+        throw TransactionFixtureError.failed("observer-first failure was reported as a pause")
+      case .completedBeforePause(let message):
+        try check(message.contains("unknownRecordKey"), "observer-first failure notification is exact")
+      }
+
+      // 4. Early success with the observer registered first.
+      let registeredSuccess = PrePublicationPauser()
+      let successGate = CompletionGate()
+      let gatedSuccessTask = Task {
+        await successGate.wait()
+        return try await pauserStore.applyPurposeChange(
+          recordKeyUnits: pauserKey, expectedGeneration: base.records[2].generation,
+          purpose: pauserPurposes[1], previousKeyUnits: nil, previousExpectedGeneration: nil)
+      }
+      let gatedSuccessWatcher = completionWatcher(pauser: registeredSuccess, task: gatedSuccessTask)
+      let registeredSuccessOutcome = Task { await registeredSuccess.waitUntilPaused() }
+      await registeredSuccess.waitForObserverRegistration()
+      await successGate.open()
+      await gatedSuccessWatcher.value
+      switch await registeredSuccessOutcome.value {
+      case .paused:
+        throw TransactionFixtureError.failed("observer-first success was reported as a pause")
+      case .completedBeforePause(let message):
+        try check(message.contains("succeeded"), "observer-first success notification is reported")
+      }
+
+      // 5. Normal pause and explicit resume (resume is idempotent).
+      let resumePauser = PrePublicationPauser()
+      await pauserStore.setPrePublicationDeliveryHook { await resumePauser.suspendOnce() }
+      let pausedTask = Task {
+        try await pauserStore.applyPurposeChange(
+          recordKeyUnits: pauserKey, expectedGeneration: base.records[2].generation,
+          purpose: pauserPurposes[2], previousKeyUnits: nil, previousExpectedGeneration: nil)
+      }
+      let pausedWatcher = completionWatcher(pauser: resumePauser, task: pausedTask)
+      switch await resumePauser.waitUntilPaused() {
+      case .paused: checks += 1
+      case .completedBeforePause:
+        throw TransactionFixtureError.failed("pending pause was reported as completed")
+      }
+      await resumePauser.resume()
+      await resumePauser.resume()
+      _ = try await pausedTask.value
+      await pausedWatcher.value
+      await pauserStore.setPrePublicationDeliveryHook(nil)
+      switch await resumePauser.waitUntilPaused() {
+      case .paused: checks += 1
+      case .completedBeforePause:
+        throw TransactionFixtureError.failed("resumed one-shot pause lost its state")
+      }
+      let afterResume = try await pauserVault.loadShadow()
+      try check(afterResume?.records[2].persistedPurposes.contains(pauserPurposes[2]) == true,
+                "normal pause/resume regression really published")
+      try await pauserVault.discardShadow()
+    } catch {
+      await pauserStore.setPrePublicationDeliveryHook(nil)
+      try? await pauserVault.discardShadow()
       throw error
     }
 
