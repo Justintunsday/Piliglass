@@ -16,9 +16,8 @@ final class NativeAccountSnapshotException implements Exception {
 final class NativeAccountSnapshotService {
   NativeAccountSnapshotService({
     Future<void> Function()? checkpoint,
-    AccountCredentialReader credentialReader = accountCredentialReader,
-  })  : _checkpoint = checkpoint ?? _yield,
-        _credentialReader = credentialReader;
+    this._credentialReader = accountCredentialReader,
+  }) : _checkpoint = checkpoint ?? _yield;
 
   final String authorityEpoch = const Uuid().v4();
   final Future<void> Function() _checkpoint;
