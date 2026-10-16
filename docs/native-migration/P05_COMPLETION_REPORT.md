@@ -323,6 +323,45 @@ adapter，见 §10）、Hive compaction/close、LoginUtils 副作用。
   前驱 8cf6629/085d883 preview failure 保留；无真机/authority 结论；四 flag false。
 - 记录为 docs-only commit，不代表 code CI SHA；实际测试 SC SHA 为上述两个代码 SHA。
 
+## 18. 2026-10-16 B1f purpose path-routing + R43 矩阵 + harness R44–R47（`a50ea69`；Codex 有限 PASS）
+
+- 同代码 SHA `a50ea693c2d4b7d410fff9e29c40ad437af941ac`：release
+  [38864047457](https://github.com/Justintunsday/Piliglass/actions/runs/38864047457)
+  success5/5 与 preview
+  [38864051135](https://github.com/Justintunsday/Piliglass/actions/runs/38864051135)
+  success4/4（均首次尝试、无 job 重跑）；九强制 outcome 全 success、`BUILD SUCCEEDED`、
+  Runner.app 109.1MB、实际执行 Aether FFmpeg 先于 media-kit 的 Mach-O 验证；账户
+  **293** tests/runtime 72/strict analyze clean；envelope 109/44 负例/1 synthetic/40
+  staging/**245**(68+177)/**292**/51；producer 8/10/2；89 raw Git blob 87 match+2 声明
+  pubspec；golden `be8600df…`（live memory）/`b7a6bf49…`（Hive reopen）；Mac QA 45/45
+  （EOF-shortchild race/integration/ready SIG_IGN/no alive/bounded elapsed 1.45s；
+  synthetic 进程 QA ≠ 模拟器/设备证据）；navigation streamed phases launch 07:13:11Z/
+  exit0 07:20:33Z/export0 07:20:38Z；UI 20 tests：navigation 345.291s + image 120.287s
+  （comment 30.413s/dynamic 23.654s/failed-single 66.220s，均在**恢复后的定时 XCTest
+  gate**下实际执行）+ account 173.057s + player 115.890s；home 11 accepted reports
+  各自 token/PID 匹配 + 22 stream 文件；压力 `failures[]`。
+- 内容：B1f real Dio+AccountManager 9 项 path-routing 回归（video/HB 匿名负例/real HB
+  表/recommend/login 匿名/unmatched main/preset precedence/slot 切换后 boundA/reader
+  context consumption）；R43 discriminating purpose 矩阵 + header/cookie owner
+  provenance；R44–R47 harness（非掩蔽生命周期诊断/有界清理、迭代独立检查 + EOF 流状态 +
+  owned PGID 清理、post-wait 重验证 + POSIX readiness + `run_navigation` 集成负例、
+  恢复 `XCTNSPredicateExpectation`+`XCTWaiter`，最多 5s，`completed` 之外一律失败，
+  无循环后 fresh predicate）。
+- 前驱失败/拒绝保留（不追溯改判）：`ced3b19` void-await（`use_of_void_result` ERROR +
+  `await_only_futures` INFO 阻塞实际执行）；`d5f9d0c` preview 25m 硬取消 + account-pages
+  `testGuestDoesNotShowAccountData` 在 app.launch 的 terminate 失败；`f84314a` image
+  comment-gallery zoom 5s 失败 + navigation Settings tap 失败 + pressure SKIPPED；
+  `ea4c609`/`cb71a52` 双绿但 reviewer 以 R45/R47 拒绝（green ≠ gate 接受）。
+- 精度：R47 source comment 的 "exactly 5 seconds" 按**最多 5s waiter 上界**理解（满足即
+  提前完成）；`openMine()` 为 8s 存在 THEN 另加 8s 选中（两次顺序上界，非共享单 8s）；
+  本次绿色不是历史 gesture/AX/app termination/hang 的因果证明；real GitHub hard cancel
+  仍可能跳过上传。
+- 边界：有限 PASS 仅上述已测试路径；不构成 whole Block1（120 csrf/18 access 全量消费、
+  whole writer async closure、gRPC purpose binding、generic purpose CAS read-transform-
+  publish 干扰）、B2e-2b bridge/frozen revision、Block3 composition/handoff/revert/startup/
+  GC、Block4、CA5/CA6 设备授权、whole P05 或生产 authority；四 flag false；本记录为
+  docs-only commit，不代表 code CI SHA（实际测试 SHA 为 `a50ea69`）。
+
 ## 17. 2026-10-16 B1e refresh/export reader seam + R39–R42（`c6eb327`；Codex 有限 PASS）
 
 - 同代码 SHA `c6eb32769b69290a8991281db295c54e14bb6fb0`：release

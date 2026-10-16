@@ -243,6 +243,55 @@ sourceSHA=workflowSHA=9724ddb；preview 20 tests 0 failures、压力 `failures=[
 shadow 组件：未接 authority、无生产 caller，durable identity 消费/恢复语义、账号级队列与
 receipt/unknown ack、Block 3/4/5 仍未交付；四能力 flag 保持 false，P05 未整体完成。
 
+**B1f 真实 Dio+AccountManager purpose path-routing 9 regressions + R43 判别矩阵 + preview-harness R44–R47 在 `a50ea69` 获 Codex 有限 PASS（仅这些已测试路径；不等于 whole Block1/P05/生产 authority）**：
+- 内容：B1f 以真实 Dio/AccountManager（离线受控 adapter）的 9 项路由回归——video 路径、
+  heartbeat 匿名负例（判别性：main 放不同登录账号）、real HB 表路径（`Api.videoIntro`，
+  非特殊 heartBeat 拒绝路径）、recommend 表路径（`Api.recommendListWeb`）、login 匿名、
+  unmatched main fallback、preset precedence、slot 切换后 boundA 响应、reader context
+  consumption（实际 headers/Cookie provenance/计数全 0 的非预期读）；R43 discriminating
+  purpose 矩阵 + header/cookie owner provenance；harness R44（非掩蔽 lifecycle/phase/
+  timeout/cancel 诊断 + 有界清理）、R45（迭代独立检查、EOF 视为流状态、owned PGID 清理）、
+  R46（阻塞等待后重验证、POSIX readiness handshake、对实际 `run_navigation` 的集成负例）、
+  R47（恢复原始定时 XCTest gate：`XCTNSPredicateExpectation` + `XCTWaiter`，**最多 5s**
+  的 waiter 上界，`.completed` 之外一律失败，无循环后 fresh predicate）。
+- 实际证据（`sourceSHA=workflowSHA=a50ea69`，Codex 独立读取 main release job 116852674039、
+  四个 preview job 日志并下载 account12030860889/native12030573216/home12031352136/
+  pressure12031496851/navigation12031661179 产物核对）：release
+  [38864047457](https://github.com/Justintunsday/Piliglass/actions/runs/38864047457)
+  SUCCESS5/5 与 preview
+  [38864051135](https://github.com/Justintunsday/Piliglass/actions/runs/38864051135)
+  SUCCESS4/4（均首次尝试、无 job 重跑）；九强制 outcome 全 success、BUILD SUCCEEDED、
+  Runner.app 109.1MB、实际执行 Aether FFmpeg 先于 media-kit 的 Mach-O 验证；账户
+  **293**/runtime 72/strict analyze clean；envelope 109/44 负例/1 synthetic integer/40
+  staging/**245**(68+177)/**292**/51；producer 8/10/2；89 raw Git blob 87 match+2 声明
+  pubspec；golden `be8600df…`（live memory）/`b7a6bf49…`（Hive reopen）；Mac QA 45/45
+  （EOF-shortchild race/integration/ready SIG_IGN descendant/no alive/bounded elapsed
+  1.45s；synthetic 进程 QA，非额外 UI/模拟器/设备证据）；navigation 实际流式 phase
+  launch 07:13:11Z/exit0 07:20:33Z/export0 07:20:38Z；UI 20 tests（navigation 345.291s +
+  image 120.287s + account 173.057s + player 115.890s）0 failure，两个 gallery 用例在
+  **恢复后的定时 XCTest gate** 下实际执行（comment 30.413s/dynamic 23.654s/failed-single
+  66.220s），此前失败的 Settings/persistence 用例在 selected My-tab 后置条件下通过；
+  home 11 accepted reports/11 唯一 token 各自匹配 trace PID+token、8 项 both-nav/
+  behind-tab true、22 stream 文件，last-row 4395==bottom 4395；压力 `failures[]`
+  （100000 danmaku/1000 comments/所有 boolean gate true）。
+- 历史如实保留（不追溯改判）：`ced3b19` 的 `await` on synchronous void
+  `Accounts.selectTemporarily`（lifecycle_test 656 `use_of_void_result` ERROR +
+  `await_only_futures` INFO）阻塞 account/native fixture 实际执行；`d5f9d0c` preview
+  主 job 25m 硬取消 + account-pages `testGuestDoesNotShowAccountData` 在 `app.launch()`
+  的 prior-app terminate 失败（断言前终止）；`f84314a` preview image comment-gallery 5s
+  zoom 断言失败 + navigation Settings tap 失败 + pressure SKIPPED（无 artifact）；
+  `ea4c609`/`cb71a52` 双绿但被 reviewer 以 R45/R47 拒绝（green ≠ gate 接受）。
+- 精度：R47 comment 的 "exactly 5 seconds" 应读作**最多 5s 的 waiter 上界**（满足即提前
+  完成，非固定 5s 睡眠）；`openMine()` 是 8s 存在 THEN 另加 8s 选中的两次顺序上界，非共享
+  单 8s/零新增等待；本次绿色**不是**历史 gesture/AX/app termination/hang 的因果证明。
+- 边界：limited PASS 仅上述已测试路径；**不构成** whole Block1（all 120 csrf+18 access
+  全量消费、whole writer async closure、gRPC purpose binding、generic purpose CAS
+  read→transform→publish 干扰均未闭合）；B2e-2b bridge/durable identity 消费/production
+  freeze-drain-handoff-revert-startup/GC/Block4/CA5-CA6 device auth/whole P05 均未闭合；
+  真实 GitHub hard cancel 仍可能跳过上传（已测试的 synthetic cancel/cleanup 不保证全部
+  runner 终止 grace/disk failure/platform 场景）；四 flag false；本记录为 docs-only，
+  不代表 code CI SHA（实际测试 SHA 为 `a50ea69`）。
+
 **B1e refresh/export reader seam + R39 清单 + R40/R41 negatives + R42 fixture 修复在 `c6eb327` 获 Codex 有限 PASS（仅该 seam/修复范围；不等于 whole Block1/P05）**：
 - 内容：refresh tagged nullable binding（no-stamp legacy / rejected 不回退 raw / bound(null) 合法）；
   snapshot descriptor/secret-entry 与 shadow export 经同一 reader seam 读取并 fail closed，

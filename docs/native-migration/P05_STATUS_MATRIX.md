@@ -349,6 +349,27 @@ preview [38843202056](https://github.com/Justintunsday/Piliglass/actions/runs/38
 推断而非直接遥测；本次绿色不是历史 tap/AX/timer 因果证明。**边界**：非 whole Block1/
 endpoints/writers/composition/Block4/5/P05/authority；四 flag false。
 
+**B1f 真实 purpose path-routing 9 regressions + R43 判别矩阵 + harness R44–R47 在 `a50ea69` 获 Codex 有限 PASS（仅已测试路径）**：
+video/HB 匿名负例（判别性 main）/real HB 表（`Api.videoIntro`）/recommend（`Api.recommendListWeb`）/
+login 匿名/unmatched main/preset precedence/slot 切换后 boundA/reader context consumption +
+R43 discriminating purpose 矩阵/header-cookie owner provenance；R44 非掩蔽 lifecycle 诊断 +
+有界清理、R45 迭代独立检查/EOF 流状态/owned PGID 清理、R46 post-wait 重验证 + POSIX
+readiness + `run_navigation` 集成负例、R47 恢复 `XCTNSPredicateExpectation`+`XCTWaiter`
+（最多 5s，`.completed` 之外一律失败；无 late predicate）。证据：release
+[38864047457](https://github.com/Justintunsday/Piliglass/actions/runs/38864047457) 5/5 与
+preview [38864051135](https://github.com/Justintunsday/Piliglass/actions/runs/38864051135)
+4/4（首次、无 job 重跑）；九 outcome/BUILD 109.1MB/executed FFmpeg；账户 **293**/72/
+analyze clean；109/44/1 synthetic/40/**245**(68+177)/**292**/51；producer 8/10/2；
+89 raw blob 87+2；golden `be8600df…`/`b7a6bf49…`；Mac QA 45/45（bounded elapsed 1.45s）；
+UI 20 tests（两个 gallery 用例在恢复后的 5s waiter gate 下实际执行、Settings/persistence
+用例在 selected My-tab 后置条件下通过）；11 reports/22 streams/`failures[]`。
+前驱保留：ced3b19 void-await ERROR、d5f9d0c 25m hard cancel + guest termination、
+f84314a image/nav 断言失败 + pressure SKIPPED、ea4c609/cb71a52 双绿但被 R45/R47 拒绝。
+**边界**：非 whole Block1（120 csrf/18 access 全量消费、whole writer async closure、
+gRPC purpose binding、generic purpose CAS 读-改-写干扰）/B2e-2b bridge/Block3/4/5/P05/
+authority；real hard cancel 仍可能跳过上传；"exactly 5s" 读作最多 5s；8 存在 THEN 8 选中
+为两次顺序上界；四 flag false。
+
 **Block 1 / B1d 切片（页面读取、延迟副作用、maintenance gate）已在 `98e6f9b` 验收**：
 `Accounts.installedAccounts()` 纯只读 seam + 页面 `isEmpty/isNotEmpty` 切
 `visibleAccounts()`（login/mine/setting/about，内容/顺序/读取时机不变、零

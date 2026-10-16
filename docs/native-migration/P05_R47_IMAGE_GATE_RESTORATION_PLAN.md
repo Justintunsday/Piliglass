@@ -58,3 +58,9 @@
 - 四 flag false、Flutter/Dart fallback、Aether 独立、不读/改 `youtube/`、无 UI visual/
   真实账户写/auth/captcha/设备伪造；保留 `f84314a` 的 image/navigation 失败史与
   pressure SKIPPED 记录。
+- 验收记录（docs-only，不改变代码 SHA）：本计划恢复后的链（B1f/R43 + harness R44–R47）在
+  代码 SHA `a50ea693c2d4b7d410fff9e29c40ad437af941ac` 获 Codex 有限 PASS（review
+  `review-a50ea693c2d4b7d410fff9e29c40ad437af941ac-codex/REVIEW.md`）；release 38864047457
+  5/5 + preview 38864051135 4/4 首次尝试，两个 gallery 用例在恢复后的 gate 下实际执行。
+  该 comment 中的 "exactly 5 seconds" 应读作**最多 5s 的 waiter 上界**（满足即提前完成，
+  非固定 5s 睡眠）；边界与未闭合行见 PROGRESS/STATUS_MATRIX，不追溯改判前驱失败。

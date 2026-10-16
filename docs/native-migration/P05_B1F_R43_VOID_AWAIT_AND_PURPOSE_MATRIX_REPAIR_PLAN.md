@@ -59,3 +59,8 @@
   九 outcome、BUILD/FFmpeg、preview 20/11/压力）→ docs-only 证据 → Codex 独立复审。
 - 四 flag false；不改 UI/`youtube/`/authority；不重跑 unchanged `ced3b19`、不自我验收、
   不声称 whole Block1/P05 关闭。
+- 验收记录（docs-only，不改变代码 SHA）：本计划的 B1f/R43 内容（连同 harness R44–R47）在
+  代码 SHA `a50ea693c2d4b7d410fff9e29c40ad437af941ac` 获 Codex 有限 PASS（review
+  `review-a50ea693c2d4b7d410fff9e29c40ad437af941ac-codex/REVIEW.md`）；仅在已测试路径范围
+  内成立，whole Block1/authority 未闭合；`ced3b19` 失败与 `d5f9d0c` preview 失败史保留，
+  不追溯改判。
