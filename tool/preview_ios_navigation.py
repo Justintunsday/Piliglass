@@ -221,6 +221,11 @@ final class MenuNavigationTests: XCTestCase {
     let tab = app.tabBars.buttons["我的"]
     XCTAssertTrue(tab.waitForExistence(timeout: 8))
     tab.tap()
+    // A synthesized tap is not proof of a page switch: require the tab to be
+    // actually selected before any Mine-page control is touched. Bounded to the
+    // existing 8-second wait budget semantics; no extra tap or retry is added.
+    expectation(for: NSPredicate(format: "isSelected == true"), evaluatedWith: tab)
+    waitForExpectations(timeout: 8)
   }
 
   func testSearchButtonAndInteractiveBack() {
@@ -520,6 +525,31 @@ def write_project():
     return project_dir
 
 
+def run_navigation(run, result, phases, *, export_command=None, export_timeout=600):
+    """Run the navigation step and always finalize it without masking failures.
+
+    ``run`` performs the xcodebuild phase; StepTimeout/StepCancelled propagate.
+    The finally contract exports the xcresult attachments whenever the bundle
+    exists. The export is best-effort: it can never replace a primary success,
+    nonzero code or exception. Returns the exact exit code, raising
+    ``SystemExit(code)`` for a nonzero one (the previous main() behavior)."""
+    code = None
+    try:
+        code = run()
+    finally:
+        result_path = Path(result)
+        if result_path.exists():
+            command = export_command
+            if command is None:
+                command = ['xcrun','xcresulttool','export','attachments','--path',str(result_path),
+                           '--output-path',str(result_path.parent/'attachments')]
+            preview_step_runner.run_bounded_cleanup(command, phases, 'attachments-export',
+                                                    timeout=export_timeout)
+    if code:
+        raise SystemExit(code)
+    return code
+
+
 def main():
     if platform.system() != 'Darwin':
         raise SystemExit('Navigation UI tests require macOS and Xcode.')
@@ -531,26 +561,15 @@ def main():
     device = next(d for values in devices.values() for d in values if d['state']=='Booted' and 'iPhone' in d['name'])
     home.run('xcrun','simctl','ui',device['udid'],'appearance','light')
     phases = preview_step_runner.PhaseLog(OUTPUT / 'phases.log')
-    result = OUTPUT / 'MenuNavigation.xcresult'
-    code = None
-    try:
-        code = preview_step_runner.run_streaming(
+    run_navigation(
+        lambda: preview_step_runner.run_streaming(
             ['xcodebuild','test','-project',str(project),'-scheme','MenuPreview',
              '-destination',f"platform=iOS Simulator,id={device['udid']}",'-parallel-testing-enabled','NO',
-             '-resultBundlePath',str(result),'-derivedDataPath',str(OUTPUT/'DerivedData')],
-            OUTPUT / 'xcodebuild.log', phases, 'xcodebuild-test')
-    finally:
-        # Non-cancelled failure/timeout paths still export the xcresult
-        # attachments for the workflow's always-upload steps. A hard job
-        # cancellation can still skip uploads entirely; cleanup is best-effort
-        # and must never mask the primary step outcome.
-        if result.exists():
-            preview_step_runner.run_bounded_cleanup(
-                ['xcrun','xcresulttool','export','attachments','--path',str(result),
-                 '--output-path',str(OUTPUT/'attachments')],
-                phases, 'attachments-export', timeout=600)
-    if code:
-        raise SystemExit(code)
+             '-resultBundlePath',str(OUTPUT / 'MenuNavigation.xcresult'),
+             '-derivedDataPath',str(OUTPUT/'DerivedData')],
+            OUTPUT / 'xcodebuild.log', phases, 'xcodebuild-test'),
+        OUTPUT / 'MenuNavigation.xcresult',
+        phases)
 
 
 if __name__ == '__main__':

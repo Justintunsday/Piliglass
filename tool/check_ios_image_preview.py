@@ -128,9 +128,20 @@ final class ImagePreviewTests: XCTestCase {
     // Wait once for the actual ready state with the combined existence+value
     // budget instead of spending the existence budget before the value wait.
     assertValue(image, "value", "1.0 倍", timeout: 16)
+    XCTAssertTrue(image.isHittable,
+      "the zoomable image must be hittable before the zoom gesture")
+    print("zoom-before value=\(image.value ?? "nil") hittable=\(image.isHittable) frame=\(image.frame)")
     image.doubleTap()
-    expectation(for: NSPredicate(format: "value != %@", "1.0 倍"), evaluatedWith: image)
-    waitForExpectations(timeout: 5)
+    // Same 5-second bound and predicate as before, with the observed value
+    // carried into the failure message so a repeated failure distinguishes a
+    // missed gesture from an unchanged zoom state. The gesture is sent once.
+    let zoomed = NSPredicate(format: "value != %@", "1.0 倍")
+    let deadline = Date().addingTimeInterval(5)
+    while !zoomed.evaluate(with: image) && Date() < deadline {
+      RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+    }
+    XCTAssertTrue(zoomed.evaluate(with: image),
+      "double tap must change the zoomed value within 5 seconds; observed=\(image.value ?? "nil") hittable=\(image.isHittable) frame=\(image.frame)")
     capture("long-image-zoomed")
     image.doubleTap()
     assertValue(image, "value", "1.0 倍")

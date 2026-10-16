@@ -52,6 +52,17 @@ def eof_then_sleep(seconds, code):
     )
 
 
+def eof_short_lived(seconds, code):
+    """Close both streams, stay alive briefly (inside the read-poll window)."""
+    return (
+        "import os, sys, time\n"
+        "os.close(1)\n"
+        "os.close(2)\n"
+        f"time.sleep({seconds})\n"
+        f"sys.exit({code})\n"
+    )
+
+
 def main():
     with tempfile.TemporaryDirectory() as tmp:
         out = Path(tmp)
@@ -169,6 +180,40 @@ def main():
         check('eof-cancel phase recorded',
               'eof-cancel-case: cancelled' in phases.path.read_text(encoding='utf-8'))
 
+        log = out / 'eof-race-timeout.log'
+        race_timed_out = False
+        try:
+            runner.run_streaming(child(eof_short_lived(0.15, 0)), log, phases,
+                                 'eof-race-timeout', timeout=0.08)
+        except runner.StepTimeout:
+            race_timed_out = True
+        check('early-EOF short child cannot bypass the deadline (StepTimeout)', race_timed_out)
+        check('eof-race-timeout phase recorded',
+              'eof-race-timeout: timeout' in phases.path.read_text(encoding='utf-8'))
+
+        log = out / 'eof-race-cancel.log'
+        cancel = threading.Event()
+        timer = threading.Timer(0.08, cancel.set)
+        timer.start()
+        race_cancelled = False
+        try:
+            runner.run_streaming(child(eof_short_lived(0.15, 0)), log, phases,
+                                 'eof-race-cancel', cancel_event=cancel)
+        except runner.StepCancelled:
+            race_cancelled = True
+        finally:
+            timer.cancel()
+        check('early-EOF short child cannot bypass cancellation (StepCancelled)', race_cancelled)
+        check('eof-race-cancel phase recorded',
+              'eof-race-cancel: cancelled' in phases.path.read_text(encoding='utf-8'))
+
+        log = out / 'eof-race-returncode.log'
+        code = runner.run_streaming(child(eof_short_lived(0.15, 4)), log, phases, 'eof-race-returncode')
+        check('early-EOF short child keeps its exact returncode without cancel/expiry',
+              code == 4, f'code={code}')
+        check('eof-race-returncode phase recorded',
+              'eof-race-returncode: exit 4' in phases.path.read_text(encoding='utf-8'))
+
         cleanup_code = runner.run_bounded_cleanup(child("print('cleanup-ok')"), phases, 'cleanup-success')
         check('bounded cleanup success returns 0', cleanup_code == 0, f'code={cleanup_code}')
         cleanup_code = runner.run_bounded_cleanup(child("import sys; sys.exit(5)"), phases, 'cleanup-nonzero')
@@ -182,28 +227,89 @@ def main():
               and 'cleanup-nonzero: exit 5' in cleanup_phases
               and 'cleanup-raising: failed' in cleanup_phases)
 
+        navigation = None
+        try:
+            import preview_ios_navigation as navigation_module
+            navigation = navigation_module
+        except Exception as error:  # pragma: no cover - platform dependent
+            print(f'SKIP navigation integration cases (import failed: {error.__class__.__name__}); '
+                  'not counted as a pass', flush=True)
+        if navigation is not None:
+            result = out / 'navigation-result.xcresult'
+            result.mkdir()
+            code = navigation.run_navigation(lambda: 0, result, phases,
+                                             export_command=child("print('export-ok')"),
+                                             export_timeout=5)
+            check('navigation integration success returns normally', code == 0, f'code={code}')
+            try:
+                navigation.run_navigation(lambda: 2, result, phases,
+                                          export_command=[str(out / 'missing-export-fixture')],
+                                          export_timeout=5)
+                check('navigation integration nonzero raises SystemExit with export failure',
+                      False, 'no SystemExit')
+            except SystemExit as exit_error:
+                check('navigation integration nonzero raises SystemExit with export failure',
+                      exit_error.code == 2, f'code={exit_error.code}')
+            try:
+                navigation.run_navigation(lambda: 3, result, phases,
+                                          export_command=child("import time; time.sleep(5)"),
+                                          export_timeout=0.3)
+                check('navigation integration export timeout preserves nonzero', False, 'no SystemExit')
+            except SystemExit as exit_error:
+                check('navigation integration export timeout preserves nonzero',
+                      exit_error.code == 3, f'code={exit_error.code}')
+            for label, exception in (('timeout', runner.StepTimeout('synthetic')),
+                                     ('cancel', runner.StepCancelled('synthetic'))):
+                def failing_run(run_exception=exception):
+                    raise run_exception
+                try:
+                    navigation.run_navigation(failing_run, result, phases,
+                                              export_command=child("print('export-after-failure')"),
+                                              export_timeout=5)
+                    check(f'navigation integration preserves {label} exception', False, 'no exception')
+                except (runner.StepTimeout, runner.StepCancelled) as propagated:
+                    check(f'navigation integration preserves {label} exception',
+                          type(propagated) is type(exception))
+            code = navigation.run_navigation(lambda: 0, result, phases,
+                                             export_command=[str(out / 'missing-export-fixture')],
+                                             export_timeout=5)
+            check('navigation integration export failure keeps success', code == 0, f'code={code}')
+
         if os.name == 'posix':
-            marker = out / 'posix-descendant-marker'
+            ready = out / 'posix-descendant-ready'
+            alive = out / 'posix-descendant-alive'
             grandchild = (
                 "import pathlib, signal, sys, time\n"
                 "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+                f"pathlib.Path({str(ready)!r}).write_text('ready')\n"
                 "time.sleep(3)\n"
-                "pathlib.Path(sys.argv[1]).write_text('alive')\n"
+                f"pathlib.Path({str(alive)!r}).write_text('alive')\n"
                 "time.sleep(30)\n"
             )
             parent = (
-                "import subprocess, sys\n"
-                f"subprocess.Popen([sys.executable, '-c', {grandchild!r}, {str(marker)!r}])\n"
+                "import pathlib, subprocess, sys, time\n"
+                f"subprocess.Popen([sys.executable, '-c', {grandchild!r}])\n"
+                "deadline = time.time() + 5\n"
+                f"while not pathlib.Path({str(ready)!r}).exists():\n"
+                "    if time.time() > deadline:\n"
+                "        sys.exit(9)\n"
+                "    time.sleep(0.02)\n"
                 "sys.exit(0)\n"
             )
+            started = time.monotonic()
             code = runner.run_streaming(child(parent), out / 'posix-descendant.log', phases,
                                         'posix-descendant-case', term_grace=1.0)
+            elapsed = time.monotonic() - started
             check('posix descendant case leader exit preserved', code == 0, f'code={code}')
+            check('posix descendant installed SIG_IGN before leader exit (ready handshake)',
+                  ready.exists())
             time.sleep(3.5)
-            check('ignoring-TERM descendant cleaned up after leader exit (no marker)',
-                  not marker.exists())
+            check('ignoring-TERM descendant killed after leader exit (no alive marker)',
+                  not alive.exists())
+            check('owned-group SIGKILL escalation stayed bounded', elapsed < 6,
+                  f'elapsed={elapsed:.2f}s')
         else:
-            print('SKIP POSIX descendant cleanup case (requires POSIX); '
+            print('SKIP POSIX descendant readiness/escalation case (requires POSIX); '
                   'not counted as a pass', flush=True)
 
     failed = [name for name, ok in CHECKS if not ok]

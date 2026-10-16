@@ -239,9 +239,18 @@ def run_streaming(command, log_path, phases, name, *,
                 try:
                     line = lines.get(timeout=_READ_POLL_SECONDS)
                 except queue.Empty:
-                    if process.poll() is not None:
-                        break
-                    continue
+                    # Revalidate after the blocking wait: a cancellation or
+                    # deadline that became due while waiting must not be
+                    # bypassed by the leader-exit check below (cancel takes
+                    # precedence over deadline, deadline over a finished
+                    # child).
+                    if cancel_event.is_set():
+                        stop_reason = 'cancelled'
+                    elif deadline is not None and time.monotonic() >= deadline:
+                        stop_reason = 'timeout'
+                    elif process.poll() is None:
+                        continue
+                    break
                 if line is None:
                     # stdout EOF is a stream state, not child completion: keep
                     # bounded polling (checks above) until the child exits.
@@ -254,6 +263,15 @@ def run_streaming(command, log_path, phases, name, *,
                     tail_total -= len(tail.popleft())
                 sys.stdout.write(line)
                 sys.stdout.flush()
+            if stop_reason is None:
+                code = process.wait()
+                _drain(lines, log, tail)
+                # Final revalidation before committing a normal completion: an
+                # already-observed cancellation or expiry cannot return success.
+                if cancel_event.is_set():
+                    stop_reason = 'cancelled'
+                elif deadline is not None and time.monotonic() >= deadline:
+                    stop_reason = 'timeout'
             if stop_reason is not None:
                 outcome = terminate_process_group(process, pgid, term_grace)
                 _drain(lines, log, tail)
@@ -261,8 +279,6 @@ def run_streaming(command, log_path, phases, name, *,
                 if stop_reason == 'timeout':
                     raise StepTimeout(f'{name} exceeded its {timeout}s deadline')
                 raise StepCancelled(f'{name} was cancelled')
-            code = process.wait()
-            _drain(lines, log, tail)
             phases.mark(f'{name}: exit {code}')
             if code:
                 excerpt = ''.join(tail)[-tail_chars:]
