@@ -3,6 +3,7 @@ import 'dart:collection';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:PiliPlus/http/api.dart';
 import 'package:PiliPlus/http/retry_interceptor.dart';
 import 'package:PiliPlus/models/common/account_type.dart';
 import 'package:PiliPlus/utils/accounts.dart';
@@ -11,6 +12,7 @@ import 'package:PiliPlus/utils/accounts/account_manager/account_mgr.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'account_credential_reader_fixtures.dart';
 import 'account_test_storage.dart';
 
 final _origin = Uri.parse('https://www.bilibili.com/github/account-fixture');
@@ -58,7 +60,11 @@ void main() {
     await storage.reset();
     adapter = _ControlledAdapter();
     dio = Dio(
-      BaseOptions(responseType: ResponseType.plain, followRedirects: false),
+      BaseOptions(
+        baseUrl: 'https://www.bilibili.com',
+        responseType: ResponseType.plain,
+        followRedirects: false,
+      ),
     )
       ..httpClientAdapter = adapter
       ..interceptors.add(AccountManager());
@@ -545,6 +551,147 @@ void main() {
     );
 
     expect(Accounts.account.isEmpty, isTrue);
+  });
+
+  test('a video purpose path resolves the video slot owner and writes only there', () async {
+    final video = _account(301, session: 'video-owner');
+    final main = _account(302, session: 'main-owner');
+    await Accounts.installCredentials(video);
+    await Accounts.installCredentials(main);
+    await Accounts.set(AccountType.video, video);
+    final response = dio.get<String>(Api.ugcUrl);
+    final request = await adapter.nextRequest();
+    expect(request.options.extra['account'], same(video));
+    await finish(
+      response,
+      request,
+      cookies: ['from_video=path-resolved; Domain=.bilibili.com; Path=/'],
+    );
+    expect(await _cookie(video, 'from_video'), 'path-resolved');
+    expect(await _cookie(main, 'from_video'), isNull);
+    expect(await _cookie(AnonymousAccount(), 'from_video'), isNull);
+  });
+
+  test('the heartbeat path rejects an anonymous heartbeat binding before fetch', () async {
+    final video = _account(311);
+    await Accounts.installCredentials(video);
+    await Accounts.set(AccountType.video, video);
+    expect(Accounts.get(AccountType.heartbeat), isA<AnonymousAccount>());
+    await expectLater(
+      dio.get<String>(Api.heartBeat),
+      throwsA(
+        isA<DioException>().having(
+          (error) => error.type,
+          'type',
+          DioExceptionType.cancel,
+        ),
+      ),
+    );
+    expect(adapter.fetchCount, 0);
+  });
+
+  test('a login API path binds the anonymous singleton even when slots hold logins', () async {
+    final slotHolder = _account(321, session: 'slot-holder');
+    await Accounts.installCredentials(slotHolder);
+    Accounts.selectTemporarily(AccountType.main, slotHolder);
+    Accounts.selectTemporarily(AccountType.video, slotHolder);
+    final response = dio.get<String>(Api.qrcodePoll);
+    final request = await adapter.nextRequest();
+    expect(request.options.extra['account'], isA<AnonymousAccount>());
+    await finish(
+      response,
+      request,
+      cookies: ['login_flow=anonymous; Domain=.bilibili.com; Path=/'],
+    );
+    expect(await _cookie(AnonymousAccount(), 'login_flow'), 'anonymous');
+    expect(await _cookie(slotHolder, 'login_flow'), isNull);
+  });
+
+  test('an unmatched path falls back to the main slot owner', () async {
+    final main = _account(331, session: 'main-fallback');
+    await Accounts.installCredentials(main);
+    Accounts.selectTemporarily(AccountType.main, main);
+    final response = dio.get<String>('/x/unmatched-purpose-fixture');
+    final request = await adapter.nextRequest();
+    expect(request.options.extra['account'], same(main));
+    await finish(
+      response,
+      request,
+      cookies: ['main_fallback=kept; Domain=.bilibili.com; Path=/'],
+    );
+    expect(await _cookie(main, 'main_fallback'), 'kept');
+  });
+
+  test('an explicit preset wins over path purpose resolution', () async {
+    final video = _account(341, session: 'video-owner');
+    final preset = _account(342, session: 'preset-owner');
+    await Accounts.installCredentials(video);
+    await Accounts.installCredentials(preset);
+    await Accounts.set(AccountType.video, video);
+    final response = dio.get<String>(
+      Api.ugcUrl,
+      options: Options(extra: {'account': preset}),
+    );
+    final request = await adapter.nextRequest();
+    expect(request.options.extra['account'], same(preset));
+    await finish(
+      response,
+      request,
+      cookies: ['preset_won=kept; Domain=.bilibili.com; Path=/'],
+    );
+    expect(await _cookie(preset, 'preset_won'), 'kept');
+    expect(await _cookie(video, 'preset_won'), isNull);
+  });
+
+  test('a path-resolved binding stays bound across an in-flight purpose switch', () async {
+    final a = _account(351, session: 'video-a');
+    final b = _account(352, session: 'video-b');
+    await Accounts.installCredentials(a);
+    await Accounts.installCredentials(b);
+    await Accounts.set(AccountType.video, a);
+    final stamp = Accounts.captureRequest(a)!;
+    final response = dio.get<String>(Api.ugcUrl);
+    final request = await adapter.nextRequest();
+    expect(request.options.extra['account'], same(a));
+    await Accounts.selectTemporarily(AccountType.video, b);
+    expect(Accounts.get(AccountType.video), same(b));
+    // Switching the purpose slot does not revoke A: its legitimate bound
+    // response write must still land, and B must receive nothing.
+    expect(Accounts.isCurrentRequest(stamp), isTrue);
+    await finish(
+      response,
+      request,
+      cookies: ['path_bound_a=kept; Domain=.bilibili.com; Path=/'],
+    );
+    expect(await _cookie(a, 'path_bound_a'), 'kept');
+    expect(await _cookie(b, 'path_bound_a'), isNull);
+    expect(Accounts.isCurrentRequest(stamp), isTrue);
+  });
+
+  test('a path-resolved request consumes exactly one bound credential context', () async {
+    final video = _account(361, session: 'video-reader');
+    await Accounts.installCredentials(video);
+    await Accounts.set(AccountType.video, video);
+    final reader = CountingCredentialReader();
+    final readerDio = Dio(
+      BaseOptions(
+        baseUrl: 'https://www.bilibili.com',
+        responseType: ResponseType.plain,
+        followRedirects: false,
+      ),
+    )
+      ..httpClientAdapter = adapter
+      ..interceptors.add(AccountManager(credentialReader: reader));
+    try {
+      final response = readerDio.get<String>(Api.ugcUrl);
+      final request = await adapter.nextRequest();
+      expect(request.options.extra['account'], same(video));
+      expect(reader.captures, 1);
+      await finish(response, request, cookies: const []);
+      expect(reader.captures, 1);
+    } finally {
+      readerDio.close(force: true);
+    }
   });
 }
 
