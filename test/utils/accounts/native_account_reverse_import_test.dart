@@ -7,6 +7,7 @@ import 'package:PiliPlus/models/common/account_type.dart';
 import 'package:PiliPlus/services/native_accounts/account_install_persistence_port.dart';
 import 'package:PiliPlus/services/native_accounts/account_reset_persistence_port.dart';
 import 'package:PiliPlus/services/native_accounts/native_account_reverse_import.dart';
+import 'package:PiliPlus/services/native_accounts/native_ordered_cookie_jar_export.dart';
 import 'package:PiliPlus/utils/accounts.dart';
 import 'package:PiliPlus/utils/accounts/account.dart';
 import 'package:dio/dio.dart';
@@ -47,6 +48,65 @@ Map<String, Object?> _schemaThreeEnvelope(
       ? 0
       : generations.reduce((left, right) => left > right ? left : right);
   return value;
+}
+
+/// Mirrors the decoder's single cumulative preallocation ledger: the fixed
+/// base plus every `*Units` array and every `durableIdentity` array. Used only
+/// to place fixtures exactly at the unit-cap boundary; the production decoder
+/// stays the sole validator under test.
+int _chargedUnits(Map<String, Object?> envelope) {
+  var units = 2048 + 512 * _records(envelope).length;
+  void walk(Object? node) {
+    if (node is Map) {
+      for (final entry in node.entries) {
+        final value = entry.value;
+        if (value is List) {
+          final key = entry.key as String;
+          if (key.endsWith('Units') || key == 'durableIdentity') units += value.length;
+        }
+        walk(value);
+      }
+    } else if (node is List) {
+      for (final child in node) walk(child);
+    }
+  }
+  walk(envelope);
+  return units;
+}
+
+Map<String, Object?> _paddingCookie(String key, int valueLength) => <String, Object?>{
+  'keyUnits': key.codeUnits,
+  'nameUnits': 'n'.codeUnits,
+  'valueUnits': List<int>.filled(valueLength, 65),
+  'cookieDomainUnits': null,
+  'cookiePathUnits': null,
+  'secure': false,
+  'httpOnly': false,
+  'sameSite': null,
+  'expiresMicroseconds': null,
+  'maxAgeSeconds': null,
+  'createdSeconds': 0,
+};
+
+/// Appends explicit synthetic cookies to the login record's first domain path
+/// until the cumulative ledger equals [target] exactly. Keys and names make
+/// every addition cost a known overhead plus its value length.
+void _padToChargedUnits(Map<String, Object?> envelope, int target) {
+  final jar = _records(envelope)[1]['jar']! as Map;
+  final cookies = ((jar['domainBuckets'] as List).first['paths'] as List).first['cookies'] as List;
+  var remaining = target - _chargedUnits(envelope);
+  expect(remaining, greaterThan(0));
+  var index = 0;
+  while (remaining > 69632) {
+    final key = 'p$index';
+    cookies.add(_paddingCookie(key, 65536));
+    remaining -= key.length + 1 + 65536;
+    index++;
+  }
+  final valueLength = remaining >= 65538 ? 65536 : remaining - 2;
+  final keyLength = remaining - valueLength - 1;
+  cookies.add(_paddingCookie('q'.padRight(keyLength, 'x'), valueLength));
+  expect(_chargedUnits(envelope), target);
 }
 
 /// Deterministic empty-target fixture: delete/reset only, with no clear()'s
@@ -348,6 +408,15 @@ void main() {
     final noHighWater = _copy(valid)..remove('generationHighWater');
     expect(NativeAccountReverseImport.decode(noHighWater).recordDurableIdentities,
       [null, identityA, identityB]);
+    // An explicit null high-water is the same legal schema-3 form as omission.
+    final nullHighWater = _copy(valid)..['generationHighWater'] = null;
+    expect(NativeAccountReverseImport.decode(nullHighWater).recordDurableIdentities,
+      [null, identityA, identityB]);
+    // The anonymous record may omit the identity key entirely (legacy shape).
+    final anonymousOmitted = _copy(valid);
+    _records(anonymousOmitted)[0].remove('durableIdentity');
+    expect(NativeAccountReverseImport.decode(anonymousOmitted).recordDurableIdentities,
+      [null, identityA, identityB]);
     // Duplicate identities across login records are rejected before any write.
     expect(() => NativeAccountReverseImport.decode(
         _schemaThreeEnvelope(capture, [null, identityA, identityA])),
@@ -357,6 +426,7 @@ void main() {
       (value) => _records(value)[1]['durableIdentity'] = null,
       (value) => (_records(value)[1]['durableIdentity'] as List)[0] = 0x41,
       (value) => _records(value)[1]['durableIdentity'] = identityA.substring(0, 35).codeUnits,
+      (value) => _records(value)[1]['durableIdentity'] = '${identityA}0'.codeUnits,
       (value) => (_records(value)[1]['durableIdentity'] as List)[8] = 0x31,
       (value) => (_records(value)[1]['durableIdentity'] as List)[0] = 0x67,
       (value) => _records(value)[0]['durableIdentity'] = identityA.codeUnits,
@@ -373,6 +443,35 @@ void main() {
       expect(() => NativeAccountReverseImport.decode(value),
         throwsA(isA<NativeAccountReverseImportException>()));
     }
+  });
+
+  test('schema 3 identity units join the shared preallocation ledger at the unit budget boundary', () async {
+    // Pin the shared ceiling so this regression cannot silently drift with it.
+    expect(NativeOrderedCookieJarExporter.maxUTF16Units, 2 * 1024 * 1024);
+    final account = envelopeFixtureAccount('777');
+    await Accounts.installCredentials(account);
+    final capture = Accounts.captureLiveMemoryShadow().value;
+    const identity = '11111111-1111-4111-8111-111111111111';
+    // Exact budget including the identity units: a double charge would fail.
+    final exact = _schemaThreeEnvelope(capture, [null, identity]);
+    _padToChargedUnits(exact, NativeOrderedCookieJarExporter.maxUTF16Units);
+    final decoded = NativeAccountReverseImport.decode(exact);
+    expect(decoded.recordDurableIdentities, [null, identity]);
+    // One unit over the same ledger: omitting the identity units would leave
+    // this envelope 35 units under the ceiling and wrongly succeed.
+    final oneOver = _schemaThreeEnvelope(capture, [null, identity]);
+    _padToChargedUnits(oneOver, NativeOrderedCookieJarExporter.maxUTF16Units + 1);
+    expect(() => NativeAccountReverseImport.decode(oneOver),
+      throwsA(isA<NativeAccountReverseImportException>().having((error) => error.code, 'code', 'resourceLimit')));
+    // Non-identity fields alone consume the cap exactly, so only the trailing
+    // 37-unit noncanonical identity array can push the shared preallocation
+    // ledger over; `resourceLimit` (not the projection-time invalidEnvelope)
+    // proves the units were charged before any record/String projection.
+    final noncanonical = _schemaThreeEnvelope(capture, [null, '${identity}0']);
+    _padToChargedUnits(noncanonical, NativeOrderedCookieJarExporter.maxUTF16Units + 37);
+    expect(() => NativeAccountReverseImport.decode(noncanonical),
+      throwsA(isA<NativeAccountReverseImportException>().having((error) => error.code, 'code', 'resourceLimit')));
+    expect(identical(Accounts.account.get('777'), account), true);
   });
 
   test('schema 2 rejects durable identity and generation high-water keys', () async {
