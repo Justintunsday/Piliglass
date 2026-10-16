@@ -148,7 +148,7 @@ EXPORT_METADATA_KEYS = {
 }
 EXPORT_METADATA_SCHEMA = "pili.account.schema3-export.v1"
 EXPORT_CONSUMED_SCHEMA = "pili.account.schema3-export.consumed.v1"
-MINIMUM_EXPORT_CHECKS = 40
+MINIMUM_EXPORT_CHECKS = 110
 CONSUMER_TESTS = 6
 LIVE_IDS = [
     "anonymous-empty-jar",

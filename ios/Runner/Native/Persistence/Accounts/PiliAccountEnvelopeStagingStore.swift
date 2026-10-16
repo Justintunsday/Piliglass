@@ -417,40 +417,50 @@ actor PiliAccountEnvelopeStagingStore {
   /// with `staleExport` instead of returning stale bytes. Returned bytes are the
   /// exact stored bytes of that pointer's record (never re-encoded), strictly
   /// validated as schema 3 with the production codec and its existing
-  /// byte/node/UTF16 limits. Cancellation is honored at every await boundary
-  /// and releases the fence; no write path is reachable.
+  /// byte/node/UTF16 limits. Cancellation is honored at every await boundary:
+  /// each awaited result is captured first, cancellation is checked immediately
+  /// after the successful await, and only then is the result interpreted, so a
+  /// task cancelled across an await always surfaces the exact
+  /// `CancellationError` instead of the typed outcome of the resumed read. No
+  /// write path is reachable.
   func exportCurrentShadow(expectedTransactionID: UUID) async throws -> PiliAccountEnvelopeExport {
     try beginOperation()
     defer { operationInProgress = false }
     try Task.checkCancellation()
+    let journal: PiliAccountEnvelopeRecoveryJournal?
     do {
-      if try await recoveryJournal() != nil {
-        throw PiliAccountEnvelopeStagingError.unresolvedRecovery
-      }
+      journal = try await recoveryJournal()
     } catch let error as CancellationError {
       throw error
-    } catch let error as PiliAccountEnvelopeStagingError {
-      throw error
+    } catch PiliAccountEnvelopeStagingError.invalidRecoveryJournal {
+      // Strict decode corruption stays exactly classified; its bytes are
+      // preserved for an explicit recovery operation.
+      throw PiliAccountEnvelopeStagingError.invalidRecoveryJournal
     } catch {
-      // A failed journal read never proves absence: any unreadable state fails
-      // closed as unresolved recovery and leaves the bytes untouched.
+      // Any other unreadable journal state never proves absence and must not
+      // leak an unrelated typed error into the export contract.
       throw PiliAccountEnvelopeStagingError.unresolvedRecovery
     }
     try Task.checkCancellation()
-    guard let current = try await manifest() else {
+    if journal != nil {
+      throw PiliAccountEnvelopeStagingError.unresolvedRecovery
+    }
+    let snapshot = try await manifest()
+    try Task.checkCancellation()
+    guard let current = snapshot else {
       throw PiliAccountEnvelopeStagingError.shadowUnavailable
     }
     guard current.value.transactionID == expectedTransactionID else {
       throw PiliAccountEnvelopeStagingError.staleExport
     }
+    let record = try await secrets.read(key(current.value.transactionID))
     try Task.checkCancellation()
-    guard let data = try await secrets.read(key(current.value.transactionID)) else {
+    guard let data = record else {
       throw PiliAccountEnvelopeStagingError.missingRecord
     }
     guard data.count == current.value.byteCount, digest(data) == current.value.sha256 else {
       throw PiliAccountEnvelopeStagingError.verificationFailed
     }
-    try Task.checkCancellation()
     let envelope: PiliAccountLiveMemoryShadow
     do {
       envelope = try codec.decode(data)
