@@ -322,3 +322,31 @@ adapter，见 §10）、Hive compaction/close、LoginUtils 副作用。
   诊断文件与成功报告分离；本地 3 项 mock 控制流 QA 不是 CI 计数或模拟器/设备执行；
   前驱 8cf6629/085d883 preview failure 保留；无真机/authority 结论；四 flag false。
 - 记录为 docs-only commit，不代表 code CI SHA；实际测试 SC SHA 为上述两个代码 SHA。
+
+## 16. 2026-10-16 B2e-2b-1 schema-3 reverse-import 严格解码 + R38 预投影记账（`ea60931`；Codex 有限 PASS）
+
+- 同代码 SHA `ea609317e499a200b1d1fcc55d5a9127aba9e44d`：release
+  [38829392361](https://github.com/Justintunsday/Piliglass/actions/runs/38829392361)
+  success5/5 与 preview
+  [38829396589](https://github.com/Justintunsday/Piliglass/actions/runs/38829396589)
+  success4/4（均首次尝试、无 job 重跑）；九强制 outcome 全 success、`BUILD SUCCEEDED`、
+  Runner.app 109.1MB、Aether FFmpeg 先于 media-kit；账户 `+269: All tests passed!`
+  （含 R38 unit-budget 边界实际执行）/runtime 72/strict analyze `No issues found!`；
+  envelope 109（obs=10/negative=44/synthetic=1/runtimeEnabled=false）/staging 40/
+  transactions **245**(68+177)/queue **292**/authority 51；producer 8 tests/10
+  observations/2 goldens；golden `041724…`/`ae2e5f…`；88 raw blob 86 匹配 + 2 声明
+  pubspec（Codex 独立复核）；source-clean before/after、sourceRevision 前后=ea60931；
+  preview 20 tests（9+3+6+2）0 failures、11 reports（8 home + 3 settings，每个唯一
+  modeToken==trace token、launchPID==解析 PID）、压力 `"failures": []`。
+- 内容：schema-3 durable-identity strict decode（canonical 36-unit 小写 UUID/唯一/
+  anonymous null-or-omitted/high-water/tracker namespace 拒绝）+ immutable
+  `recordDurableIdentities`（correlation-only）+ R38：`durableIdentity` units 并入
+  `_preflight` 同一累计账本、删除晚计费（无双重计费）；新增 exact-budget/+1/预投影
+  37-unit `resourceLimit` 边界与 37-unit/null-high-water/anonymous-omitted 用例。
+- 前驱保留：`ed89e9f` 绿色但 R38 open；`a0e76ed` 因 test70:33 strict-analysis info
+  致下游 ACCOUNT_DART/NATIVE/COOKIES/ENVELOPE_OUTCOME 被 aggregate 正确拒绝（preview
+  4/4 不替代），修复仅包块且未改 lint/options/fatal-infos/断言/caps。
+- 边界：**不构成 whole B2e-2b/Block2/P05**；`apply()` 不携带 durable labels、非
+  Swift→Dart 端到端 handoff/revert 证据；bridge export/frozen-revision/startup/revert/
+  GC/production composition、authority/process-kill/真机未闭合；四 flag false；本记录为
+  docs-only commit，不代表 code CI SHA（实际测试 SHA 为 `ea60931`）。

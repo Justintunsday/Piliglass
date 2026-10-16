@@ -243,6 +243,44 @@ sourceSHA=workflowSHA=9724ddb；preview 20 tests 0 failures、压力 `failures=[
 shadow 组件：未接 authority、无生产 caller，durable identity 消费/恢复语义、账号级队列与
 receipt/unknown ack、Block 3/4/5 仍未交付；四能力 flag 保持 false，P05 未整体完成。
 
+**B2e-2b-1 schema-3 reverse-import durable-identity 严格解码 + R38 预投影记账在 `ea60931` 获 Codex 有限 PASS（仅该 decode/carriage 范围）；apply 仍不携带 durable labels**：
+- 沿革：`f12946a`/`450efdd`/`ed89e9f` 实现 schema-3 strict decode + 3 组测试并有绿色
+  release38824131940/preview38824134718，但 Codex 独立复核发现 R38——`durableIdentity`
+  不以 `Units` 结尾，其 36 UTF-16 units 绕过 `_preflight` 的同一累计预分配账本，
+  String/Set 投影之后才补 `reserveUnits(36)`（晚计费）；绿色 CI 不关闭该契约。
+- R38 修复（`2b07b85`）：`_preflight` 对 `durableIdentity` 数组与 `*Units` 一样在同一
+  累计 units 账本、String/Set/record 投影之前计费；删除晚 `reserveUnits(36)`（无双重
+  计费）；caps/wire/node/shape/canonical/authority 不变。
+- 回归（`a0e76ed`，actual Dart decode）：exact-budget（含 identity 恰 2×1024×1024 units）
+  成功、+1 unit → `resourceLimit`、非 identity 恰用满 cap + 37-unit 非 canonical
+  identity → `resourceLimit`（预投影先于 record/String 投影；旧晚计费会报
+  invalidEnvelope）；另补 37-unit 普通预算拒绝、显式 null high-water、anonymous 省略
+  identity；schema2/nullable/no-high-water 用例保留。`a0e76ed` 本身 release 失败：
+  account strict analyze 唯一 info
+  `native_account_reverse_import_test.dart:70:33 curly_braces_in_flow_control_structures`
+  → 下游 ACCOUNT_DART/ACCOUNT_NATIVE/COOKIES/ACCOUNT_ENVELOPE_OUTCOME 被 aggregate 正确
+  拒绝（preview 4/4 不得替代）；修复仅包块（`ea60931`），未改 lint/options/fatal-infos/
+  断言/caps。
+- 实际证据（`sourceSHA=workflowSHA=ea60931`）：release
+  [38829392361](https://github.com/Justintunsday/Piliglass/actions/runs/38829392361)
+  success5/5 与 preview
+  [38829396589](https://github.com/Justintunsday/Piliglass/actions/runs/38829396589)
+  success4/4（均首次尝试、无 job 重跑）；九强制 outcome 全 success、BUILD SUCCEEDED、
+  Runner.app 109.1MB、Aether FFmpeg 先于 media-kit；账户 `+269: All tests passed!`
+  （含 R38 边界实际执行）、runtime 72、strict analyze `No issues found!`；envelope 109
+  （obs=10/negative=44/synthetic=1/runtimeEnabled=false）、staging 40、transactions
+  68+identity 177=**245**、queue **292**、authority 51；producer
+  actualDartTests=8/observations=10/goldens=2；golden `041724…`/`ae2e5f…`；88 raw blob
+  86 匹配 + 2 声明 pubspec（Codex 独立复核）；source-clean before/after、sourceRevision
+  前后=ea60931；preview 9+3+6+2=20 tests 0 failures、8 home + 3 settings=11 reports
+  （每个唯一 modeToken 且与 trace token 匹配、launchPID 为解析 PID）、压力
+  `"failures": []`。
+- 边界（Codex 与本文同等强调）：limited PASS 仅 schema-3 reverse-decode carriage + R38
+  预投影；`apply()` 不向已安装 Dart Accounts 携带 durable labels（label 仅 correlation）；
+  schema-3 测试输入是 actual Dart capture 增补，**不是** Swift 产出的 schema-3 端到端
+  handoff/revert 证据；bridge export/frozen-revision/startup/revert/GC/production
+  composition、full B2e-2b/Block2/P05/authority/process-kill/device 均未闭合；四 flag false。
+
 **R36/R37 preview-harness 诊断/owned-report 门在 `b73efec` 获 Codex 有限 PASS（仅该 harness 验证面）；本地 mock QA 不是 CI 或设备证据**：
 - 沿革：`085d883` readiness-retry 仍缺 last-row 报告（main job 116703630704 失败，
   artifact 12010604817 仅 3 JSON+3 PNG 无诊断）；R36（`cf1a1c7`）加入 launch PID/

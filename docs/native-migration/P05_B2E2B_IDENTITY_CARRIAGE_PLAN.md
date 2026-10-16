@@ -67,3 +67,13 @@
   BUILD/FFmpeg、preview 20/压力）；docs 证据与代码 SHA 分离；交 Codex 独立复审。
 - 明确未做（不得声称）：bridge export 携带 durable identity、frozen-revision handoff/
   启动 apply、revert 幂等映射、GC、Block3 production composition、CA5/CA6 真机。
+
+## 状态注记（2026-10-16）：本组切片获 Codex 有限 PASS
+
+- B2e-2b-1（schema-3 strict decode + `recordDurableIdentities` 只读 correlation +
+  R38 预投影记账）在代码 SHA `ea60931` 获 Codex 有限 PASS（详见 `PROGRESS.md`/
+  `P05_COMPLETION_REPORT.md` §16；docs 记录与测试 SHA 分离）。
+- 明确仍开放（继承上文边界不变）：`apply()` 不向已安装 Dart Accounts 携带 durable
+  labels；schema-3 测试输入为 actual Dart capture 增补，非 Swift 产出端到端 handoff；
+  bridge export 携带 identity、frozen-revision handoff/startup apply、revert 幂等映射、
+  GC、Block3 production composition 均未实施。

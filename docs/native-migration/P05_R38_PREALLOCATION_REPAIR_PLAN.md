@@ -75,3 +75,15 @@ domain/path 的 padding cookies 精确落到目标总量，decode 前自检总�
 - 明确未做（不得声称）：bridge export 携带 durable identity、frozen-revision
   handoff/startup apply、revert 幂等映射、GC、Block3 production composition、真机/真实账号；
   已接受 R23–R37 不重做。
+
+## 修复结果（2026-10-16，Codex 有限 PASS）
+
+- 修复/回归/证据见 `PROGRESS.md`、`P05_STATUS_MATRIX.md`、`P05_COMPLETION_REPORT.md`
+  §16：代码 SHA `ea60931`（源 `2b07b85`、测试 `a0e76ed`、strict-info 修复 `ea60931`；
+  计划 `232355e`/`3664662`）经 release38829392361 5/5 + preview38829396589 4/4（首次
+  尝试）实际执行，R38 边界测试实际运行；Codex 独立复核 FINAL DISPOSITION = limited
+  PASS（仅该 decode/carriage 范围）。
+- 前驱失败如实保留：`ed89e9f` 绿色但 R38 open；`a0e76ed` strict-info fatal +
+  aggregate 失败（preview 4/4 不替代）。本文件不改写任何既有条目。
+- 仍开放：`apply()` 携带 durable labels、Swift→Dart 端到端 handoff、bridge export/
+  frozen-revision/startup/revert/GC/Block3 composition。

@@ -319,6 +319,22 @@ preview [38820524983](https://github.com/Justintunsday/Piliglass/actions/runs/38
 **边界**：不证明此前 last-row 缺失报告的根因；诊断≠成功报告；本地 3 项 mock QA 不是
 CI 计数或设备执行；无真机/authority 结论；前驱 8cf6629/085d883 preview 失败保留。
 
+**B2e-2b-1 schema-3 durable-identity 严格解码 + R38 预投影记账在 `ea60931` 获 Codex 有限 PASS（仅该 decode/carriage 范围）**：
+`NativeAccountReverseImport` schema-3 strict decode（canonical 36-unit 小写 UUID、唯一、
+anonymous null/省略、high-water、tracker namespace 拒绝、四 flag false）+
+`recordDurableIdentities` 只读 correlation labels；R38 修复把 `durableIdentity` units 并入
+`_preflight` 同一累计预分配账本（`2b07b85`；删晚计费、无双重计费），边界回归实际执行
+（exact-budget/+1/37-unit 预投影 `resourceLimit`、null high-water、anonymous 省略）。证据：
+release [38829392361](https://github.com/Justintunsday/Piliglass/actions/runs/38829392361)
+5/5 与 preview [38829396589](https://github.com/Justintunsday/Piliglass/actions/runs/38829396589)
+4/4（首次尝试、无 job 重跑）；九 outcome/BUILD SUCCEEDED/109.1MB/FFmpeg；账户
+**269**（含边界）/72/analyze clean；envelope 109/44/40/**245**(68+177)/**292**/51；
+producer 8/10/2；golden `041724…`/`ae2e5f…`；preview 20 tests/11 reports/`failures=[]`。
+前驱保留：`ed89e9f` 绿色但 R38 open；`a0e76ed` strict-info fatal +
+aggregate 4-failure（preview 4/4 不替代）。**边界**：`apply()` 不携带 durable labels；
+非 Swift→Dart 端到端 handoff；bridge export/frozen-revision/startup/revert/GC/
+composition、full B2e-2b/P05/authority 未闭合；四 flag false。
+
 **Block 1 / B1d 切片（页面读取、延迟副作用、maintenance gate）已在 `98e6f9b` 验收**：
 `Accounts.installedAccounts()` 纯只读 seam + 页面 `isEmpty/isNotEmpty` 切
 `visibleAccounts()`（login/mine/setting/about，内容/顺序/读取时机不变、零
