@@ -260,9 +260,10 @@ receipt/unknown ack、Block 3/4/5 仍未交付；四能力 flag 保持 false，P
   9+3+6+2=20 tests 0 failure（**两个 player 用例实际通过**：embedded 19.6s、landscape
   17.6s，720P 于 8.24s 被找到；configured-hidden/gesture/lock 断言均在通过路径执行）、
   11 owned reports/22 stream files/layout flags/压力 `failures[]`。
-- 前驱如实保留：`3658406`/`209885f` strict-analysis fatal（curly-braces/cascade）与
-  aggregate 失败；`ae73dcf` release 绿但 preview 19/20（player-controls landscape 在 launch
-  helper 720P 断言失败）。
+- 前驱如实保留：`a0e76ed` curly_braces_in_flow_control_structures；`3658406`
+  prefer_initializing_formals + cascade_invocations；`209885f`
+  avoid_single_cascade_in_expression_statements（三者均另带 aggregate 失败）；`ae73dcf`
+  release 绿但 preview 19/20（player-controls landscape 在 launch helper 720P 断言失败）。
 - 精度修正（Codex 明确要求）：ae73dcf 失败时观察到的**只是 AX 树中 chrome/720P 缺失**；
   "alpha=0/隐藏 chrome" 是由生产代码支持的**推断**，并非直接采样的 alpha 遥测；本次绿色
   证明修正后的 fixture/断言实际执行，但**不是**历史 tap/AX/timer 链条的因果证明；

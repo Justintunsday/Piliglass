@@ -46,7 +46,12 @@
   2. 无测试证明"显式 preset 优先于 path 解析"（preset 命中时 `_findAccount` 不应生效）；
   3. path 解析出的绑定在响应 await 中遇到同用途槽切换时，必须保持**原绑定**（不重解析），
      现有测试只覆盖 preset 绑定版本；
-  4. `selectTemporarily`/`set` 在 frozen 下的零效应是否有独立断言待核（有则记录，无则补）。
+  4. ~~frozen 零效应待核~~ **audit resolved（2026-10-16）**：`account_write_barrier_test.dart`
+   :325 frozen `set`、:339 frozen `selectTemporarily`、:356 frozen `refresh` 均已断言零效应
+   （selection/type/revision/`admittedCount=0`），属**已验收 284 套件**；**不重复不重开**。
+   admission token 是 drain 记账而非独占所有权锁；quiesce 有意**不冻结** admission，不得写
+   以 quiesce 拒绝写者的测试；writer 表是源码清单，不代表全部 async/Hive/WK/LoginUtils/
+   构造期并发效应已闭合。
 
 ## 本组切片（B1f，可独立执行）
 
@@ -64,8 +69,9 @@
       零写（与既有 preset 版对偶）；
    g. 用注入 `CountingCredentialReader`（`AccountManager(credentialReader: …)`）证明绑定后
       请求头经 reader context 消费（计数一次、csrf/accessKey 读取计数精确）。
-2. writer 边界审计：把上表固化为文档 + 缺口断言（frozen `selectTemporarily`/`set`、
-   `refresh` quiesce 期间的 `_requireNoCapturedRestore` 组合）；已有覆盖只记录不重复。
+2. writer 边界审计：上表已固化；frozen `set`/`selectTemporarily`/`refresh` 零效应由
+   `account_write_barrier_test.dart`:325/339/356 既有覆盖（见 §实际缺口 4，audit resolved）；
+   本组只补**经证明**的剩余缺口（当前无新增目标）；不因补齐通用矩阵而改已验收 writer。
 3. 明确不闭合（不得声称）：120/17 live `csrfOf`、18/8 live `accessKeyOf` 的 tagged 类型
    迁移；WK Cookie 镜像广度；LoginUtils 全部延迟副作用；Hive maintenance 细节；网络
    writer（proxy/retry/TLS/timeout）；B2e-2b durable bridge/frozen revision；Block3
