@@ -62,8 +62,11 @@ durable identity（缺失/不匹配 → 拒绝、零写）；identity 只作关�
   `codec.encode(shadow)` 导出 schema-3 线，Dart 以**现有** schema-3 严格 decoder 消费
   （B2e-2b-1 已完成）；identity 字段天然只在信封命名空间内。需要在 Block3 定义 freeze/drain
   次序、命令命名、拒绝码与 cross-runtime fixture（Swift 产出 → Dart 测试消费）的 CI 编排。
-- 崩溃/重启对齐路径（两选项共用）：`loadPersistentRecovery` →（armed 时）
-  `resolveUnresolvedPublication` → `lookupRecord(durableIdentity:)`/`loadPublishedCandidate`；
+- 崩溃/重启对齐（仅限**显式恢复操作**）：只读导出/读取**不得**自动调用
+  `resolveUnresolvedPublication` 或清除 journal/fence；armed persistent unknown → fail closed、
+  保留 journal/fence（精确定义见
+  [P05_B2E2B3_SCHEMA3_ENVELOPE_WIRE_CONTRACT_PLAN.md](P05_B2E2B3_SCHEMA3_ENVELOPE_WIRE_CONTRACT_PLAN.md)
+  R56）；`lookupRecord(durableIdentity:)`/`loadPublishedCandidate` 只作显式恢复/对齐工具；
   旧指针/不匹配 identity → typed 拒绝、零写。
 - 需 Codex 决策的开放点：选型 A/B、冻结点所有权（composition vs repository）、命令/错误码命名、
   导出失败时的 drain 释放语义、GC 引用策略。
