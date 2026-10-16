@@ -63,3 +63,12 @@ edits 之前保存**；只修 driver/test 工具缺陷，不需要生产 seam �
 - 新最终 code SHA → BOTH workflows 各一次 + Codex 独立复审；不重跑 5d；不自我验收/不升级
   authority；四 flag false；历史失败与证据边界保留；若出现真实编译预算问题则按矩阵保留
   拆分诊断，不扩大 180/90。
+
+## 结果（2026-10-16）
+
+- `0303747`：R52 词法携带与 R53 全终态 helper + 五个直接回归落地，但收据类型编译失败
+  （error 794）仍阻断运行（R54，见 `P05_REVIEW_0303747_R54_REPAIR_PLAN.md`）。
+- `3818948`：R54 修正后全部修复实际编译+执行；**LIMITED PASS**
+  （`review-3818948…-codex`）——R52 scope carry、R53 single-waiter 全终态 helper 与五回归
+  均在 108 计数器前运行；未关闭项（通用多等待者/cancel-responsive/每 helper 硬期限）按
+  review 精确保留；`5d`/`030` 失败历史保留。

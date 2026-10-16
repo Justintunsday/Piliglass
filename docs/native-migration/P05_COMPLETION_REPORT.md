@@ -323,6 +323,45 @@ adapter，见 §10）、Hive compaction/close、LoginUtils 副作用。
   前驱 8cf6629/085d883 preview failure 保留；无真机/authority 结论；四 flag false。
 - 记录为 docs-only commit，不代表 code CI SHA；实际测试 SC SHA 为上述两个代码 SHA。
 
+## 21. 2026-10-16 Native `applyPurposeChange` read-transform-publish CAS（原 53 item8）+ R51–R54（`3818948`；Codex 有限 PASS）
+
+- 生产唯一新增：instance-local、缺省 nil 的 `prePublicationDeliveryHook`（`publishCandidate`
+  内 encode/attemptID mint 之后、shared-vault `importShadow` 之前 await；生产接线从不安装；
+  不改变 candidate/指针/门/CAS）。
+- driver 新增：C1（A 暂停保留 captured P0/candidate/wrapper 门 → 同 vault 合法 B 发布 W →
+  A 恢复进入真实 CAS → 精确 `.staleTransaction`，零 stale 发布、无 receipt/无新 unknown
+  fence/journal、winner 完整信封 = 独立构建期望、成功写计数不变）；C1c（cancel 后**显式**
+  resume → 精确 `CancellationError`/零 durable 写/无 fence，随后合法写入成功）；C2（fresh
+  merge 从 W 追加；receipt 只断言 transactionID/record/durableIdentity/两 flag false）；
+  C3（写者静默后同 namespace 新 Keychain 实例读回，同进程非 process kill）；C4
+  （B=`applyTemporarySelection` 变体）；R53 五个 helper 直接回归（早成功/早失败 × 两种注册
+  顺序、正常 pause-resume；无 sleep/`Task.yield`）。
+- 同代码 SHA `381894826294d11b0cd714e3ea30f2bc536e070a`：release
+  [38907716616](https://github.com/Justintunsday/Piliglass/actions/runs/38907716616)
+  success5/5 与 preview
+  [38907728006](https://github.com/Justintunsday/Piliglass/actions/runs/38907728006)
+  success4/4（均首次尝试、无 job 重跑）；九强制 outcome 全 success、`BUILD SUCCEEDED`、
+  Runner.app 109.1MB、executed Aether FFmpeg 先于 media-kit；账户 **322**/runtime 72/
+  strict analyze No issues；envelope 109/44 负例/1 synthetic/40 staging/**285**(108+177)/
+  **292**/51（新 Native 用例在 108 计数器前实际执行，非借用 245）；producer 8/10/2；91 raw
+  Git blob 89 match+2 声明 pubspec；golden `2237bfdd…`（live）`c5d57bbb…`（hive）；preview
+  20 tests passed（nav 256.179s + image 99.126s + account 177.065s + player 58.849s）；
+  home 11/11 accepted（token+launchPID）/22 streams、last-row 4395==bottom；压力
+  `failures[]`；Mac QA 45/45（1.31s synthetic 进程 QA）。
+- 前驱失败保留（不追溯改判）：`5d3bf43` 词法作用域编译失败（winnerReceipt/expectedWinner
+  816/817/839）；`0303747` 收据类型编译失败（794 ShadowTransactionReceipt→StagingReceipt）；
+  新用例在两个失败 SHA 均未执行。
+- 精度：仅 schema2 fixture 的目标竞态（不单独证明 schema3/high-water 专属交错）；
+  successful-write 计数只计成功写调用，非全部 attempted writes/removes/orphan 清点（源
+  CAS-先于写佐证零发布）；one-shot/single-waiter helper 非通用多等待者/cancel-responsive
+  continuation/硬期限证明；同进程 Keychain 新实例 ≠ process kill/冷启动；synthetic
+  credentials 非真实账户；未声明 zero Swift warnings（identity 单元既有 unused-adoptDelete
+  警告）。
+- 边界：有限 PASS 仅上述已测试范围；未闭合 whole Block1/2/P05/全部 writer/schema3 专属
+  竞态/process kill/生产 authority/handoff-revert-GC/设备；四 flag false；本记录为 docs-only
+  commit，不代表 code CI SHA（实际测试 SHA 为 `3818948`；`830576f`/`6575740`/`e38d63d` 为
+  docs-only distinct）。
+
 ## 20. 2026-10-16 B1h Dart `Accounts.set` post-activation revalidate#2 干扰（7 用例，`eb58d5c`；Codex 有限 PASS）
 
 - 同代码 SHA `eb58d5cdfbd709c73db727a4c25c61e9c1666894`：release

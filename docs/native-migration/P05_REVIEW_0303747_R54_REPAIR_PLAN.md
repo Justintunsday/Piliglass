@@ -41,3 +41,9 @@ TOP TERMINAL DISPOSITION/R54 与 actual inner transaction-compile.log。**本计
 - 不改生产 seam/CAS/vault；不重跑 030；不自我验收；新最终 code SHA → BOTH workflows 各一次
   + Codex 独立复审；预算不变（180/90）；历史失败（5d 词法、030 类型）与证据边界保留；
   四 flag false；eb58 Dart7 limitedPASS/830 plan-only 不复重开。
+
+## 结果（2026-10-16）
+
+- `3818948`：标注修正后实际 Swift6 strict 编译通过（六个 inner compile/result 日志由 Codex
+  亲读），C1/C4/cancel/merge/R53 五 helper 实际执行；双 CI 首尝试 5/5 + 4/4；**LIMITED
+  PASS**（`review-3818948…-codex`），仅该组范围；`030` 类型失败历史保留。

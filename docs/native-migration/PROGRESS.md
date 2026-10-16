@@ -243,6 +243,40 @@ sourceSHA=workflowSHA=9724ddb；preview 20 tests 0 failures、压力 `failures=[
 shadow 组件：未接 authority、无生产 caller，durable identity 消费/恢复语义、账号级队列与
 receipt/unknown ack、Block 3/4/5 仍未交付；四能力 flag 保持 false，P05 未整体完成。
 
+**Native `applyPurposeChange` read-transform-publish CAS 目标组（原 53 item8）+ R51–R54 在 `3818948` 获 Codex 有限 PASS（仅该 schema2 fixture/同 vault 合法竞争者/同进程 Keychain reopen 范围；不等于 whole Block1/2/P05/schema3 专属竞态/process kill/authority）**：
+- 内容：生产唯一新增为 instance-local、缺省 nil 的 `prePublicationDeliveryHook`（`publishCandidate`
+  内 encode/attemptID mint 之后、shared-vault `importShadow` 之前 await；生产接线从不安装）。
+  driver 新增 C1（A 暂停时保留 captured P0/candidate/wrapper 门，同 vault 合法 store B 以
+  purposeChange 发布 W，A 恢复进入真实 staging CAS → 精确 `.staleTransaction`、零 stale 发布、
+  无 receipt/无新 unknown fence/journal、winner 完整信封等于**独立构建**期望、成功写计数不变）、
+  C1c（cancel 后**显式** resume → 精确 `CancellationError`/零 durable 写/无 fence，随后合法写入
+  成功）、C2（fresh merge 从 W 追加，receipt 只断言真实字段）、C3（写者静默后同 namespace 新
+  Keychain 实例读回）、C4（B=`applyTemporarySelection` 变体），以及 R53 五个 helper 直接回归
+  （早成功/早失败 × complete-before-register/reg-before-complete、正常 pause-resume；无
+  sleep/`Task.yield`）。R51 相位计划由 `830576f`（docs-only）批准；R52/R53 修复 `0303747`；
+  R54 收据类型修正 `3818948`。
+- 实际证据（`review-3818948…-codex` FINAL DISPOSITION，Codex 独立读取 main/四条 preview 日志
+  与全部六个 inner Swift6 strict compile/result 日志 + producer）：release
+  [38907716616](https://github.com/Justintunsday/Piliglass/actions/runs/38907716616) 5/5 与
+  preview [38907728006](https://github.com/Justintunsday/Piliglass/actions/runs/38907728006)
+  4/4（均首次尝试、无 job 重跑）；账户 strict analyze No issues/runtime 72/**322** All passed；
+  九强制 outcome 全 success、BUILD SUCCEEDED、Runner.app 109.1MB、executed Aether FFmpeg 先于
+  media-kit；native 109/44 负例/1 synthetic/40 staging/**285=108+177**/292/51（新 C1/C4/cancel/
+  merge/reopen/R53 用例在 108 计数器前实际执行，非借用 245）；producer 8/10/2；91 raw Git blob
+  89 match+2 声明 pubspec；golden live `2237bfdd…`/hive `c5d57bbb…`；preview 20 passed
+  （nav 256.179s + image 99.126s + account 177.065s + player 58.849s）；home 11/11
+  token+launchPID、22 streams、last-row 4395==bottom、压力 `failures[]`；Mac QA 45/45
+  （1.31s synthetic 进程 QA）。
+- 精度/边界（LIMITED PASS 精确声明保留）：仅 schema2 fixture 的目标竞态，不单独证明
+  schema3/high-water 专属交错；successful-write 计数只计成功写调用，非全部 attempted
+  writes/removes/orphan 清点（源 CAS-先于写佐证零发布）；one-shot/single-waiter helper 不构成
+  通用多等待者/cancel-responsive continuation/每 helper 硬期限证明；同进程新 Keychain 实例
+  ≠ process kill/冷启动；synthetic credentials 非真实账户；未声明 zero Swift warnings
+  （identity 单元存在既有 unused-adoptDelete 警告）。保留 5d 词法编译失败与 030 错误收据类型
+  编译失败历史（新用例在那些 SHA 未执行）；未闭合 whole Block1/2/全部 writer/schema3 专属
+  竞态/process kill/生产 authority/handoff-revert-GC/设备。四 flag false；本记录为 docs-only
+  （实际测试 SHA `3818948`；`830576f`/`6575740`/`e38d63d` 均为 docs-only distinct）。
+
 **B1h 真实 Dart `Accounts.set` post-activation revalidate#2 干扰（7 用例，main/heartbeat）在 `eb58d5c` 获 Codex 有限 PASS（仅该 7 用例/offline seam 范围；不闭合 Native purpose CAS/初始 Hive await/default/全部 writer）**：
 - 内容：`test/utils/accounts/account_purpose_set_interference_test.dart` 7 个用例（真实 Hive +
   受控 adapter + LoginUtils 文档化 seam）：对照 publish 链、暂停中 selection switch 零后续

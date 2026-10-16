@@ -158,3 +158,17 @@
 - 本 R51 修正版先经 Codex 计划复核；通过后实现为**新代码 SHA**，显式 BOTH workflows
   （各一次）+ Codex 独立复审（以实际 CI 产物/日志为准）；本 docs-only 轮不实现、不派发 CI、
   不改生产/测试。
+
+## 实现与验收结果（2026-10-16）
+
+- R51 计划（本文件，`830576f` docs-only）获 Codex PASS 后：seam + C1–C4 实现于 `5d3bf43`
+  （词法作用域编译失败 R52 保留）；R52/R53 修复 `0303747`（收据类型编译失败 R54 保留）；
+  R54 标注修正于 **`3818948`**，双 CI 首尝试 5/5 + 4/4，实际 native
+  109/44/1/40/**285=108+177**/292/51（新用例在 108 计数器前实际执行）。
+- **Codex FINAL DISPOSITION（`review-3818948…-codex`）：LIMITED PASS**，仅覆盖本文件的
+  schema2 fixture 目标竞态（同 vault 合法 purpose/temporary 竞争者、stale 精确拒绝、winner
+  完整信封、零成功写、无新 unknown fence/journal、cancel 显式 resume、fresh merge、同进程
+  Keychain 新实例读回）+ R51 相位/R52 作用域/R53 single-waiter 全终态 helper/R54 收据类型。
+- 保持 OPEN：whole Block1/2/P05、schema3/high-water 专属竞态、process kill/冷启动、生产
+  authority、完整 handoff/revert/GC、设备；`5d`/`030` 失败历史保留。实际证据以
+  PROGRESS/STATUS_MATRIX/COMPLETION_REPORT 的 381 记录为准。

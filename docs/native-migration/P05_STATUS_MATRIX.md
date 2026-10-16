@@ -401,9 +401,28 @@ producer 8/10/2；91 raw blob 89+2；golden `5c30f83b…`/`71ed239c…`；previe
 （1.65s synthetic）。**精度**：证明 writer/state-machine 时序，非 headers/Cookie/auth
 pipeline/Native CAS/WK 副作用/真实账户；mirror/publisher 为既有 seam；并发 future 只证重叠；
 main/heartbeat 已测、default 未测；仅 post-activation/#2。**边界**：不闭合 Native
-`applyPurposeChange` CAS（原 53 item8；其 proposed plan 已按 R51 修正待计划复核）、初始 Hive
-onChange await/#1、全部 writer/async closure、B2e-2b bridge/frozen revision、Block3/4/5、
-authority；四 flag false；本记录为 docs-only（实际测试 SHA `eb58d5c`）。
+`applyPurposeChange` CAS（原 53 item8；其目标组已实现并在 `3818948` 获有限 PASS，见下条）、
+初始 Hive onChange await/#1、全部 writer/async closure、B2e-2b bridge/frozen revision、
+Block3/4/5、authority；四 flag false；本记录为 docs-only（实际测试 SHA `eb58d5c`）。
+
+**Native `applyPurposeChange` read-transform-publish CAS（原 53 item8）+ R51–R54 在 `3818948` 获 Codex 有限 PASS（仅该 schema2 fixture/同 vault 合法竞争者/同进程 Keychain reopen 范围）**：
+生产唯一新增为 instance-local 缺省 nil 的 `prePublicationDeliveryHook`（encode/attemptID mint 后、
+shared-vault import 前 await；生产接线从不安装）；C1/C1c/C2/C3/C4 + R53 五个 helper 回归
+（同 vault 合法 purpose/temporary 竞争者 → 精确 `.staleTransaction`/零 stale 发布/无新
+fence/journal/成功写计数不变、cancel 显式 resume → `CancellationError`、fresh merge、
+写者静默后同进程新 Keychain 实例读回）。证据：release
+[38907716616](https://github.com/Justintunsday/Piliglass/actions/runs/38907716616) 5/5 与
+preview [38907728006](https://github.com/Justintunsday/Piliglass/actions/runs/38907728006)
+4/4（首次、无 job 重跑）；九 outcome/BUILD 109.1MB/executed FFmpeg；账户 **322**/72/strict
+clean；109/44/1 synthetic/40/**285=108+177**/292/51（新用例实际执行，非借 245）；producer
+8/10/2；91 raw blob 89+2；golden `2237bfdd…`/`c5d57bbb…`；preview 20 tests
+（256.179+99.126+177.065+58.849s）；11 reports/22 streams/`failures[]`；Mac QA 45/45
+（1.31s synthetic）。前驱保留：5d 词法编译失败、030 错误收据类型编译失败（新用例未在其执行）。
+**精度**：仅 schema2 目标竞态（非 schema3/high-water 专属证明）；write 计数为成功写调用，
+非全部 attempted writes/removes/orphan 清点；one-shot/single-waiter helper 非通用等待者/
+cancel-responsive/硬期限证明；同进程 Keychain 实例 ≠ process kill；无 zero-warning 声明。
+**边界**：不等于 whole Block1/2/P05/schema3 专属竞态/process kill/authority/handoff-revert-GC/
+设备；四 flag false；docs-only 记录（实际测试 SHA `3818948`）。
 
 **Block 1 / B1d 切片（页面读取、延迟副作用、maintenance gate）已在 `98e6f9b` 验收**：
 `Accounts.installedAccounts()` 纯只读 seam + 页面 `isEmpty/isNotEmpty` 切
