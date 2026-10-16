@@ -558,7 +558,10 @@ void main() {
     final main = _account(302, session: 'main-owner');
     await Accounts.installCredentials(video);
     await Accounts.installCredentials(main);
+    Accounts.selectTemporarily(AccountType.main, main);
     await Accounts.set(AccountType.video, video);
+    expect(Accounts.get(AccountType.main), same(main));
+    expect(Accounts.get(AccountType.video), same(video));
     final response = dio.get<String>(Api.ugcUrl);
     final request = await adapter.nextRequest();
     expect(request.options.extra['account'], same(video));
@@ -572,10 +575,14 @@ void main() {
     expect(await _cookie(AnonymousAccount(), 'from_video'), isNull);
   });
 
-  test('the heartbeat path rejects an anonymous heartbeat binding before fetch', () async {
-    final video = _account(311);
+  test('the heartbeat path rejects an anonymous heartbeat binding while main is a distinct login', () async {
+    final mainLogin = _account(311, session: 'main-login');
+    final video = _account(312, session: 'video-login');
+    await Accounts.installCredentials(mainLogin);
     await Accounts.installCredentials(video);
+    Accounts.selectTemporarily(AccountType.main, mainLogin);
     await Accounts.set(AccountType.video, video);
+    expect(Accounts.get(AccountType.main), same(mainLogin));
     expect(Accounts.get(AccountType.heartbeat), isA<AnonymousAccount>());
     await expectLater(
       dio.get<String>(Api.heartBeat),
@@ -588,6 +595,64 @@ void main() {
       ),
     );
     expect(adapter.fetchCount, 0);
+  });
+
+  test('a heartbeat-table path resolves the heartbeat slot owner with header and cookie provenance', () async {
+    final hb = _account(313, session: 'heartbeat-owner');
+    final main = _account(314, session: 'main-owner');
+    final video = _account(315, session: 'video-owner');
+    await Accounts.installCredentials(hb);
+    await Accounts.installCredentials(main);
+    await Accounts.installCredentials(video);
+    Accounts.selectTemporarily(AccountType.heartbeat, hb);
+    Accounts.selectTemporarily(AccountType.main, main);
+    await Accounts.set(AccountType.video, video);
+    expect(Accounts.get(AccountType.heartbeat), same(hb));
+    final response = dio.get<String>(Api.videoIntro);
+    final request = await adapter.nextRequest();
+    expect(request.options.extra['account'], same(hb));
+    expect(request.options.headers['x-bili-mid'], '313');
+    expect(
+      request.options.headers[HttpHeaders.cookieHeader],
+      contains('SESSDATA=heartbeat-owner'),
+    );
+    await finish(
+      response,
+      request,
+      cookies: ['from_heartbeat=path-resolved; Domain=.bilibili.com; Path=/'],
+    );
+    expect(await _cookie(hb, 'from_heartbeat'), 'path-resolved');
+    expect(await _cookie(main, 'from_heartbeat'), isNull);
+    expect(await _cookie(video, 'from_heartbeat'), isNull);
+  });
+
+  test('a recommend-table path resolves the recommend slot owner with header and cookie provenance', () async {
+    final rec = _account(316, session: 'recommend-owner');
+    final main = _account(317, session: 'main-owner');
+    final video = _account(318, session: 'video-owner');
+    await Accounts.installCredentials(rec);
+    await Accounts.installCredentials(main);
+    await Accounts.installCredentials(video);
+    Accounts.selectTemporarily(AccountType.recommend, rec);
+    Accounts.selectTemporarily(AccountType.main, main);
+    await Accounts.set(AccountType.video, video);
+    expect(Accounts.get(AccountType.recommend), same(rec));
+    final response = dio.get<String>(Api.recommendListWeb);
+    final request = await adapter.nextRequest();
+    expect(request.options.extra['account'], same(rec));
+    expect(request.options.headers['x-bili-mid'], '316');
+    expect(
+      request.options.headers[HttpHeaders.cookieHeader],
+      contains('SESSDATA=recommend-owner'),
+    );
+    await finish(
+      response,
+      request,
+      cookies: ['from_recommend=path-resolved; Domain=.bilibili.com; Path=/'],
+    );
+    expect(await _cookie(rec, 'from_recommend'), 'path-resolved');
+    expect(await _cookie(main, 'from_recommend'), isNull);
+    expect(await _cookie(video, 'from_recommend'), isNull);
   });
 
   test('a login API path binds the anonymous singleton even when slots hold logins', () async {
@@ -653,7 +718,7 @@ void main() {
     final response = dio.get<String>(Api.ugcUrl);
     final request = await adapter.nextRequest();
     expect(request.options.extra['account'], same(a));
-    await Accounts.selectTemporarily(AccountType.video, b);
+    Accounts.selectTemporarily(AccountType.video, b);
     expect(Accounts.get(AccountType.video), same(b));
     // Switching the purpose slot does not revoke A: its legitimate bound
     // response write must still land, and B must receive nothing.
@@ -686,9 +751,20 @@ void main() {
       final response = readerDio.get<String>(Api.ugcUrl);
       final request = await adapter.nextRequest();
       expect(request.options.extra['account'], same(video));
+      expect(request.options.headers['x-bili-mid'], '361');
+      expect(
+        request.options.headers[HttpHeaders.cookieHeader],
+        contains('SESSDATA=video-reader'),
+      );
       expect(reader.captures, 1);
       await finish(response, request, cookies: const []);
       expect(reader.captures, 1);
+      expect(reader.csrfReads, 0);
+      expect(reader.accessKeyReads, 0);
+      expect(reader.refreshReads, 0);
+      expect(reader.boundCsrfReads, 0);
+      expect(reader.boundAccessKeyReads, 0);
+      expect(reader.boundRefreshReads, 0);
     } finally {
       readerDio.close(force: true);
     }
