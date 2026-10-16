@@ -18,17 +18,20 @@ import io
 import json
 import os
 from pathlib import Path
+import re
 import sys
 import tempfile
-import time
 
 TOOL = Path(__file__).resolve().parent
 ROOT = TOOL.parent
 PIPELINE_PATH = TOOL / "check_native_account_envelopes.py"
+DRIVER_PATH = TOOL / "check_native_account_envelope_export.swift"
 WORKFLOW_PATH = ROOT / ".github" / "workflows" / "ios.yml"
 MAIN_SHA = os.environ.get("GITHUB_SHA") or "a" * 40
 MOCK_WIRE = b'{"schemaVersion":3,"mock":true}'
 MOCK_TRANSACTION = "11111111-1111-1111-1111-111111111111"
+MOCK_EXPORT_CHECK_LINE = "126 native account envelope export checks passed\n"
+STALE_EXPORT_REASON = "Cross-runtime export metadata is absent, stale or mismatched"
 CLEANUP_NAMES = [
     "schema3-export.json", "schema3-export-wire.bin", "schema3-export-consumed.json",
     "schema3-export-compile.log", "schema3-export-result.log",
@@ -48,13 +51,32 @@ def load_pipeline():
     return module
 
 
+class ProducerClock:
+    """Deterministic microsecond clock for the mocked producer window.
+
+    Every call advances by a fixed step, so with the module's clock injected
+    around `main()`, `producer_started < observation started <= observation
+    finished < producer_finished` holds on any host clock granularity, without
+    sleeps and without touching the production fixture validation.
+    """
+
+    def __init__(self, start_microseconds=1_700_000_000_000_000, step_microseconds=5):
+        self._now = start_microseconds
+        self._step = step_microseconds
+
+    def time_ns(self):
+        self._now += self._step
+        return self._now * 1000
+
+
 class FakePipeline:
     """Mock process seam: writes the same output files the real commands would."""
 
-    def __init__(self, root: Path, scenario: str, module):
+    def __init__(self, root: Path, scenario: str, module, clock=None):
         self.root = root
         self.scenario = scenario
         self.module = module
+        self.clock = clock or ProducerClock()
         self.commands = []
 
     def run(self, command, log, timeout=180):
@@ -112,8 +134,9 @@ class FakePipeline:
         }
 
     def write_goldens(self):
-        started = time.time_ns() // 1000
-        window = (started, started + 10)
+        started = self.clock.time_ns() // 1000
+        finished = self.clock.time_ns() // 1000
+        window = (started, finished)
         live = {
             "schemaVersion": 1,
             "source": "actual Accounts / real Hive / production live-memory capture service",
@@ -161,10 +184,10 @@ class FakePipeline:
         metadata = self.producer_metadata(digest)
         if self.scenario == "missing_wire":
             (self.root / "schema3-export.json").write_text(json.dumps(metadata), encoding="utf-8")
-            return "126 native account envelope export checks passed\n"
+            return MOCK_EXPORT_CHECK_LINE
         if self.scenario == "missing_metadata":
             (self.root / "schema3-export-wire.bin").write_bytes(MOCK_WIRE)
-            return "126 native account envelope export checks passed\n"
+            return MOCK_EXPORT_CHECK_LINE
         if self.scenario == "duplicate_metadata_keys":
             (self.root / "schema3-export-wire.bin").write_bytes(MOCK_WIRE)
             text = ('{"schema":"pili.account.schema3-export.v1",'
@@ -174,7 +197,7 @@ class FakePipeline:
                     '"wireFileName":"schema3-export-wire.bin"}'
                     % (MAIN_SHA, MAIN_SHA, MOCK_TRANSACTION, len(MOCK_WIRE), digest))
             (self.root / "schema3-export.json").write_text(text, encoding="utf-8")
-            return "126 native account envelope export checks passed\n"
+            return MOCK_EXPORT_CHECK_LINE
         if self.scenario == "stale_metadata":
             metadata["sourceSHA"] = "b" * 40
         if self.scenario == "main_stale_export":
@@ -184,7 +207,7 @@ class FakePipeline:
         else:
             (self.root / "schema3-export-wire.bin").write_bytes(MOCK_WIRE)
         (self.root / "schema3-export.json").write_text(json.dumps(metadata), encoding="utf-8")
-        return "126 native account envelope export checks passed\n"
+        return MOCK_EXPORT_CHECK_LINE
 
     def consumer(self, joined):
         assert "--dart-define=NATIVE_ACCOUNT_SCHEMA3_EXPORT=" in joined
@@ -229,25 +252,28 @@ def run_phase(module, scenario, workflow_sha=None):
         return evidence, fake
 
 
-def run_main(module, scenario):
+def run_main(module, scenario, clock=None):
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
-        fake = FakePipeline(root, scenario, module)
+        fake = FakePipeline(root, scenario, module, clock=clock)
         previous_output = module.OUTPUT
         previous_run = module.run
+        previous_time = module.time
         previous_platform = sys.platform
         module.OUTPUT = root
         module.run = fake.run
+        module.time = clock or ProducerClock()
         sys.platform = "darwin"
         try:
             with redirect_stdout(io.StringIO()):
                 exit_code = module.main()
         finally:
             sys.platform = previous_platform
+            module.time = previous_time
             module.OUTPUT = previous_output
             module.run = previous_run
         summary = json.loads((root / "summary.json").read_text(encoding="utf-8"))
-        return exit_code, summary
+        return exit_code, summary, fake
 
 
 def check_phase_success(module):
@@ -281,22 +307,34 @@ def check_phase_wrong_workflow(module):
 
 
 def check_main_success(module):
-    exit_code, summary = run_main(module, "happy")
-    assert exit_code == 0, summary.get("reason")
-    assert summary["status"] == "passed"
-    assert summary["sourceSHA"] == MAIN_SHA
-    export = summary["schema3Export"]
-    assert export["exportChecks"] == 126
-    assert export["consumerTests"] == 6
-    assert export["transactionID"] == MOCK_TRANSACTION
-    assert len(export["wireSHA256"]) == 64
+    # Two different clock bases: the deterministic producer window must hold on
+    # any boundary, without host clock granularity involvement.
+    for clock in (ProducerClock(0, 5), ProducerClock(1_700_000_000_000_000, 7)):
+        exit_code, summary, fake = run_main(module, "happy", clock=clock)
+        assert exit_code == 0, summary.get("reason")
+        assert summary["status"] == "passed"
+        assert summary["sourceSHA"] == MAIN_SHA
+        export = summary["schema3Export"]
+        assert export["exportChecks"] == 126
+        assert export["consumerTests"] == 6
+        assert export["transactionID"] == MOCK_TRANSACTION
+        assert len(export["wireSHA256"]) == 64
+        commands = [" ".join(command) for command, _ in fake.commands]
+        assert any("check-native-account-envelope-export" in command for command in commands), \
+            "main() never reached the cross-runtime export phase"
 
 
 def check_main_failure(module):
-    exit_code, summary = run_main(module, "main_stale_export")
+    exit_code, summary, fake = run_main(module, "main_stale_export")
     assert exit_code == 1, "a failed phase must exit non-zero"
     assert summary["status"] == "failed"
-    assert summary.get("reason"), "failed summary must record the phase failure"
+    assert summary.get("reason") == STALE_EXPORT_REASON, \
+        f"failed summary must record the intended stale-export cause, got {summary.get('reason')!r}"
+    commands = [" ".join(command) for command, _ in fake.commands]
+    assert any("check-native-account-envelope-export" in command for command in commands), \
+        "the cross-runtime export phase was never reached; an earlier failure cannot prove this negative path"
+    assert any("test/utils/accounts/" in command for command in commands), \
+        "the producer phase never ran before the intended stale-export failure"
 
 
 def check_static_wiring():
@@ -338,6 +376,29 @@ def check_static_wiring():
     assert '"test/services/native_accounts/**"' in workflow
 
 
+def check_driver_fixture_consistency():
+    """Static fixture-consistency QA for the changed-manifest cancellation row.
+
+    Source-level only: the reminted manifest must be a pointer-only mutation
+    (transaction ID changed, byte count and digest untouched), and the row must
+    carry its independent expected-mutation / restore labels. This is not Swift
+    execution evidence.
+    """
+    source = DRIVER_PATH.read_text(encoding="utf-8")
+    match = re.search(
+        r"private static func remintedManifest\(_ bytes: Data\) throws -> Data \{(?P<body>.*?)\n  \}",
+        source, re.S)
+    assert match is not None, "remintedManifest function body not found"
+    body = match.group("body")
+    assert 'object["transactionID"] = UUID().uuidString.lowercased()' in body, \
+        "changed-manifest fixture must remint the transaction ID"
+    assert "byteCount" not in body and "sha256" not in body, \
+        "changed-manifest fixture must be a pointer-only mutation"
+    for label in ("changed-manifest cancel preserves the exact independently expected fixture mutation",
+                  "cleanup restores the original vault bytes"):
+        assert label in source, f"changed-manifest row is missing its expected-state label: {label}"
+
+
 def main() -> int:
     module = load_pipeline()
     results = []
@@ -362,6 +423,7 @@ def main() -> int:
     attempt("full main() mock fails summary/exit1 on a stale export",
             lambda: check_main_failure(module))
     attempt("static pipeline/workflow wiring", check_static_wiring)
+    attempt("driver changed-manifest fixture consistency", check_driver_fixture_consistency)
     failed = 0
     for label, passed, detail in results:
         if passed:
@@ -371,7 +433,9 @@ def main() -> int:
             print(f"FAIL {label} ({detail})")
     print(f"QA native account envelope export: {len(results) - failed}/{len(results)} "
           "local mock checks passed")
-    print("QA note: local mocked Python QA only - NOT Mac/Swift/Dart/device runtime evidence")
+    print("QA note: local mocked Python QA only - NOT Mac/Swift/Dart/device runtime evidence; "
+          "the mock '126 native ... checks passed' lines are MOCK subprocess output, not a "
+          "Swift execution count")
     return 1 if failed else 0
 
 

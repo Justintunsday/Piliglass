@@ -351,6 +351,11 @@ func exportCurrentShadow(expectedTransactionID: UUID) async throws -> PiliAccoun
   consumer 进程错误与缺 pass 报告、缺失/篡改 consumption record；**main() 级受控 mock**
   验证 phase 失败 → summary failed/exit 1、happy → passed/0；清理断言改为 AST 读取 main()
   实际 unlink 列表。以上为**本地 mock，非 Mac/Swift/Dart 运行时证据**。
+- **R64/R65 修复（review-3e7a21f；driver/mock-QA only，无生产语义变化）**：
+  changed-manifest-cancel 行改为孤儿指针的独立期望全字节 oracle，且恢复原完整 fixture
+  先于任何 cleanup 读/导出；本地 mock QA 注入确定性时钟（无 sleep/无预算变化）、happy main
+  双时钟基准、failure main 断言精确 stale-export 原因与阶段到达、新增 driver fixture
+  静态一致性检查；driver 计数 128（MINIMUM 120，只增不减）。
 - 本切片**未派发任何 CI**：按 source-preflight 次序，先提交 code SHA 等待 Codex SOURCE
   PREFLIGHT；通过后才在同一 exact SHA 派发 BOTH workflow 各一次，再由 Codex 复核实际证据。
 - §1.3 保证范围、§2 composition 会话设计、§3.1/3.2 bootstrap/binding 保持 OPEN、未实施；

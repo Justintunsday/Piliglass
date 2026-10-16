@@ -899,9 +899,19 @@ private actor ExportFaultVault: PiliAccountSecretStore {
     }
     do {
       let (vault, staging, _, current) = try await makeAdoptedVault(codec: codec, base: base)
-      guard let manifestBefore = await vault.storedBytes(manifestKey) else {
-        throw ExportFixtureError.failed("missing manifest bytes")
+      guard let manifestBefore = await vault.storedBytes(manifestKey),
+            let recordBefore = await vault.storedBytes(recordKey(current.transactionID)) else {
+        throw ExportFixtureError.failed("missing manifest/record bytes")
       }
+      // An orphaned changed pointer: the manifest is reminted to a fresh
+      // transaction ID with NO record under that key. The independent expected
+      // vault state is the original fixture with exactly that one manifest
+      // replacement; the ORIGINAL complete fixture is restored before any valid
+      // cleanup read or export, and no unexpected error is swallowed.
+      let moved = try remintedManifest(manifestBefore)
+      let originalSnapshot = await vault.storedSnapshot()
+      var expectedMutated = originalSnapshot
+      expectedMutated[manifestKey] = moved
       await vault.resetExportCounters()
       await vault.pauseManifestReadOnce()
       var cancelled = false
@@ -909,7 +919,6 @@ private actor ExportFaultVault: PiliAccountSecretStore {
         _ = try await runControlledExport(
           label: "manifest-changed-cancel", vault: vault, staging: staging,
           expectedTransactionID: current.transactionID, cancelBeforeResume: true) {
-          let moved = try remintedManifest(manifestBefore)
           await vault.installFixtureBytes(moved, key: manifestKey)
           return 0
         }
@@ -920,10 +929,20 @@ private actor ExportFaultVault: PiliAccountSecretStore {
       let removeAttempts = await vault.removeAttemptCount()
       try require(writeAttempts == 0 && removeAttempts == 0, "changed-manifest cancel attempts no writes")
       checks += 1
-      let observed = try await staging.loadShadowSnapshot()
-      try require(observed != nil, "fence released after changed-manifest cancel")
+      let mutated = await vault.storedSnapshot()
+      try require(mutated == expectedMutated,
+                  "changed-manifest cancel preserves the exact independently expected fixture mutation")
       checks += 1
       await vault.installFixtureBytes(manifestBefore, key: manifestKey)
+      let cleanup = try await staging.exportCurrentShadow(expectedTransactionID: current.transactionID)
+      try require(cleanup.transactionID == current.transactionID &&
+                  cleanup.envelopeBytes == recordBefore &&
+                  cleanup.envelopeSHA256 == sha256Hex(recordBefore),
+                  "cleanup export returns the original pointer bytes and digest")
+      checks += 1
+      let after = await vault.storedSnapshot()
+      try require(after == originalSnapshot, "cleanup restores the original vault bytes")
+      checks += 1
     }
     do {
       let (vault, staging, _, current) = try await makeAdoptedVault(codec: codec, base: base)
