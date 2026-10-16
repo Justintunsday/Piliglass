@@ -424,6 +424,30 @@ cancel-responsive/硬期限证明；同进程 Keychain 实例 ≠ process kill�
 **边界**：不等于 whole Block1/2/P05/schema3 专属竞态/process kill/authority/handoff-revert-GC/
 设备；四 flag false；docs-only 记录（实际测试 SHA `3818948`）。
 
+**B2e-2b-3 原子只读 schema3 当前指针导出 + 真实跨运行时消费 + R62–R65 在 `6b39ac1` 获 Codex 有限 PASS（仅该只读导出/selected `stored-10-2-owner-2-10` fixture/R62–R65）**：
+`exportCurrentShadow(expectedTransactionID:)`：单 shared-vault fence、fresh persistent
+journal fail-closed（present/corrupt/unreadable 保留字节、绝不 resolve/clear/replay）、pinned
+pointer 精确已存字节（不重编码）、严格 schema3、zero writes、post-await 精确
+`CancellationError`；原 enum 只加 `shadowUnavailable`/`staleExport`；R62 次序/映射修复、
+R63 负例矩阵 + 全 winner oracle + 真实 store-B correlated `publicationUnknown`（journal+fence
+保留、不 replay）+ pre-cancel 零 IO + 终态 helper、R64/R65 driver 全字节 oracle + mock QA
+确定性时钟。跨运行时：driver 精确 wire/元数据由**同一 mandatory outcome** 内实际 Dart
+consumer 6 测试严格消费（byte/hash/consumed/指针/labels 对齐独立 capture、负例拒绝）。证据：
+release [38939382819](https://github.com/Justintunsday/Piliglass/actions/runs/38939382819)
+5/5 与 preview [38939388310](https://github.com/Justintunsday/Piliglass/actions/runs/38939388310)
+4/4（首次、无 job 重跑）；九 outcome/BUILD 109.1MB/executed FFmpeg；账户 **322**/72/strict
+clean；七个 Swift6 strict 日志 **128** export checks/consumer 6；既有
+109/44/1/40/**285**(108+177)/292/51、producer 8/10/2；legacy 88；94 raw 92+2（非 108
+unique）；goldens `d67f0fc8…`/`4f9b95f9…`/`0198a937…`/`b1220406…`；metadata
+`0af69bf2…`/wire `aed83d99…`/consumed `ff52457b…`；preview 20
+（398.437+62.362+173.313+71.989s）；11 reports/22 streams/`failures[]`；MacQA 45/45（1.66s
+synthetic）。前驱保留：`818a0e9`/`3e7a21f` 两次 source-preflight CHANGES_REQUESTED（R62–R65）、
+mock QA 14/15。**精度**：raw fault fixture ≠ 合法 writer 干涉；同进程 Keychain 新实例 ≠
+process kill；warning 保留（非 zero-warning）。**边界**：不等于 whole Block2/3/P05/authority/
+生产 bootstrap/binding/handoff/revert/startup/GC/设备；四 flag false；docs-only 记录（实际
+测试 SHA `6b39ac1`）。下一组契约见
+[P05_B2E2B3_FIRST_PUBLICATION_ASSOCIATION_PLAN.md](P05_B2E2B3_FIRST_PUBLICATION_ASSOCIATION_PLAN.md)。
+
 **B2e-2b-2 legacy schema-1 staging fetch（`stagingExport()`）+ R55 在 `318bb88` 获 Codex 有限 PASS（仅 legacy read-only fetch/命名统一/新取消回归/组件 provenance 范围）**：
 真实仓库方法 `stagingExport()`（命令 `exportNativeAccountStaging`、nil 参数、严格 codec/
 error-state；R55 统一 driver 命名、无别名）+ 预取消零 invoke/受控挂起取消（显式 release）/

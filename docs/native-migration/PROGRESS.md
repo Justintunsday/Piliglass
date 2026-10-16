@@ -243,6 +243,35 @@ sourceSHA=workflowSHA=9724ddb；preview 20 tests 0 failures、压力 `failures=[
 shadow 组件：未接 authority、无生产 caller，durable identity 消费/恢复语义、账号级队列与
 receipt/unknown ack、Block 3/4/5 仍未交付；四能力 flag 保持 false，P05 未整体完成。
 
+**B2e-2b-3 原子只读 schema3 当前指针导出 + 真实跨运行时消费 + R62–R65 在 `6b39ac1` 获 Codex 有限 PASS（仅该只读导出/selected `stored-10-2-owner-2-10` 跨运行时 fixture/R62–R65 范围；不等于 whole Block2/3/P05/authority/生产 bootstrap/binding/handoff/GC/process kill/设备）**：
+- 生产：`PiliAccountEnvelopeStagingStore.exportCurrentShadow(expectedTransactionID:)`——单
+  shared-vault fence、fresh persistent journal fail-closed（present/corrupt/unreadable 全保留
+  字节、绝不 resolve/clear/replay）、pinned pointer **精确已存字节**（不重编码）、严格 schema3
+  codec/上限、zero writes、post-await 取消精确 `CancellationError`；原 enum 仅加
+  `shadowUnavailable`/`staleExport`。R62 capture→checkCancellation→interpret + journal 映射
+  收窄；R63 导出负例矩阵 + 全 winner oracle + 真实同 vault store-B correlated
+  `publicationUnknown`（journal+in-memory fence 保留、不 replay）+ pre-cancel 零 IO + 终态
+  上报 helper；R64/R65 driver 独立期望全字节 oracle + mock QA 确定性时钟/精确失败原因。
+- 跨运行时：driver 产出 6223 字节精确 wire + 元数据；**同一 mandatory envelope outcome** 内
+  实际 Dart consumer 6 测试严格消费（byte/hash/consumed/指针一致、labels 对齐独立 actual
+  Dart capture、负例拒绝），Python 消费后复核产物哈希；consumer 文件不改。
+- 实际证据（`review-6b39ac1…-codex` FINAL DISPOSITION，Codex 独立读取双 workflow 全部实际
+  日志/artifacts 并 raw-hash 94+14 Git blobs）：release
+  [38939382819](https://github.com/Justintunsday/Piliglass/actions/runs/38939382819) 5/5 与
+  preview [38939388310](https://github.com/Justintunsday/Piliglass/actions/runs/38939388310)
+  4/4（均首次尝试、无 job 重跑）；九 outcome 全 success、BUILD 109.1MB、executed FFmpeg；
+  账户 322/72/`--fatal-infos` clean；七个 Swift6 strict 日志 **128** export checks、consumer
+  6、既有 109/44/1/40/**285**(108+177)/292/51、producer 8/10/2；legacy 88；goldens
+  `d67f0fc8…`/`4f9b95f9…`/`0198a937…`/`b1220406…` 匹配；metadata `0af69bf2…`/wire
+  `aed83d99…`/consumed `ff52457b…`；preview 20（398.437+62.362+173.313+71.989s）；home
+  11/11 token+PID、22 streams、`failures[]`；Mac QA 45/45（1.66s synthetic）。
+- 精度/边界：raw fault fixture 变异 ≠ 合法 writer 干涉；同进程 Keychain 新实例 ≠ process
+  kill；无全局 all-writer freeze/lease/MethodChannel e2e/生产 composition/authority；warning
+  保留（adoptedDelete 636/新 unused vault 1104，非 zero-warning）；前驱 `818a0e9`/`3e7a21f`
+  source-preflight CHANGES_REQUESTED 与 mock QA 14/15 历史保留。四 flag false；本记录为
+  docs-only（实际测试 SHA `6b39ac1`）。下一组契约计划见
+  [P05_B2E2B3_FIRST_PUBLICATION_ASSOCIATION_PLAN.md](P05_B2E2B3_FIRST_PUBLICATION_ASSOCIATION_PLAN.md)。
+
 **B2e-2b-2 legacy schema-1 staging fetch（`stagingExport()`）+ R55 在 `318bb88` 获 Codex 有限 PASS（仅 legacy read-only fetch/命名统一/新取消回归/组件 provenance 范围；不等于 full schema3 wire/frozen lease/MethodChannel e2e/生产 composition/authority/P05）**：
 - 内容：`PiliAccountFlutterRepository.stagingExport()`（真实命令 `exportNativeAccountStaging`、nil
   参数、与 `selectionSnapshot()` 同型 error-state、严格 `PiliAccountStagingBridgeCodec`）；R55

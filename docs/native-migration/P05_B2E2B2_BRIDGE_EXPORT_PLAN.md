@@ -94,3 +94,10 @@ durable identity（缺失/不匹配 → 拒绝、零写）；identity 只作关�
   （仅计划，待 Codex contract review）；legacy fetch 非 MethodChannel e2e/生产 composition/
   authority；`apply()` 不携带 durable labels；nonempty-target/idempotent reverse apply、
   startup/revert/GC 为独立门。
+- 追加（2026-10-17）：B2e-2b-3 原子**只读** schema3 当前指针导出 + 真实 Swift 产出→Dart
+  消费（`6b39ac1`）已获 Codex 有限 PASS（精确记录见 `PROGRESS.md` 与
+  `P05_COMPLETION_REPORT.md` §23）；frozen-revision handoff / 双向 durable-identity
+  carriage / 生产 composition 仍 OPEN；下一组 guarded FIRST 发布/bootstrap + captured
+  Dart→adopted Native 关联契约计划见
+  [P05_B2E2B3_FIRST_PUBLICATION_ASSOCIATION_PLAN.md](P05_B2E2B3_FIRST_PUBLICATION_ASSOCIATION_PLAN.md)
+  （待 CONTRACT review，未获批前不实现）。

@@ -356,7 +356,16 @@ func exportCurrentShadow(expectedTransactionID: UUID) async throws -> PiliAccoun
   先于任何 cleanup 读/导出；本地 mock QA 注入确定性时钟（无 sleep/无预算变化）、happy main
   双时钟基准、failure main 断言精确 stale-export 原因与阶段到达、新增 driver fixture
   静态一致性检查；driver 计数 128（MINIMUM 120，只增不减）。
-- 本切片**未派发任何 CI**：按 source-preflight 次序，先提交 code SHA 等待 Codex SOURCE
-  PREFLIGHT；通过后才在同一 exact SHA 派发 BOTH workflow 各一次，再由 Codex 复核实际证据。
-- §1.3 保证范围、§2 composition 会话设计、§3.1/3.2 bootstrap/binding 保持 OPEN、未实施；
-  四 flag false；既有计数/预算/aggregate、318 limited PASS 与失败历史不变。
+- **本切片已获 Codex 有限 PASS（review-6b39ac1 FINAL DISPOSITION）**：测试代码 SHA
+  `6b39ac14ef49d871621a3f40f40fb90edb24c594`，release
+  [38939382819](https://github.com/Justintunsday/Piliglass/actions/runs/38939382819) 5/5 +
+  preview [38939388310](https://github.com/Justintunsday/Piliglass/actions/runs/38939388310)
+  4/4（首次、无重跑）；实际 128 export checks/consumer 6、既有计数不变、104 raw Git blob
+  match（94 92+2 与 legacy 14 重叠，非 unique）。LIMITED PASS 仅该只读导出 + selected
+  `stored-10-2-owner-2-10` 跨运行时 fixture + R62–R65；精确记录见 `PROGRESS.md`/
+  `P05_COMPLETION_REPORT.md` §23。
+- §1.3 保证范围、§2 composition 会话设计、§3.1/3.2 bootstrap/binding 保持 **OPEN、未实施**；
+  下一组 guarded FIRST 发布/bootstrap + captured Dart→adopted Native 关联的契约计划已另存：
+  [P05_B2E2B3_FIRST_PUBLICATION_ASSOCIATION_PLAN.md](P05_B2E2B3_FIRST_PUBLICATION_ASSOCIATION_PLAN.md)
+  （待 Codex CONTRACT review，未获批前不实现）。四 flag false；既有计数/预算/aggregate、318
+  limited PASS 与失败历史不变。
