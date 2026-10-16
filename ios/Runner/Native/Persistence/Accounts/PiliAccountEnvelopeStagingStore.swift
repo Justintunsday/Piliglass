@@ -4,7 +4,7 @@ import Foundation
 enum PiliAccountEnvelopeStagingError: Error, Sendable, Equatable {
   case operationInProgress, invalidManifest, missingRecord, verificationFailed, publicationUnknown,
        staleTransaction, invalidRecoveryJournal, unresolvedRecovery, staleRecoveryJournal,
-       shadowUnavailable, staleExport
+       shadowUnavailable, staleExport, bootstrapRefused, invalidBootstrap
 }
 
 struct PiliAccountEnvelopeStagingReceipt: Sendable, Equatable {
@@ -41,6 +41,12 @@ struct PiliAccountEnvelopeRecoveryJournal: Sendable, Equatable {
 
   static let maximumBytes = 4096
   static let journalKey = "account-envelope-recovery-journal-v1"
+  /// Fixed lower-layer kind for the create-only bootstrap publication. The
+  /// staging and authority compile phases do not include the transaction
+  /// store, so the staging layer owns this literal; the transaction enum's
+  /// `bootstrap` case spells the same raw value literally and the bootstrap
+  /// driver asserts both are equal. No caller supplies this kind string.
+  static let bootstrapKind = "bootstrap"
 
   /// Canonical bounded encoding (sorted keys, explicit null for the expected
   /// previous pointer). Decoding rejects any non-canonical byte form, so
@@ -146,7 +152,7 @@ actor PiliAccountEnvelopeStagingStore {
   func importShadow(_ input: Data) async throws -> PiliAccountEnvelopeStagingReceipt {
     try beginOperation()
     defer { operationInProgress = false }
-    return try await publishShadow(input, expectedTransactionID: nil)
+    return try await publishShadow(input, expectation: .uncorrelated)
   }
 
   /// Compare and publish under the same vault operation fence. All transaction
@@ -163,18 +169,48 @@ actor PiliAccountEnvelopeStagingStore {
     -> PiliAccountEnvelopeStagingReceipt {
     try beginOperation()
     defer { operationInProgress = false }
-    return try await publishShadow(input, expectedTransactionID: expectedTransactionID,
+    return try await publishShadow(input, expectation: .exact(expectedTransactionID),
                                    candidateTransactionID: candidateTransactionID,
                                    recoveryKind: recoveryKind)
   }
 
-  private func publishShadow(_ input: Data, expectedTransactionID: UUID?,
+  /// Create-only correlated bootstrap publication under the same vault fence.
+  /// Only a schema-2 candidate is accepted, and the publication is refused
+  /// before any persistent write when the CURRENT pointer is present, when a
+  /// record or an orphan descriptor already exists under
+  /// `candidateTransactionID`, or when recovery evidence exists. "Create-only"
+  /// means exactly that the current pointer is absent under this fence: it is
+  /// NOT proof that the namespace never published before, and it authorizes no
+  /// historical-generation or high-water reset. The journal kind is the fixed
+  /// lower-layer constant; no caller supplies it.
+  @discardableResult
+  func bootstrapShadow(_ input: Data, candidateTransactionID: UUID) async throws
+    -> PiliAccountEnvelopeStagingReceipt {
+    try beginOperation()
+    defer { operationInProgress = false }
+    return try await publishShadow(input, expectation: .absent,
+                                   candidateTransactionID: candidateTransactionID,
+                                   recoveryKind: PiliAccountEnvelopeRecoveryJournal.bootstrapKind)
+  }
+
+  /// Publish-time expectation evaluated under the single vault fence:
+  /// `.uncorrelated` keeps the raw no-expectation primitive, `.exact` keeps the
+  /// correlated compare-and-publish, and `.absent` is the create-only bootstrap
+  /// expectation (the current pointer must be absent).
+  private enum ShadowPublicationExpectation {
+    case uncorrelated, exact(UUID), absent
+  }
+
+  private func publishShadow(_ input: Data, expectation: ShadowPublicationExpectation,
                              candidateTransactionID: UUID? = nil,
                              recoveryKind: String? = nil) async throws
     -> PiliAccountEnvelopeStagingReceipt {
     // Validate and own a complete copy before any persistent mutation.
     let candidate = try codec.decode(input)
     let data = try codec.encode(candidate)
+    if case .absent = expectation, candidate.schemaVersion != 2 {
+      throw PiliAccountEnvelopeStagingError.invalidBootstrap
+    }
     // Correlated publications participate in the single-slot recovery journal:
     // they require both the exact operation ID and its kind, and they must not
     // start while another attempt in this namespace is unresolved. The raw
@@ -185,30 +221,80 @@ actor PiliAccountEnvelopeStagingStore {
       guard recoveryKind != nil else {
         throw PiliAccountEnvelopeStagingError.verificationFailed
       }
-      guard try await recoveryJournal() == nil else {
-        throw PiliAccountEnvelopeStagingError.unresolvedRecovery
+      if case .absent = expectation {
+        // The create-only path honors a pre-cancelled caller before any IO and
+        // classifies the fresh journal read exactly like the read-only export:
+        // a corrupt journal stays invalidRecoveryJournal, any other unreadable
+        // state fails closed as unresolvedRecovery, and cancellation stays
+        // cancellation.
+        try Task.checkCancellation()
+        let journal: PiliAccountEnvelopeRecoveryJournal?
+        do {
+          journal = try await recoveryJournal()
+        } catch let error as CancellationError {
+          throw error
+        } catch PiliAccountEnvelopeStagingError.invalidRecoveryJournal {
+          throw PiliAccountEnvelopeStagingError.invalidRecoveryJournal
+        } catch {
+          throw PiliAccountEnvelopeStagingError.unresolvedRecovery
+        }
+        guard journal == nil else {
+          throw PiliAccountEnvelopeStagingError.unresolvedRecovery
+        }
+      } else {
+        guard try await recoveryJournal() == nil else {
+          throw PiliAccountEnvelopeStagingError.unresolvedRecovery
+        }
       }
     }
     let previous = try await manifest()
-    if let expectedTransactionID, previous?.value.transactionID != expectedTransactionID {
-      throw PiliAccountEnvelopeStagingError.staleTransaction
+    switch expectation {
+    case .uncorrelated:
+      break
+    case .exact(let expectedTransactionID):
+      if previous?.value.transactionID != expectedTransactionID {
+        throw PiliAccountEnvelopeStagingError.staleTransaction
+      }
+    case .absent:
+      guard previous == nil else {
+        throw PiliAccountEnvelopeStagingError.bootstrapRefused
+      }
     }
     try Task.checkCancellation()
     let id = candidateTransactionID ?? UUID()
     let recordKey = key(id)
     if candidateTransactionID != nil {
-      // A caller-supplied operation ID must never overwrite an existing record.
-      guard try await secrets.read(recordKey) == nil else {
-        throw PiliAccountEnvelopeStagingError.verificationFailed
+      if case .absent = expectation {
+        // Create-only refuses both an existing record and an orphan descriptor
+        // under the reused ID: an immutable descriptor may still be referenced
+        // by an authority marker, so it is never overwritten.
+        guard try await secrets.read(recordKey) == nil,
+              try await secrets.read(descriptorKey(id)) == nil else {
+          throw PiliAccountEnvelopeStagingError.bootstrapRefused
+        }
+      } else {
+        // A caller-supplied operation ID must never overwrite an existing record.
+        guard try await secrets.read(recordKey) == nil else {
+          throw PiliAccountEnvelopeStagingError.verificationFailed
+        }
       }
     }
     // Write the durable recovery evidence before the candidate record, the
     // descriptor and the pointer, and only after a verified clean pre-check.
     var journalBytes: Data? = nil
     if let candidateTransactionID, let recoveryKind {
+      let expectedPrevious: UUID?
+      switch expectation {
+      case .uncorrelated:
+        expectedPrevious = nil
+      case .exact(let expected):
+        expectedPrevious = expected
+      case .absent:
+        expectedPrevious = nil
+      }
       let journal = PiliAccountEnvelopeRecoveryJournal(
         attemptedTransactionID: candidateTransactionID,
-        expectedPreviousTransactionID: expectedTransactionID,
+        expectedPreviousTransactionID: expectedPrevious,
         attemptedCandidateSHA256: digest(data), kind: recoveryKind)
       journalBytes = try PiliAccountEnvelopeRecoveryJournal.encode(journal)
       try await writeRecoveryJournalVerifying(journalBytes!)

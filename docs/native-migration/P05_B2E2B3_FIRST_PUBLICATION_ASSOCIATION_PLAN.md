@@ -107,6 +107,8 @@ review 后才实施。6b limited PASS 仅覆盖只读导出 + selected fixture�
   `.absent` 时 `guard previous == nil else { throw bootstrapRefused }`。
   **不**在 fence 外先查缺席再调用 raw（消除 TOCTOU）；**不**从 bootstrap 内部调用公共
   fenced import（会 `operationInProgress`）。既有 raw/correlated 语义逐字节保留。
+  create-only 只证明**当前 pointer 在 fence 内缺席**，不证明该 namespace 从未发布、
+  无孤儿历史，或可安全重置 high-water，也不授权生产新 namespace。
 - `bootstrapShadow` 签名（最终）：
   `func bootstrapShadow(_ input: Data, candidateTransactionID: UUID) async throws
   -> PiliAccountEnvelopeStagingReceipt`（kind 固定为下层常量
@@ -138,11 +140,12 @@ review 后才实施。6b limited PASS 仅覆盖只读导出 + selected fixture�
 | record 写前检查点 cancel | 先走 candidate 清理：record/descriptor `try?` 移除 + 验证清 journal | 清理验证成功 → **原始 `CancellationError`**；清 journal 不可验证 → `unresolvedRecovery`（journal 保留） |
 | record/descriptor 写入或读回 **IO/注入抛错** | 同上清理路径；清理验证成功时传播**原始 IO 错误**（**不是** `verificationFailed`） | record/descriptor `try?` 移除；journal 验证清除 |
 | record/descriptor **字节/解码验证不符** | 同上清理路径；清理验证成功时 `verificationFailed` | 同上 |
-| 上述 candidate 清理中 journal 清除不可验证 | `unresolvedRecovery`（替换原错误） | **journal 原样保留**（durable fence） |
+| 上述 candidate 清理中 journal 清除不可验证 | `unresolvedRecovery`（替换原错误） | journal 实际状态按故障注入断言：remove 抛错 → 原样保留；remove 已提交而验证读失败 → **实际缺席**（不得声称一定保留） |
 | pointer 写失败 + ack 可读且 == previous(nil) | 确定未提交：清理 + 原错误 | journal 验证清除 |
 | pointer 写失败 + ack 不可读/异常 | `publicationUnknown` | **journal 保留**（durable fence），不 replay/不自动 resolve |
 | ack == nextBytes（即使写报错）且 journal 清除可验证 | 验证提交：receipt（`recoveredWriteAcknowledgment = writeFailure != nil`） | journal 缺失（验证清除） |
-| ack == nextBytes 但 journal 清除不可验证（`try? await removeRecoveryJournalVerifying()` 未能确认） | **receipt 仍返回**（pointer ack 即提交证明）；不伪造 `publicationUnknown`、不承诺回滚 | **journal 原样保留**：follower/export 继续 fail closed；显式 isolated resolve 分类 committed 后清除 |
+| ack == nextBytes 但 journal remove 抛错（`try?` 吞错） | **receipt 仍返回**（pointer ack 即提交证明）；不伪造 `publicationUnknown`、不承诺回滚 | **journal 原样保留**：follower/export 继续 fail closed；显式 isolated resolve 分类 committed 后验证清除 |
+| ack == nextBytes 但 remove 已提交而验证读失败 | **receipt 仍返回** | journal **实际缺席**（无 durable fence）：follower 依实际状态继续，不声称保留 |
 | 验证提交后 | 无追溯取消：只保留已定义前置检查点 | — |
 
 ## 3. P0/P1 与关联校验（test-only；无生产 binding）
@@ -231,16 +234,18 @@ SOURCE define；**新**独立 240 上界）→ consumed 记录严格校验（精
 8. journal 写前/写后/不可读验证：按 §2.3 表精确断言（含 `unresolvedRecovery` 保留路径）。
 9. candidate 阶段失败三分类：写入或读回 **IO/注入抛错**且清理验证成功 → 传播**原始错误**
    （非 `verificationFailed`）；**字节/解码验证不符**且清理验证成功 → `verificationFailed`；
-   清理中 journal 清除不可验证 → `unresolvedRecovery`（journal 原样保留）。清理验证成功时
+   清理中 journal 清除不可验证 → `unresolvedRecovery`（journal 实际状态按故障注入：remove
+   抛错 → 保留；remove 已提交/验证读失败 → 实际缺席）。清理验证成功时
    record/descriptor 已 `try?` 移除、journal 验证清除、无 pointer。
 10. pointer 写前失败 / 写后 ack 可读 nil → 确定未提交清理+原错误；ack 不可读/异常 →
     `publicationUnknown` + journal 保留 + 全字节快照；导出/bootstrap 随后
     `unresolvedRecovery`；绝不 resolve/clear/replay。
-11. 验证提交（ack == nextBytes，含写报错）两分支：(a) journal 清除可验证 → receipt +
-    journal 缺失；(b) journal 清除不可验证 → **receipt 仍返回**（pointer ack 即提交证明）、
-    journal 原样保留：随后 follower/export 继续 fail closed（`unresolvedRecovery`），显式
-    isolated resolve 分类 committed 后清除。绝不伪造 `publicationUnknown`/回滚/“总是干净”。
-    无追溯取消。
+11. 验证提交（ack == nextBytes，含写报错）分支：(a) journal 清除可验证 → receipt +
+    journal 缺失；(b) remove 抛错 → **receipt 仍返回**（pointer ack 即提交证明）、journal
+    原样保留：follower/export 继续 fail closed（`unresolvedRecovery`），显式 isolated
+    resolve 分类 committed 后验证清除；(c) remove 已提交但验证读失败 → **receipt 仍返回**、
+    journal **实际缺席**（无 durable fence），follower 依实际状态断言。绝不伪造
+    `publicationUnknown`/回滚/“总是干净”。无追溯取消。
 12. fresh store 冷加载隔离 fixture：§1.3 字段（含枚举 rawValue == 下层常量断言与
     `.bootstrap` 识别）+ 显式 resolve 三态分类；正常路径不自动 resolve。
 13. 合法并发：暂停 bootstrap 时同 vault 第二 bootstrap / correlated import →

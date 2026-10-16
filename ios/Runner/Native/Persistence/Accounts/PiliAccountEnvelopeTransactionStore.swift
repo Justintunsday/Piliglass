@@ -138,6 +138,10 @@ struct PiliAccountShadowTransactionReceipt: Sendable, Equatable {
 enum PiliAccountShadowUnresolvedWriteKind: String, Sendable, Equatable {
   case adoptIdentities, install, importRecords, delete, cookieSave, cookieDelete
   case cookieDeleteAll, temporarySelection, purposeChange, credentials, activated, buvidSeed
+  /// Create-only bootstrap publications are written by the staging layer's
+  /// fixed lower-layer constant; this literal must match it and the bootstrap
+  /// driver asserts the equality and the actual cold-load recognition.
+  case bootstrap = "bootstrap"
 }
 
 /// Immutable evidence retained for one unresolved publication: the exact
