@@ -1,9 +1,12 @@
-# P05 下一组计划（R66–R68 修订版；契约评审）：guarded FIRST 发布/bootstrap（create-only expected-absent）+ captured Dart→adopted Native 关联 + composition 会话/recovery 依赖
+# P05 下一组计划（R66–R69 修订版；契约评审）：guarded FIRST 发布/bootstrap（create-only expected-absent）+ captured Dart→adopted Native 关联 + composition 会话/recovery 依赖
 
 2026-10-17（Asia/Hong_Kong）。依据
 `build/native-migration/review-081f2d5cf2718a0cf799b481575ac32ea9559188-codex/REVIEW.md`
-R66–R68（对上一版计划的 contract plan CHANGES_REQUESTED）与
-`review-6b39ac1…-codex` FINAL DISPOSITION 的 "Next authorized substantive work"。
+R66–R68（对上一版计划的 contract plan CHANGES_REQUESTED）、
+`build/native-migration/review-afebb3c52d95311ea4d215152a397af8455a9fe8-codex/REVIEW.md`
+R69 聚焦修正（staging/authority 编译闭包含 staging store 而不含 TransactionStore；candidate
+阶段 IO 抛错与提交后 journal 清除真值）与 `review-6b39ac1…-codex` FINAL DISPOSITION 的
+"Next authorized substantive work"。
 **本文件只保存修订后的具体契约计划（docs-only，不实现、不派发 CI）**；通过 Codex CONTRACT
 review 后才实施。6b limited PASS 仅覆盖只读导出 + selected fixture（不重开）；本计划只选定
 一个有界下一组，不把未来 §2/3.1–2 视为整体获批。
@@ -42,15 +45,31 @@ review 后才实施。6b limited PASS 仅覆盖只读导出 + selected fixture�
 
 ## 1. R66 —— bootstrap 的 kind / fence 契约（精确选择）
 
-### 1.1 语义 kind（新增原 enum case；无 caller 字符串）
+### 1.1 语义 kind（新增原 enum case；无 caller 字符串；R69 下层常量修正）
 
+- **编译闭包事实**（`tool/check_native_account_envelopes.py` 实测）：`STAGING_SOURCES`
+  （:44-53）与 `AUTHORITY_SOURCES`（:89-100）只编译 `PiliAccountEnvelopeStagingStore.swift`，
+  **不含** `PiliAccountEnvelopeTransactionStore.swift`；transaction 文件只出现在
+  `TRANSACTION_SOURCES`（:57-69）/`TRANSACTION_IDENTITY_SOURCES`（:74-86）/`QUEUE_SOURCES`
+  （:105-117）/`EXPORT_SOURCES`（:122-134）闭包。因此 staging 层**不得**直接引用
+  `PiliAccountShadowUnresolvedWriteKind`（会使既有 STAGING/AUTHORITY 严格编译阶段失败）；
+  split 阶段与 180/90 预算不变，不把 transaction/reducer/parser 依赖加进这些闭包。
+- **下层固定常量**（R69 首选修正）：在既有 staging 文件的
+  `PiliAccountEnvelopeRecoveryJournal`（:36-117）新增 `static let bootstrapKind = "bootstrap"`。
+  bootstrap 写入路径以该常量作为 journal kind；bootstrap 入口不暴露 kind 参数。既有
+  correlated 公共入口的 `recoveryKind: String?` 与 TransactionStore `kind.rawValue`（:462）
+  行为逐字节保留，本组不扩大修改。
 - 在**原声明** `PiliAccountShadowUnresolvedWriteKind`（TransactionStore :138-141）新增
-  `case bootstrap`（rawValue `"bootstrap"`）。冷加载两处 rawValue 转换无需改动即识别；
-  无 switch 需更新。（源文件已在编译闭包内；staging store 直接引用该 enum 生成常量
-  `.bootstrap.rawValue`，不再接受调用方传入任意 kind 字符串。）
-- `PiliAccountEnvelopeRecoveryJournal` 的 kind 形状校验由**构造保证**：写入路径不再有
-  caller 输入；`"bootstrap"` 天然满足 decode 约束（非空/ASCII/≤64）。无效/伪造 kind 仍需
-  由 decode 拒绝（既有行为），不新增语义。
+  `case bootstrap = "bootstrap"`（字面 rawValue）。冷加载两处 rawValue 转换
+  （`loadRecoveryOnce` :323、`armFromRecoveryJournal` :340）无需改动即识别；无 switch 需更新。
+- **枚举↔常量一致性由 driver 证明**（新阶段编译闭包同时含两个文件，见 §4.2）：断言
+  `PiliAccountShadowUnresolvedWriteKind.bootstrap.rawValue == PiliAccountEnvelopeRecoveryJournal.bootstrapKind`；
+  并做**真实冷加载识别**断言：staging bootstrap 写入的 journal 被 TransactionStore 冷加载
+  识别为 `.bootstrap` pending fence（而非 `invalidRecovery`）；伪造/未知 kind 仍
+  `invalidRecovery`（§1.3、矩阵 12）。
+- `PiliAccountEnvelopeRecoveryJournal` 的 kind 形状校验由**构造保证**：bootstrap 写入路径
+  不再有 caller 输入；`"bootstrap"` 天然满足 decode 约束（非空/ASCII/≤64）。无效/伪造 kind
+  仍需由 decode 拒绝（既有行为），不新增语义。
 
 ### 1.2 双层 fence 契约（durable vs owner-memory）
 
@@ -66,8 +85,12 @@ review 后才实施。6b limited PASS 仅覆盖只读导出 + selected fixture�
 
 ### 1.3 fresh store 冷加载与显式恢复（isolated fixture）
 
-- 冷加载断言：`expectedPreviousTransactionID == nil`、`attemptedTransactionID` == bootstrap
-  入参 ID、`attemptedCandidateSHA256` == 候选编码 digest、`kind == .bootstrap`。
+- driver 断言 `PiliAccountShadowUnresolvedWriteKind.bootstrap.rawValue ==
+  PiliAccountEnvelopeRecoveryJournal.bootstrapKind`（§1.1）。
+- 冷加载断言（journal 由真实 staging bootstrap 路径写入）：`expectedPreviousTransactionID
+  == nil`、`attemptedTransactionID` == bootstrap 入参 ID、`attemptedCandidateSHA256` ==
+  候选编码 digest、`kind == .bootstrap`；TransactionStore 冷加载识别为 `.bootstrap`
+  pending fence，不误报 `invalidRecovery`。
 - **正常 bootstrap/只读导出绝不**自动 resolve/clear/replay unknown。
 - 显式 `resolveUnresolvedPublication()` 仅在**隔离 fixture**上单独测试分类：pointer ==
   attemptedID → committed；pointer 仍 nil（== expectedPrevious nil）→ notCommitted；其它
@@ -86,7 +109,8 @@ review 后才实施。6b limited PASS 仅覆盖只读导出 + selected fixture�
   fenced import（会 `operationInProgress`）。既有 raw/correlated 语义逐字节保留。
 - `bootstrapShadow` 签名（最终）：
   `func bootstrapShadow(_ input: Data, candidateTransactionID: UUID) async throws
-  -> PiliAccountEnvelopeStagingReceipt`（kind 固定 `.bootstrap`，无 caller kind 参数）。
+  -> PiliAccountEnvelopeStagingReceipt`（kind 固定为下层常量
+  `PiliAccountEnvelopeRecoveryJournal.bootstrapKind`，无 caller kind 参数）。
 
 ### 2.2 输入/collision 边界（全部在首个持久写之前）
 
@@ -112,11 +136,13 @@ review 后才实施。6b limited PASS 仅覆盖只读导出 + selected fixture�
 | journal 写前 cancel | `CancellationError` | 无 journal/无 record |
 | journal 写失败/验证读失败 | 确定未写 → 原写错误；不确定 → `unresolvedRecovery` | journal 保留 |
 | record 写前检查点 cancel | 先走 candidate 清理：record/descriptor `try?` 移除 + 验证清 journal | 清理验证成功 → **原始 `CancellationError`**；清 journal 不可验证 → `unresolvedRecovery`（journal 保留） |
-| record 写/读回失败 | 同上清理路径 | `verificationFailed` 或清理失败时 `unresolvedRecovery` |
-| descriptor 写/验证失败 | 同上清理路径 | 同上 |
+| record/descriptor 写入或读回 **IO/注入抛错** | 同上清理路径；清理验证成功时传播**原始 IO 错误**（**不是** `verificationFailed`） | record/descriptor `try?` 移除；journal 验证清除 |
+| record/descriptor **字节/解码验证不符** | 同上清理路径；清理验证成功时 `verificationFailed` | 同上 |
+| 上述 candidate 清理中 journal 清除不可验证 | `unresolvedRecovery`（替换原错误） | **journal 原样保留**（durable fence） |
 | pointer 写失败 + ack 可读且 == previous(nil) | 确定未提交：清理 + 原错误 | journal 验证清除 |
 | pointer 写失败 + ack 不可读/异常 | `publicationUnknown` | **journal 保留**（durable fence），不 replay/不自动 resolve |
-| ack == nextBytes（即使写报错） | 验证提交：receipt（`recoveredWriteAcknowledgment = writeFailure != nil`） | 验证清 journal |
+| ack == nextBytes（即使写报错）且 journal 清除可验证 | 验证提交：receipt（`recoveredWriteAcknowledgment = writeFailure != nil`） | journal 缺失（验证清除） |
+| ack == nextBytes 但 journal 清除不可验证（`try? await removeRecoveryJournalVerifying()` 未能确认） | **receipt 仍返回**（pointer ack 即提交证明）；不伪造 `publicationUnknown`、不承诺回滚 | **journal 原样保留**：follower/export 继续 fail closed；显式 isolated resolve 分类 committed 后清除 |
 | 验证提交后 | 无追溯取消：只保留已定义前置检查点 | — |
 
 ## 3. P0/P1 与关联校验（test-only；无生产 binding）
@@ -178,11 +204,16 @@ SOURCE define；**新**独立 240 上界）→ consumed 记录严格校验（精
 - mock QA（`tool/qa_native_account_envelope_export.py`）扩展为**两阶段各自** happy/负例
   （不得用一条 happy 记录同时证明两阶段）；覆盖上述必失败项与覆盖/篡改检测。
 - 触发/接线（仅此清单，无其它源文件）：修改
-  `ios/…/PiliAccountEnvelopeStagingStore.swift`、`ios/…/PiliAccountEnvelopeTransactionStore.swift`
-  （仅新增 kind case）、`tool/check_native_account_envelopes.py`、
+  `ios/…/PiliAccountEnvelopeStagingStore.swift`（新增 `bootstrapKind` 常量与 bootstrap 路径）、
+  `ios/…/PiliAccountEnvelopeTransactionStore.swift`（仅新增 kind case）、
+  `tool/check_native_account_envelopes.py`、
   `tool/qa_native_account_envelope_export.py`、`.github/workflows/ios.yml`（仅 trigger path
   `tool/check_native_account_envelope_bootstrap*`）；新增
   `tool/check_native_account_envelope_bootstrap.swift`；Dart consumer/ios-home-preview.yml 不变。
+- 阶段二编译闭包（新 `BOOTSTRAP_SOURCES`）：与 `EXPORT_SOURCES`（:122-134）同构，仅将 driver
+  换为 `tool/check_native_account_envelope_bootstrap.swift`（含 staging 与 transaction 两个
+  envelope store 实际文件，`verify_crossruntime_stage` 的 `sources` 参数传入）；既有
+  `STAGING_SOURCES`/`AUTHORITY_SOURCES` 闭包与 180/90 预算不变。
 
 ## 5. 受控证明矩阵（bootstrap driver；全阶段 + 独立 oracle）
 
@@ -198,13 +229,20 @@ SOURCE define；**新**独立 240 上界）→ consumed 记录严格校验（精
    零写，descriptor 原样保留。
 7. pre-cancel（自取消任务）→ 精确 `CancellationError`、read/write/remove 计数 0。
 8. journal 写前/写后/不可读验证：按 §2.3 表精确断言（含 `unresolvedRecovery` 保留路径）。
-9. record/descriptor 写/读回失败 + 清理失败：`verificationFailed` 或 `unresolvedRecovery`；
-   清理成功时 journal 验证清除、无 record/descriptor/pointer。
+9. candidate 阶段失败三分类：写入或读回 **IO/注入抛错**且清理验证成功 → 传播**原始错误**
+   （非 `verificationFailed`）；**字节/解码验证不符**且清理验证成功 → `verificationFailed`；
+   清理中 journal 清除不可验证 → `unresolvedRecovery`（journal 原样保留）。清理验证成功时
+   record/descriptor 已 `try?` 移除、journal 验证清除、无 pointer。
 10. pointer 写前失败 / 写后 ack 可读 nil → 确定未提交清理+原错误；ack 不可读/异常 →
     `publicationUnknown` + journal 保留 + 全字节快照；导出/bootstrap 随后
     `unresolvedRecovery`；绝不 resolve/clear/replay。
-11. 验证提交（ack == nextBytes，含写报错）：receipt + 验证清 journal；无追溯取消。
-12. fresh store 冷加载隔离 fixture：§1.3 字段 + 显式 resolve 三态分类；正常路径不自动 resolve。
+11. 验证提交（ack == nextBytes，含写报错）两分支：(a) journal 清除可验证 → receipt +
+    journal 缺失；(b) journal 清除不可验证 → **receipt 仍返回**（pointer ack 即提交证明）、
+    journal 原样保留：随后 follower/export 继续 fail closed（`unresolvedRecovery`），显式
+    isolated resolve 分类 committed 后清除。绝不伪造 `publicationUnknown`/回滚/“总是干净”。
+    无追溯取消。
+12. fresh store 冷加载隔离 fixture：§1.3 字段（含枚举 rawValue == 下层常量断言与
+    `.bootstrap` 识别）+ 显式 resolve 三态分类；正常路径不自动 resolve。
 13. 合法并发：暂停 bootstrap 时同 vault 第二 bootstrap / correlated import →
     `operationInProgress`、winner 不变；release 后二次 bootstrap → `bootstrapRefused`；
     journal 存在时所有 in-contract follower fail closed（跨新 actor）。
