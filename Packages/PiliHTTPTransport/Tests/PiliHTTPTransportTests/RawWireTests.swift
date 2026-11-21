@@ -5,9 +5,12 @@ import Testing
 private struct WireCase: Decodable {
   let id: String
   let wireValues: [String]
-  let statusCode: Int
+  let statusCode: Int?
   let mode: String
   let expectedBodyBase64: String?
+  let redirectLimit: Int?
+  let nativeError: String?
+  let nativeTargets: [String]?
 }
 
 private struct WireObservation: Codable {
@@ -18,12 +21,15 @@ private struct WireObservation: Codable {
   let bodyBase64: String?
   let error: String?
   let elapsedSeconds: Double
+  let terminalURL: String?
 }
 
-private final class CancellationHandle: @unchecked Sendable {
+private final class WireTransferProbe: @unchecked Sendable {
   private let lock = NSLock()
   private var task: Task<PiliRawHTTPOutcome, Never>?
   private var cancelled = false
+  private var heads: [PiliRawHTTPHead] = []
+  private var byteCount = 0
   func bind(_ task: Task<PiliRawHTTPOutcome, Never>) {
     lock.lock(); self.task = task; let cancel = cancelled; lock.unlock()
     if cancel { task.cancel() }
@@ -32,6 +38,10 @@ private final class CancellationHandle: @unchecked Sendable {
     lock.lock(); cancelled = true; let task = task; lock.unlock()
     task?.cancel()
   }
+
+  func recordHead(_ head: PiliRawHTTPHead) { lock.withLock { heads.append(head) } }
+  func recordChunk(_ size: Int) { lock.withLock { byteCount += size } }
+  var callbacks: (heads: [PiliRawHTTPHead], bytes: Int) { lock.withLock { (heads, byteCount) } }
 }
 
 @Test func rawHeaderAndIdleWire() async throws {
@@ -45,19 +55,28 @@ private final class CancellationHandle: @unchecked Sendable {
   let client = try PiliRawHTTPTransport(configuration: .init(), loopbackFixture: true)
   var observations: [WireObservation] = []
   for item in cases {
-    let cancellation = CancellationHandle()
-    let start = ContinuousClock.now
-    let task = Task {
-      await client.get(URL(string: base + "/" + item.id)!, headers: [.init(name: "Accept-Encoding", value: "br,gzip")],
-        onHead: { _ in if item.mode == "pending" { cancellation.cancel() } })
+    let probe = WireTransferProbe()
+    var fields: [PiliRawHTTPField] = [.init(name: "Accept-Encoding", value: "br,gzip")]
+    if item.redirectLimit != nil {
+      fields.append(.init(name: "Cookie", value: "wire=synthetic"))
+      fields.append(.init(name: "Authorization", value: "Bearer synthetic"))
     }
-    cancellation.bind(task)
-    if item.mode == "no-head" {
-      // Cancellation only after the actual server records request arrival.
+    let start = ContinuousClock.now
+    let task = Task { [fields] in
+      await client.get(URL(string: base + "/" + item.id)!, headers: fields, sameOriginRedirectLimit: item.redirectLimit,
+        onHead: { head in
+          probe.recordHead(head)
+          if item.mode == "pending" { probe.cancel() }
+        }, onChunk: { probe.recordChunk($0) })
+    }
+    probe.bind(task)
+    if item.mode == "no-head" || item.mode == "cancel-redirect" {
+      let marker = output.appendingPathComponent("seen-" + item.id).path
       for _ in 0..<500 {
-        if FileManager.default.fileExists(atPath: output.appendingPathComponent("seen-" + item.id).path) { break }
+        if FileManager.default.fileExists(atPath: marker) { break }
         try await Task.sleep(for: .milliseconds(10))
       }
+      #expect(FileManager.default.fileExists(atPath: marker))
       task.cancel()
     }
     let outcome = await task.value
@@ -70,7 +89,26 @@ private final class CancellationHandle: @unchecked Sendable {
     }
     observations.append(.init(id: item.id, status: outcome.head?.statusCode, version: outcome.head?.version,
       cookieFields: outcome.head?.setCookieFields ?? [], bodyBase64: body?.base64EncodedString(), error: error,
-      elapsedSeconds: seconds))
+      elapsedSeconds: seconds, terminalURL: outcome.head?.url.absoluteString))
+    let callbacks = probe.callbacks
+    #expect(callbacks.heads == (outcome.head.map { [$0] } ?? []))
+    if item.redirectLimit != nil {
+      #expect(error == item.nativeError)
+      if item.nativeError == nil {
+        let terminal = try #require(item.nativeTargets?.last)
+        #expect(outcome.head?.url.absoluteString == base + "/" + terminal)
+        #expect(outcome.head?.statusCode == item.statusCode)
+        #expect(outcome.head?.version == "1.1")
+        #expect(outcome.head?.setCookieFields == item.wireValues)
+        #expect(body?.base64EncodedString() == item.expectedBodyBase64)
+        #expect(callbacks.bytes == body?.count)
+      } else {
+        #expect(outcome.head == nil)
+        #expect(body == nil)
+        #expect(callbacks.bytes == 0)
+      }
+      continue
+    }
     if item.mode == "no-head" {
       #expect(outcome.head == nil)
       #expect(error == "cancelled")
@@ -106,5 +144,7 @@ private final class CancellationHandle: @unchecked Sendable {
   let outcome = await client.get(URL(string: "http://example.invalid/")!)
   #expect(outcome.head == nil)
   #expect(throws: PiliRawHTTPFailure.invalidRequest) { try outcome.body.get() }
+  let negativeLimit = await client.get(URL(string: "https://example.invalid/")!, sameOriginRedirectLimit: -1)
+  #expect(throws: PiliRawHTTPFailure.invalidRequest) { try negativeLimit.body.get() }
   try await client.shutdown()
 }

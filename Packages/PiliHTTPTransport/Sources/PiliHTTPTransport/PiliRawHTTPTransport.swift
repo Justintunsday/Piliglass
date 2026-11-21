@@ -22,6 +22,7 @@ public struct PiliRawHTTPHead: Sendable, Equatable {
 public enum PiliRawHTTPFailure: String, Error, Sendable, Equatable {
   case invalidConfiguration, invalidRequest, cancelled, connectionTimeout
   case receiveIdleTimeout, sendIdleTimeout, deadline, bodyLimit, transport
+  case invalidRedirect, redirectLimit, redirectLoop, redirectOutsideOrigin
 }
 
 public struct PiliRawHTTPOutcome: Sendable {
@@ -104,15 +105,19 @@ public final class PiliRawHTTPTransport: Sendable {
   /// platform singleton event loop is borrowed and is never shut down here.
   public func shutdown() async throws { try await client.shutdown() }
 
+  /// A nil limit returns the original response. An explicit limit follows only
+  /// same-origin GET redirects, delivering callbacks for the terminal response.
   public func get(
     _ url: URL, headers: [PiliRawHTTPField] = [],
+    sameOriginRedirectLimit: Int? = nil,
     onHead: @escaping @Sendable (PiliRawHTTPHead) -> Void = { _ in },
     onChunk: @escaping @Sendable (Int) -> Void = { _ in }
   ) async -> PiliRawHTTPOutcome {
     var observed: PiliRawHTTPHead?
     do {
       try Task.checkCancellation()
-      guard url.user == nil, url.password == nil, url.fragment == nil, url.host != nil,
+      guard (sameOriginRedirectLimit ?? 0) >= 0,
+            url.user == nil, url.password == nil, url.fragment == nil, url.host != nil,
             !restrictsFixtureHost || url.host == "127.0.0.1",
             url.scheme?.lowercased() == "https" ||
               (allowsLoopbackHTTP && url.scheme == "http" && url.host == "127.0.0.1") else {
@@ -124,27 +129,64 @@ public final class PiliRawHTTPTransport: Sendable {
           && !["host", "content-length"].contains(field.name.lowercased())
           && !field.value.contains("\r") && !field.value.contains("\n")
       }) else { throw PiliRawHTTPFailure.invalidRequest }
-      var request = HTTPClientRequest(url: url.absoluteString)
-      request.method = .GET
-      for field in headers { request.headers.add(name: field.name, value: field.value) }
-      // No resource-total deadline replacing a receive-idle timeout.
-      let response = try await client.execute(request, deadline: .distantFuture)
-      let head = PiliRawHTTPHead(url: response.url ?? url, statusCode: Int(response.status.code),
-        version: "\(response.version.major).\(response.version.minor)",
-        fields: response.headers.map { PiliRawHTTPField(name: $0.name, value: $0.value) })
-      observed = head
-      onHead(head)
-      var body = Data()
-      for try await chunk in response.body {
+      var target = url
+      var followed: Set<URL> = []
+      while true {
         try Task.checkCancellation()
-        guard chunk.readableBytes <= maxBodyBytes - body.count else { throw PiliRawHTTPFailure.bodyLimit }
-        body.append(contentsOf: chunk.readableBytesView)
-        onChunk(chunk.readableBytes)
+        var request = HTTPClientRequest(url: target.absoluteString)
+        request.method = .GET
+        for field in headers { request.headers.add(name: field.name, value: field.value) }
+        // No resource-total deadline replacing a receive-idle timeout.
+        let response = try await client.execute(request, deadline: .distantFuture)
+        let head = PiliRawHTTPHead(url: response.url ?? target, statusCode: Int(response.status.code),
+          version: "\(response.version.major).\(response.version.minor)",
+          fields: response.headers.map { PiliRawHTTPField(name: $0.name, value: $0.value) })
+        if let next = try Self.redirectTarget(head, origin: url, limit: sameOriginRedirectLimit, followed: &followed) {
+          // Drain the accepted hop to permit connection reuse. Only the final
+          // response's head, Cookie fields and chunks reach the caller.
+          var remaining = maxBodyBytes
+          for try await chunk in response.body {
+            try Task.checkCancellation()
+            guard chunk.readableBytes <= remaining else { throw PiliRawHTTPFailure.bodyLimit }
+            remaining -= chunk.readableBytes
+          }
+          target = next
+          continue
+        }
+        observed = head
+        onHead(head)
+        var body = Data()
+        for try await chunk in response.body {
+          try Task.checkCancellation()
+          guard chunk.readableBytes <= maxBodyBytes - body.count else { throw PiliRawHTTPFailure.bodyLimit }
+          body.append(contentsOf: chunk.readableBytesView)
+          onChunk(chunk.readableBytes)
+        }
+        return .init(head: head, body: .success(body))
       }
-      return .init(head: head, body: .success(body))
     } catch {
       return .init(head: observed, body: .failure(Self.failure(error)))
     }
+  }
+
+  private static func redirectTarget(_ head: PiliRawHTTPHead, origin: URL, limit: Int?,
+                                     followed: inout Set<URL>) throws -> URL? {
+    guard let limit, [301, 302, 303, 307, 308].contains(head.statusCode) else { return nil }
+    guard followed.count < limit else { throw PiliRawHTTPFailure.redirectLimit }
+    let locations = head.fields.filter { $0.name.lowercased() == "location" }
+    guard locations.count == 1, !locations[0].value.isEmpty,
+          let target = URL(string: locations[0].value, relativeTo: head.url)?.absoluteURL,
+          target.user == nil, target.password == nil, target.fragment == nil else {
+      throw PiliRawHTTPFailure.invalidRedirect
+    }
+    let scheme = origin.scheme?.lowercased()
+    let defaultPort = scheme == "https" ? 443 : 80
+    guard target.scheme?.lowercased() == scheme, target.host?.lowercased() == origin.host?.lowercased(),
+          (target.port ?? defaultPort) == (origin.port ?? defaultPort) else {
+      throw PiliRawHTTPFailure.redirectOutsideOrigin
+    }
+    guard followed.insert(target).inserted else { throw PiliRawHTTPFailure.redirectLoop }
+    return target
   }
 
   private static func failure(_ error: Error) -> PiliRawHTTPFailure {

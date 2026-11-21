@@ -40,12 +40,74 @@ def cases():
             for name, cookies, status, mode, data in values]
 
 
+def redirects():
+    body = b'final redirect body\n'
+    # Each route specifies the logical case to which its server event belongs.
+    routes = {
+        'follow-chain': ('follow-chain', 302, 'follow-next?hop=1', ['first=ignored']),
+        'follow-next?hop=1': ('follow-chain', 307, 'follow-result?limit=10', ['next=ignored']),
+        'follow-result?limit=10': ('follow-chain', 200, None, ['final=retained; Path=/']),
+        'follow-forbidden': ('follow-forbidden', 303, 'follow-denied', ['first=ignored']),
+        'follow-denied': ('follow-forbidden', 403, None, ['denied=retained; Path=/']),
+        'follow-limit': ('follow-limit', 308, 'follow-limit-next', ['first=ignored']),
+        'follow-limit-next': ('follow-limit', 302, 'unexpected-redirect', ['next=ignored']),
+        'follow-zero': ('follow-zero', 302, 'unexpected-redirect', ['zero=ignored']),
+        'follow-loop': ('follow-loop', 301, 'follow-loop', ['loop=ignored']),
+        'follow-missing': ('follow-missing', 302, None, ['missing=ignored']),
+        'follow-other-port': ('follow-other-port', 302, '@other-port', ['first=ignored']),
+        'follow-other-target': ('follow-other-port', 200, None, ['other=retained; Path=/']),
+        'follow-cancel': ('follow-cancel', 302, 'unexpected-redirect', ['pending=ignored']),
+    }
+    modes = [
+        (2, ['follow-chain', 'follow-next?hop=1', 'follow-result?limit=10'], None, None),
+        (1, ['follow-forbidden', 'follow-denied'], None, 'badResponse'),
+        (1, ['follow-limit', 'follow-limit-next'], 'redirectLimit', 'unknown'),
+        (0, ['follow-zero'], 'redirectLimit', 'unknown'),
+        (5, ['follow-loop', 'follow-loop'], 'redirectLoop', 'unknown'),
+        (5, ['follow-missing'], 'invalidRedirect', 'unknown'),
+        (1, ['follow-other-port', 'follow-other-target'], 'redirectOutsideOrigin', None),
+        (2, ['follow-cancel'], 'cancelled', 'cancel'),
+    ]
+    fixtures = []
+    for limit, paths, native_error, dart_error in modes:
+        case_id = paths[0]
+        _, status, _, cookies = routes[paths[-1]]
+        terminal = dart_error in (None, 'badResponse')
+        native_targets = paths[:1] if native_error == 'redirectOutsideOrigin' else paths
+        fixtures.append(dict(id=case_id, mode='cancel-redirect' if case_id == 'follow-cancel' else 'follow',
+            redirectLimit=limit, nativeError=native_error, dartError=dart_error,
+            nativeTargets=native_targets, dartTargets=paths,
+            statusCode=status if terminal else None, wireValues=cookies if terminal else [],
+            expectedBodyBase64=base64.b64encode(body).decode() if terminal else None))
+    return fixtures, {
+        path: dict(redirectCase=case_id, statusCode=status, location=location, wireValues=cookies,
+                   mode='pending' if case_id == 'follow-cancel' else 'keepalive',
+                   body=body if status in (200, 403) else b'intermediate redirect body\n')
+        for path, (case_id, status, location, cookies) in routes.items()
+    }
+
+
+def verify_redirect_requests(fixtures, records, client):
+    for fixture in fixtures:
+        hops = [event for event in records if event.get('redirectCase') == fixture['id'] and event['client'] == client]
+        if [hop['id'] for hop in hops] != fixture[client + 'Targets']:
+            raise RuntimeError(f"{client} redirect request sequence differed for {fixture['id']}")
+        for hop in hops:
+            # The pinned Dart SDK may reach the second port, with both
+            # credential fields stripped. Swift stops before that request.
+            valid = (not hop['hasCredentialHeaders'] if hop['id'] == 'follow-other-target'
+                     else hop['retainedFixtureHeaders'])
+            if not valid:
+                raise RuntimeError(f"{client} redirected headers differed at {hop['id']}")
+
+
 class Server(ThreadingHTTPServer):
     daemon_threads = True
     block_on_close = False
 
-    def __init__(self, fixtures):
-        self.fixtures = {item['id']: item for item in fixtures}
+    def __init__(self, routes, *, redirect_port=None):
+        self.routes = routes
+        self.redirect_port = redirect_port
         self.records = []
         self.lock = threading.Lock()
         self.connection_ids = {}
@@ -66,7 +128,7 @@ class Handler(BaseHTTPRequestHandler):
         name = self.path.lstrip('/')
         client = 'dart' if name.startswith('dart/') else 'native'
         if client == 'dart': name = name.removeprefix('dart/')
-        item = self.server.fixtures.get(name)
+        item = self.server.routes.get(name)
         if item is None:
             with self.server.lock:
                 self.server.records.append(dict(id=name, unexpectedRequest=True))
@@ -75,12 +137,19 @@ class Handler(BaseHTTPRequestHandler):
         mode, body = item['mode'], item['body']
         record = dict(id=name, client=client, connectionID=self.server.connection_ids[self.connection],
                       received=time.monotonic(), cookieFields=item['wireValues'], chunks=[])
+        if 'redirectCase' in item:
+            cookie = self.headers.get('Cookie')
+            authorization = self.headers.get('Authorization')
+            record.update(redirectCase=item['redirectCase'],
+                hasCredentialHeaders=cookie is not None or authorization is not None,
+                retainedFixtureHeaders=cookie == 'wire=synthetic' and authorization == 'Bearer synthetic')
         with self.server.lock: self.server.records.append(record)
-        (OUTPUT / ('seen-' + ('dart-' if client == 'dart' else '') + name)).write_text('received', encoding='ascii')
+        marker = 'seen-' + ('dart-' if client == 'dart' else '') + name
         self.close_connection = mode != 'keepalive'
         self.connection.settimeout(15)
         try:
             if mode == 'no-head':
+                (OUTPUT / marker).write_text('received', encoding='ascii')
                 self.connection.recv(1)
                 return
             fields = [('Set-Cookie', v) for v in item['wireValues']]
@@ -89,6 +158,11 @@ class Handler(BaseHTTPRequestHandler):
                        ('Connection', 'keep-alive' if mode == 'keepalive' else 'close')]
             if mode == 'gzip': fields += [('Content-Encoding', 'gzip')]
             if name == 'redirect': fields += [('Location', f'http://127.0.0.1:{self.server.server_port}/unexpected-redirect')]
+            if location := item.get('location'):
+                if location == '@other-port':
+                    child = '/dart' if client == 'dart' else ''
+                    location = f'http://127.0.0.1:{self.server.redirect_port}{child}/follow-other-target'
+                fields.append(('Location', location))
             head = '\r\n'.join([f"HTTP/1.1 {item['statusCode']} Fixture", *(f'{k}: {v}' for k,v in fields)])+'\r\n\r\n'
             self.connection.sendall(head.encode('ascii'))
             record['headSent'] = time.monotonic()
@@ -104,6 +178,8 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 self.connection.sendall(b'x' * 1024 if mode in ('pending', 'eof') else body)
                 record['chunks'].append(time.monotonic())
+                if item.get('redirectCase') == 'follow-cancel':
+                    (OUTPUT / marker).write_text('first hop sent', encoding='ascii')
                 if mode == 'pending': self.connection.recv(1)
         except (ConnectionError, socket.timeout):
             record['closedDuringTransfer'] = True
@@ -127,6 +203,9 @@ def main():
     try:
         if sys.platform != 'darwin': raise RuntimeError('macOS/Xcode required; transport unverified')
         fixtures = cases()
+        redirect_fixtures, redirect_routes = redirects()
+        route_map = {item['id']: item for item in fixtures}
+        fixtures += redirect_fixtures
         (OUTPUT/'fixtures.json').write_text(json.dumps([{k:v for k,v in item.items() if k!='body'} for item in fixtures],indent=2)+'\n',encoding='utf-8')
         for item in fixtures:
             (OUTPUT/('seen-'+item['id'])).unlink(missing_ok=True)
@@ -134,19 +213,24 @@ def main():
         run(['swift','package','resolve'], 'resolve.log')
         resolved = PACKAGE/'Package.resolved'
         if resolved.exists(): shutil.copy2(resolved, OUTPUT/'Package.resolved')
-        server = Server(fixtures)
-        thread = threading.Thread(target=server.serve_forever, daemon=True); thread.start()
+        cross_origin = Server({'follow-other-target': redirect_routes.pop('follow-other-target')})
+        server = Server(route_map | redirect_routes, redirect_port=cross_origin.server_port)
+        servers = (server, cross_origin)
+        threads = [threading.Thread(target=listener.serve_forever, daemon=True) for listener in servers]
+        for thread in threads: thread.start()
         try:
             env = {**os.environ, 'PILI_RAW_WIRE_BASE': f'http://127.0.0.1:{server.server_port}', 'PILI_RAW_WIRE_OUTPUT':str(OUTPUT)}
             run(['flutter','test','--no-pub','--reporter','expanded','test/http/native_transport_wire_test.dart'],
                 'dart-wire.log',timeout=300,env=env,cwd=ROOT)
             run(['swift','test','--filter','rawHeaderAndIdleWire|rawConfigurationRejectsUnknownSemantics'], 'wire.log', env=env)
         finally:
-            server.shutdown(); server.server_close(); thread.join(timeout=2)
-            (OUTPUT/'server-events.json').write_text(json.dumps(server.records,indent=2)+'\n',encoding='utf-8')
+            for listener, thread in zip(servers, threads):
+                listener.shutdown(); listener.server_close(); thread.join(timeout=2)
+            records = server.records + cross_origin.records
+            (OUTPUT/'server-events.json').write_text(json.dumps(records,indent=2)+'\n',encoding='utf-8')
         observations = json.loads((OUTPUT/'observations.json').read_text(encoding='utf-8'))
         if len(observations) != len(fixtures): raise RuntimeError('Missing raw wire observations')
-        if any(record.get('unexpectedRequest') for record in server.records): raise RuntimeError('Client followed redirect')
+        if any(record.get('unexpectedRequest') for record in records): raise RuntimeError('Client requested an unexpected URL')
         dart_observations = json.loads((OUTPUT/'dart-observations.json').read_text(encoding='utf-8'))
         if len(dart_observations) != len(fixtures): raise RuntimeError('Missing actual Dart wire observations')
         # Failed-body Dart responses may lack a head while Native retains it;
@@ -154,6 +238,8 @@ def main():
         (OUTPUT/'comparison.json').write_text(json.dumps([
             dict(id=n['id'], native=n, dart=d) for n,d in zip(observations,dart_observations)
         ],indent=2)+'\n',encoding='utf-8')
+        for client in ('native', 'dart'):
+            verify_redirect_requests(redirect_fixtures, records, client)
         records = {record['id']:record for record in server.records if record.get('client')=='native'}
         if records['keepalive-one']['connectionID'] != records['keepalive-two']['connectionID']:
             raise RuntimeError('Default pool did not reuse actual keepalive socket')
@@ -166,8 +252,10 @@ def main():
                  '-derivedDataPath',str(OUTPUT/'DerivedData'), 'IPHONEOS_DEPLOYMENT_TARGET=16.0',
                  'CODE_SIGNING_ALLOWED=NO','build'],f'{label}-build.log',timeout=1800)
         summary.update(status='passed', wireCases=len(observations), actualDartWireCases=len(dart_observations),
+                       redirectCases=len(redirect_fixtures),
                        ios16Device=True, ios16Simulator=True,
-                       knownPending=['br decoder','H2/TLS/proxy/pool expiry','retry','actual API/account acceptance'])
+                       knownPending=['br decoder','H2/TLS/proxy/pool expiry','retry',
+                                     'redirect response Cookie ownership','actual API/account acceptance'])
     except (OSError,RuntimeError,subprocess.TimeoutExpired) as error:
         summary['reason']=str(error); print(f'FAIL raw HTTP: {error}')
     (OUTPUT/'summary.json').write_text(json.dumps(summary,indent=2)+'\n',encoding='utf-8')

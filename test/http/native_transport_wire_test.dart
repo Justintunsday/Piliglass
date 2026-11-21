@@ -26,22 +26,34 @@ void main() {
           final item = raw as Map<String, dynamic>;
           final name = item['id'] as String;
           final mode = item['mode'] as String;
+          final redirectLimit = item['redirectLimit'] as int?;
+          final url = Uri.parse('$base/dart/$name');
           final token = CancelToken();
           final watch = Stopwatch()..start();
           Response<dynamic>? response;
           DioException? failure;
           final operation = Request.http11Dio.getUri<dynamic>(
-            Uri.parse('$base/dart/$name'),
-            options: Options(responseType: ResponseType.bytes, followRedirects: false),
+            url,
+            options: Options(
+              responseType: ResponseType.bytes,
+              followRedirects: redirectLimit != null,
+              maxRedirects: redirectLimit,
+              headers: redirectLimit == null ? null : {
+                HttpHeaders.cookieHeader: 'wire=synthetic',
+                HttpHeaders.authorizationHeader: 'Bearer synthetic',
+              },
+            ),
             cancelToken: token,
             onReceiveProgress: mode == 'pending' ? (_, _) => token.cancel('fixture head/body arrived') : null,
           );
-          if (mode == 'no-head') {
+          if (mode == 'no-head' || mode == 'cancel-redirect') {
+            final marker = File('$output/seen-dart-$name');
             for (var i = 0; i < 500; i++) {
-              if (File('$output/seen-dart-$name').existsSync()) break;
+              if (marker.existsSync()) break;
               await Future<void>.delayed(const Duration(milliseconds: 10));
             }
-            token.cancel('fixture server recorded arrival before head');
+            expect(marker.existsSync(), isTrue, reason: name);
+            token.cancel('fixture server reached the cancellation point');
           }
           try {
             response = await operation;
@@ -50,12 +62,28 @@ void main() {
             response = error.response;
           }
           final body = response?.data is List<int> ? response!.data as List<int> : null;
+          final terminalUrl = response == null ? null : url.resolveUri(response.realUri);
           observations.add({
             'id': name, 'status': response?.statusCode,
             'cookieFields': response?.headers['set-cookie'] ?? <String>[],
             'bodyBase64': body == null ? null : base64Encode(body),
             'error': failure?.type.name, 'elapsedSeconds': watch.elapsedMicroseconds / 1000000,
+            'terminalURL': terminalUrl?.toString(),
           });
+          if (redirectLimit != null) {
+            expect(failure?.type.name, item['dartError'], reason: name);
+            expect(response?.statusCode, item['statusCode'], reason: name);
+            expect(response?.headers['set-cookie'] ?? [], item['wireValues'], reason: name);
+            expect(body == null ? null : base64Encode(body), item['expectedBodyBase64'], reason: name);
+            if (terminalUrl != null) {
+              final targets = item['dartTargets'] as List<dynamic>;
+              final last = Uri.parse('/dart/${targets.last}');
+              expect(response!.redirects, hasLength(targets.length - 1), reason: name);
+              expect(terminalUrl.path, last.path, reason: name);
+              expect(terminalUrl.query, last.query, reason: name);
+            }
+            continue;
+          }
           if (mode == 'no-head' || mode == 'pending') {
             expect(failure?.type, DioExceptionType.cancel);
           } else if (mode == 'idle-timeout') {
