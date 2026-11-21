@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 from ios_native_sources import read_native_root
 import platform
+import plistlib
 
 import preview_ios_home as home
 import preview_step_runner
@@ -436,7 +437,7 @@ def production_swift():
         '// MARK: - Native search', '// MARK: - Shared native views') + stubs
 
 
-def write_project():
+def write_project(*, app_info=None):
     """Write a minimal app + UI-test Xcode project without external generators."""
     objects = {}
 
@@ -474,8 +475,12 @@ def write_project():
 
     common = dict(SWIFT_VERSION='5.0', IPHONEOS_DEPLOYMENT_TARGET='16.0', SDKROOT='iphoneos',
                   TARGETED_DEVICE_FAMILY='1,2', CODE_SIGNING_ALLOWED='NO', GENERATE_INFOPLIST_FILE='YES')
-    app_config = configurations(dict(common, PRODUCT_BUNDLE_IDENTIFIER=BUNDLE_ID, PRODUCT_NAME='MenuPreview',
-                                    INFOPLIST_KEY_UILaunchScreen_Generation='YES'))
+    app_settings = dict(common, PRODUCT_BUNDLE_IDENTIFIER=BUNDLE_ID, PRODUCT_NAME='MenuPreview',
+                        INFOPLIST_KEY_UILaunchScreen_Generation='YES')
+    if app_info is not None:
+        (OUTPUT / 'AppInfo.plist').write_bytes(plistlib.dumps(app_info))
+        app_settings['INFOPLIST_FILE'] = 'AppInfo.plist'
+    app_config = configurations(app_settings)
     test_config = configurations(dict(common, PRODUCT_BUNDLE_IDENTIFIER=BUNDLE_ID+'.tests',
                                      PRODUCT_NAME='MenuNavigationTests', TEST_TARGET_NAME='MenuPreview'))
     project_config = configurations(dict(CLANG_ENABLE_MODULES='YES', SWIFT_OPTIMIZATION_LEVEL='-Onone'))
@@ -553,13 +558,13 @@ def run_navigation(run, result, phases, *, export_command=None, export_timeout=6
     return code
 
 
-def main():
+def main(*, app_info=None):
     if platform.system() != 'Darwin':
         raise SystemExit('Navigation UI tests require macOS and Xcode.')
     OUTPUT.mkdir(parents=True, exist_ok=True)
     (OUTPUT / 'Main.swift').write_text(production_swift(), encoding='utf-8')
     (OUTPUT / 'NavigationTests.swift').write_text(TESTS, encoding='utf-8')
-    project = write_project()
+    project = write_project(app_info=app_info)
     devices = json.loads(home.run('xcrun','simctl','list','devices','available','-j'))['devices']
     device = next(d for values in devices.values() for d in values if d['state']=='Booted' and 'iPhone' in d['name'])
     home.run('xcrun','simctl','ui',device['udid'],'appearance','light')

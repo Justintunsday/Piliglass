@@ -16,6 +16,19 @@ ROOT = Path(__file__).resolve().parents[1]
 # test asserts the app-observed effective value, so a silent fallback cannot
 # hide (the former 60.0 fixture never obtained its intended delay).
 FIXTURE_HIDE_DELAY = 8.0
+APP_INFO = {
+    'UIApplicationSceneManifest': {
+        'UIApplicationSupportsMultipleScenes': False,
+        'UISceneConfigurations': {
+            'UIWindowSceneSessionRoleApplication': [{
+                'UISceneConfigurationName': 'Player Preview',
+                'UISceneClassName': 'UIWindowScene',
+                'UISceneDelegateClassName': '$(PRODUCT_MODULE_NAME).PlayerPreviewScene',
+            }],
+        },
+    },
+    'UISupportedInterfaceOrientations': ['UIInterfaceOrientationPortrait', 'UIInterfaceOrientationLandscapeRight'],
+}
 
 
 def production_hide_delay_values():
@@ -118,22 +131,30 @@ final class PiliNativePlayerSession: ObservableObject {
 }
 @main
 final class PlayerPreviewApp: UIResponder, UIApplicationDelegate {
+  static var embedded: Bool { ProcessInfo.processInfo.arguments.contains("embedded") }
+
+  func application(_ application: UIApplication,
+                   supportedInterfaceOrientationsFor window: UIWindow?) -> UIInterfaceOrientationMask {
+    Self.embedded ? .portrait : .landscapeRight
+  }
+}
+
+final class PlayerPreviewScene: UIResponder, UIWindowSceneDelegate {
   var window: UIWindow?
   let session = PiliNativePlayerSession()
   let probe = UILabel()
   var observation: AnyCancellable?
-  var embedded: Bool { ProcessInfo.processInfo.arguments.contains("embedded") }
 
-  func application(_ application: UIApplication,
-                   didFinishLaunchingWithOptions options: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
+  func scene(_ scene: UIScene, willConnectTo sceneSession: UISceneSession,
+             options connectionOptions: UIScene.ConnectionOptions) {
+    guard let windowScene = scene as? UIWindowScene else { return }
     // Production hideDelay accepts only [3, 5, 8] seconds and silently falls
     // back to 3 for anything else; configure the supported maximum so the real
     // chrome hide timer is deterministic and never a hidden fallback.
     UserDefaults.standard.set(__FIXTURE_HIDE_DELAY__, forKey: PiliNativePlayerPreferences.hideDelayKey)
-    let controller = PiliNativePlayerViewController(session: session, fullscreen: !embedded)
-    // Use the UIKit controller as the window root so its supported orientations
-    // apply directly, without a SwiftUI preview host retaining a portrait frame.
-    let window = UIWindow(frame: UIScreen.main.bounds)
+    let controller = PiliNativePlayerViewController(session: session, fullscreen: !PlayerPreviewApp.embedded)
+    // The real controller requests its orientation from this window scene.
+    let window = UIWindow(windowScene: windowScene)
     window.rootViewController = controller
     self.window = window
     window.makeKeyAndVisible()
@@ -151,12 +172,6 @@ final class PlayerPreviewApp: UIResponder, UIApplicationDelegate {
       self?.updateProbe()
     }
     updateProbe()
-    return true
-  }
-
-  func application(_ application: UIApplication,
-                   supportedInterfaceOrientationsFor window: UIWindow?) -> UIInterfaceOrientationMask {
-    embedded ? .portrait : .landscape
   }
 
   func updateProbe() {
@@ -170,19 +185,24 @@ import XCTest
 final class PlayerControlsTests: XCTestCase {
   let app = XCUIApplication()
   var state: XCUIElement { app.staticTexts["playback-state"] }
+  var playerWindow: XCUIElement { app.windows.containing(.staticText, identifier: "playback-state").firstMatch }
   override func setUpWithError() throws {
     continueAfterFailure = false
   }
   func launch(embedded: Bool = false) {
-    XCUIDevice.shared.orientation = embedded ? .portrait : .landscapeLeft
     app.launchArguments = ["-AppleLanguages", "(zh-Hans)", "-AppleLocale", "zh_CN"] + (embedded ? ["embedded"] : [])
     app.launch()
+    XCUIDevice.shared.orientation = embedded ? .portrait : .landscapeLeft
     XCTAssertTrue(state.waitForExistence(timeout: 10))
     XCTAssertTrue(
       state.label.contains("hideDelay=__FIXTURE_HIDE_DELAY__"),
       "Configured fixture hide delay must equal the production-effective value, not a silent fallback: \(state.label)")
     if !embedded {
-      let landscape = NSPredicate { _, _ in self.app.frame.width > self.app.frame.height }
+      let landscape = NSPredicate { _, _ in
+        let appFrame = self.app.frame
+        let windowFrame = self.playerWindow.frame
+        return appFrame.width > appFrame.height && windowFrame.width > windowFrame.height
+      }
       expectation(for: landscape, evaluatedWith: app)
       waitForExpectations(timeout: 10)
       // The hit-test precondition can block for many seconds while the
@@ -192,7 +212,7 @@ final class PlayerControlsTests: XCTestCase {
       // tap when the controls are absent; the 8s existence assertion and every
       // other budget/assertion stays unchanged.
       if !app.buttons["720P"].exists {
-        app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        playerWindow.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
       }
       XCTAssertTrue(app.buttons["720P"].waitForExistence(timeout: 8))
     }
@@ -205,10 +225,11 @@ final class PlayerControlsTests: XCTestCase {
   }
   func exerciseGestures() {
     // Tap either half of the video: neither gesture may seek by ten seconds.
-    let left = app.coordinate(withNormalizedOffset: CGVector(dx: 0.28, dy: 0.5))
-    let right = app.coordinate(withNormalizedOffset: CGVector(dx: 0.7, dy: 0.5))
+    let left = playerWindow.coordinate(withNormalizedOffset: CGVector(dx: 0.28, dy: 0.5))
+    let right = playerWindow.coordinate(withNormalizedOffset: CGVector(dx: 0.7, dy: 0.5))
     left.doubleTap()
-    XCTAssertTrue(state.label.contains("playing=false"))
+    let stateAfterLeftTap = state.label
+    XCTAssertTrue(stateAfterLeftTap.contains("playing=false"), stateAfterLeftTap)
     XCTAssertTrue(state.label.contains("time=61"))
     right.doubleTap()
     XCTAssertTrue(state.label.contains("playing=true"))
@@ -233,7 +254,7 @@ final class PlayerControlsTests: XCTestCase {
     screenshot("landscape-native-player")
     exerciseGestures()
     app.buttons["锁定播放器"].tap()
-    app.coordinate(withNormalizedOffset: CGVector(dx: 0.7, dy: 0.5)).doubleTap()
+    playerWindow.coordinate(withNormalizedOffset: CGVector(dx: 0.7, dy: 0.5)).doubleTap()
     XCTAssertTrue(state.label.contains("playing=false"))
     screenshot("landscape-player-locked")
   }
@@ -277,4 +298,4 @@ if __name__ == '__main__':
     navigation.BUNDLE_ID = 'dev.piliglass.playerpreview'
     navigation.production_swift = production_swift
     navigation.TESTS = TESTS.replace('__FIXTURE_HIDE_DELAY__', str(FIXTURE_HIDE_DELAY))
-    navigation.main()
+    navigation.main(app_info=APP_INFO)
