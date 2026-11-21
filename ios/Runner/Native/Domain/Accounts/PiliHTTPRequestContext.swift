@@ -77,6 +77,7 @@ enum PiliHTTPRequestContextError: Error, Sendable, Equatable {
 
 protocol PiliHTTPRequestContextProviding: Sendable {
   func prepare(_ purpose: PiliHTTPRequestPurpose) async throws -> PiliHTTPRequestContext
+  func prepareRetry(_ context: PiliHTTPRequestContext, attempt: Int64) async throws -> [String: String]
   func finish(
     _ context: PiliHTTPRequestContext,
     response: PiliHTTPRequestResponseCookies

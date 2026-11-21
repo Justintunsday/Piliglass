@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:PiliPlus/http/init.dart';
+import 'package:PiliPlus/http/retry_interceptor.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -12,6 +13,7 @@ import '../utils/accounts/account_test_storage.dart';
 void main() {
   final base = Platform.environment['PILI_RAW_WIRE_BASE'];
   final output = Platform.environment['PILI_RAW_WIRE_OUTPUT'];
+  final refused = Platform.environment['PILI_RAW_REFUSED_PORT'];
   test('actual Request H11 raw fields and receive-idle wire', () async {
     TestWidgetsFlutterBinding.ensureInitialized();
     // Flutter's widget binding installs a fixed-400 HttpClient globally. This
@@ -119,6 +121,42 @@ void main() {
       }
     }, _RealWireHttpOverrides());
   }, timeout: const Timeout(Duration(minutes: 3)), skip: base == null || output == null);
+
+  test('installed retry waits 500 ms then 1000 ms after real refused connections', () async {
+    await HttpOverrides.runWithHttpOverrides(() async {
+      final dio = Dio();
+      final timer = Stopwatch()..start();
+      final starts = <int>[];
+      final failures = <int>[];
+      final errorKinds = <String>[];
+      dio.interceptors.add(InterceptorsWrapper(
+        onRequest: (options, handler) {
+          starts.add(timer.elapsedMilliseconds);
+          handler.next(options);
+        },
+        onError: (error, handler) {
+          failures.add(timer.elapsedMilliseconds);
+          errorKinds.add(error.type.name);
+          handler.next(error);
+        },
+      ));
+      dio.interceptors.add(RetryInterceptor(dio, 2, 500));
+      try {
+        await expectLater(dio.get<void>('https://127.0.0.1:$refused/fixture'), throwsA(isA<DioException>()
+          .having((error) => error.type, 'type', DioExceptionType.connectionError)));
+        expect(starts, hasLength(3));
+        expect(errorKinds, List.filled(3, DioExceptionType.connectionError.name));
+        final waits = [starts[1] - failures[0], starts[2] - failures[1]];
+        expect(waits[0], greaterThanOrEqualTo(490));
+        expect(waits[1], greaterThanOrEqualTo(990));
+        await File('$output/dart-initial-retry.json').writeAsString(jsonEncode({
+          'attempts': starts.length, 'errorKinds': errorKinds, 'backoffMilliseconds': waits,
+        }));
+      } finally {
+        dio.close(force: true);
+      }
+    }, _RealWireHttpOverrides());
+  }, skip: refused == null || output == null);
 }
 
 // Inherited createHttpClient delegates to dart:io's actual native implementation.

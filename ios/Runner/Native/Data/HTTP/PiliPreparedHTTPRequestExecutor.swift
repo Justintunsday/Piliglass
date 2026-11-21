@@ -62,7 +62,27 @@ struct PiliPreparedHTTPRequestExecutor: Sendable {
       throw CancellationError()
     }
     let terminal = PiliHTTPHeadTerminal(context: context, provider: provider)
-    let outcome = await transport.transfer(request, onHead: { terminal.observe($0) })
+    var outcome = await transport.transfer(request, onHead: { terminal.observe($0) })
+    if let retry = context.policy.retry, retry.installed, let delay = retry.delayMilliseconds, delay >= 0 {
+      var attempt: Int64 = 0
+      while attempt < retry.count, outcome.failedDuringInitialConnection, outcome.head == nil,
+            !terminal.hasObservedHead, case .failure(.client(_)) = outcome.body {
+        attempt += 1
+        let (milliseconds, delayOverflow) = delay.multipliedReportingOverflow(by: attempt)
+        let (nanoseconds, unitOverflow) = milliseconds.multipliedReportingOverflow(by: 1_000_000)
+        guard !delayOverflow, !unitOverflow else { break }
+        do {
+          try await Task.sleep(nanoseconds: UInt64(nanoseconds))
+          let headers = try await provider.prepareRetry(context, attempt: attempt)
+          try Task.checkCancellation()
+          request.allHTTPHeaderFields = headers
+        } catch {
+          _ = try await terminal.complete(outcome)
+          throw error
+        }
+        outcome = await transport.transfer(request, onHead: { terminal.observe($0) })
+      }
+    }
     // Finalization starts at response head, before a slow or infinite body can
     // exhaust the Dart lease TTL. It remains alive across caller cancellation.
     // No second finish/abandon is sent if its acknowledgement is lost.
@@ -86,6 +106,8 @@ private final class PiliHTTPHeadTerminal: @unchecked Sendable {
   func observe(_ head: PiliHTTPResponseHead) {
     _ = claim(head)
   }
+
+  var hasObservedHead: Bool { lock.withLock { operation != nil } }
 
   func complete(_ outcome: PiliHTTPTransferOutcome) async throws -> PiliHTTPRequestContextReceipt {
     try await claim(outcome.head).value

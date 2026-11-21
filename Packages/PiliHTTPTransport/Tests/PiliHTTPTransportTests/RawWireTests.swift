@@ -82,6 +82,7 @@ private final class WireTransferProbe: @unchecked Sendable {
       task.cancel()
     }
     let outcome = await task.value
+    #expect(!outcome.failedDuringInitialConnection)
     let elapsed = start.duration(to: .now)
     let seconds = Double(elapsed.components.seconds) + Double(elapsed.components.attoseconds) / 1e18
     let body: Data?, error: String?
@@ -138,6 +139,18 @@ private final class WireTransferProbe: @unchecked Sendable {
   try await client.shutdown()
   let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
   try encoder.encode(observations).write(to: output.appendingPathComponent("observations.json"))
+}
+
+@Test func rawInitialConnectionRefused() async throws {
+  let port = try #require(ProcessInfo.processInfo.environment["PILI_RAW_REFUSED_PORT"].flatMap(Int.init))
+  let client = try PiliRawHTTPTransport(configuration: .init(), loopbackFixture: true)
+  for scheme in ["http", "https"] {
+    let outcome = await client.get(URL(string: "\(scheme)://127.0.0.1:\(port)/fixture")!)
+    #expect(outcome.head == nil)
+    #expect(outcome.failedDuringInitialConnection)
+    #expect(throws: PiliRawHTTPFailure.connectionRefused) { try outcome.body.get() }
+  }
+  try await client.shutdown()
 }
 
 @Test func rawConfigurationRejectsUnknownSemantics() async throws {

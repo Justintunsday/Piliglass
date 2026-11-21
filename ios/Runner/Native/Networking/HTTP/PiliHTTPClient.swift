@@ -66,15 +66,20 @@ struct PiliHTTPTransferOutcome: Sendable {
   let body: Result<Data, PiliHTTPTransferFailure>
   // Only an actual completion error in NSURLErrorDomain supplies this value.
   let transportErrorCode: Int?
+  // Raw connection-establishment failures on the initial URL can be retried.
+  let failedDuringInitialConnection: Bool
 
-  init(head: PiliHTTPResponseHead?, body: Result<Data, PiliHTTPTransferFailure>, transportErrorCode: Int? = nil) {
+  init(head: PiliHTTPResponseHead?, body: Result<Data, PiliHTTPTransferFailure>, transportErrorCode: Int? = nil,
+       failedDuringInitialConnection: Bool = false) {
     self.head = head
     self.body = body
     self.transportErrorCode = transportErrorCode
+    self.failedDuringInitialConnection = failedDuringInitialConnection
   }
 }
 
 protocol PiliHTTPTransferring: Sendable {
+  // Observed head callbacks precede the returned outcome.
   func transfer(
     _ request: URLRequest,
     onHead: @escaping @Sendable (PiliHTTPResponseHead) -> Void

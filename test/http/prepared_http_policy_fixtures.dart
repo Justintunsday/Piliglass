@@ -138,6 +138,78 @@ void runPreparedHTTPPolicyFixtures({required bool http2}) {
     });
     await changed(() => Request.dio.interceptors.removeWhere((value) => value is RetryInterceptor));
   });
+  test('retry uses the same owner and merges current Cookie with prior attempts', () async {
+    final service = create();
+    final bridge = NativeHTTPRequestLeaseBridge(service: service);
+    final snapshot = await service.prepare(requestID: _requestID());
+    final replacement = LoginAccount(BiliCookieJar.fromJson({
+      'DedeUserID': '91001', 'SESSDATA': 'other-session',
+    }), null, null)..activated = true;
+    await Accounts.installCredentials(replacement);
+    await Accounts.set(AccountType.recommend, replacement);
+    Future<Map<String, Object?>> refresh(Object attempt) => bridge.handle('prepareNativeHTTPRetry', {
+      'requestID': snapshot.requestID, 'leaseID': snapshot.leaseID, 'attempt': attempt,
+    });
+    expect((await refresh(true))['code'], 'invalidArguments');
+    expect((await refresh(2))['code'], 'invalidRetryAttempt');
+    for (final attempt in [1, 2]) {
+      await account.cookieJar.saveFromResponse(snapshot.url, [Cookie('retry_fixture', 'value-$attempt')..path = '/']);
+      final result = await refresh(attempt);
+      expect(result['state'], 'retryPrepared');
+      expect(result['executionAllowed'], isFalse);
+      expect(result['attempt'], attempt);
+      final header = (result['headers'] as Map)['cookie'] as String;
+      expect(header, contains('SESSDATA=synthetic-session'));
+      expect(header, isNot(contains('other-session')));
+      expect(header, contains('retry_fixture=value-1'));
+      if (attempt == 2) expect(header, contains('retry_fixture=value-2'));
+      expect((await refresh(attempt))['code'], 'invalidRetryAttempt');
+    }
+    expect((await refresh(3))['code'], 'invalidRetryAttempt');
+    expect(service.abandon(requestID: snapshot.requestID, leaseID: snapshot.leaseID).outcome.name, 'abandoned');
+  });
+
+  for (final change in ['abandoned', 'revoked', 'snapshotChanged']) {
+    test('$change during retry Cookie read prevents another attempt', () async {
+      final entered = Completer<void>(), release = Completer<void>();
+      var loads = 0;
+      final service = create(loadCookies: (owner, url) async {
+        if (++loads == 2) {
+          entered.complete();
+          await release.future;
+        }
+        return owner.cookieJar.loadForRequest(url);
+      });
+      final bridge = NativeHTTPRequestLeaseBridge(service: service);
+      final snapshot = await service.prepare(requestID: _requestID());
+      Future<Map<String, Object?>> retry() => bridge.handle('prepareNativeHTTPRetry', {
+        'requestID': snapshot.requestID, 'leaseID': snapshot.leaseID, 'attempt': 1,
+      });
+      final pending = retry();
+      await entered.future;
+      expect((await retry())['code'], 'retryInProgress');
+      try {
+        switch (change) {
+          case 'abandoned':
+            service.abandon(requestID: snapshot.requestID, leaseID: snapshot.leaseID);
+          case 'revoked':
+            await Accounts.installCredentials(LoginAccount(BiliCookieJar.fromJson({
+              'DedeUserID': '${account.mid}', 'SESSDATA': 'replacement-session',
+            }), null, null)..activated = true);
+          case 'snapshotChanged':
+            Request.resetAdaptersForNetworkChange();
+        }
+      } finally {
+        release.complete();
+      }
+      final denied = await pending;
+      expect(denied['code'], change);
+      expect(denied['headers'], isNull);
+      expect(loads, 2);
+      service.abandon(requestID: snapshot.requestID, leaseID: snapshot.leaseID);
+      expect(service.liveLeaseCount, 0);
+    });
+  }
   test('Prefs alone do not replace an effective pool or installed retry', () async {
     final entered = Completer<void>(), release = Completer<void>();
     final service = create(loadCookies: (owner, url) async {

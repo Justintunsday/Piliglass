@@ -23,7 +23,7 @@ private final class FakeTransport: PiliBridgeMethodTransport {
     if background { DispatchQueue.global().async { reply(result) } }
     else { reply(result) }
   }
-  var terminalCalls: [Call] { calls.filter { $0.method != "prepareNativeHTTPRequest" } }
+  var terminalCalls: [Call] { calls.filter { $0.method == "finishNativeHTTPRequest" || $0.method == "abandonNativeHTTPRequest" } }
   func dropReplies() { replies.removeAll() }
 }
 
@@ -112,11 +112,57 @@ private struct NativeRequestContextChecks {
   static func main() async {
     do {
       try await codecChecks(); try await ordinaryChecks(); try await prepareCancellationChecks()
+      try await retryCancellationChecks()
       try await invalidPrepareChecks(); try await terminalChecks(); try await capacityAndDisposalChecks()
       print("\(checks) native request context checks passed")
     } catch {
       print("FAIL native request context checks: \(error)"); exit(1)
     }
+  }
+
+  static func retryCancellationChecks() async throws {
+    guard case .dictionary(var policy) = PreparedHTTPPolicyFixture.unknown,
+          case .array(let issues) = policy["issues"] else {
+      throw CheckFailure(message: "Missing fixture policy")
+    }
+    policy["retry"] = .dictionary(["installed": .bool(true), "count": .integer(2), "delayMilliseconds": .integer(500)])
+    policy["issues"] = .array(issues.filter { $0 != .string("retryNotDescribed") })
+    let capturedPolicy = policy
+    let transport = FakeTransport(), active = provider(transport)
+    transport.immediate = { call in
+      if call.method == "prepareNativeHTTPRequest", case .string(let id) = call.arguments?["requestID"] {
+        var prepared = fields(requestID: id)
+        prepared["policy"] = .dictionary(capturedPolicy)
+        return .success(.dictionary(prepared))
+      }
+      return call.method == "abandonNativeHTTPRequest" ? .success(receipt("abandoned")) : nil
+    }
+    defer { active.dispose() }
+    let context = try await value { try await active.prepare(.searchTrending(limit: 10)) }
+    let operation = Task { try await active.prepareRetry(context, attempt: 1) }
+    try await until("retry waiting for Dart") { transport.calls.count == 2 }
+    let arguments: [String: PiliBridgeValue] = ["requestID": .string(context.requestID),
+      "leaseID": .string(context.leaseID), "attempt": .integer(1)]
+    try expect(transport.calls[1].method == "prepareNativeHTTPRetry" && transport.calls[1].arguments == arguments,
+               "Retry carries the existing lease and exact attempt")
+    var payload = arguments
+    payload["state"] = .string("retryPrepared")
+    payload["executionAllowed"] = .bool(false)
+    payload["headers"] = .dictionary(["cookie": .string("fixture=refreshed"), "env": .string("prod")])
+    let decoded = try PiliHTTPRequestContextBridgeCodec.decodeRetry(.dictionary(payload), context: context, attempt: 1)
+    try expect(decoded["cookie"] == "fixture=refreshed", "Retry accepts only the refreshed Cookie")
+    var invalid = payload
+    invalid["headers"] = .dictionary(["cookie": .string("fixture=refreshed"), "env": .string("other")])
+    let changed = invalid
+    try await error({ _ = try PiliHTTPRequestContextBridgeCodec.decodeRetry(.dictionary(changed), context: context, attempt: 1) },
+      { ($0 as? PiliHTTPRequestContextError) == .invalidResponse }, "Retry cannot change prepared non-Cookie headers")
+    operation.cancel()
+    try await error({ _ = try await operation.value }, { $0 is CancellationError }, "Retry cancellation ends the active wait")
+    _ = try await active.abandon(context)
+    transport.complete(1, .success(.dictionary(payload)))
+    try await drain()
+    try expect(active.activeContextCount == 0 && transport.terminalCalls.count == 1,
+               "Late retry headers cannot reopen an abandoned lease")
   }
 
   static func codecChecks() async throws {

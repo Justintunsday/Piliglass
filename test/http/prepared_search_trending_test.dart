@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:PiliPlus/http/init.dart';
+import 'package:PiliPlus/http/retry_interceptor.dart';
 import 'package:PiliPlus/models/common/account_type.dart';
 import 'package:PiliPlus/models_new/search/search_trending/data.dart';
 import 'package:PiliPlus/services/native_accounts/native_account_snapshot_bridge.dart';
@@ -25,6 +26,8 @@ enum _Scenario {
   redirected,
   redirectedSwitched,
   redirectedHTTPError,
+  retried,
+  retryRevoked,
 }
 
 LoginAccount _account(int mid, String session) => LoginAccount(
@@ -73,6 +76,13 @@ void main() {
           _ => false,
         };
         final followsRedirects = redirected || scenario == _Scenario.redirects;
+        final retryRevoked = scenario == _Scenario.retryRevoked;
+        final retrying = retryRevoked || scenario == _Scenario.retried;
+        if (retrying) {
+          final retry = RetryInterceptor(Request.dio, 2, 500);
+          Request.dio.interceptors.insert(0, retry);
+          addTearDown(() => Request.dio.interceptors.remove(retry));
+        }
         final previousRedirects = Request.dio.options.followRedirects;
         Request.dio.options.followRedirects = followsRedirects;
         addTearDown(() {
@@ -112,13 +122,14 @@ void main() {
         ];
         final declined =
             scenario == _Scenario.declined || scenario == _Scenario.redirects;
-        final terminalMethod = declined
+        final abandoning = declined || retryRevoked;
+        final terminalMethod = abandoning
             ? 'abandonNativeHTTPRequest'
             : 'finishNativeHTTPRequest';
         final terminal = <String, Object?>{
           'requestID': prepared['requestID'],
           'leaseID': prepared['leaseID'],
-          if (!declined)
+          if (!abandoning)
             'response': {
               'url': responseUrl.toString(),
               'statusCode': status,
@@ -141,13 +152,33 @@ void main() {
         };
         if (scenario == _Scenario.switched || scenario == _Scenario.redirectedSwitched) {
           await Accounts.set(AccountType.recommend, other);
-        } else if (scenario == _Scenario.revoked) {
+        } else if (scenario == _Scenario.revoked || retryRevoked) {
           await Accounts.installCredentials(_account(mid, 'replacement'));
         }
+        final retries = <Map<String, Object?>>[];
+        if (retrying) {
+          for (final attempt in retryRevoked ? [1] : [1, 2]) {
+            if (!retryRevoked) {
+              await original.cookieJar.saveFromResponse(url, [Cookie('retry_fixture', 'attempt-$attempt')..path = '/']);
+            }
+            final command = {'requestID': prepared['requestID'], 'leaseID': prepared['leaseID'], 'attempt': attempt};
+            final reply = await bridge.handle('prepareNativeHTTPRetry', command);
+            expect(reply['state'], retryRevoked ? 'error' : 'retryPrepared');
+            expect(reply['executionAllowed'], isFalse);
+            if (retryRevoked) {
+              expect(reply['code'], 'revoked');
+            } else {
+              final header = (reply['headers'] as Map)['cookie'] as String;
+              expect(header, contains('retry_fixture=attempt-$attempt'));
+              expect(header, contains('SESSDATA=fixture-recommend'));
+            }
+            retries.add({'command': command, 'reply': reply});
+          }
+        }
         final receipt = await bridge.handle(terminalMethod, terminal);
-        final writes = !declined && scenario != _Scenario.revoked;
+        final writes = !abandoning && scenario != _Scenario.revoked;
         expect(receipt['state'], switch (scenario) {
-          _Scenario.declined || _Scenario.redirects => 'abandoned',
+          _Scenario.declined || _Scenario.redirects || _Scenario.retryRevoked => 'abandoned',
           _Scenario.revoked => 'revoked',
           _ => 'finished',
         });
@@ -168,7 +199,7 @@ void main() {
           expect(replay['state'], 'consumed');
           expect(replay['cookiesSaved'], isFalse);
         }
-        if (scenario == _Scenario.revoked) {
+        if (scenario == _Scenario.revoked || retryRevoked) {
           final current = Accounts.account.get('$mid')!;
           expect(current, isNot(same(original)));
           expect(await _responseCookies(current, url), isEmpty);
@@ -224,6 +255,7 @@ void main() {
           'name': scenario.name,
           'prepare': prepare,
           'prepared': prepared,
+          'retries': retries,
           'terminalMethod': terminalMethod,
           'terminal': terminal,
           'receipt': receipt,

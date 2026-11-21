@@ -34,36 +34,54 @@ final class PiliFlutterHTTPRequestContextProvider: PiliHTTPRequestContextProvidi
       finalizer: PiliBridgeLeaseFinalizer(transport: transport, requestID: requestID,
                                          timeoutNanoseconds: terminalTimeoutNanoseconds))
     entries[requestID] = entry
-    let invoker = self.invoker
-    // A separate operation can be explicitly cancelled by caller or dispose.
-    // It captures request values and the invoker, never the provider.
-    let operation = Task { @MainActor in
-      try await invoker.invoke("prepareNativeHTTPRequest", arguments: arguments)
-    }
-    entry.preparation = operation
     do {
-      let raw = try await withTaskCancellationHandler {
-        try await operation.value
-      } onCancel: {
-        operation.cancel()
-      }
-      try Task.checkCancellation()
-      guard !disposed, entries[requestID] === entry, !entry.ending else {
-        throw PiliHTTPRequestContextError.disposed
-      }
+      let raw = try await invokeWhileActive(entry, "prepareNativeHTTPRequest", arguments: arguments)
       let context = try PiliHTTPRequestContextBridgeCodec.decodePrepared(raw, requestID: requestID, purpose: purpose)
       try Task.checkCancellation()
-      entry.preparation = nil
       entry.leaseID = context.leaseID
       return context
     } catch {
-      entry.preparation = nil
       // Includes invalid codec and cancellation that discarded the lease ID.
       // A late prepare reply never starts a second token-based cleanup.
       beginAbandon(entry)
       if disposed { throw PiliHTTPRequestContextError.disposed }
       throw Self.error(error)
     }
+  }
+
+  func prepareRetry(_ context: PiliHTTPRequestContext, attempt: Int64) async throws -> [String: String] {
+    try Task.checkCancellation()
+    guard !disposed, let entry = try matchingEntry(context), !entry.ending else {
+      throw PiliHTTPRequestContextError.disposed
+    }
+    guard entry.preparation == nil else { throw PiliHTTPRequestContextError.invalidRequest }
+    let arguments = try PiliHTTPRequestContextBridgeCodec.retryArguments(context: context, attempt: attempt)
+    do {
+      let raw = try await invokeWhileActive(entry, "prepareNativeHTTPRetry", arguments: arguments)
+      return try PiliHTTPRequestContextBridgeCodec.decodeRetry(raw, context: context, attempt: attempt)
+    } catch {
+      if disposed { throw PiliHTTPRequestContextError.disposed }
+      throw Self.error(error)
+    }
+  }
+
+  private func invokeWhileActive(_ entry: PiliHTTPRequestContextEntry, _ method: String,
+                                 arguments: [String: PiliBridgeValue]) async throws -> PiliBridgeValue {
+    let invoker = self.invoker
+    // The caller and terminal cleanup can cancel this operation independently.
+    let operation = Task { @MainActor in try await invoker.invoke(method, arguments: arguments) }
+    entry.preparation = operation
+    defer { entry.preparation = nil }
+    let raw = try await withTaskCancellationHandler {
+      try await operation.value
+    } onCancel: {
+      operation.cancel()
+    }
+    try Task.checkCancellation()
+    guard !disposed, entries[entry.requestID] === entry, !entry.ending else {
+      throw PiliHTTPRequestContextError.disposed
+    }
+    return raw
   }
 
   func finish(
@@ -82,6 +100,7 @@ final class PiliFlutterHTTPRequestContextProvider: PiliHTTPRequestContextProvidi
       throw Self.error(error)
     }
     entry.ending = true
+    entry.preparation?.cancel()
     guard let terminal = entry.finalizer.start("finishNativeHTTPRequest", arguments: arguments) else {
       return Self.receipt(.consumed)
     }
@@ -101,6 +120,7 @@ final class PiliFlutterHTTPRequestContextProvider: PiliHTTPRequestContextProvidi
     guard let entry = try matchingEntry(context) else { return Self.receipt(.consumed) }
     if entry.ending { return Self.receipt(.consumed) }
     entry.ending = true
+    entry.preparation?.cancel()
     guard let terminal = entry.finalizer.start("abandonNativeHTTPRequest", arguments: abandonArguments(entry)) else {
       return Self.receipt(.consumed)
     }
@@ -137,6 +157,7 @@ final class PiliFlutterHTTPRequestContextProvider: PiliHTTPRequestContextProvidi
   private func beginAbandon(_ entry: PiliHTTPRequestContextEntry) {
     guard !entry.ending else { return }
     entry.ending = true
+    entry.preparation?.cancel()
     guard let terminal = entry.finalizer.start("abandonNativeHTTPRequest", arguments: abandonArguments(entry)) else {
       remove(entry)
       return

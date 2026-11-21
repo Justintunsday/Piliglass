@@ -225,10 +225,16 @@ def main():
         threads = [threading.Thread(target=listener.serve_forever, daemon=True) for listener in servers]
         for thread in threads: thread.start()
         try:
-            env = {**os.environ, 'PILI_RAW_WIRE_BASE': f'http://127.0.0.1:{server.server_port}', 'PILI_RAW_WIRE_OUTPUT':str(OUTPUT)}
-            run(['flutter','test','--no-pub','--reporter','expanded','test/http/native_transport_wire_test.dart'],
-                'dart-wire.log',timeout=300,env=env,cwd=ROOT)
-            run(['swift','test','--filter','rawHeaderAndIdleWire|rawConfigurationRejectsUnknownSemantics'], 'wire.log', env=env)
+            # Hold a bound, unlistened port so refusal cannot race another server.
+            with socket.socket() as refused:
+                refused.bind(('127.0.0.1', 0))
+                env = {**os.environ, 'PILI_RAW_WIRE_BASE': f'http://127.0.0.1:{server.server_port}',
+                       'PILI_RAW_WIRE_OUTPUT': str(OUTPUT), 'PILI_RAW_REFUSED_PORT': str(refused.getsockname()[1])}
+                run(['flutter','test','--no-pub','--reporter','expanded','test/http/native_transport_wire_test.dart'],
+                    'dart-wire.log',timeout=300,env=env,cwd=ROOT)
+                run(['swift','test','--filter',
+                     'rawHeaderAndIdleWire|rawConfigurationRejectsUnknownSemantics|rawInitialConnectionRefused'],
+                    'wire.log', env=env)
         finally:
             for listener, thread in zip(servers, threads):
                 listener.shutdown(); listener.server_close(); thread.join(timeout=2)
@@ -258,7 +264,7 @@ def main():
                  '-derivedDataPath',str(OUTPUT/'DerivedData'), 'IPHONEOS_DEPLOYMENT_TARGET=16.0',
                  'CODE_SIGNING_ALLOWED=NO','build'],f'{label}-build.log',timeout=1800)
         summary.update(status='passed', wireCases=len(observations), actualDartWireCases=len(dart_observations),
-                       redirectCases=len(redirect_fixtures),
+                       redirectCases=len(redirect_fixtures), initialConnectionRefusal=True,
                        ios16Device=True, ios16Simulator=True,
                        knownPending=['br decoder','H2/TLS/proxy/pool expiry','retry',
                                      'redirect response Cookie ownership','actual API/account acceptance'])

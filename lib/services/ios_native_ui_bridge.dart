@@ -178,6 +178,7 @@ final class IOSNativeUIBridge {
       case 'deleteNativeLoginAccounts':
         return _nativeLoginAuthority.handle(call.method, call.arguments);
       case 'prepareNativeHTTPRequest':
+      case 'prepareNativeHTTPRetry':
       case 'finishNativeHTTPRequest':
       case 'abandonNativeHTTPRequest':
         return _nativeHTTPRequests.handle(call.method, call.arguments);

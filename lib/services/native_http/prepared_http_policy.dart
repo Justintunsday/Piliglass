@@ -36,6 +36,11 @@ final class PreparedHTTPPolicy {
   int? get redirectLimit =>
       values['followRedirects'] == true ? values['maxRedirects'] as int : null;
 
+  int get retryLimit {
+    final retry = values['retry'] as Map<String, Object?>?;
+    return retry == null || retry['installed'] != true ? 0 : retry['count'] as int;
+  }
+
   bool sameAs(PreparedHTTPPolicy other) => _same(values, other.values);
 
   static Map<String, Object?>? _pool(EffectiveHTTPPoolConfiguration? pool) =>

@@ -13,13 +13,21 @@ private struct TrendingFixture {
   let selection: PiliBridgeValue
   let body: Data
   let keywords: [PiliSearchKeyword]
+  let retries: [(command: [String: PiliBridgeValue], reply: [String: PiliBridgeValue])]
   var usesDart: Bool { name == "declined" || name == "redirects" }
+  var authorizedRetryCookies: [String] {
+    retries.compactMap { retry in
+      guard case .dictionary(let headers) = retry.reply["headers"],
+            case .string(let cookie) = headers["cookie"] else { return nil }
+      return cookie
+    }
+  }
 
   init(_ raw: [String: Any]) throws {
     guard let name = raw["name"] as? String,
           let terminalMethod = raw["terminalMethod"] as? String,
           let encoded = raw["body"] as? String, let body = Data(base64Encoded: encoded),
-          let keywords = raw["keywords"] as? [[String: String]] else {
+          let keywords = raw["keywords"] as? [[String: String]], let retries = raw["retries"] as? [[String: Any]] else {
       throw FixtureError(message: "Invalid Dart trending fixture")
     }
     self.name = name
@@ -30,6 +38,9 @@ private struct TrendingFixture {
     receipt = try PiliBridgeValue(codecValue: raw["receipt"])
     selection = try PiliBridgeValue(codecValue: raw["selection"])
     self.body = body
+    self.retries = try retries.map { entry in
+      (command: try Self.fields(entry["command"]), reply: try Self.fields(entry["reply"]))
+    }
     self.keywords = try keywords.map { fields in
       guard let keyword = fields["keyword"], let reason = fields["reason"] else {
         throw FixtureError(message: "Invalid expected Dart keyword")
@@ -50,6 +61,7 @@ private struct TrendingFixture {
 private final class FixtureBridge: PiliBridgeMethodTransport {
   let fixture: TrendingFixture
   private var requestID: PiliBridgeValue?
+  private var retryIndex = 0
   private(set) var methods: [String] = []
   private(set) var mismatch: String?
 
@@ -88,6 +100,16 @@ private final class FixtureBridge: PiliBridgeMethodTransport {
       var prepared = fixture.prepared
       prepared["requestID"] = requestID
       return .dictionary(prepared)
+    case "prepareNativeHTTPRetry":
+      guard let requestID, retryIndex < fixture.retries.count else { return nil }
+      let retry = fixture.retries[retryIndex]
+      var expected = retry.command
+      expected["requestID"] = requestID
+      guard arguments == expected else { return nil }
+      retryIndex += 1
+      var reply = retry.reply
+      if reply["requestID"] != nil { reply["requestID"] = requestID }
+      return .dictionary(reply)
     case fixture.terminalMethod:
       var expected = fixture.terminal
       expected["requestID"] = requestID
@@ -110,7 +132,8 @@ private actor FixtureTransfer: PiliHTTPTransferring {
   let head: PiliHTTPResponseHead?
   let requestedURL: URL
   let body: Data
-  let cookie: String
+  let requestCookies: [String]
+  let refusedAttempts: Int
   private(set) var sends = 0
   private(set) var matchedRequest = false
 
@@ -118,7 +141,8 @@ private actor FixtureTransfer: PiliHTTPTransferring {
     guard case .dictionary(let headers) = fixture.prepared["headers"],
           case .string(let cookie) = headers["cookie"], case .string(let request) = fixture.prepared["url"],
           let requestedURL = URL(string: request) else { throw FixtureError(message: "Missing Dart request") }
-    self.cookie = cookie
+    requestCookies = [cookie] + fixture.authorizedRetryCookies
+    refusedAttempts = fixture.retries.count
     self.requestedURL = requestedURL
     body = fixture.body
     if case .dictionary(let response) = fixture.terminal["response"],
@@ -132,7 +156,7 @@ private actor FixtureTransfer: PiliHTTPTransferring {
       let redirects = try Self.redirects(response["redirects"])
       head = PiliHTTPResponseHead(url: url, statusCode: statusCode, headers: ["content-encoding": "gzip"],
                                   cookieFields: .separatedFields(cookieFields), redirects: redirects)
-    } else if fixture.usesDart {
+    } else if fixture.usesDart || fixture.name == "retryRevoked" {
       head = nil
     } else {
       throw FixtureError(message: "Missing Dart response head")
@@ -156,12 +180,18 @@ private actor FixtureTransfer: PiliHTTPTransferring {
     _ request: URLRequest,
     onHead: @escaping @Sendable (PiliHTTPResponseHead) -> Void
   ) async -> PiliHTTPTransferOutcome {
+    let index = sends
     sends += 1
-    guard let head, request.url == requestedURL, request.httpMethod == "GET",
-          !request.httpShouldHandleCookies, request.value(forHTTPHeaderField: "Cookie") == cookie else {
+    matchedRequest = index < requestCookies.count && request.url == requestedURL && request.httpMethod == "GET"
+      && !request.httpShouldHandleCookies && request.value(forHTTPHeaderField: "Cookie") == requestCookies[index]
+    guard matchedRequest else {
       return .init(head: nil, body: .failure(.client(.invalidRequest)))
     }
-    matchedRequest = true
+    if sends <= refusedAttempts {
+      return .init(head: nil, body: .failure(.client(.nativeTransport(kind: "connectionRefused"))),
+                   failedDuringInitialConnection: true)
+    }
+    guard let head else { return .init(head: nil, body: .failure(.client(.invalidResponse))) }
     onHead(head)
     return .init(head: head, body: .success(body))
   }
@@ -179,7 +209,7 @@ private struct PreparedSearchTrendingChecks {
       }
       let fixtures = try cases.map(TrendingFixture.init)
       let expected: Set<String> = ["selected", "switched", "revoked", "httpError", "corrupt", "declined", "redirects",
-                                   "redirected", "redirectedSwitched", "redirectedHTTPError"]
+                                   "redirected", "redirectedSwitched", "redirectedHTTPError", "retried", "retryRevoked"]
       guard fixtures.count == expected.count, Set(fixtures.map(\.name)) == expected else {
         throw FixtureError(message: "Missing or repeated Dart trending scenarios")
       }
@@ -204,29 +234,32 @@ private struct PreparedSearchTrendingChecks {
       catch { failure = error; throw error }
     }
     let result = try await repository.discovery()
-    let methods = ["loadNativeSearchDiscovery", "prepareNativeHTTPRequest", fixture.terminalMethod]
+    let methods = ["loadNativeSearchDiscovery", "prepareNativeHTTPRequest"]
+      + Array(repeating: "prepareNativeHTTPRetry", count: fixture.retries.count) + [fixture.terminalMethod]
     let suffix: [String]
     switch fixture.name {
     case "declined", "redirects": suffix = ["loadNativeSearchTrending"]
-    case "selected", "switched", "redirected", "redirectedSwitched": suffix = ["loadNativeAccountSelection"]
+    case "selected", "switched", "redirected", "redirectedSwitched", "retried": suffix = ["loadNativeAccountSelection"]
     default: suffix = []
     }
     let sends = await transfer.sends
     let matched = await transfer.matchedRequest
     guard bridge.mismatch == nil, bridge.methods == methods + suffix,
-          sends == (declined ? 0 : 1), matched == !declined,
+          sends == (declined ? 0 : 1 + fixture.authorizedRetryCookies.count), matched == !declined,
           result.history == ["saved"], result.recommendations.map(\.keyword) == ["pick"] else {
       throw FixtureError(message: "\(fixture.name): altered bridge command, transfer, or discovery state")
     }
     let valid: Bool
     switch fixture.name {
-    case "selected", "redirected":
+    case "selected", "redirected", "retried":
       valid = failure == nil && !fixture.keywords.isEmpty && result.trending == fixture.keywords
     case "switched", "redirectedSwitched":
       valid = failure == nil && result.trending.isEmpty
     case "revoked":
       valid = (failure as? PiliPreparedHTTPRequestExecutionError) == .terminalNotConfirmed(.revoked)
         && result.trending.isEmpty
+    case "retryRevoked":
+      valid = (failure as? PiliHTTPRequestContextError) == .serviceFailure(code: "revoked") && result.trending.isEmpty
     case "httpError", "redirectedHTTPError":
       valid = (failure as? PiliSearchTrendingError) == .httpStatus(403) && result.trending.isEmpty
     case "corrupt":

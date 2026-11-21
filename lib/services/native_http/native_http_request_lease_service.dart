@@ -18,6 +18,9 @@ import 'package:PiliPlus/utils/accounts/account_request_state.dart';
 import 'package:dio/dio.dart';
 import 'package:uuid/v4.dart';
 
+typedef _RequestInput = ({Uri url, Map<String, String> headers, PreparedHTTPPolicy policy,
+  Object? decoder, Object? encoder, Object validateStatus});
+
 enum NativeHTTPRequestLeaseOutcome {
   finished,
   abandoned,
@@ -206,7 +209,6 @@ final class NativeHTTPRequestLeaseService {
       final revision = Accounts.requestRevision;
       final input = _captureInput(account, limit, stamp);
       final url = input.url;
-      final headers = input.headers;
       final cookies = await _loadCookies(account, url);
       _ensurePreparing(key, entry);
       if (!identical(_recommendAccount(), account) ||
@@ -214,32 +216,13 @@ final class NativeHTTPRequestLeaseService {
           !Accounts.isCurrentRequest(stamp)) {
         throw const NativeHTTPRequestLeaseException('snapshotChanged');
       }
-      // Pool generations cannot detect direct BaseOptions/retry/header edits.
-      // Recompose all effective inputs before adding the awaited Cookie values.
-      try {
-        final current = _captureInput(account, limit, stamp);
-        if (!input.policy.sameAs(current.policy) || current.url != url ||
-            !identical(input.decoder, current.decoder) ||
-            !identical(input.encoder, current.encoder) ||
-            !identical(input.validateStatus, current.validateStatus) ||
-            headers.length != current.headers.length ||
-            !headers.entries.every((entry) => current.headers[entry.key] == entry.value)) {
-          throw const NativeHTTPRequestLeaseException('snapshotChanged');
-        }
-      } catch (_) {
-        throw const NativeHTTPRequestLeaseException('snapshotChanged');
-      }
-      final previousCookies = headers[HttpHeaders.cookieHeader];
-      headers[HttpHeaders.cookieHeader] = AccountManager.getCookies([
-        ...?previousCookies?.split(';').where((value) => value.isNotEmpty).map(Cookie.fromSetCookieValue),
-        ...cookies,
-      ]);
+      _confirmInput(account, limit, stamp, input);
       final snapshot = NativeHTTPRequestLeaseSnapshot._(
-        requestID: key, leaseID: entry.leaseID, url: url, headers: headers,
+        requestID: key, leaseID: entry.leaseID, url: url, headers: _withCookies(input.headers, cookies),
         revision: revision, generation: stamp.generation, limit: limit,
         policy: input.policy,
       );
-      entry.context = _PreparedLease(snapshot, stamp);
+      entry.context = _PreparedLease(snapshot, stamp, input);
       return snapshot;
     } catch (error) {
       if (identical(_live[key], entry)) {
@@ -251,8 +234,7 @@ final class NativeHTTPRequestLeaseService {
     }
   }
 
-  ({Uri url, Map<String, String> headers, PreparedHTTPPolicy policy,
-    Object? decoder, Object? encoder, Object validateStatus}) _captureInput(
+  _RequestInput _captureInput(
     Account account, int limit, AccountRequestStamp<Account> stamp,
   ) {
     final effective = _policy();
@@ -278,6 +260,77 @@ final class NativeHTTPRequestLeaseService {
     return (url: url, headers: headers, decoder: composed.responseDecoder,
       encoder: composed.requestEncoder, validateStatus: composed.validateStatus,
       policy: PreparedHTTPPolicy.capture(effective: effective, request: composed, headers: headers));
+  }
+
+  void _confirmInput(Account account, int limit, AccountRequestStamp<Account> stamp, _RequestInput input) {
+    // Pool generations cannot detect direct BaseOptions/retry/header edits.
+    const changed = NativeHTTPRequestLeaseException('snapshotChanged');
+    try {
+      final current = _captureInput(account, limit, stamp);
+      if (!input.policy.sameAs(current.policy) || current.url != input.url ||
+          !identical(input.decoder, current.decoder) ||
+          !identical(input.encoder, current.encoder) ||
+          !identical(input.validateStatus, current.validateStatus) ||
+          input.headers.length != current.headers.length ||
+          !input.headers.entries.every((entry) => current.headers[entry.key] == entry.value)) {
+        throw changed;
+      }
+    } catch (_) {
+      throw changed;
+    }
+  }
+
+  static Map<String, String> _withCookies(Map<String, String> headers, List<Cookie> cookies) => {
+    ...headers,
+    HttpHeaders.cookieHeader: AccountManager.getCookies([
+      ...?headers[HttpHeaders.cookieHeader]?.split(';').where((value) => value.isNotEmpty).map(Cookie.fromSetCookieValue),
+      ...cookies,
+    ]),
+  };
+
+  Future<Map<String, String>> prepareRetry({
+    required String requestID,
+    required String leaseID,
+    required int attempt,
+  }) async {
+    final key = _id(requestID);
+    final token = _id(leaseID);
+    _ensureOpen();
+    pruneExpired();
+    final entry = _live[key];
+    if (entry == null) throw NativeHTTPRequestLeaseException(_terminalReceipt(key, token: token).outcome.name);
+    if (entry.leaseID != token) throw const NativeHTTPRequestLeaseException('leaseMismatch');
+    if (entry.finishing) throw const NativeHTTPRequestLeaseException('consumed');
+    final context = entry.context;
+    if (context == null) throw const NativeHTTPRequestLeaseException('notPrepared');
+    if (context.preparingRetry) throw const NativeHTTPRequestLeaseException('retryInProgress');
+    final snapshot = context.snapshot;
+    if (attempt != context.retryAttempt + 1 || attempt > snapshot.policy.retryLimit) {
+      throw const NativeHTTPRequestLeaseException('invalidRetryAttempt');
+    }
+    final account = context.stamp.account;
+    context.preparingRetry = true;
+    try {
+      if (!_owns(context)) throw const NativeHTTPRequestLeaseException('revoked');
+      _confirmInput(account, snapshot.limit, context.stamp, context.input);
+      final cookies = await _loadCookies(account, snapshot.url);
+      _ensurePreparing(key, entry);
+      if (!_owns(context)) throw const NativeHTTPRequestLeaseException('revoked');
+      _confirmInput(account, snapshot.limit, context.stamp, context.input);
+      // Dio reuses RequestOptions. Its account interceptor merges the previous
+      // Cookie header with a fresh jar read from the originally bound owner.
+      final headers = Map<String, String>.unmodifiable(_withCookies(context.lastHeaders, cookies));
+      context
+        ..lastHeaders = headers
+        ..retryAttempt = attempt;
+      return headers;
+    } on NativeHTTPRequestLeaseException {
+      rethrow;
+    } catch (_) {
+      throw const NativeHTTPRequestLeaseException('invalidRequest');
+    } finally {
+      context.preparingRetry = false;
+    }
   }
 
   Future<NativeHTTPRequestLeaseReceipt> finish({
@@ -531,9 +584,13 @@ final class _LiveLease {
 }
 
 final class _PreparedLease {
-  const _PreparedLease(this.snapshot, this.stamp);
+  _PreparedLease(this.snapshot, this.stamp, this.input) : lastHeaders = snapshot.headers;
   final NativeHTTPRequestLeaseSnapshot snapshot;
   final AccountRequestStamp<Account> stamp;
+  final _RequestInput input;
+  Map<String, String> lastHeaders;
+  int retryAttempt = 0;
+  bool preparingRetry = false;
 }
 
 final class _TerminalLease {

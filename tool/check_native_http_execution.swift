@@ -9,6 +9,8 @@ private actor Provider: PiliHTTPRequestContextProviding {
   var finishError = false
   var abandonOutcome: PiliHTTPRequestContextOutcome = .abandoned
   var cancelPrepare = false
+  var retryDenied = false
+  var retries: [Int64] = []
   init(policy: PiliPreparedHTTPPolicy, invalidURL: Bool = false) {
     context = PiliHTTPRequestContext(requestID: "request", leaseID: "lease",
       request: .init(url: URL(string: invalidURL ? "https://api.bilibili.com/x/other?limit=10"
@@ -21,6 +23,11 @@ private actor Provider: PiliHTTPRequestContextProviding {
     if cancelPrepare { throw CancellationError() }
     return context
   }
+  func prepareRetry(_ context: PiliHTTPRequestContext, attempt: Int64) async throws -> [String: String] {
+    retries.append(attempt)
+    if retryDenied { throw PiliHTTPRequestContextError.serviceFailure(code: "revoked") }
+    return ["accept-encoding": "br,gzip", "cookie": "fixture=retry-\(attempt)"]
+  }
   func finish(_ context: PiliHTTPRequestContext, response: PiliHTTPRequestResponseCookies) async throws -> PiliHTTPRequestContextReceipt {
     finishes += 1; cookies = response
     if finishError { throw PiliHTTPRequestContextError.terminalTimeout }
@@ -31,8 +38,10 @@ private actor Provider: PiliHTTPRequestContextProviding {
     return .init(outcome: abandonOutcome, cookiesSaved: false, cookieCount: 0)
   }
   func counts() -> [Int] { [prepares, finishes, abandons] }
-  func configure(finishError: Bool = false, abandon: PiliHTTPRequestContextOutcome = .abandoned, cancel: Bool = false) {
+  func configure(finishError: Bool = false, abandon: PiliHTTPRequestContextOutcome = .abandoned, cancel: Bool = false,
+                 retryDenied: Bool = false) {
     self.finishError = finishError; abandonOutcome = abandon; cancelPrepare = cancel
+    self.retryDenied = retryDenied
   }
 }
 
@@ -40,11 +49,22 @@ private actor Transfer: PiliHTTPTransferring {
   enum Mode: Sendable, Equatable { case success, headCancel, headError, noHead, delayedBody, duplicateHead, unsupportedFields }
   let mode: Mode
   let provider: Provider
+  let refusals: Int
   var calls = 0
   var headFinishedBeforeBody = false
-  init(_ mode: Mode, provider: Provider) { self.mode = mode; self.provider = provider }
+  var sent: [ContinuousClock.Instant] = []
+  var sentCookies: [String?] = []
+  init(_ mode: Mode, provider: Provider, refusals: Int = 0) {
+    self.mode = mode; self.provider = provider; self.refusals = refusals
+  }
   func transfer(_ request: URLRequest, onHead: @escaping @Sendable (PiliHTTPResponseHead) -> Void) async -> PiliHTTPTransferOutcome {
     calls += 1
+    sent.append(.now)
+    sentCookies.append(request.value(forHTTPHeaderField: "Cookie"))
+    if calls <= refusals {
+      return .init(head: nil, body: .failure(.client(.nativeTransport(kind: "connectionRefused"))),
+                   failedDuringInitialConnection: true)
+    }
     if mode == .noHead { return .init(head: nil, body: .failure(.client(.transport(code: -1)))) }
     let head = PiliHTTPResponseHead(url: request.url!, statusCode: 403, headers: [:],
       cookieFields: mode == .unsupportedFields ? .unsupported : .separatedFields(["same=path; Path=/x", "same=root; Path=/"]))
@@ -132,6 +152,54 @@ private struct ExecutionChecks {
     try await PiliPreparedHTTPRequestExecutor(provider: provider, transport: transfer, evidence: evidence)
       .execute(.searchTrending(limit: 10))
   }
+  static func initialConnectionRetries() async throws {
+    let configured = policy(retryCount: 2, delay: 25)
+    let success = Provider(policy: configured), recovered = Transfer(.success, provider: success, refusals: 2)
+    guard case .transferred(let outcome, let receipt, _, _) = try await execute(success, recovered) else {
+      throw Failure(message: "Failed Swift attempts must never replay via Dart")
+    }
+    try expect(outcome.head?.statusCode == 403 && receipt.outcome == .finished, "Recovery finishes only the final head")
+    let finalized = await success.counts(), retryAttempts = await success.retries
+    try expect(finalized == [1, 1, 0] && retryAttempts == [1, 2], "One lease for both retries")
+    try expect(await recovered.sentCookies == [nil, "fixture=retry-1", "fixture=retry-2"], "Refresh precedes each attempt")
+    let sent = await recovered.sent
+    try expect(sent.count == 3 && sent[0].duration(to: sent[1]) >= .milliseconds(25)
+      && sent[1].duration(to: sent[2]) >= .milliseconds(50), "Retry wait multiplies by attempt")
+
+    let exhausted = Provider(policy: configured), stillRefused = Transfer(.success, provider: exhausted, refusals: 3)
+    guard case .transferred = try await execute(exhausted, stillRefused) else {
+      throw Failure(message: "Retry exhaustion invoked a second transport")
+    }
+    let exhaustedCalls = await stillRefused.calls, exhaustedTerminals = await exhausted.counts()
+    try expect(exhaustedCalls == 3 && exhaustedTerminals == [1, 0, 1], "Exhaustion abandons once")
+
+    for mode in [Transfer.Mode.noHead, .headError, .headCancel] {
+      let provider = Provider(policy: configured), transfer = Transfer(mode, provider: provider)
+      _ = try await execute(provider, transfer)
+      let calls = await transfer.calls, retries = await provider.retries
+      try expect(calls == 1 && retries.isEmpty, "No resend after unclassified error, observed head or cancellation")
+    }
+
+    let denied = Provider(policy: configured), revoked = Transfer(.success, provider: denied, refusals: 1)
+    await denied.configure(retryDenied: true)
+    do { _ = try await execute(denied, revoked); throw Failure(message: "Revoked retry sent") }
+    catch PiliHTTPRequestContextError.serviceFailure(code: "revoked") { checks += 1 }
+    let deniedCalls = await revoked.calls, deniedTerminals = await denied.counts()
+    try expect(deniedCalls == 1 && deniedTerminals == [1, 0, 1], "Revoked retry settles the original lease")
+
+    let cancel = Provider(policy: policy(retryCount: 2, delay: 500)), waiting = Transfer(.success, provider: cancel, refusals: 1)
+    let operation = Task { try await execute(cancel, waiting) }
+    for _ in 0..<500 {
+      if await waiting.calls == 1 { break }
+      try await Task.sleep(nanoseconds: 1_000_000)
+    }
+    operation.cancel()
+    do { _ = try await operation.value; throw Failure(message: "Cancelled retry sent") }
+    catch is CancellationError { checks += 1 }
+    let calls = await waiting.calls, retries = await cancel.retries, terminals = await cancel.counts()
+    try expect(calls == 1 && retries.isEmpty && terminals == [1, 0, 1],
+               "Cancellation during backoff stops before reauthorization")
+  }
   static func main() async {
     do {
       let evaluator = PiliHTTPPolicyCapability()
@@ -142,6 +210,7 @@ private struct ExecutionChecks {
       try expect(reasons.contains(.unverifiedTransport) && reasons.contains(.requestSemantics), "Foundation cannot authorize runtime")
       try expect(Set(reasons).count == reasons.count, "Reasons deterministic and unique")
       try rawHTTP11Preflight(evaluator)
+      try await initialConnectionRetries()
       for invalid in [policy(connect: -1), policy(receive: Int64.max), policy(retryCount: -1, delay: 10),
                       policy(delay: -1), policy(delay: Int64.max),
                       policy(proxy: .init(host: "fixture", port: -1)), policy(issues: [.decoderChanged])] {

@@ -2,6 +2,9 @@ import AsyncHTTPClient
 import Foundation
 import NIOCore
 import NIOHTTP1
+#if canImport(Network)
+import Network
+#endif
 
 public struct PiliRawHTTPField: Sendable, Equatable, Codable {
   public let name: String
@@ -27,7 +30,7 @@ public struct PiliRawHTTPHead: Sendable, Equatable {
 }
 
 public enum PiliRawHTTPFailure: String, Error, Sendable, Equatable {
-  case invalidConfiguration, invalidRequest, cancelled, connectionTimeout
+  case invalidConfiguration, invalidRequest, cancelled, connectionTimeout, connectionRefused
   case receiveIdleTimeout, sendIdleTimeout, deadline, bodyLimit, transport
   case invalidRedirect, redirectLimit, redirectLoop, redirectOutsideOrigin
 }
@@ -35,6 +38,13 @@ public enum PiliRawHTTPFailure: String, Error, Sendable, Equatable {
 public struct PiliRawHTTPOutcome: Sendable {
   public let head: PiliRawHTTPHead?
   public let body: Result<Data, PiliRawHTTPFailure>
+  public let failedDuringInitialConnection: Bool
+
+  init(head: PiliRawHTTPHead?, body: Result<Data, PiliRawHTTPFailure>, failedDuringInitialConnection: Bool = false) {
+    self.head = head
+    self.body = body
+    self.failedDuringInitialConnection = failedDuringInitialConnection
+  }
 }
 
 /// An isolated candidate, not a declaration of Dio/iOS behavior parity. It has
@@ -121,6 +131,7 @@ public final class PiliRawHTTPTransport: Sendable {
     onChunk: @escaping @Sendable (Int) -> Void = { _ in }
   ) async -> PiliRawHTTPOutcome {
     var observed: PiliRawHTTPHead?
+    var receivedAnyHead = false
     do {
       try Task.checkCancellation()
       guard (sameOriginRedirectLimit ?? 0) >= 0,
@@ -146,6 +157,7 @@ public final class PiliRawHTTPTransport: Sendable {
         for field in headers { request.headers.add(name: field.name, value: field.value) }
         // No resource-total deadline replacing a receive-idle timeout.
         let response = try await client.execute(request, deadline: .distantFuture)
+        receivedAnyHead = true
         let head = PiliRawHTTPHead(url: response.url ?? target, statusCode: Int(response.status.code),
           version: "\(response.version.major).\(response.version.minor)",
           fields: response.headers.map { PiliRawHTTPField(name: $0.name, value: $0.value) }, redirects: redirects)
@@ -174,7 +186,9 @@ public final class PiliRawHTTPTransport: Sendable {
         return .init(head: head, body: .success(body))
       }
     } catch {
-      return .init(head: observed, body: .failure(Self.failure(error)))
+      let failure = Self.failure(error)
+      return .init(head: observed, body: .failure(failure), failedDuringInitialConnection:
+        !receivedAnyHead && (failure == .connectionRefused || failure == .connectionTimeout))
     }
   }
 
@@ -207,6 +221,13 @@ public final class PiliRawHTTPTransport: Sendable {
       if error == .readTimeout { return .receiveIdleTimeout }
       if error == .writeTimeout { return .sendIdleTimeout }
       if error == .deadlineExceeded { return .deadline }
+    }
+    #if canImport(Network)
+    if let error = error as? HTTPClient.NWPOSIXError, error.errorCode == .ECONNREFUSED { return .connectionRefused }
+    if let error = error as? NWError, case .posix(.ECONNREFUSED) = error { return .connectionRefused }
+    #endif
+    if let error = error as? IOError, error.errnoCode == POSIXErrorCode.ECONNREFUSED.rawValue {
+      return .connectionRefused
     }
     return .transport
   }

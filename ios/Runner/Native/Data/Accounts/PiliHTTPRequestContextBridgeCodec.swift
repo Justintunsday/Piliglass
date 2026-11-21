@@ -49,6 +49,32 @@ enum PiliHTTPRequestContextBridgeCodec {
       revision: revision, generation: generation, limit: purpose.limit, policy: policy)
   }
 
+  static func retryArguments(context: PiliHTTPRequestContext, attempt: Int64) throws -> [String: PiliBridgeValue] {
+    guard let requestID = canonicalID(context.requestID), let leaseID = canonicalID(context.leaseID),
+          let retry = context.policy.retry, retry.installed, attempt > 0, attempt <= retry.count else {
+      throw PiliHTTPRequestContextError.invalidRequest
+    }
+    return ["requestID": .string(requestID), "leaseID": .string(leaseID), "attempt": .integer(attempt)]
+  }
+
+  static func decodeRetry(_ value: PiliBridgeValue, context: PiliHTTPRequestContext, attempt: Int64) throws -> [String: String] {
+    let fields = try response(value)
+    guard Set(fields.keys) == Set(["state", "requestID", "leaseID", "attempt", "headers", "executionAllowed"]),
+          fields["state"] == .string("retryPrepared"), fields["attempt"] == .integer(attempt),
+          let requestID = canonicalID(context.requestID), fields["requestID"] == .string(requestID),
+          let leaseID = canonicalID(context.leaseID), fields["leaseID"] == .string(leaseID),
+          case .dictionary(let rawHeaders) = fields["headers"] else {
+      throw PiliHTTPRequestContextError.invalidResponse
+    }
+    let refreshed = try headers(rawHeaders)
+    func isCookie(_ name: String) -> Bool { name.lowercased() == "cookie" }
+    guard refreshed.keys.contains(where: isCookie),
+          refreshed.filter({ !isCookie($0.key) }) == context.request.headers.filter({ !isCookie($0.key) }) else {
+      throw PiliHTTPRequestContextError.invalidResponse
+    }
+    return refreshed
+  }
+
   static func finishArguments(
     context: PiliHTTPRequestContext,
     response: PiliHTTPRequestResponseCookies

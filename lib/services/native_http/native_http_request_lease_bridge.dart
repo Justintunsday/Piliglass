@@ -27,6 +27,16 @@ final class NativeHTTPRequestLeaseBridge {
             'policy': snapshot.policy.values,
             'generation': snapshot.generation, 'limit': snapshot.limit, 'executionAllowed': false,
           });
+        case 'prepareNativeHTTPRetry':
+          _keys(values, {'requestID', 'leaseID', 'attempt'});
+          final leaseID = _id(values['leaseID']);
+          final attempt = values['attempt'];
+          if (attempt is! int || attempt < 1) throw const NativeHTTPRequestLeaseException('invalidArguments');
+          final headers = await service.prepareRetry(requestID: requestID, leaseID: leaseID, attempt: attempt);
+          return Map.unmodifiable({
+            'state': 'retryPrepared', 'requestID': requestID.toLowerCase(), 'leaseID': leaseID.toLowerCase(),
+            'attempt': attempt, 'headers': headers, 'executionAllowed': false,
+          });
         case 'finishNativeHTTPRequest':
           _keys(values, {'requestID', 'leaseID', 'response'});
           final leaseID = _id(values['leaseID']);
