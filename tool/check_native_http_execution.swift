@@ -126,7 +126,8 @@ private struct ExecutionChecks {
       try expect(await unknownProvider.counts() == [1, 0, 1], "Unknown abandon cannot retransmit")
       for mode in [Transfer.Mode.success, .headCancel, .headError, .delayedBody, .duplicateHead] {
         let provider = Provider(policy: policy()), transfer = Transfer(mode, provider: provider)
-        guard case .transferred(let outcome, let receipt) = try await execute(provider, transfer) else { throw Failure(message: "Sent request cannot fall back") }
+        guard case .transferred(let outcome, let receipt, let generation) = try await execute(provider, transfer) else { throw Failure(message: "Sent request cannot fall back") }
+        try expect(generation == 4, "Sent request retains the prepared account generation")
         try expect(await provider.counts() == [1, 1, 0], "Head outcomes finish exactly once")
         try expect(outcome.head?.statusCode == 403 && receipt.outcome == .finished, "HTTP/API failure does not discard head")
         let cookies = await provider.cookies

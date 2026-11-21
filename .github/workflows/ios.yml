@@ -26,6 +26,7 @@ on:
       - "tool/check_native_request_context.swift"
       - "tool/check_prepared_http_policy.py"
       - "tool/check_prepared_http_policy.swift"
+      - "tool/check_prepared_search_trending.swift"
       - "tool/prepared_http_policy_fixture.swift"
       - "tool/check_native_http_transfer.py"
       - "tool/check_native_http_transfer.swift"
@@ -78,6 +79,7 @@ on:
       - "tool/check_native_request_context.swift"
       - "tool/check_prepared_http_policy.py"
       - "tool/check_prepared_http_policy.swift"
+      - "tool/check_prepared_search_trending.swift"
       - "tool/prepared_http_policy_fixture.swift"
       - "tool/check_native_http_transfer.py"
       - "tool/check_native_http_transfer.swift"
@@ -366,7 +368,7 @@ jobs:
           dart analyze --fatal-infos lib/http/init.dart lib/http/effective_http_policy.dart lib/http/retry_interceptor.dart lib/services/native_http/ test/http/ test/utils/accounts/account_test_storage.dart | tee build/effective-http-policy/analyze.log
           flutter test --no-pub --reporter expanded test/http/ | tee build/effective-http-policy/flutter-test.log
 
-      - name: Verify actual Dart policy leases with production Swift codec and provider
+      - name: Verify actual Dart policy leases and prepared Swift trending
         run: python3 tool/check_prepared_http_policy.py
 
       - name: Verify native signing and WBI cache against actual Dart implementations

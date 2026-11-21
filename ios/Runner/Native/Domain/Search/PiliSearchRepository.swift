@@ -13,6 +13,12 @@ struct PiliSearchKeyword: Sendable, Equatable {
   let icon: String?
 }
 
+enum PiliSearchTrendingResult: Sendable {
+  case keywords([PiliSearchKeyword])
+  /// The native request was declined before any HTTP transfer.
+  case useDart
+}
+
 struct PiliSearchDiscovery: Sendable, Equatable {
   let history: [String]
   let trending: [PiliSearchKeyword]

@@ -321,7 +321,7 @@ private struct NativeSearchChecks {
       && transport.calls.map { $0.0 } == [discovery], "A sent request failure does not replay or discard recommendations")
 
     transport.calls.removeAll()
-    var pending: Pending<PiliFlutterSearchRepository.TrendingResult>?
+    var pending: Pending<PiliSearchTrendingResult>?
     let cancelled = PiliFlutterSearchRepository(invoker: invoker) {
       try await withCheckedThrowingContinuation { pending = Pending("trending", $0) }
     }

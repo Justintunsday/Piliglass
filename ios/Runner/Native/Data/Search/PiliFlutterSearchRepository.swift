@@ -2,13 +2,7 @@ import Foundation
 
 @MainActor
 final class PiliFlutterSearchRepository: PiliSearchRepository {
-  enum TrendingResult: Sendable {
-    case keywords([PiliSearchKeyword])
-    /// The native request was declined before any HTTP transfer.
-    case useDart
-  }
-
-  typealias NativeTrendingLoader = @MainActor @Sendable () async throws -> TrendingResult
+  typealias NativeTrendingLoader = @MainActor @Sendable () async throws -> PiliSearchTrendingResult
 
   private let invoker: any PiliBridgeMethodInvoking
   private let loadNativeTrending: NativeTrendingLoader?

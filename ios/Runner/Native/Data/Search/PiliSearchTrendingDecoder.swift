@@ -7,7 +7,10 @@ enum PiliSearchTrendingError: Error, Sendable, Equatable {
 }
 
 enum PiliSearchTrendingDecoder {
-  static func decode(_ response: PiliHTTPResponse) throws -> [PiliSearchKeyword] {
+  static func decode(
+    _ response: PiliHTTPResponse,
+    transformBody: (Data) throws -> Data = { $0 }
+  ) throws -> [PiliSearchKeyword] {
     guard (200..<300).contains(response.statusCode) else {
       throw PiliSearchTrendingError.httpStatus(response.statusCode)
     }
@@ -15,8 +18,9 @@ enum PiliSearchTrendingDecoder {
           response.url.path == "/x/v2/search/trending/ranking" else {
       throw PiliHTTPClientError.invalidResponse
     }
+    let body = try transformBody(response.body)
     let envelope: Envelope
-    do { envelope = try JSONDecoder().decode(Envelope.self, from: response.body) }
+    do { envelope = try JSONDecoder().decode(Envelope.self, from: body) }
     catch { throw PiliSearchTrendingError.invalidPayload }
     guard envelope.code == 0 else {
       throw PiliSearchTrendingError.api(code: envelope.code, message: envelope.message)
