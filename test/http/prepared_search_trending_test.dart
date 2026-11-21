@@ -150,14 +150,20 @@ void main() {
             }),
           ),
         ]);
+        const gzipHeaders = {
+          'content-encoding': ['gzip'],
+        };
+        final wireBody = [...gzipBody];
+        if (scenario == _Scenario.corrupt || scenario == _Scenario.httpError) {
+          wireBody[wireBody.length - 8] ^= 1;
+          expect(
+            () => Request.responseBytesDecoder(wireBody, gzipHeaders),
+            throwsFormatException,
+          );
+        }
         final decoded = jsonDecode(
           utf8.decode(
-            Request.responseBytesDecoder(
-              gzipBody,
-              {
-                'content-encoding': ['gzip'],
-              },
-            ),
+            Request.responseBytesDecoder(gzipBody, gzipHeaders),
             allowMalformed: true,
           ),
         ) as Map<String, dynamic>;
@@ -172,11 +178,7 @@ void main() {
           'terminal': terminal,
           'receipt': receipt,
           'selection': snapshot,
-          'body': base64Encode(
-            scenario == _Scenario.corrupt || scenario == _Scenario.httpError
-                ? [0x1f, 0x8b, 0xff]
-                : gzipBody,
-          ),
+          'body': base64Encode(wireBody),
           'keywords': [
             for (final item in expected.list!)
               if (item.keyword.isNotEmpty)

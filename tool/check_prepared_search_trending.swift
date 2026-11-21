@@ -216,7 +216,10 @@ private struct PreparedSearchTrendingChecks {
     default:
       valid = false
     }
-    guard valid else { throw FixtureError(message: "\(fixture.name): unexpected result or error type") }
+    guard valid else {
+      let errorType = failure.map { String(describing: type(of: $0)) } ?? "none"
+      throw FixtureError(message: "\(fixture.name): unexpected result (error type: \(errorType))")
+    }
     print("PASS prepared trending \(fixture.name)")
   }
 }
