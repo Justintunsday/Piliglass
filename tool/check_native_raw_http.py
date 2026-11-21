@@ -1,5 +1,6 @@
 """Real raw H1 fields, compression bytes, idle timeout and iOS package builds."""
 import base64
+import errno
 import gzip
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
@@ -202,6 +203,13 @@ def run(command, log, timeout=1200, env=None, cwd=PACKAGE):
         raise RuntimeError(f'{log}: command failed ({result.returncode})')
 
 
+def verify_connection_refusal(port):
+    with socket.socket() as probe:
+        probe.settimeout(5)
+        if probe.connect_ex(('127.0.0.1', port)) != errno.ECONNREFUSED:
+            raise RuntimeError('Expected the unused loopback port to reject a TCP connection')
+
+
 def main():
     import os
     OUTPUT.mkdir(parents=True, exist_ok=True)
@@ -225,16 +233,21 @@ def main():
         threads = [threading.Thread(target=listener.serve_forever, daemon=True) for listener in servers]
         for thread in threads: thread.start()
         try:
-            # Hold a bound, unlistened port so refusal cannot race another server.
-            with socket.socket() as refused:
-                refused.bind(('127.0.0.1', 0))
-                env = {**os.environ, 'PILI_RAW_WIRE_BASE': f'http://127.0.0.1:{server.server_port}',
-                       'PILI_RAW_WIRE_OUTPUT': str(OUTPUT), 'PILI_RAW_REFUSED_PORT': str(refused.getsockname()[1])}
-                run(['flutter','test','--no-pub','--reporter','expanded','test/http/native_transport_wire_test.dart'],
-                    'dart-wire.log',timeout=300,env=env,cwd=ROOT)
-                run(['swift','test','--filter',
-                     'rawHeaderAndIdleWire|rawConfigurationRejectsUnknownSemantics|rawInitialConnectionRefused'],
-                    'wire.log', env=env)
+            # Darwin can time out on a bound, unlistened socket. Release the
+            # assigned port and check for refusal before and after verification.
+            with socket.socket() as reserved:
+                reserved.bind(('127.0.0.1', 0))
+                refused_port = reserved.getsockname()[1]
+            env = {**os.environ, 'PILI_RAW_WIRE_BASE': f'http://127.0.0.1:{server.server_port}',
+                   'PILI_RAW_WIRE_OUTPUT': str(OUTPUT), 'PILI_RAW_REFUSED_PORT': str(refused_port)}
+            verify_connection_refusal(refused_port)
+            run(['flutter','test','--no-pub','--reporter','expanded','test/http/native_transport_wire_test.dart'],
+                'dart-wire.log',timeout=300,env=env,cwd=ROOT)
+            verify_connection_refusal(refused_port)
+            run(['swift','test','--filter',
+                 'rawHeaderAndIdleWire|rawConfigurationRejectsUnknownSemantics|rawInitialConnectionRefused'],
+                'wire.log', env=env)
+            verify_connection_refusal(refused_port)
         finally:
             for listener, thread in zip(servers, threads):
                 listener.shutdown(); listener.server_close(); thread.join(timeout=2)
