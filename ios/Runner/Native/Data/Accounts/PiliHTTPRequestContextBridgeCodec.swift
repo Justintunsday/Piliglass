@@ -41,8 +41,9 @@ enum PiliHTTPRequestContextBridgeCodec {
       guard let rawPolicy = fields["policy"] else { throw PiliHTTPRequestContextError.invalidResponse }
       policy = try PiliPreparedHTTPPolicyCodec.decode(rawPolicy)
     } catch { throw PiliHTTPRequestContextError.invalidResponse }
-    guard policy.acceptEncoding == validatedHeaders.first(where: { $0.key.lowercased() == "accept-encoding" })?.value,
-          !policy.followRedirects else { throw PiliHTTPRequestContextError.invalidResponse }
+    guard policy.acceptEncoding == validatedHeaders.first(where: { $0.key.lowercased() == "accept-encoding" })?.value else {
+      throw PiliHTTPRequestContextError.invalidResponse
+    }
     return PiliHTTPRequestContext(requestID: expectedID, leaseID: leaseID,
       request: PiliHTTPRequestDescriptor(url: expectedURL, method: "GET", headers: validatedHeaders),
       revision: revision, generation: generation, limit: purpose.limit, policy: policy)

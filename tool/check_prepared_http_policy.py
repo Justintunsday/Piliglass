@@ -21,7 +21,7 @@ TRENDING_SOURCES = [
     'ios/Runner/Native/Data/Accounts/PiliAccountFlutterRepository.swift',
     'ios/Runner/Native/Data/Accounts/PiliHTTPRequestHeaderFinalizer.swift',
     'ios/Runner/Native/Networking/HTTP/PiliHTTPClient.swift',
-    'ios/Runner/Native/Networking/HTTP/PiliHTTPPolicyCapability.swift',
+    'ios/Runner/Native/Networking/HTTP/PiliRawHTTPClient.swift',
     'ios/Runner/Native/Data/HTTP/PiliPreparedHTTPRequestExecutor.swift',
     'ios/Runner/Native/Data/Search/PiliFlutterSearchRepository.swift',
     'ios/Runner/Native/Data/Search/PiliSearchTrendingDecoder.swift',
@@ -43,22 +43,30 @@ def check_trending(context_sources):
         for path in context_sources + TRENDING_SOURCES:
             shutil.copy2(ROOT / path, sources)
         codec_path = json.dumps(str(ROOT / 'Packages/PiliHTTPBodyCodec'), ensure_ascii=False)
+        transport_path = json.dumps(str(ROOT / 'Packages/PiliHTTPTransport'), ensure_ascii=False)
         (package / 'Package.swift').write_text(f'''// swift-tools-version: 6.2
 import PackageDescription
 let package = Package(
   name: "TrendingCheck",
   platforms: [.macOS(.v13)],
-  dependencies: [.package(path: {codec_path})],
+  dependencies: [.package(path: {codec_path}), .package(path: {transport_path})],
   targets: [.executableTarget(
     name: "TrendingCheck",
-    dependencies: [.product(name: "PiliHTTPBodyCodec", package: "PiliHTTPBodyCodec")],
+    dependencies: [
+      .product(name: "PiliHTTPBodyCodec", package: "PiliHTTPBodyCodec"),
+      .product(name: "PiliHTTPTransport", package: "PiliHTTPTransport")
+    ],
     swiftSettings: [.define("PILI_HTTP_FIXTURES")]
   )]
 )
 ''', encoding='utf-8')
+        resolved = package / 'Package.resolved'
+        shutil.copy2(ROOT / 'Packages/PiliHTTPTransport/Package.resolved', resolved)
         command = ['swift', 'run', '--package-path', str(package),
                    '-Xswiftc', '-strict-concurrency=complete', 'TrendingCheck', str(fixture)]
-        result = subprocess.run(command, cwd=ROOT, capture_output=True, text=True, timeout=420)
+        result = subprocess.run(command, cwd=ROOT, capture_output=True, text=True, timeout=600)
+        if resolved.is_file():
+            shutil.copy2(resolved, OUTPUT / 'trending-Package.resolved')
     output = result.stdout + result.stderr
     (OUTPUT / 'trending.log').write_text(shlex.join(command) + '\n' + output, encoding='utf-8')
     print(output, end='')
@@ -80,6 +88,7 @@ def main():
                 raise RuntimeError(f'Actual Dart golden missing: {golden.name}')
         sources = [value for value in SOURCES if value not in
                    ['tool/check_native_request_context.swift', 'tool/prepared_http_policy_fixture.swift']]
+        sources.append('ios/Runner/Native/Networking/HTTP/PiliHTTPPolicyCapability.swift')
         executable = OUTPUT / 'check-prepared-http-policy'
         command = ['xcrun', 'swiftc', '-swift-version', '6', '-strict-concurrency=complete',
                    '-parse-as-library', '-o', str(executable),

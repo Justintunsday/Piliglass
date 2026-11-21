@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:PiliPlus/http/init.dart';
 import 'package:PiliPlus/http/retry_interceptor.dart';
+import 'package:PiliPlus/http/search.dart';
 import 'package:PiliPlus/models/common/account_type.dart';
 import 'package:PiliPlus/services/native_http/native_http_request_lease_bridge.dart';
 import 'package:PiliPlus/services/native_http/native_http_request_lease_service.dart';
@@ -119,6 +120,7 @@ void runPreparedHTTPPolicyFixtures({required bool http2}) {
   test('microsecond timeout, encoding, base and account headers cannot change across await', () async {
     await changed(() => Request.dio.options.receiveTimeout = const Duration(microseconds: 7000001));
     await changed(() => Request.dio.options.transformTimeout = const Duration(microseconds: 7000009));
+    await changed(() => Request.dio.options.followRedirects = false);
     await changed(() => Request.dio.options.headers['accept-encoding'] = 'gzip');
     await changed(() => Request.dio.options.headers['x-policy-fixture'] = 'later');
     await changed(() => account.headers['x-account-fixture'] = 'later');
@@ -157,6 +159,33 @@ void runPreparedHTTPPolicyFixtures({required bool http2}) {
     expect(snapshot.executionAllowed, isFalse);
     service.abandon(requestID: snapshot.requestID, leaseID: snapshot.leaseID);
   });
+  test('prepared redirects match the actual legacy SearchHttp request', () async {
+    final service = create();
+    final seen = <RequestOptions>[];
+    final capture = InterceptorsWrapper(onRequest: (request, handler) {
+      seen.add(request);
+      handler.resolve(Response<Map<String, dynamic>>(
+        requestOptions: request,
+        statusCode: 200,
+        data: {'code': 0, 'data': {'list': []}},
+      ));
+    });
+    Request.dio.interceptors.add(capture);
+    try {
+      for (final followRedirects in [true, false]) {
+        Request.dio.options.followRedirects = followRedirects;
+        final context = await service.prepare(requestID: _requestID());
+        await SearchHttp.searchTrending(limit: 10);
+        expect(seen.last.uri, context.url);
+        expect(seen.last.followRedirects, followRedirects);
+        expect(context.policy.values['followRedirects'], seen.last.followRedirects);
+        service.abandon(requestID: context.requestID, leaseID: context.leaseID);
+      }
+      expect(seen, hasLength(2));
+    } finally {
+      Request.dio.interceptors.remove(capture);
+    }
+  });
   test('real production bridge exports composed policies for Swift consumption', () async {
     final cases = <Map<String, Object?>>[];
     Future<void> export(String name, {bool h11 = false}) async {
@@ -170,7 +199,7 @@ void runPreparedHTTPPolicyFixtures({required bool http2}) {
         });
         expect(payload['state'], 'prepared');
         final policy = payload['policy'] as Map;
-        expect(policy['followRedirects'], isFalse); // Endpoint override of true BaseOptions.
+        expect(policy['followRedirects'], isTrue); // Inherit the legacy SearchHttp request.
         expect(policy['clientMode'], h11 ? 'http11' : 'main');
         expect(policy['acceptEncoding'], (payload['headers'] as Map)['accept-encoding']);
         expect(() => policy['version'] = 2, throwsUnsupportedError);

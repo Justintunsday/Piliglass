@@ -89,7 +89,8 @@ generation/取消/响应头门禁见 [REQUEST_CONTEXT.md](REQUEST_CONTEXT.md)。
 P04b（hybrid discovery 切换）。lease 绑定请求准备时的实际 recommend Account，
 带不透明 ID 和单调 revision；响应 Cookie 写回原始绑定账户，包括非 2xx 响应。
 finish/abandon 恰好释放一次；URLSession ephemeral session 禁用自动 Cookie storage。
-早期切片拒绝自动重定向，未支持的代理/transport 模式继续 Dart。
+租约保留 Dart 请求的重定向设置。允许重定向的请求在发送前交回 Dart，未支持的
+代理和传输模式同样使用 Dart。
 
 精确 pipeline 定位：`lib/http/init.dart:203`（base/timeout/headers）、
 `lib/utils/accounts/account.dart:65`（账户 headers）、
@@ -119,6 +120,14 @@ Cookie 写回验收。Swift 6 搜索检查使用生产仓库和热搜解析器�
 离线验收使用 Dart 桥接、Hive 和隔离账号生成的准备、终结与选择快照，验证正常
 结果、换号、凭据替换、HTTP 错误、损坏正文和发送前回退。正式启用仍需确认实际
 传输策略与真机账号行为。
+
+### 直连 HTTP/1.1 候选
+
+发送前检查使用热搜实际 API 请求的重定向设置和当时安装的 Dio 重试策略。默认配置
+允许重定向并配置两次重试，这两项都会阻止 Swift 发送。对直连 HTTP/1.1、默认
+证书验证、关闭重定向和零次重试的配置，候选可按实际微秒值构建连接和接收空闲
+超时，保留连接池代次。当前候选还依赖真机账号及传输行为验收。HTTP/2、代理、
+自定义发送或转换超时等组合在发送前继续交给 Dart。
 
 ## 其他搜索能力
 

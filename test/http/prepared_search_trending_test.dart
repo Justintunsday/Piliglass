@@ -14,7 +14,15 @@ import 'package:flutter_test/flutter_test.dart';
 
 import '../utils/accounts/account_test_storage.dart';
 
-enum _Scenario { selected, switched, revoked, httpError, corrupt, declined }
+enum _Scenario {
+  selected,
+  switched,
+  revoked,
+  httpError,
+  corrupt,
+  declined,
+  redirects,
+}
 
 LoginAccount _account(int mid, String session) => LoginAccount(
   BiliCookieJar.fromJson({
@@ -57,6 +65,11 @@ void main() {
         Accounts.selectTemporarily(AccountType.main, other);
         await Accounts.set(AccountType.recommend, original);
 
+        final previousRedirects = Request.dio.options.followRedirects;
+        Request.dio.options.followRedirects = scenario == _Scenario.redirects;
+        addTearDown(() {
+          Request.dio.options.followRedirects = previousRedirects;
+        });
         final service = NativeHTTPRequestLeaseService(autoExpire: false);
         final bridge = NativeHTTPRequestLeaseBridge(service: service);
         addTearDown(bridge.dispose);
@@ -73,6 +86,10 @@ void main() {
         );
         expect(prepared['state'], 'prepared');
         expect(prepared['executionAllowed'], isFalse);
+        expect(
+          (prepared['policy'] as Map)['followRedirects'],
+          scenario == _Scenario.redirects,
+        );
         final cookie = (prepared['headers'] as Map)['cookie'] as String;
         expect(cookie, contains('SESSDATA=fixture-recommend'));
         expect(cookie, isNot(contains('SESSDATA=fixture-main')));
@@ -83,7 +100,8 @@ void main() {
           'trending_fixture=endpoint; Path=/x/v2/search',
           'trending_fixture=root; Domain=.bilibili.com; Path=/',
         ];
-        final declined = scenario == _Scenario.declined;
+        final declined =
+            scenario == _Scenario.declined || scenario == _Scenario.redirects;
         final terminalMethod = declined
             ? 'abandonNativeHTTPRequest'
             : 'finishNativeHTTPRequest';
@@ -106,7 +124,7 @@ void main() {
         final receipt = await bridge.handle(terminalMethod, terminal);
         final writes = !declined && scenario != _Scenario.revoked;
         expect(receipt['state'], switch (scenario) {
-          _Scenario.declined => 'abandoned',
+          _Scenario.declined || _Scenario.redirects => 'abandoned',
           _Scenario.revoked => 'revoked',
           _ => 'finished',
         });

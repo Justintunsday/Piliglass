@@ -13,6 +13,7 @@ private struct TrendingFixture {
   let selection: PiliBridgeValue
   let body: Data
   let keywords: [PiliSearchKeyword]
+  var usesDart: Bool { name == "declined" || name == "redirects" }
 
   init(_ raw: [String: Any]) throws {
     guard let name = raw["name"] as? String,
@@ -127,7 +128,7 @@ private actor FixtureTransfer: PiliHTTPTransferring {
       }
       head = PiliHTTPResponseHead(url: url, statusCode: statusCode, headers: ["content-encoding": "gzip"],
                                   cookieFields: .separatedFields(cookieFields))
-    } else if fixture.name == "declined" {
+    } else if fixture.usesDart {
       head = nil
     } else {
       throw FixtureError(message: "Missing Dart response head")
@@ -160,7 +161,7 @@ private struct PreparedSearchTrendingChecks {
         throw FixtureError(message: "Fresh Dart trending fixture required")
       }
       let fixtures = try cases.map(TrendingFixture.init)
-      let expected: Set<String> = ["selected", "switched", "revoked", "httpError", "corrupt", "declined"]
+      let expected: Set<String> = ["selected", "switched", "revoked", "httpError", "corrupt", "declined", "redirects"]
       guard fixtures.count == expected.count, Set(fixtures.map(\.name)) == expected else {
         throw FixtureError(message: "Missing or repeated Dart trending scenarios")
       }
@@ -173,11 +174,12 @@ private struct PreparedSearchTrendingChecks {
   }
 
   static func check(_ fixture: TrendingFixture) async throws {
+    if fixture.name == "declined" { try await checkRawCandidate(fixture) }
     let bridge = FixtureBridge(fixture)
     let transfer = try FixtureTransfer(fixture)
-    let declined = fixture.name == "declined"
+    let declined = fixture.usesDart
     let loader = PiliPreparedSearchTrendingLoader(bridge: bridge, transport: transfer,
-      evidence: declined ? .rawCandidate : .syntheticComplete, maximumBodyBytes: 65_536)
+      evidence: fixture.name == "declined" ? .rawCandidate : .syntheticComplete, maximumBodyBytes: 65_536)
     var failure: Error?
     let repository = PiliFlutterSearchRepository(invoker: PiliBridgeMethodInvoker(transport: bridge)) {
       do { return try await loader.load() }
@@ -187,7 +189,7 @@ private struct PreparedSearchTrendingChecks {
     let methods = ["loadNativeSearchDiscovery", "prepareNativeHTTPRequest", fixture.terminalMethod]
     let suffix: [String]
     switch fixture.name {
-    case "declined": suffix = ["loadNativeSearchTrending"]
+    case "declined", "redirects": suffix = ["loadNativeSearchTrending"]
     case "selected", "switched": suffix = ["loadNativeAccountSelection"]
     default: suffix = []
     }
@@ -211,7 +213,7 @@ private struct PreparedSearchTrendingChecks {
       valid = (failure as? PiliSearchTrendingError) == .httpStatus(403) && result.trending.isEmpty
     case "corrupt":
       valid = (failure as? PiliHTTPBodyDecodeFailure) == .malformedCompression && result.trending.isEmpty
-    case "declined":
+    case "declined", "redirects":
       valid = failure == nil && result.trending.map(\.keyword) == ["Dart hot"]
     default:
       valid = false
@@ -221,5 +223,30 @@ private struct PreparedSearchTrendingChecks {
       throw FixtureError(message: "\(fixture.name): unexpected result (error type: \(errorType))")
     }
     print("PASS prepared trending \(fixture.name)")
+  }
+
+  static func checkRawCandidate(_ fixture: TrendingFixture) async throws {
+    guard case .string(let id) = fixture.prepared["requestID"] else {
+      throw FixtureError(message: "Missing Dart ID for raw preflight")
+    }
+    let context = try PiliHTTPRequestContextBridgeCodec.decodePrepared(.dictionary(fixture.prepared),
+      requestID: id, purpose: .searchTrending(limit: 10))
+    guard case .candidate(let profile) = PiliHTTPPolicyCapability().planRawHTTP11(context.policy) else {
+      throw FixtureError(message: "The direct HTTP/1.1 fixture should describe a representable configuration")
+    }
+    guard profile.poolGeneration == context.policy.poolGeneration,
+          profile.connectMicroseconds == 10_000_000, profile.receiveIdleMicroseconds == 10_000_000,
+          profile.poolIdleMicroseconds == 15_000_000 else {
+      throw FixtureError(message: "Raw configuration drifted from the actual Dart pool")
+    }
+    let client = try PiliRawHTTPClient(profile: profile, maximumBodyBytes: 65_536)
+    var request = URLRequest(url: URL(string: "http://127.0.0.1:1/trending-fixture")!)
+    request.httpMethod = "GET"
+    let rejected = await client.transfer(request, onHead: { _ in })
+    try await client.shutdown()
+    guard rejected.head == nil,
+          case .failure(.client(.nativeTransport(kind: "invalidRequest"))) = rejected.body else {
+      throw FixtureError(message: "The configured candidate accepted a plain HTTP fixture URL")
+    }
   }
 }

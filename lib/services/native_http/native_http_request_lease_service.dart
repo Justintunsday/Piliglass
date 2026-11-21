@@ -241,7 +241,9 @@ final class NativeHTTPRequestLeaseService {
     Account account, int limit, AccountRequestStamp<Account> stamp,
   ) {
     final effective = _policy();
-    final composed = Options(method: 'GET', followRedirects: false).compose(
+    // Describe the legacy SearchHttp request. Transport support is decided
+    // before sending; a candidate's restrictions never rewrite this policy.
+    final composed = Options(method: 'GET').compose(
       _options(), Api.searchTrending, queryParameters: {'limit': limit},
     );
     final url = Uri.https('api.bilibili.com', Api.searchTrending, {'limit': '$limit'});

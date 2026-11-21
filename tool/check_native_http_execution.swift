@@ -74,17 +74,48 @@ private struct ExecutionChecks {
   }
   static func policy(connect: Int64? = 10_000_000, receive: Int64? = 10_000_000,
                      retryCount: Int64 = 0, delay: Int64? = nil,
-                     proxy: PiliPreparedHTTPPolicy.Proxy? = nil, issues: [PiliPreparedHTTPPolicy.Issue] = []) -> PiliPreparedHTTPPolicy {
+                     proxy: PiliPreparedHTTPPolicy.Proxy? = nil, issues: [PiliPreparedHTTPPolicy.Issue] = [],
+                     http2: Bool = false, followRedirects: Bool = false,
+                     send: Int64? = nil, transform: Int64? = nil) -> PiliPreparedHTTPPolicy {
     .init(version: 1, poolGeneration: 1, clientMode: .http11,
-      pool: .init(http2Enabled: false, idleTimeoutMicroseconds: 15_000_000,
-        http11AcceptsBadCertificate: proxy != nil, http2AcceptsBadCertificate: nil,
-        proxy: proxy, autoUncompress: false, http2ALPN: []),
+      pool: .init(http2Enabled: http2, idleTimeoutMicroseconds: 15_000_000,
+        http11AcceptsBadCertificate: proxy != nil, http2AcceptsBadCertificate: http2 ? false : nil,
+        proxy: proxy, autoUncompress: false, http2ALPN: http2 ? ["h2"] : []),
       retry: .init(installed: delay != nil, count: retryCount, delayMilliseconds: delay),
       connectTimeoutMicroseconds: connect, receiveIdleTimeoutMicroseconds: receive,
-      sendTimeoutMicroseconds: nil, transformTimeoutMicroseconds: nil,
-      receiveDataWhenStatusError: true, persistentConnection: true, followRedirects: false,
+      sendTimeoutMicroseconds: send, transformTimeoutMicroseconds: transform,
+      receiveDataWhenStatusError: true, persistentConnection: true, followRedirects: followRedirects,
       maxRedirects: 5, acceptEncoding: "br,gzip", responseType: "json",
       decoder: .manualCompressionUTF8, issues: issues)
+  }
+  static func rawHTTP11Preflight(_ evaluator: PiliHTTPPolicyCapability) throws {
+    let precise = policy(connect: 10_000_001, receive: 7_000_003)
+    try expect(evaluator.planRawHTTP11(precise) == .candidate(.init(
+      poolGeneration: 1, connectMicroseconds: 10_000_001, receiveIdleMicroseconds: 7_000_003,
+      poolIdleMicroseconds: 15_000_000)), "Raw candidate preserves microseconds and pool generation")
+    try expect(evaluator.evaluate(precise, evidence: .rawCandidate) == .dart([.unverifiedTransport]),
+               "An exact mapping still cannot authorize production traffic")
+    for disabled: Int64? in [nil, 0] {
+      try expect(evaluator.planRawHTTP11(policy(receive: disabled, delay: 37, send: 0, transform: 0))
+        == .candidate(.init(poolGeneration: 1, connectMicroseconds: 10_000_000, receiveIdleMicroseconds: nil,
+                           poolIdleMicroseconds: 15_000_000)), "Absent and zero idle timeout map to disabled")
+    }
+    let rejected: [(PiliPreparedHTTPPolicy, [PiliHTTPPolicyRejection])] = [
+      (policy(connect: nil), [.connectTimeout]),
+      (policy(connect: 0), [.connectTimeout]),
+      (policy(receive: -1), [.invalidDuration]),
+      (policy(receive: Int64.max), [.durationOverflow]),
+      (policy(retryCount: 2, delay: 500, followRedirects: true), [.retry, .redirect]),
+      (policy(proxy: .init(host: "fixture", port: 8080)), [.proxy, .certificateTrust]),
+      (policy(issues: [.decoderChanged]), [.undescribedPolicy]),
+      (policy(http2: true), [.protocolSelection]),
+      (policy(send: 1, transform: 1), [.sendTimeout, .transformTimeout])
+    ]
+    for (request, reasons) in rejected {
+      try expect(evaluator.planRawHTTP11(request) == .unsupported(reasons), "Specific raw incompatibilities")
+      try expect(evaluator.evaluate(request, evidence: .rawCandidate) == .dart([.unverifiedTransport] + reasons),
+                 "Unsupported policy is declined before the raw transfer")
+    }
   }
   static func execute(_ provider: Provider, _ transfer: Transfer,
                       evidence: PiliHTTPTransportEvidence = .syntheticComplete) async throws -> PiliPreparedHTTPRequestExecution {
@@ -95,13 +126,12 @@ private struct ExecutionChecks {
     do {
       let evaluator = PiliHTTPPolicyCapability()
       try expect(evaluator.evaluate(policy(), evidence: .syntheticComplete) == .native, "Only synthetic complete evidence supports fixture")
-      for unsupported in [PiliHTTPTransportEvidence.foundationBaseline, .rawCandidate] {
-        guard case .dart(let reasons) = evaluator.evaluate(policy(), evidence: unsupported) else {
-          throw Failure(message: "Unverified transport accepted")
-        }
-        try expect(reasons.contains(.unverifiedTransport) && reasons.contains(.requestSemantics), "Real profiles cannot authorize runtime")
-        try expect(Set(reasons).count == reasons.count, "Reasons deterministic and unique")
+      guard case .dart(let reasons) = evaluator.evaluate(policy(), evidence: .foundationBaseline) else {
+        throw Failure(message: "Unverified Foundation transport accepted")
       }
+      try expect(reasons.contains(.unverifiedTransport) && reasons.contains(.requestSemantics), "Foundation cannot authorize runtime")
+      try expect(Set(reasons).count == reasons.count, "Reasons deterministic and unique")
+      try rawHTTP11Preflight(evaluator)
       for invalid in [policy(connect: -1), policy(receive: Int64.max), policy(retryCount: -1, delay: 10),
                       policy(delay: -1), policy(delay: Int64.max),
                       policy(proxy: .init(host: "fixture", port: -1)), policy(issues: [.decoderChanged])] {

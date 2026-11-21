@@ -4,7 +4,19 @@ import PiliHTTPTransport
 /// Runner adapter; endpoint/lease permission remains in Data, not this client.
 /// Runtime composition still uses Dart until this transport is accepted.
 struct PiliRawHTTPClient: PiliHTTPTransferring {
-  let transport: PiliRawHTTPTransport
+  private let transport: PiliRawHTTPTransport
+
+  init(profile: PiliRawHTTP11Profile, maximumBodyBytes: Int) throws {
+    transport = try PiliRawHTTPTransport(configuration: .init(
+      protocolMode: .http11,
+      connectMicroseconds: profile.connectMicroseconds,
+      receiveIdleMicroseconds: profile.receiveIdleMicroseconds,
+      poolIdleMicroseconds: profile.poolIdleMicroseconds,
+      maxBodyBytes: maximumBodyBytes
+    ))
+  }
+
+  func shutdown() async throws { try await transport.shutdown() }
 
   func transfer(_ request: URLRequest,
                 onHead: @escaping @Sendable (PiliHTTPResponseHead) -> Void) async -> PiliHTTPTransferOutcome {

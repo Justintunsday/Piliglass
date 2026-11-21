@@ -45,7 +45,14 @@ private struct PreparedHTTPPolicyChecks {
           guard let name = fixture["id"] as? String else { throw Failure(message: "Missing case") }
           let value = try PiliBridgeValue(codecValue: fixture["prepared"])
           let context = try decode(value), policy = context.policy
-          try expect(!context.executionAllowed && !policy.followRedirects, "Endpoint override and closed runtime gate")
+          try expect(!context.executionAllowed && policy.followRedirects, "Legacy redirect policy survives with execution closed")
+          guard case .dart(let reasons) = PiliHTTPPolicyCapability().evaluate(policy, evidence: .rawCandidate) else {
+            throw Failure(message: "Raw candidate accepted an unverified Dart policy")
+          }
+          try expect(reasons.contains(.unverifiedTransport), "Raw transport remains closed")
+          if policy.isDescribed {
+            try expect(reasons.contains(.redirect), "Actual legacy redirect option stays on Dart")
+          }
           try expect(policy.version == 1 && policy.connectTimeoutMicroseconds == 10_000_001 &&
             policy.receiveIdleTimeoutMicroseconds == 10_000_003 && policy.sendTimeoutMicroseconds == 9_000_007 &&
             policy.transformTimeoutMicroseconds == 8_000_009 && policy.receiveDataWhenStatusError,
@@ -66,6 +73,7 @@ private struct PreparedHTTPPolicyChecks {
             try expect(policy.retry?.installed == true && policy.retry?.count == 2 && policy.retry?.delayMilliseconds == 500,
                        "Actual copied/bound retry")
             try expect(policy.clientMode == (name == "forced-http11" ? .http11 : .main), "Selected client mode retained")
+            try expect(reasons.contains(.retry), "Actual retry-two stays on Dart")
           case "retry-installed-zero":
             try expect(policy.retry?.installed == true && policy.retry?.count == 0 && policy.retry?.delayMilliseconds == 37,
                        "Installed zero is distinct from absence")
@@ -112,7 +120,7 @@ private struct PreparedHTTPPolicyChecks {
       ("poolGeneration", .integer(-1)), ("poolGeneration", .integer(0)), ("clientMode", .string("auto")),
       ("connectTimeoutMicroseconds", .double(10_000_001)), ("sendTimeoutMicroseconds", .bool(false)),
       ("receiveIdleTimeoutMicroseconds", .integer(-1)), ("persistentConnection", .integer(1)),
-      ("followRedirects", .bool(true)), ("maxRedirects", .double(5)), ("acceptEncoding", .string("mismatch")),
+      ("followRedirects", .integer(1)), ("maxRedirects", .double(5)), ("acceptEncoding", .string("mismatch")),
       ("responseType", .string("invented")), ("decoder", .string("unknown")),
       ("pool", .null), ("retry", .null), ("issues", .array([.string("unknownIssue")])),
       ("issues", .array([.string("decoderChanged"), .string("decoderChanged")]))]
