@@ -40,6 +40,7 @@ import 'package:PiliPlus/models/common/video/video_type.dart';
 import 'package:PiliPlus/models/dynamics/result.dart';
 import 'package:PiliPlus/models/search/result.dart';
 import 'package:PiliPlus/models_new/download/bili_download_entry_info.dart';
+import 'package:PiliPlus/models_new/search/search_rcmd/data.dart';
 import 'package:PiliPlus/models_new/video/video_detail/data.dart';
 import 'package:PiliPlus/pages/dynamics/controller.dart';
 import 'package:PiliPlus/pages/dynamics_tab/controller.dart';
@@ -249,7 +250,14 @@ final class IOSNativeUIBridge {
       case 'searchVideos':
         return _searchVideos(_arguments(call));
       case 'loadNativeSearchDiscovery':
-        return _loadNativeSearchDiscovery();
+        return _loadNativeSearchDiscovery(
+          includeTrending: _arguments(call)['includeTrending'] != false,
+        );
+      case 'loadNativeSearchTrending':
+        return {
+          'state': 'success',
+          'items': _searchDiscoveryKeywords(await _loadSearchTrending()),
+        };
       case 'loadNativeSearchSuggestions':
         return _loadNativeSearchSuggestions(_arguments(call));
       case 'updateNativeSearchHistory':
@@ -1856,32 +1864,28 @@ final class IOSNativeUIBridge {
     };
   }
 
-  Future<Map<String, dynamic>> _loadNativeSearchDiscovery() async {
-    final results = await Future.wait<dynamic>([
-      Pref.enableTrending
-          ? SearchHttp.searchTrending(limit: 10)
-          : Future<dynamic>.value(null),
-      Pref.enableSearchRcmd
-          ? SearchHttp.searchRecommend()
-          : Future<dynamic>.value(null),
-    ]);
+  static Future<LoadingState<SearchRcmdData>?> _loadSearchTrending() async =>
+      Pref.enableTrending ? await SearchHttp.searchTrending(limit: 10) : null;
 
-    List<Map<String, dynamic>> keywords(dynamic result) {
-      if (result case Success(:final response)) {
-        final items = response.list as List? ?? const [];
-        return items
-            .map<Map<String, dynamic>>(
-              (item) => <String, dynamic>{
-                'keyword': item.keyword?.toString() ?? '',
-                'reason': item.recommendReason?.toString() ?? '',
-                'icon': _normalizeURL(item.icon),
-              },
-            )
-            .where((item) => (item['keyword'] as String).isNotEmpty)
-            .toList();
-      }
-      return const [];
-    }
+  static List<Map<String, dynamic>> _searchDiscoveryKeywords(
+    LoadingState<SearchRcmdData>? result,
+  ) => [
+    for (final item in result?.dataOrNull?.list ?? const [])
+      if (item.keyword.isNotEmpty)
+        {
+          'keyword': item.keyword,
+          'reason': item.recommendReason ?? '',
+          'icon': _normalizeURL(item.icon),
+        },
+  ];
+
+  Future<Map<String, dynamic>> _loadNativeSearchDiscovery({
+    required bool includeTrending,
+  }) async {
+    final results = await Future.wait<LoadingState<SearchRcmdData>?>([
+      includeTrending ? _loadSearchTrending() : Future.value(),
+      Pref.enableSearchRcmd ? SearchHttp.searchRecommend() : Future.value(),
+    ]);
 
     return {
       'state': 'success',
@@ -1892,8 +1896,8 @@ final class IOSNativeUIBridge {
       'history': List<String>.from(
         GStorage.historyWord.get('cacheList') ?? const <String>[],
       ),
-      'trending': keywords(results[0]),
-      'recommendations': keywords(results[1]),
+      'trending': _searchDiscoveryKeywords(results[0]),
+      'recommendations': _searchDiscoveryKeywords(results[1]),
     };
   }
 

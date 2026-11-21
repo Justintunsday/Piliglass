@@ -103,5 +103,18 @@ MID 或对象 identity 无法发现凭据刷新和 A→B→A。切换前覆盖 r
 重复/path Cookie、错误响应 Set-Cookie、换号/删除/刷新、取消不 fallback、lease 释放。
 拆分旧 discovery 的数据供应，使 Native trending 成功时不再同时发送 Dart trending。
 
+## 热搜分流切片
+
+`loadNativeSearchDiscovery` 接受可选的 `includeTrending: false`。这时 Dart 继续返回
+搜索历史、推荐和开关，跳过热搜请求。独立的 `loadNativeSearchTrending` 沿用相同的
+热搜开关、推荐账号、查询上限和展示字段。
+
+Swift 搜索仓库可以注入热搜加载器。加载器确认发出 HTTP 前放弃 Swift 路径时，
+仓库才调用独立的 Dart 热搜命令。空结果、传输失败及取消均结束本次热搜。
+现有 Runner 仍使用聚合的 Dart 请求。接入实际加载器需完成请求上下文、传输和
+Cookie 写回验收。Swift 6 搜索检查使用生产仓库和热搜解析器验证各分流结果。
+
+## 其他搜索能力
+
 Dart 完整搜索还支持综合、番剧、影视、直播、用户、专栏、筛选与风险校验恢复。
 当前 native bridge 只有视频搜索；在这些能力得到原生对应前保留 Dart routes。

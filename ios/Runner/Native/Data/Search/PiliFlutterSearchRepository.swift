@@ -2,23 +2,63 @@ import Foundation
 
 @MainActor
 final class PiliFlutterSearchRepository: PiliSearchRepository {
-  private let invoker: any PiliBridgeMethodInvoking
+  enum TrendingResult: Sendable {
+    case keywords([PiliSearchKeyword])
+    /// The native request was declined before any HTTP transfer.
+    case useDart
+  }
 
-  init(invoker: any PiliBridgeMethodInvoking) {
+  typealias NativeTrendingLoader = @MainActor @Sendable () async throws -> TrendingResult
+
+  private let invoker: any PiliBridgeMethodInvoking
+  private let loadNativeTrending: NativeTrendingLoader?
+
+  init(invoker: any PiliBridgeMethodInvoking, loadNativeTrending: NativeTrendingLoader? = nil) {
     self.invoker = invoker
+    self.loadNativeTrending = loadNativeTrending
   }
 
   func discovery() async throws -> PiliSearchDiscovery {
-    let result = try await response("loadNativeSearchDiscovery")
+    let result = try await response(
+      "loadNativeSearchDiscovery",
+      arguments: loadNativeTrending == nil ? nil : ["includeTrending": .bool(false)]
+    )
+    let trendingEnabled = PiliSearchBridgeDecoder.bool(result["trendingEnabled"])
+    let trending: [PiliSearchKeyword]
+    if let loadNativeTrending {
+      trending = trendingEnabled ? try await trendingKeywords(loadNativeTrending) : []
+    } else {
+      trending = PiliSearchBridgeDecoder.keywords(result["trending"])
+    }
     return PiliSearchDiscovery(
       history: PiliSearchBridgeDecoder.strings(result["history"]),
-      trending: PiliSearchBridgeDecoder.keywords(result["trending"]),
+      trending: trending,
       recommendations: PiliSearchBridgeDecoder.keywords(result["recommendations"]),
-      trendingEnabled: PiliSearchBridgeDecoder.bool(result["trendingEnabled"]),
+      trendingEnabled: trendingEnabled,
       recommendEnabled: PiliSearchBridgeDecoder.bool(result["recommendEnabled"]),
       suggestionEnabled: PiliSearchBridgeDecoder.bool(result["suggestionEnabled"]),
       recordHistory: PiliSearchBridgeDecoder.bool(result["recordHistory"])
     )
+  }
+
+  private func trendingKeywords(_ load: NativeTrendingLoader) async throws -> [PiliSearchKeyword] {
+    do {
+      let result = try await load()
+      try Task.checkCancellation()
+      switch result {
+      case .keywords(let keywords):
+        return keywords
+      case .useDart:
+        let fallback = try await response("loadNativeSearchTrending")
+        return PiliSearchBridgeDecoder.keywords(fallback["items"])
+      }
+    } catch is CancellationError {
+      throw CancellationError()
+    } catch {
+      try Task.checkCancellation()
+      // Trending may fail independently of the other discovery sections.
+      return []
+    }
   }
 
   func suggestions(for keyword: String) async throws -> [String] {

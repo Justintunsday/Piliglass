@@ -16,8 +16,11 @@ SOURCES = [
     "ios/Runner/Native/Bridge/Models/PiliNativeVideo.swift",
     "ios/Runner/Native/Domain/Search/PiliSearchRepository.swift",
     "ios/Runner/Native/Data/Search/PiliFlutterSearchRepository.swift",
+    "ios/Runner/Native/Data/Search/PiliNativeSearchTrendingService.swift",
+    "ios/Runner/Native/Data/Search/PiliSearchTrendingDecoder.swift",
     "ios/Runner/Native/Features/Search/PiliNativeSearchViewState.swift",
     "ios/Runner/Native/Features/Search/PiliNativeSearchModel.swift",
+    "ios/Runner/Native/Networking/HTTP/PiliHTTPClient.swift",
     "tool/check_native_search.swift",
 ]
 

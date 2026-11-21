@@ -8,13 +8,29 @@ private final class FakeTransport: PiliBridgeMethodTransport {
   var calls: [(String, [String: PiliBridgeValue]?)] = []
   var replies: [Reply] = []
   var immediate: Result<PiliBridgeValue, PiliBridgeInvocationError>?
+  var methodReplies: [String: Result<PiliBridgeValue, PiliBridgeInvocationError>] = [:]
   var background = false
   func invoke(_ method: String, arguments: [String: PiliBridgeValue]?, completion: @escaping Reply) {
     calls.append((method, arguments)); replies.append(completion)
-    if let immediate {
+    if let immediate = methodReplies[method] ?? immediate {
       if background { DispatchQueue.global().async { completion(immediate) } }
       else { completion(immediate) }
     }
+  }
+}
+
+private struct TrendingFixtureClient: PiliHTTPClient {
+  func send(_ request: URLRequest) async throws -> PiliHTTPResponse {
+    guard let url = request.url,
+          url.absoluteString == "https://api.bilibili.com/x/v2/search/trending/ranking?limit=10",
+          request.httpMethod == "GET", !request.httpShouldHandleCookies,
+          request.value(forHTTPHeaderField: "User-Agent") == "PiliGlass fixture" else {
+      throw CheckFailure(message: "Unexpected Swift trending request")
+    }
+    let body = Data("""
+      {"code":0,"data":{"list":[{"keyword":"Swift hot","recommend_reason":"1·2","icon":"//example.test/icon"}]}}
+      """.utf8)
+    return PiliHTTPResponse(url: url, statusCode: 200, headers: [:], body: body)
   }
 }
 
@@ -117,6 +133,7 @@ private struct NativeSearchChecks {
   static func main() async {
     do {
       try snapshotChecks(); try await bridgeChecks(); try await repositoryChecks()
+      try await trendingRoutingChecks()
       try await modelChecks(); try await historyOrderingChecks()
       print("\(checks) native search checks passed")
     } catch {
@@ -239,6 +256,83 @@ private struct NativeSearchChecks {
     try await until("repository cancellation") { transport.calls.count == count + 1 }; cancelled.cancel()
     try await failure({ _ = try await cancelled.value }, { $0 is CancellationError })
     transport.replies[count](.success(.dictionary(["state": .string("success")]))); try await drain()
+  }
+
+  static func trendingRoutingChecks() async throws {
+    let transport = FakeTransport()
+    let invoker = PiliBridgeMethodInvoker(transport: transport)
+    let discovery = "loadNativeSearchDiscovery"
+    let dartTrending = "loadNativeSearchTrending"
+    let recommendation = PiliSearchKeyword(keyword: "pick", reason: "", icon: nil)
+
+    func discoveryReply(trendingEnabled: Bool = true) -> PiliBridgeValue {
+      .dictionary([
+        "state": .string("success"), "trendingEnabled": .bool(trendingEnabled),
+        "history": .array([.string("saved")]),
+        "recommendations": .array([.dictionary(["keyword": .string("pick")])])
+      ])
+    }
+
+    transport.methodReplies[discovery] = .success(discoveryReply())
+    transport.methodReplies[dartTrending] = .success(.dictionary([
+      "state": .string("success"),
+      "items": .array([.dictionary(["keyword": .string("Dart hot")])])
+    ]))
+
+    let service = PiliNativeSearchTrendingService(client: TrendingFixtureClient())
+    var nativeLoads = 0
+    let native = PiliFlutterSearchRepository(invoker: invoker) {
+      nativeLoads += 1
+      return .keywords(try await service.keywords(headers: ["User-Agent": "PiliGlass fixture"]))
+    }
+    let nativeResult = try await native.discovery()
+    try expect(nativeResult.trending == [
+      PiliSearchKeyword(keyword: "Swift hot", reason: "1 2", icon: "https://example.test/icon")
+    ] && nativeResult.history == ["saved"] && nativeResult.recommendations == [recommendation],
+      "Swift trending joins the original Dart discovery sections")
+    try expect(nativeLoads == 1 && transport.calls.map { $0.0 } == [discovery]
+      && transport.calls[0].1 == ["includeTrending": .bool(false)],
+      "Swift success opts out of the original Dart trending request")
+
+    transport.calls.removeAll()
+    transport.methodReplies[discovery] = .success(discoveryReply(trendingEnabled: false))
+    let disabled = try await native.discovery()
+    try expect(!disabled.trendingEnabled && disabled.trending.isEmpty && nativeLoads == 1
+      && transport.calls.map { $0.0 } == [discovery], "Disabled trending never starts either source")
+
+    transport.methodReplies[discovery] = .success(discoveryReply())
+    transport.calls.removeAll()
+    let declined = PiliFlutterSearchRepository(invoker: invoker) { .useDart }
+    let fallback = try await declined.discovery()
+    try expect(fallback.trending.map(\.keyword) == ["Dart hot"]
+      && transport.calls.map { $0.0 } == [discovery, dartTrending]
+      && transport.calls[1].1 == nil, "A declined native request fetches Dart trending exactly once")
+
+    transport.calls.removeAll()
+    let empty = PiliFlutterSearchRepository(invoker: invoker) { .keywords([]) }
+    let emptyResult = try await empty.discovery()
+    try expect(emptyResult.trending.isEmpty && transport.calls.map { $0.0 } == [discovery],
+      "An empty successful native response does not fetch Dart trending")
+
+    transport.calls.removeAll()
+    let failed = PiliFlutterSearchRepository(invoker: invoker) { throw PiliSearchTrendingError.httpStatus(503) }
+    let failedResult = try await failed.discovery()
+    try expect(failedResult.trending.isEmpty && failedResult.recommendations == [recommendation]
+      && transport.calls.map { $0.0 } == [discovery], "A sent request failure does not replay or discard recommendations")
+
+    transport.calls.removeAll()
+    var pending: Pending<PiliFlutterSearchRepository.TrendingResult>?
+    let cancelled = PiliFlutterSearchRepository(invoker: invoker) {
+      try await withCheckedThrowingContinuation { pending = Pending("trending", $0) }
+    }
+    let task = Task { try await cancelled.discovery() }
+    defer { task.cancel(); pending?.finish(.success(.useDart)) }
+    try await until("native trending started") { pending != nil }
+    task.cancel()
+    pending?.finish(.success(.useDart))
+    try await failure({ _ = try await task.value }, { $0 is CancellationError })
+    try expect(transport.calls.map { $0.0 } == [discovery],
+      "Cancellation suppresses a late Dart fallback decision")
   }
 
   static func modelChecks() async throws {
