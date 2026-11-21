@@ -13,7 +13,6 @@ from check_native_request_context import SOURCES
 ROOT = Path(__file__).resolve().parents[1]
 OUTPUT = ROOT / 'build/prepared-http-policy'
 TRENDING_SOURCES = [
-    'ios/Runner/Native/Bridge/Models/PiliNativeVideo.swift',
     'ios/Runner/Native/Domain/Search/PiliSearchRepository.swift',
     'ios/Runner/Native/Domain/Accounts/PiliAccountRepository.swift',
     'ios/Runner/Native/Persistence/Accounts/PiliAccountSecretStore.swift',
