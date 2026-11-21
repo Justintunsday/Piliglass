@@ -56,14 +56,55 @@ enum PiliHTTPRequestContextBridgeCodec {
     guard let requestID = canonicalID(context.requestID), canonicalID(context.leaseID) != nil,
           let expectedURL = url(for: .searchTrending(limit: context.limit)),
           context.request.url.absoluteString == expectedURL.absoluteString,
-          context.request.method == "GET", response.url.absoluteString == expectedURL.absoluteString,
+          context.request.method == "GET",
           (100...599).contains(response.statusCode) else {
       throw PiliHTTPRequestContextError.invalidRequest
     }
-    return ["requestID": .string(requestID), "leaseID": .string(context.leaseID),
-      "response": .dictionary(["url": .string(response.url.absoluteString),
-        "statusCode": .integer(Int64(response.statusCode)), "cookieSource": .string(response.cookieSource.rawValue),
-        "setCookieValues": .array(response.setCookieValues.map(PiliBridgeValue.string))])]
+    let redirects = try redirectArguments(response, original: expectedURL, policy: context.policy)
+    var fields: [String: PiliBridgeValue] = ["url": .string(response.url.absoluteString),
+      "statusCode": .integer(Int64(response.statusCode)), "cookieSource": .string(response.cookieSource.rawValue),
+      "setCookieValues": .array(response.setCookieValues.map(PiliBridgeValue.string))]
+    if !redirects.isEmpty { fields["redirects"] = .array(redirects) }
+    return ["requestID": .string(requestID), "leaseID": .string(context.leaseID), "response": .dictionary(fields)]
+  }
+
+  private static func redirectArguments(
+    _ response: PiliHTTPRequestResponseCookies, original: URL, policy: PiliPreparedHTTPPolicy
+  ) throws -> [PiliBridgeValue] {
+    guard let last = response.redirects.last else {
+      guard response.url.absoluteString == original.absoluteString else {
+        throw PiliHTTPRequestContextError.invalidRequest
+      }
+      return []
+    }
+    guard policy.followRedirects, Int64(response.redirects.count) <= policy.maxRedirects,
+          response.cookieSource == .separatedFields,
+          response.statusCode >= 200, !(300..<400).contains(response.statusCode) else {
+      throw PiliHTTPRequestContextError.invalidRequest
+    }
+
+    func inOrigin(_ url: URL) -> Bool {
+      url.scheme?.lowercased() == original.scheme && url.host?.lowercased() == original.host &&
+        (url.port ?? 443) == (original.port ?? 443) && url.user == nil && url.password == nil && url.fragment == nil
+    }
+    var current = original
+    var visited = Set<String>()
+    let encoded: [PiliBridgeValue] = try response.redirects.map { hop in
+      guard [301, 302, 303, 307, 308].contains(hop.statusCode), !hop.location.isEmpty,
+            let resolved = URL(string: hop.location, relativeTo: current)?.absoluteURL,
+            inOrigin(resolved), resolved.absoluteString == hop.url.absoluteString,
+            visited.insert(resolved.absoluteString).inserted else {
+        throw PiliHTTPRequestContextError.invalidRequest
+      }
+      current = resolved
+      return .dictionary(["statusCode": .integer(Int64(hop.statusCode)), "location": .string(hop.location),
+                          "url": .string(hop.url.absoluteString)])
+    }
+    guard current.absoluteString == response.url.absoluteString,
+          let cookieURL = URL(string: last.location, relativeTo: original)?.absoluteURL, inOrigin(cookieURL) else {
+      throw PiliHTTPRequestContextError.invalidRequest
+    }
+    return encoded
   }
 
   static func decodeReceipt(_ value: PiliBridgeValue) throws -> PiliHTTPRequestContextReceipt {

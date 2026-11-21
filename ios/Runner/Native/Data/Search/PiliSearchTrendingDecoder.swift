@@ -9,13 +9,20 @@ enum PiliSearchTrendingError: Error, Sendable, Equatable {
 enum PiliSearchTrendingDecoder {
   static func decode(
     _ response: PiliHTTPResponse,
+    requestedURL: URL? = nil,
     transformBody: (Data) throws -> Data = { $0 }
   ) throws -> [PiliSearchKeyword] {
     guard (200..<300).contains(response.statusCode) else {
       throw PiliSearchTrendingError.httpStatus(response.statusCode)
     }
-    guard response.url.scheme == "https", response.url.host == "api.bilibili.com",
-          response.url.path == "/x/v2/search/trending/ranking" else {
+    // A prepared transfer provides its original endpoint after the lease has
+    // accepted the response URL and redirect trace.
+    let endpoint = requestedURL ?? response.url
+    guard endpoint.scheme == "https", endpoint.host == "api.bilibili.com",
+          endpoint.path == "/x/v2/search/trending/ranking",
+          response.url.scheme?.lowercased() == endpoint.scheme,
+          response.url.host?.lowercased() == endpoint.host,
+          (response.url.port ?? 443) == (endpoint.port ?? 443) else {
       throw PiliHTTPClientError.invalidResponse
     }
     let body = try transformBody(response.body)

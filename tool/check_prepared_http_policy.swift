@@ -50,9 +50,6 @@ private struct PreparedHTTPPolicyChecks {
             throw Failure(message: "Raw candidate accepted an unverified Dart policy")
           }
           try expect(reasons.contains(.unverifiedTransport), "Raw transport remains closed")
-          if policy.isDescribed {
-            try expect(reasons.contains(.redirect), "Actual legacy redirect option stays on Dart")
-          }
           try expect(policy.version == 1 && policy.connectTimeoutMicroseconds == 10_000_001 &&
             policy.receiveIdleTimeoutMicroseconds == 10_000_003 && policy.sendTimeoutMicroseconds == 9_000_007 &&
             policy.transformTimeoutMicroseconds == 8_000_009 && policy.receiveDataWhenStatusError,
@@ -77,6 +74,7 @@ private struct PreparedHTTPPolicyChecks {
           case "retry-installed-zero":
             try expect(policy.retry?.installed == true && policy.retry?.count == 0 && policy.retry?.delayMilliseconds == 37,
                        "Installed zero is distinct from absence")
+            try expect(reasons.contains(.retry), "Installed zero can still follow 3xx in the interceptor")
           case "retry-absent":
             try expect(policy.retry?.installed == false && policy.retry?.count == 0 && policy.retry?.delayMilliseconds == nil,
                        "No interceptor does not invent a delay")

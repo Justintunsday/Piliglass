@@ -47,6 +47,9 @@ def redirects():
         'follow-chain': ('follow-chain', 302, 'follow-next?hop=1', ['first=ignored']),
         'follow-next?hop=1': ('follow-chain', 307, 'follow-result?limit=10', ['next=ignored']),
         'follow-result?limit=10': ('follow-chain', 200, None, ['final=retained; Path=/']),
+        'follow-nested': ('follow-nested', 302, 'follow-stage/nested', ['first=ignored']),
+        'follow-stage/nested': ('follow-nested', 307, 'terminal', ['next=ignored']),
+        'follow-stage/terminal': ('follow-nested', 200, None, ['final=retained']),
         'follow-forbidden': ('follow-forbidden', 303, 'follow-denied', ['first=ignored']),
         'follow-denied': ('follow-forbidden', 403, None, ['denied=retained; Path=/']),
         'follow-limit': ('follow-limit', 308, 'follow-limit-next', ['first=ignored']),
@@ -60,6 +63,7 @@ def redirects():
     }
     modes = [
         (2, ['follow-chain', 'follow-next?hop=1', 'follow-result?limit=10'], None, None),
+        (2, ['follow-nested', 'follow-stage/nested', 'follow-stage/terminal'], None, None),
         (1, ['follow-forbidden', 'follow-denied'], None, 'badResponse'),
         (1, ['follow-limit', 'follow-limit-next'], 'redirectLimit', 'unknown'),
         (0, ['follow-zero'], 'redirectLimit', 'unknown'),
@@ -77,6 +81,8 @@ def redirects():
         fixtures.append(dict(id=case_id, mode='cancel-redirect' if case_id == 'follow-cancel' else 'follow',
             redirectLimit=limit, nativeError=native_error, dartError=dart_error,
             nativeTargets=native_targets, dartTargets=paths,
+            redirectLocations=[routes[path][2] for path in paths[:-1]] if native_error is None else None,
+            legacyCookieTarget='terminal' if case_id == 'follow-nested' else paths[-1],
             statusCode=status if terminal else None, wireValues=cookies if terminal else [],
             expectedBodyBase64=base64.b64encode(body).decode() if terminal else None))
     return fixtures, {

@@ -11,6 +11,7 @@ private struct WireCase: Decodable {
   let redirectLimit: Int?
   let nativeError: String?
   let nativeTargets: [String]?
+  let redirectLocations: [String]?
 }
 
 private struct WireObservation: Codable {
@@ -22,6 +23,7 @@ private struct WireObservation: Codable {
   let error: String?
   let elapsedSeconds: Double
   let terminalURL: String?
+  let redirectLocations: [String]
 }
 
 private final class WireTransferProbe: @unchecked Sendable {
@@ -89,19 +91,23 @@ private final class WireTransferProbe: @unchecked Sendable {
     }
     observations.append(.init(id: item.id, status: outcome.head?.statusCode, version: outcome.head?.version,
       cookieFields: outcome.head?.setCookieFields ?? [], bodyBase64: body?.base64EncodedString(), error: error,
-      elapsedSeconds: seconds, terminalURL: outcome.head?.url.absoluteString))
+      elapsedSeconds: seconds, terminalURL: outcome.head?.url.absoluteString,
+      redirectLocations: outcome.head?.redirects.map(\.location) ?? []))
     let callbacks = probe.callbacks
     #expect(callbacks.heads == (outcome.head.map { [$0] } ?? []))
     if item.redirectLimit != nil {
       #expect(error == item.nativeError)
       if item.nativeError == nil {
-        let terminal = try #require(item.nativeTargets?.last)
+        let targets = try #require(item.nativeTargets)
+        let terminal = try #require(targets.last)
         #expect(outcome.head?.url.absoluteString == base + "/" + terminal)
         #expect(outcome.head?.statusCode == item.statusCode)
         #expect(outcome.head?.version == "1.1")
         #expect(outcome.head?.setCookieFields == item.wireValues)
         #expect(body?.base64EncodedString() == item.expectedBodyBase64)
         #expect(callbacks.bytes == body?.count)
+        #expect(outcome.head?.redirects.map(\.location) == item.redirectLocations)
+        #expect(outcome.head?.redirects.map { $0.url.absoluteString } == targets.dropFirst().map { base + "/" + $0 })
       } else {
         #expect(outcome.head == nil)
         #expect(body == nil)

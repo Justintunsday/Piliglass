@@ -20,7 +20,6 @@ TRENDING_SOURCES = [
     'ios/Runner/Native/Data/Accounts/PiliAccountStagingBridgeCodec.swift',
     'ios/Runner/Native/Data/Accounts/PiliAccountFlutterRepository.swift',
     'ios/Runner/Native/Data/Accounts/PiliHTTPRequestHeaderFinalizer.swift',
-    'ios/Runner/Native/Networking/HTTP/PiliHTTPClient.swift',
     'ios/Runner/Native/Networking/HTTP/PiliRawHTTPClient.swift',
     'ios/Runner/Native/Data/HTTP/PiliPreparedHTTPRequestExecutor.swift',
     'ios/Runner/Native/Data/Search/PiliFlutterSearchRepository.swift',

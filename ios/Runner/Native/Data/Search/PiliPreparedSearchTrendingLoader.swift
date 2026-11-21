@@ -30,7 +30,7 @@ struct PiliPreparedSearchTrendingLoader: Sendable {
     switch execution {
     case .dartFallback:
       return .useDart
-    case .transferred(let transfer, let receipt, let generation):
+    case .transferred(let transfer, let receipt, let generation, let requestedURL):
       let body: Data
       switch transfer.body {
       case .success(let bytes): body = bytes
@@ -42,7 +42,7 @@ struct PiliPreparedSearchTrendingLoader: Sendable {
       }
       guard let head = transfer.head else { throw PiliHTTPClientError.invalidResponse }
       let response = PiliHTTPResponse(url: head.url, statusCode: head.statusCode, headers: head.headers, body: body)
-      let keywords = try PiliSearchTrendingDecoder.decode(response) { body in
+      let keywords = try PiliSearchTrendingDecoder.decode(response, requestedURL: requestedURL) { body in
         let encoding = response.header(named: "content-encoding")
         let headers = encoding.map { ["content-encoding": [$0]] } ?? [:]
         let bytes = try PiliHTTPBodyDecoder.decode(body: body, headers: headers, maximumOutputBytes: maximumBodyBytes)

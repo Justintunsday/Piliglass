@@ -38,6 +38,22 @@ struct PiliHTTPResponseHead: Sendable, Equatable {
   let statusCode: Int
   let headers: [String: String]
   let cookieFields: PiliHTTPResponseCookieFields
+  let redirects: [PiliHTTPRedirectHop]
+
+  init(url: URL, statusCode: Int, headers: [String: String], cookieFields: PiliHTTPResponseCookieFields,
+       redirects: [PiliHTTPRedirectHop] = []) {
+    self.url = url
+    self.statusCode = statusCode
+    self.headers = headers
+    self.cookieFields = cookieFields
+    self.redirects = redirects
+  }
+}
+
+struct PiliHTTPRedirectHop: Sendable, Equatable {
+  let statusCode: Int
+  let location: String
+  let url: URL
 }
 
 enum PiliHTTPTransferFailure: Error, Sendable, Equatable {

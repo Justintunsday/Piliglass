@@ -42,6 +42,16 @@ struct PiliHTTPRequestResponseCookies: Sendable, Equatable {
   let statusCode: Int
   let cookieSource: PiliHTTPRequestCookieSource
   let setCookieValues: [String]
+  let redirects: [PiliHTTPRedirectHop]
+
+  init(url: URL, statusCode: Int, cookieSource: PiliHTTPRequestCookieSource, setCookieValues: [String],
+       redirects: [PiliHTTPRedirectHop] = []) {
+    self.url = url
+    self.statusCode = statusCode
+    self.cookieSource = cookieSource
+    self.setCookieValues = setCookieValues
+    self.redirects = redirects
+  }
 }
 
 enum PiliHTTPRequestContextOutcome: String, Sendable, Equatable {

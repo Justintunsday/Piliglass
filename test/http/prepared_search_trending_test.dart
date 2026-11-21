@@ -22,6 +22,9 @@ enum _Scenario {
   corrupt,
   declined,
   redirects,
+  redirected,
+  redirectedSwitched,
+  redirectedHTTPError,
 }
 
 LoginAccount _account(int mid, String session) => LoginAccount(
@@ -65,8 +68,13 @@ void main() {
         Accounts.selectTemporarily(AccountType.main, other);
         await Accounts.set(AccountType.recommend, original);
 
+        final redirected = switch (scenario) {
+          _Scenario.redirected || _Scenario.redirectedSwitched || _Scenario.redirectedHTTPError => true,
+          _ => false,
+        };
+        final followsRedirects = redirected || scenario == _Scenario.redirects;
         final previousRedirects = Request.dio.options.followRedirects;
-        Request.dio.options.followRedirects = scenario == _Scenario.redirects;
+        Request.dio.options.followRedirects = followsRedirects;
         addTearDown(() {
           Request.dio.options.followRedirects = previousRedirects;
         });
@@ -88,16 +96,18 @@ void main() {
         expect(prepared['executionAllowed'], isFalse);
         expect(
           (prepared['policy'] as Map)['followRedirects'],
-          scenario == _Scenario.redirects,
+          followsRedirects,
         );
         final cookie = (prepared['headers'] as Map)['cookie'] as String;
         expect(cookie, contains('SESSDATA=fixture-recommend'));
         expect(cookie, isNot(contains('SESSDATA=fixture-main')));
 
         final url = Uri.parse(prepared['url'] as String);
-        final status = scenario == _Scenario.httpError ? 403 : 200;
-        const fields = [
-          'trending_fixture=endpoint; Path=/x/v2/search',
+        final responseUrl = redirected ? url.resolve('/fixture/nested/response?limit=10') : url;
+        final cookieUrl = redirected ? url.resolve('response?limit=10') : url;
+        final status = scenario == _Scenario.httpError || scenario == _Scenario.redirectedHTTPError ? 403 : 200;
+        final fields = [
+          if (redirected) 'trending_fixture=endpoint' else 'trending_fixture=endpoint; Path=/x/v2/search',
           'trending_fixture=root; Domain=.bilibili.com; Path=/',
         ];
         final declined =
@@ -110,13 +120,26 @@ void main() {
           'leaseID': prepared['leaseID'],
           if (!declined)
             'response': {
-              'url': url.toString(),
+              'url': responseUrl.toString(),
               'statusCode': status,
               'cookieSource': 'separatedFields',
               'setCookieValues': fields,
+              if (redirected)
+                'redirects': [
+                  {
+                    'statusCode': 302,
+                    'location': '/fixture/nested/stage',
+                    'url': url.resolve('/fixture/nested/stage').toString(),
+                  },
+                  {
+                    'statusCode': 307,
+                    'location': 'response?limit=10',
+                    'url': responseUrl.toString(),
+                  },
+                ],
             },
         };
-        if (scenario == _Scenario.switched) {
+        if (scenario == _Scenario.switched || scenario == _Scenario.redirectedSwitched) {
           await Accounts.set(AccountType.recommend, other);
         } else if (scenario == _Scenario.revoked) {
           await Accounts.installCredentials(_account(mid, 'replacement'));
@@ -130,12 +153,21 @@ void main() {
         });
         expect(receipt['cookieCount'], writes ? fields.length : 0);
         expect(
-          await _responseCookies(original, url),
+          await _responseCookies(original, cookieUrl),
           unorderedEquals(
             writes ? ['endpoint', 'root'] : <String>[],
           ),
         );
-        expect(await _responseCookies(other, url), isEmpty);
+        expect(await _responseCookies(other, cookieUrl), isEmpty);
+        if (redirected) {
+          // A host-only Cookie without Path uses the legacy directory, even
+          // though the final body arrived at a different same-origin path.
+          expect(await _responseCookies(original, responseUrl), ['root']);
+          expect(await _responseCookies(other, responseUrl), isEmpty);
+          final replay = await bridge.handle(terminalMethod, terminal);
+          expect(replay['state'], 'consumed');
+          expect(replay['cookiesSaved'], isFalse);
+        }
         if (scenario == _Scenario.revoked) {
           final current = Accounts.account.get('$mid')!;
           expect(current, isNot(same(original)));
@@ -172,7 +204,7 @@ void main() {
           'content-encoding': ['gzip'],
         };
         final wireBody = [...gzipBody];
-        if (scenario == _Scenario.corrupt || scenario == _Scenario.httpError) {
+        if (scenario == _Scenario.corrupt || status == 403) {
           wireBody[wireBody.length - 8] ^= 1;
           expect(
             () => Request.responseBytesDecoder(wireBody, gzipHeaders),

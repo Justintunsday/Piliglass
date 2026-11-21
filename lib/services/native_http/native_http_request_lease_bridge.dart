@@ -31,17 +31,15 @@ final class NativeHTTPRequestLeaseBridge {
           _keys(values, {'requestID', 'leaseID', 'response'});
           final leaseID = _id(values['leaseID']);
           final response = _map(values['response']);
-          _keys(response, {'url', 'statusCode', 'cookieSource', 'setCookieValues'});
-          final urlValue = response['url'];
+          const responseKeys = {'url', 'statusCode', 'cookieSource', 'setCookieValues'};
+          _keys(response, {...responseKeys, 'redirects'}, required: responseKeys);
+          final url = _url(response['url']);
           final statusCode = response['statusCode'];
           final cookies = response['setCookieValues'];
-          if (urlValue is! String || statusCode is! int ||
+          if (statusCode is! int ||
               cookies is! List || cookies.any((value) => value is! String)) {
             throw const NativeHTTPRequestLeaseException('invalidArguments');
           }
-          final Uri url;
-          try { url = Uri.parse(urlValue); }
-          on FormatException { throw const NativeHTTPRequestLeaseException('invalidArguments'); }
           final source = switch (response['cookieSource']) {
             'separatedFields' => SetCookieSource.separatedFields,
             'foundationCombined' => SetCookieSource.foundationCombined,
@@ -51,7 +49,8 @@ final class NativeHTTPRequestLeaseBridge {
           return _receipt(await service.finish(
             requestID: requestID, leaseID: leaseID,
             response: NativeHTTPRequestLeaseResponse(url: url, statusCode: statusCode,
-                cookieSource: source, setCookieValues: cookies.cast<String>()),
+                cookieSource: source, setCookieValues: cookies.cast<String>(),
+                redirects: response.containsKey('redirects') ? _redirects(response['redirects']) : const []),
           ));
         case 'abandonNativeHTTPRequest':
           _keys(values, {'requestID', 'leaseID'}, required: {'requestID'});
@@ -84,6 +83,25 @@ final class NativeHTTPRequestLeaseBridge {
       throw const NativeHTTPRequestLeaseException('invalidArguments');
     }
     return value;
+  }
+
+  static Uri _url(Object? value) {
+    final url = value is String ? Uri.tryParse(value) : null;
+    if (url == null) throw const NativeHTTPRequestLeaseException('invalidArguments');
+    return url;
+  }
+
+  static List<NativeHTTPRequestRedirectHop> _redirects(Object? value) {
+    const invalid = NativeHTTPRequestLeaseException('invalidArguments');
+    if (value is! List || value.isEmpty) throw invalid;
+    return value.map((entry) {
+      final hop = _map(entry);
+      _keys(hop, {'statusCode', 'location', 'url'});
+      final status = hop['statusCode'];
+      final location = hop['location'];
+      if (status is! int || location is! String) throw invalid;
+      return NativeHTTPRequestRedirectHop(statusCode: status, location: location, url: _url(hop['url']));
+    }).toList();
   }
 
   static void _keys(Map<String, Object?> values, Set<String> allowed, {Set<String>? required}) {

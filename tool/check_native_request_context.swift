@@ -185,8 +185,10 @@ private struct NativeRequestContextChecks {
     let arguments = try PiliHTTPRequestContextBridgeCodec.finishArguments(context: context, response: response(context))
     guard case .dictionary(let metadata) = arguments["response"] else { throw CheckFailure(message: "Missing response metadata") }
     try expect(metadata["statusCode"] == .integer(403) && metadata["cookieSource"] == .string("foundationCombined") &&
-      metadata["setCookieValues"] == .array([.string("id=one; Path=/"), .string("id=two; Path=/x")]),
+      metadata["setCookieValues"] == .array([.string("id=one; Path=/"), .string("id=two; Path=/x")]) &&
+      metadata["redirects"] == nil,
       "Finish sends original Cookie fields and provenance before status interpretation")
+    try await redirectChecks(disabled: context)
 
     // The production copier deliberately drops non-String raw dictionary keys.
     // This fixture documents its boundary; the strict decoder never saw that key.
@@ -197,6 +199,41 @@ private struct NativeRequestContextChecks {
     let copied = try PiliHTTPRequestContextBridgeCodec.decodePrepared(owned, requestID: requestID,
                                                                      purpose: .searchTrending(limit: 10))
     try expect(copied.request.method == "GET", "Raw copier owns values and retains known legacy non-String key boundary")
+  }
+
+  static func redirectChecks(disabled: PiliHTTPRequestContext) async throws {
+    var payload = fields()
+    guard case .dictionary(var policy) = payload["policy"] else {
+      throw CheckFailure(message: "Missing redirect fixture policy")
+    }
+    policy["followRedirects"] = .bool(true)
+    policy["maxRedirects"] = .integer(2)
+    payload["policy"] = .dictionary(policy)
+    let allowed = try PiliHTTPRequestContextBridgeCodec.decodePrepared(.dictionary(payload), requestID: requestID,
+      purpose: .searchTrending(limit: 10))
+    let stage = URL(string: "https://api.bilibili.com/fixture/stage")!
+    let terminal = URL(string: "https://api.bilibili.com/fixture/result")!
+    let hops = [PiliHTTPRedirectHop(statusCode: 302, location: "/fixture/stage", url: stage),
+                .init(statusCode: 307, location: "result", url: terminal)]
+    func response(_ trace: [PiliHTTPRedirectHop]? = nil, url: URL? = nil, status: Int = 403)
+      -> PiliHTTPRequestResponseCookies {
+      .init(url: url ?? terminal, statusCode: status, cookieSource: .separatedFields,
+            setCookieValues: ["host=final"], redirects: trace ?? hops)
+    }
+    let arguments = try PiliHTTPRequestContextBridgeCodec.finishArguments(context: allowed, response: response())
+    guard case .dictionary(let encoded) = arguments["response"], case .array(let trace) = encoded["redirects"] else {
+      throw CheckFailure(message: "Missing redirect wire data")
+    }
+    try expect(trace == hops.map { .dictionary(["statusCode": .integer(Int64($0.statusCode)),
+      "location": .string($0.location), "url": .string($0.url.absoluteString)]) },
+      "Finish retains original Location, status and resolved URL for each hop")
+    let outside = URL(string: "https://api.bilibili.com:8443/fixture/result")!
+    for (context, invalid) in [(disabled, response()), (allowed, response(url: endpoint)),
+      (allowed, response(status: 302)), (allowed, response([hops[0], hops[0]], url: stage)),
+      (allowed, response([hops[0], .init(statusCode: 302, location: outside.absoluteString, url: outside)], url: outside))] {
+      try await error({ _ = try PiliHTTPRequestContextBridgeCodec.finishArguments(context: context, response: invalid) },
+        { ($0 as? PiliHTTPRequestContextError) == .invalidRequest }, "Invalid redirect trace never reaches the bridge")
+    }
   }
 
   static func ordinaryChecks() async throws {

@@ -5,8 +5,10 @@ import PiliHTTPTransport
 /// Runtime composition still uses Dart until this transport is accepted.
 struct PiliRawHTTPClient: PiliHTTPTransferring {
   private let transport: PiliRawHTTPTransport
+  private let redirectLimit: Int?
 
   init(profile: PiliRawHTTP11Profile, maximumBodyBytes: Int) throws {
+    redirectLimit = profile.redirectLimit
     transport = try PiliRawHTTPTransport(configuration: .init(
       protocolMode: .http11,
       connectMicroseconds: profile.connectMicroseconds,
@@ -26,6 +28,7 @@ struct PiliRawHTTPClient: PiliHTTPTransferring {
     }
     let outcome = await transport.get(url,
       headers: (request.allHTTPHeaderFields ?? [:]).map { .init(name: $0.key, value: $0.value) },
+      sameOriginRedirectLimit: redirectLimit,
       onHead: { onHead(Self.head($0)) })
     let body = outcome.body.mapError { error -> PiliHTTPTransferFailure in
       error == .cancelled ? .cancelled : .client(.nativeTransport(kind: error.rawValue))
@@ -40,6 +43,7 @@ struct PiliRawHTTPClient: PiliHTTPTransferring {
       if headers[name] == nil { headers[name] = field.value }
     }
     return .init(url: value.url, statusCode: value.statusCode, headers: headers,
-                 cookieFields: .separatedFields(value.setCookieFields))
+                 cookieFields: .separatedFields(value.setCookieFields),
+                 redirects: value.redirects.map { .init(statusCode: $0.statusCode, location: $0.location, url: $0.url) })
   }
 }

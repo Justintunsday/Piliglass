@@ -36,7 +36,7 @@ struct PiliHTTPRequestHeaderFinalizer: Sendable {
     // Once finish has been sent, an unknown/error ack never chooses abandon.
     return try await provider.finish(context, response: PiliHTTPRequestResponseCookies(
       url: head.url, statusCode: head.statusCode,
-      cookieSource: source, setCookieValues: values
+      cookieSource: source, setCookieValues: values, redirects: head.redirects
     ))
   }
 }

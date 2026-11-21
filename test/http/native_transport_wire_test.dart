@@ -62,13 +62,18 @@ void main() {
             response = error.response;
           }
           final body = response?.data is List<int> ? response!.data as List<int> : null;
-          final terminalUrl = response == null ? null : url.resolveUri(response.realUri);
+          final terminalUrl = response?.redirects.fold<Uri>(
+            url,
+            (source, hop) => source.resolveUri(hop.location),
+          );
+          final cookieScopeUrl = response == null ? null : url.resolveUri(response.realUri);
           observations.add({
             'id': name, 'status': response?.statusCode,
             'cookieFields': response?.headers['set-cookie'] ?? <String>[],
             'bodyBase64': body == null ? null : base64Encode(body),
             'error': failure?.type.name, 'elapsedSeconds': watch.elapsedMicroseconds / 1000000,
             'terminalURL': terminalUrl?.toString(),
+            'legacyCookieURL': cookieScopeUrl?.toString(),
           });
           if (redirectLimit != null) {
             expect(failure?.type.name, item['dartError'], reason: name);
@@ -78,9 +83,15 @@ void main() {
             if (terminalUrl != null) {
               final targets = item['dartTargets'] as List<dynamic>;
               final last = Uri.parse('/dart/${targets.last}');
+              final scope = Uri.parse('/dart/${item['legacyCookieTarget']}');
               expect(response!.redirects, hasLength(targets.length - 1), reason: name);
               expect(terminalUrl.path, last.path, reason: name);
               expect(terminalUrl.query, last.query, reason: name);
+              expect(cookieScopeUrl!.path, scope.path, reason: name);
+              expect(cookieScopeUrl.query, scope.query, reason: name);
+              if (item['redirectLocations'] case final List<dynamic> locations) {
+                expect(response.redirects.map((hop) => hop.location.toString()), locations, reason: name);
+              }
             }
             continue;
           }

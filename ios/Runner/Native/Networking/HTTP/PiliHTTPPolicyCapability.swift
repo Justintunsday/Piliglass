@@ -29,6 +29,7 @@ struct PiliRawHTTP11Profile: Sendable, Equatable {
   let connectMicroseconds: Int64
   let receiveIdleMicroseconds: Int64?
   let poolIdleMicroseconds: Int64
+  let redirectLimit: Int?
 }
 
 enum PiliRawHTTP11Preflight: Sendable, Equatable {
@@ -49,6 +50,7 @@ struct PiliHTTPPolicyCapability: Sendable {
     let idle = pool.idleTimeoutMicroseconds
     let durations = [connect, receive, send, transform, idle]
     let retryDelay = retry.delayMilliseconds ?? 0
+    let redirectLimit = policy.followRedirects ? Int(exactly: policy.maxRedirects) : nil
     var reasons: [PiliHTTPPolicyRejection] = []
     if pool.http2Enabled || !pool.http2ALPN.isEmpty { reasons.append(.protocolSelection) }
     if pool.proxy != nil { reasons.append(.proxy) }
@@ -65,10 +67,11 @@ struct PiliHTTPPolicyCapability: Sendable {
     if connect == 0 { reasons.append(.connectTimeout) }
     if send != 0 { reasons.append(.sendTimeout) }
     if transform != 0 { reasons.append(.transformTimeout) }
-    if retry.count != 0 || retryDelay < 0 || retry.installed != (retry.delayMilliseconds != nil) {
+    if retry.count != 0 || retryDelay < 0 || retry.installed != (retry.delayMilliseconds != nil) ||
+        (policy.followRedirects && retry.installed) {
       reasons.append(.retry)
     }
-    if policy.followRedirects { reasons.append(.redirect) }
+    if policy.followRedirects, (redirectLimit ?? -1) < 0 { reasons.append(.redirect) }
     if !policy.persistentConnection { reasons.append(.persistence) }
     if !policy.receiveDataWhenStatusError { reasons.append(.errorResponseBody) }
     if policy.responseType != "json" { reasons.append(.responseType) }
@@ -79,7 +82,7 @@ struct PiliHTTPPolicyCapability: Sendable {
     guard reasons.isEmpty else { return .unsupported(reasons) }
     return .candidate(PiliRawHTTP11Profile(poolGeneration: policy.poolGeneration,
       connectMicroseconds: connect, receiveIdleMicroseconds: receive == 0 ? nil : receive,
-      poolIdleMicroseconds: idle))
+      poolIdleMicroseconds: idle, redirectLimit: redirectLimit))
   }
 
   func evaluate(
@@ -143,7 +146,8 @@ struct PiliHTTPPolicyCapability: Sendable {
          delay > Int64.max / 1_000_000 { reject(.durationOverflow) }
       if foundation { reject(.retry) }
     }
-    if policy.followRedirects { reject(.redirect) }
+    if policy.followRedirects && (foundation || policy.maxRedirects < 0 || policy.retry?.installed != false ||
+        policy.retry?.count != 0) { reject(.redirect) }
     if foundation { reject(.persistence); reject(.errorResponseBody) }
     if policy.responseType != "json" { reject(.responseType) }
     if policy.decoder != .manualCompressionUTF8 || foundation {

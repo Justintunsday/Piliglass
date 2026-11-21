@@ -50,11 +50,13 @@ NativeHTTPRequestLeaseResponse _response(
   Iterable<String> cookies = const ['lease_cookie=received; Path=/'],
   SetCookieSource source = SetCookieSource.separatedFields,
   Uri? url,
+  Iterable<NativeHTTPRequestRedirectHop> redirects = const [],
 }) => NativeHTTPRequestLeaseResponse(
   url: url ?? snapshot.url,
   statusCode: status,
   cookieSource: source,
   setCookieValues: cookies,
+  redirects: redirects,
 );
 
 Future<NativeHTTPRequestLeaseReceipt> _finish(
@@ -471,6 +473,91 @@ void main() {
       expect((await _finish(service, snapshot)).outcome.name, 'consumed');
       expect(await _cookie(account, snapshot.url, 'lease_cookie'), isNull);
     }
+  });
+
+  test('redirect write-back validates every hop and the terminal response', () async {
+    final account = await select(101);
+    final service = create();
+    final original = Uri.https('api.bilibili.com', '/x/v2/search/trending/ranking', {'limit': '10'});
+    NativeHTTPRequestRedirectHop hop(Uri start, String location, {int status = 302}) =>
+        NativeHTTPRequestRedirectHop(statusCode: status, location: location, url: start.resolve(location));
+    final via = hop(original, '/fixture/stage');
+    final end = hop(via.url, 'result', status: 307);
+    NativeHTTPRequestLeaseResponse redirected({
+      List<NativeHTTPRequestRedirectHop>? hops,
+      Uri? url,
+      int status = 200,
+      SetCookieSource source = SetCookieSource.separatedFields,
+    }) => NativeHTTPRequestLeaseResponse(url: url ?? end.url, statusCode: status,
+      cookieSource: source, setCookieValues: ['lease_cookie=received'], redirects: hops ?? [via, end]);
+    for (final testCase in {
+      'different host': redirected(hops: [hop(original, 'https://other.example/start'), end]),
+      'different port': redirected(hops: [hop(original, 'https://api.bilibili.com:8443/start'), end]),
+      'downgrade': redirected(hops: [hop(original, 'http://api.bilibili.com/start'), end]),
+      'URL credentials': redirected(hops: [hop(original, 'https://user@api.bilibili.com/start'), end]),
+      'fragment': redirected(hops: [hop(original, '/fixture/stage#extra'), end]),
+      'non-redirect hop': redirected(hops: [hop(original, '/fixture/stage', status: 304), end]),
+      'mismatched Location': redirected(hops: [via, NativeHTTPRequestRedirectHop(
+        statusCode: 302, location: 'unrelated', url: end.url,
+      )]),
+      'repeated hop': redirected(hops: [via, via], url: via.url),
+      'mismatched response': redirected(url: end.url.replace(query: 'unrelated=1')),
+      'another 3xx': redirected(status: 304),
+      'combined cookie provenance': redirected(source: SetCookieSource.foundationCombined),
+    }.entries) {
+      final snapshot = await service.prepare(requestID: _requestID());
+      final revision = Accounts.requestRevision;
+      await expectLater(service.finish(requestID: snapshot.requestID, leaseID: snapshot.leaseID,
+        response: testCase.value), throwsA(_leaseError('invalidResponse')), reason: testCase.key);
+      expect(Accounts.requestRevision, revision);
+      expect((await _finish(service, snapshot)).outcome.name, 'consumed');
+      expect(await _cookie(account, end.url, 'lease_cookie'), isNull);
+      expect(await _cookie(account, original, 'lease_cookie'), isNull);
+    }
+  });
+
+  test('redirect write-back applies the prepared redirect allowance', () async {
+    final account = await select(101);
+    final service = create();
+    for (final (follows, limit) in [(false, 5), (true, 0), (true, 1)]) {
+      dio.options
+        ..followRedirects = follows
+        ..maxRedirects = limit;
+      final snapshot = await service.prepare(requestID: _requestID());
+      final via = snapshot.url.resolve('/fixture/stage');
+      final finalUrl = via.resolve('result');
+      // An edit after prepare cannot expand the captured redirect allowance.
+      dio.options
+        ..followRedirects = true
+        ..maxRedirects = 5;
+      final response = _response(snapshot, url: finalUrl, redirects: [
+        NativeHTTPRequestRedirectHop(statusCode: 302, location: '/fixture/stage', url: via),
+        NativeHTTPRequestRedirectHop(statusCode: 307, location: 'result', url: finalUrl),
+      ]);
+      await expectLater(service.finish(requestID: snapshot.requestID, leaseID: snapshot.leaseID,
+        response: response), throwsA(_leaseError('invalidResponse')));
+      expect((await _finish(service, snapshot)).outcome.name, 'consumed');
+      expect(await _cookie(account, finalUrl, 'lease_cookie'), isNull);
+    }
+  });
+
+  test('redirect bridge rejects malformed trace shape before claiming the lease', () async {
+    await select(101);
+    final service = create();
+    final bridge = NativeHTTPRequestLeaseBridge(service: service);
+    final snapshot = await service.prepare(requestID: _requestID());
+    final command = _finishCommand(snapshot);
+    final response = command['response']! as Map<String, Object?>;
+    for (final invalid in [null, [], [{'statusCode': 302, 'location': '/fixture'}], [true]]) {
+      final result = await bridge.handle('finishNativeHTTPRequest', {
+        ...command,
+        'response': {...response, 'redirects': invalid},
+      });
+      expect(result['code'], 'invalidArguments');
+      expect(service.liveLeaseCount, 1);
+    }
+    final result = await bridge.handle('finishNativeHTTPRequest', command);
+    expect(result['state'], 'finished');
   });
 
   test('Foundation ambiguous field refuses whole batch instead of speculating', () async {

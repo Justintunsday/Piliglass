@@ -9,11 +9,18 @@ public struct PiliRawHTTPField: Sendable, Equatable, Codable {
   public init(name: String, value: String) { self.name = name; self.value = value }
 }
 
+public struct PiliRawHTTPRedirectHop: Sendable, Equatable {
+  public let statusCode: Int
+  public let location: String
+  public let url: URL
+}
+
 public struct PiliRawHTTPHead: Sendable, Equatable {
   public let url: URL
   public let statusCode: Int
   public let version: String
   public let fields: [PiliRawHTTPField]
+  public let redirects: [PiliRawHTTPRedirectHop]
   public var setCookieFields: [String] {
     fields.filter { $0.name.lowercased() == "set-cookie" }.map(\.value)
   }
@@ -131,6 +138,7 @@ public final class PiliRawHTTPTransport: Sendable {
       }) else { throw PiliRawHTTPFailure.invalidRequest }
       var target = url
       var followed: Set<URL> = []
+      var redirects: [PiliRawHTTPRedirectHop] = []
       while true {
         try Task.checkCancellation()
         var request = HTTPClientRequest(url: target.absoluteString)
@@ -140,8 +148,8 @@ public final class PiliRawHTTPTransport: Sendable {
         let response = try await client.execute(request, deadline: .distantFuture)
         let head = PiliRawHTTPHead(url: response.url ?? target, statusCode: Int(response.status.code),
           version: "\(response.version.major).\(response.version.minor)",
-          fields: response.headers.map { PiliRawHTTPField(name: $0.name, value: $0.value) })
-        if let next = try Self.redirectTarget(head, origin: url, limit: sameOriginRedirectLimit, followed: &followed) {
+          fields: response.headers.map { PiliRawHTTPField(name: $0.name, value: $0.value) }, redirects: redirects)
+        if let hop = try Self.redirectHop(head, origin: url, limit: sameOriginRedirectLimit, followed: &followed) {
           // Drain the accepted hop to permit connection reuse. Only the final
           // response's head, Cookie fields and chunks reach the caller.
           var remaining = maxBodyBytes
@@ -150,7 +158,8 @@ public final class PiliRawHTTPTransport: Sendable {
             guard chunk.readableBytes <= remaining else { throw PiliRawHTTPFailure.bodyLimit }
             remaining -= chunk.readableBytes
           }
-          target = next
+          redirects.append(hop)
+          target = hop.url
           continue
         }
         observed = head
@@ -169,13 +178,13 @@ public final class PiliRawHTTPTransport: Sendable {
     }
   }
 
-  private static func redirectTarget(_ head: PiliRawHTTPHead, origin: URL, limit: Int?,
-                                     followed: inout Set<URL>) throws -> URL? {
+  private static func redirectHop(_ head: PiliRawHTTPHead, origin: URL, limit: Int?,
+                                  followed: inout Set<URL>) throws -> PiliRawHTTPRedirectHop? {
     guard let limit, [301, 302, 303, 307, 308].contains(head.statusCode) else { return nil }
     guard followed.count < limit else { throw PiliRawHTTPFailure.redirectLimit }
     let locations = head.fields.filter { $0.name.lowercased() == "location" }
-    guard locations.count == 1, !locations[0].value.isEmpty,
-          let target = URL(string: locations[0].value, relativeTo: head.url)?.absoluteURL,
+    guard locations.count == 1, let location = locations.first?.value, !location.isEmpty,
+          let target = URL(string: location, relativeTo: head.url)?.absoluteURL,
           target.user == nil, target.password == nil, target.fragment == nil else {
       throw PiliRawHTTPFailure.invalidRedirect
     }
@@ -186,7 +195,7 @@ public final class PiliRawHTTPTransport: Sendable {
       throw PiliRawHTTPFailure.redirectOutsideOrigin
     }
     guard followed.insert(target).inserted else { throw PiliRawHTTPFailure.redirectLoop }
-    return target
+    return PiliRawHTTPRedirectHop(statusCode: head.statusCode, location: location, url: target)
   }
 
   private static func failure(_ error: Error) -> PiliRawHTTPFailure {

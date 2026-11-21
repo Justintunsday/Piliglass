@@ -108,6 +108,7 @@ private final class FixtureBridge: PiliBridgeMethodTransport {
 
 private actor FixtureTransfer: PiliHTTPTransferring {
   let head: PiliHTTPResponseHead?
+  let requestedURL: URL
   let body: Data
   let cookie: String
   private(set) var sends = 0
@@ -115,8 +116,10 @@ private actor FixtureTransfer: PiliHTTPTransferring {
 
   init(_ fixture: TrendingFixture) throws {
     guard case .dictionary(let headers) = fixture.prepared["headers"],
-          case .string(let cookie) = headers["cookie"] else { throw FixtureError(message: "Missing Dart Cookie") }
+          case .string(let cookie) = headers["cookie"], case .string(let request) = fixture.prepared["url"],
+          let requestedURL = URL(string: request) else { throw FixtureError(message: "Missing Dart request") }
     self.cookie = cookie
+    self.requestedURL = requestedURL
     body = fixture.body
     if case .dictionary(let response) = fixture.terminal["response"],
        case .string(let rawURL) = response["url"], let url = URL(string: rawURL),
@@ -126,12 +129,26 @@ private actor FixtureTransfer: PiliHTTPTransferring {
         guard case .string(let field) = raw else { throw FixtureError(message: "Invalid Dart Set-Cookie field") }
         return field
       }
+      let redirects = try Self.redirects(response["redirects"])
       head = PiliHTTPResponseHead(url: url, statusCode: statusCode, headers: ["content-encoding": "gzip"],
-                                  cookieFields: .separatedFields(cookieFields))
+                                  cookieFields: .separatedFields(cookieFields), redirects: redirects)
     } else if fixture.usesDart {
       head = nil
     } else {
       throw FixtureError(message: "Missing Dart response head")
+    }
+  }
+
+  private static func redirects(_ value: PiliBridgeValue?) throws -> [PiliHTTPRedirectHop] {
+    guard let value else { return [] }
+    guard case .array(let hops) = value else { throw FixtureError(message: "Expected Dart redirect list") }
+    return try hops.map { hop in
+      guard case .dictionary(let fields) = hop, case .integer(let status) = fields["statusCode"],
+            let statusCode = Int(exactly: status), case .string(let location) = fields["location"],
+            case .string(let rawURL) = fields["url"], let url = URL(string: rawURL) else {
+        throw FixtureError(message: "Missing Dart redirect fields")
+      }
+      return .init(statusCode: statusCode, location: location, url: url)
     }
   }
 
@@ -140,7 +157,7 @@ private actor FixtureTransfer: PiliHTTPTransferring {
     onHead: @escaping @Sendable (PiliHTTPResponseHead) -> Void
   ) async -> PiliHTTPTransferOutcome {
     sends += 1
-    guard let head, request.url == head.url, request.httpMethod == "GET",
+    guard let head, request.url == requestedURL, request.httpMethod == "GET",
           !request.httpShouldHandleCookies, request.value(forHTTPHeaderField: "Cookie") == cookie else {
       return .init(head: nil, body: .failure(.client(.invalidRequest)))
     }
@@ -161,7 +178,8 @@ private struct PreparedSearchTrendingChecks {
         throw FixtureError(message: "Fresh Dart trending fixture required")
       }
       let fixtures = try cases.map(TrendingFixture.init)
-      let expected: Set<String> = ["selected", "switched", "revoked", "httpError", "corrupt", "declined", "redirects"]
+      let expected: Set<String> = ["selected", "switched", "revoked", "httpError", "corrupt", "declined", "redirects",
+                                   "redirected", "redirectedSwitched", "redirectedHTTPError"]
       guard fixtures.count == expected.count, Set(fixtures.map(\.name)) == expected else {
         throw FixtureError(message: "Missing or repeated Dart trending scenarios")
       }
@@ -174,12 +192,12 @@ private struct PreparedSearchTrendingChecks {
   }
 
   static func check(_ fixture: TrendingFixture) async throws {
-    if fixture.name == "declined" { try await checkRawCandidate(fixture) }
+    if fixture.usesDart { try await checkRawCandidate(fixture) }
     let bridge = FixtureBridge(fixture)
     let transfer = try FixtureTransfer(fixture)
     let declined = fixture.usesDart
     let loader = PiliPreparedSearchTrendingLoader(bridge: bridge, transport: transfer,
-      evidence: fixture.name == "declined" ? .rawCandidate : .syntheticComplete, maximumBodyBytes: 65_536)
+      evidence: declined ? .rawCandidate : .syntheticComplete, maximumBodyBytes: 65_536)
     var failure: Error?
     let repository = PiliFlutterSearchRepository(invoker: PiliBridgeMethodInvoker(transport: bridge)) {
       do { return try await loader.load() }
@@ -190,7 +208,7 @@ private struct PreparedSearchTrendingChecks {
     let suffix: [String]
     switch fixture.name {
     case "declined", "redirects": suffix = ["loadNativeSearchTrending"]
-    case "selected", "switched": suffix = ["loadNativeAccountSelection"]
+    case "selected", "switched", "redirected", "redirectedSwitched": suffix = ["loadNativeAccountSelection"]
     default: suffix = []
     }
     let sends = await transfer.sends
@@ -202,14 +220,14 @@ private struct PreparedSearchTrendingChecks {
     }
     let valid: Bool
     switch fixture.name {
-    case "selected":
+    case "selected", "redirected":
       valid = failure == nil && !fixture.keywords.isEmpty && result.trending == fixture.keywords
-    case "switched":
+    case "switched", "redirectedSwitched":
       valid = failure == nil && result.trending.isEmpty
     case "revoked":
       valid = (failure as? PiliPreparedHTTPRequestExecutionError) == .terminalNotConfirmed(.revoked)
         && result.trending.isEmpty
-    case "httpError":
+    case "httpError", "redirectedHTTPError":
       valid = (failure as? PiliSearchTrendingError) == .httpStatus(403) && result.trending.isEmpty
     case "corrupt":
       valid = (failure as? PiliHTTPBodyDecodeFailure) == .malformedCompression && result.trending.isEmpty
@@ -236,7 +254,8 @@ private struct PreparedSearchTrendingChecks {
     }
     guard profile.poolGeneration == context.policy.poolGeneration,
           profile.connectMicroseconds == 10_000_000, profile.receiveIdleMicroseconds == 10_000_000,
-          profile.poolIdleMicroseconds == 15_000_000 else {
+          profile.poolIdleMicroseconds == 15_000_000,
+          profile.redirectLimit == (context.policy.followRedirects ? Int(context.policy.maxRedirects) : nil) else {
       throw FixtureError(message: "Raw configuration drifted from the actual Dart pool")
     }
     let client = try PiliRawHTTPClient(profile: profile, maximumBodyBytes: 65_536)

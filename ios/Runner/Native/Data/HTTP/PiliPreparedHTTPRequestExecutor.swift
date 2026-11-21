@@ -5,7 +5,7 @@ enum PiliPreparedHTTPRequestExecution: Sendable {
   case dartFallback([PiliHTTPPolicyRejection])
   /// A sent request never falls back, including missing head, body failure or
   /// cancelled transfer. The caller decides how to present that single result.
-  case transferred(PiliHTTPTransferOutcome, PiliHTTPRequestContextReceipt, generation: Int64)
+  case transferred(PiliHTTPTransferOutcome, PiliHTTPRequestContextReceipt, generation: Int64, requestedURL: URL)
 }
 
 enum PiliPreparedHTTPRequestExecutionError: Error, Sendable, Equatable {
@@ -67,7 +67,7 @@ struct PiliPreparedHTTPRequestExecutor: Sendable {
     // exhaust the Dart lease TTL. It remains alive across caller cancellation.
     // No second finish/abandon is sent if its acknowledgement is lost.
     let receipt = try await terminal.complete(outcome)
-    return .transferred(outcome, receipt, generation: context.generation)
+    return .transferred(outcome, receipt, generation: context.generation, requestedURL: context.request.url)
   }
 }
 

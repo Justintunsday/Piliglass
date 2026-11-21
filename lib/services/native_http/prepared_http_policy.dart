@@ -33,6 +33,9 @@ final class PreparedHTTPPolicy {
 
   final Map<String, Object?> values;
 
+  int? get redirectLimit =>
+      values['followRedirects'] == true ? values['maxRedirects'] as int : null;
+
   bool sameAs(PreparedHTTPPolicy other) => _same(values, other.values);
 
   static Map<String, Object?>? _pool(EffectiveHTTPPoolConfiguration? pool) =>
