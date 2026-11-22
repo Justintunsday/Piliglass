@@ -13,28 +13,56 @@ struct PiliPreparedSearchTrendingLoader: Sendable {
   static func repository(
     bridge: any PiliBridgeMethodTransport,
     launchArguments: [String] = CommandLine.arguments,
+    deviceTrial: Bool = Bundle.main.object(forInfoDictionaryKey: "PiliNativeSearchTrendingTrial") as? Bool == true,
     makeRawTransport: MakeRawTransport? = nil
   ) -> PiliFlutterSearchRepository {
     let invoker = PiliBridgeMethodInvoker(transport: bridge)
-    guard launchArguments.contains("--pili-native-search-trending") else {
+    guard deviceTrial || launchArguments.contains("--pili-native-search-trending") else {
       return PiliFlutterSearchRepository(invoker: invoker)
     }
+    let recordTrial: @Sendable (String) -> Void = { status in
+      guard deviceTrial else { return }
+      let url = FileManager.default.temporaryDirectory.appendingPathComponent("piliglass-trending-trial.txt")
+      try? status.write(to: url, atomically: true, encoding: .utf8)
+    }
+    recordTrial("ready")
     let maximumBodyBytes = 4 * 1024 * 1024
     let pool = PiliRawHTTPClientPool(maximumBodyBytes: maximumBodyBytes)
     let loader = Self(bridge: bridge, selectTransport: { policy in
       switch PiliHTTPPolicyCapability().planRawHTTP11(policy) {
       case .unsupported(let reasons):
+        recordTrial("dart: " + reasons.map(\.rawValue).joined(separator: " "))
         return .dart(reasons)
       case .candidate(let profile):
         do {
           if let makeRawTransport { return .native(try await makeRawTransport(profile)) }
           return .native(try await pool.client(for: profile))
         } catch {
+          recordTrial("dart: client")
           return .dart([.unverifiedTransport])
         }
       }
     }, maximumBodyBytes: maximumBodyBytes)
-    return PiliFlutterSearchRepository(invoker: invoker, loadNativeTrending: { try await loader.load() })
+    return PiliFlutterSearchRepository(invoker: invoker, loadNativeTrending: {
+      recordTrial("loading")
+      do {
+        let result = try await loader.load()
+        if case .keywords(let keywords) = result { recordTrial("native: \(keywords.count)") }
+        return result
+      } catch is CancellationError {
+        recordTrial("cancelled")
+        throw CancellationError()
+      } catch {
+        if case .httpStatus(let status) = error as? PiliSearchTrendingError {
+          recordTrial("response: \(status)")
+        } else if case .nativeTransport(let kind) = error as? PiliHTTPClientError {
+          recordTrial("transport: " + kind)
+        } else {
+          recordTrial("error: \(type(of: error))")
+        }
+        throw error
+      }
+    })
   }
 
   @MainActor

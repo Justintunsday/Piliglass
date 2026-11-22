@@ -188,7 +188,10 @@ Cookie。超出本地正文大小上限和取消都不重试。
 ### Runner 真机试验入口
 
 在 Xcode 的 Runner 启动参数中添加 `--pili-native-search-trending`，启动后从原生首页
-打开搜索，加载接入 Runner 的热搜。未提供参数时，Runner 使用原有 Dart 聚合入口。
+打开搜索，加载接入 Runner 的热搜。无 Xcode 启动器的真机可使用单独签名的试验包，
+仅在试验包的 Info.plist 将 `PiliNativeSearchTrendingTrial` 设置为布尔值 true。该包
+在应用自身的临时目录记录最近的路由与请求结果，包含展现条数与有限错误类型。常规
+包的普通启动使用原有 Dart 聚合入口。
 试验仅接受已描述的直连 HTTP/1.1 策略。策略或客户端在发送前无法使用时，先确认租约
 已放弃，再单独请求 Dart 热搜。请求发出后由同一条路径结束。
 
