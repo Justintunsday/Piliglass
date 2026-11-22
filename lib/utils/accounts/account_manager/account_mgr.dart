@@ -63,7 +63,7 @@ class AccountManager extends Interceptor {
     final binding = _bindRequestAccount(options);
     final account = binding.account;
 
-    if (account is NoAccount || _skipCookie(path)) return handler.next(options);
+    if (account is NoAccount || skipsCookiesForPath(path)) return handler.next(options);
     final stamp = binding.stamp;
     if (stamp == null || !_isCurrentBinding(binding, options)) {
       return handler.reject(_revokedRequest(options), false);
@@ -269,7 +269,7 @@ class AccountManager extends Interceptor {
     }
   }
 
-  static bool _skipCookie(String path) {
+  static bool skipsCookiesForPath(String path) {
     return path.startsWith(blockServer) ||
         path.contains('hdslb.com') ||
         path.contains('biliimg.com');
@@ -304,7 +304,7 @@ class AccountManager extends Interceptor {
     final account = binding.account;
     if (account is NoAccount ||
         path.startsWith(HttpString.appBaseUrl) ||
-        _skipCookie(path)) {
+        skipsCookiesForPath(path)) {
       return null;
     }
     return binding;

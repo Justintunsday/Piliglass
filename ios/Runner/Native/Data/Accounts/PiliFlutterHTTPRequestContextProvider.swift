@@ -39,6 +39,7 @@ final class PiliFlutterHTTPRequestContextProvider: PiliHTTPRequestContextProvidi
       let context = try PiliHTTPRequestContextBridgeCodec.decodePrepared(raw, requestID: requestID, purpose: purpose)
       try Task.checkCancellation()
       entry.leaseID = context.leaseID
+      entry.requestURL = context.request.url
       return context
     } catch {
       // Includes invalid codec and cancellation that discarded the lease ID.
@@ -59,6 +60,26 @@ final class PiliFlutterHTTPRequestContextProvider: PiliHTTPRequestContextProvidi
     do {
       let raw = try await invokeWhileActive(entry, "prepareNativeHTTPRetry", arguments: arguments)
       return try PiliHTTPRequestContextBridgeCodec.decodeRetry(raw, context: context, attempt: attempt)
+    } catch {
+      if disposed { throw PiliHTTPRequestContextError.disposed }
+      throw Self.error(error)
+    }
+  }
+
+  func prepareRedirect(_ context: PiliHTTPRequestContext, response: PiliHTTPResponseHead) async throws -> PiliHTTPRequestContext {
+    try Task.checkCancellation()
+    guard !disposed, let entry = try matchingEntry(context), !entry.ending else {
+      throw PiliHTTPRequestContextError.disposed
+    }
+    guard entry.preparation == nil else { throw PiliHTTPRequestContextError.invalidRequest }
+    let arguments = try PiliHTTPRequestContextBridgeCodec.redirectRequestArguments(context: context, head: response)
+    do {
+      let raw = try await invokeWhileActive(entry, "prepareNativeHTTPRedirect", arguments: arguments)
+      let next = try PiliHTTPRequestContextBridgeCodec.decodeRedirect(raw, context: context)
+      guard try matchingEntry(context) === entry, !entry.ending else { throw PiliHTTPRequestContextError.disposed }
+      entry.requestURL = next.request.url
+      entry.redirectIndex = next.redirectIndex
+      return next
     } catch {
       if disposed { throw PiliHTTPRequestContextError.disposed }
       throw Self.error(error)
@@ -117,7 +138,7 @@ final class PiliFlutterHTTPRequestContextProvider: PiliHTTPRequestContextProvidi
 
   func abandon(_ context: PiliHTTPRequestContext) async throws -> PiliHTTPRequestContextReceipt {
     if disposed { return Self.receipt(.closed) }
-    guard let entry = try matchingEntry(context) else { return Self.receipt(.consumed) }
+    guard let entry = try matchingEntry(context, requireCurrentRoute: false) else { return Self.receipt(.consumed) }
     if entry.ending { return Self.receipt(.consumed) }
     entry.ending = true
     entry.preparation?.cancel()
@@ -141,14 +162,15 @@ final class PiliFlutterHTTPRequestContextProvider: PiliHTTPRequestContextProvidi
     }
   }
 
-  private func matchingEntry(_ context: PiliHTTPRequestContext) throws -> PiliHTTPRequestContextEntry? {
+  private func matchingEntry(_ context: PiliHTTPRequestContext, requireCurrentRoute: Bool = true) throws -> PiliHTTPRequestContextEntry? {
     guard let key = PiliHTTPRequestContextBridgeCodec.canonicalID(context.requestID),
           let token = PiliHTTPRequestContextBridgeCodec.canonicalID(context.leaseID) else {
       throw PiliHTTPRequestContextError.invalidRequest
     }
     guard let entry = entries[key] else { return nil }
     guard entry.purpose.limit == context.limit,
-          entry.leaseID.flatMap(PiliHTTPRequestContextBridgeCodec.canonicalID) == token else {
+          entry.leaseID.flatMap(PiliHTTPRequestContextBridgeCodec.canonicalID) == token,
+          !requireCurrentRoute || (entry.requestURL == context.request.url && entry.redirectIndex == context.redirectIndex) else {
       throw PiliHTTPRequestContextError.invalidRequest
     }
     return entry
@@ -198,13 +220,15 @@ final class PiliFlutterHTTPRequestContextProvider: PiliHTTPRequestContextProvidi
 
 /// Capacity covers pending, prepared and ending entries. Never-finished contexts
 /// consume a bounded slot until explicitly abandoned/disposed; Dart TTL does not
-/// purge this Swift registry. No request snapshot is retained here.
+/// purge this Swift registry. Only the current URL and redirect index are kept.
 @MainActor
 private final class PiliHTTPRequestContextEntry {
   let requestID: String
   let purpose: PiliHTTPRequestPurpose
   let finalizer: PiliBridgeLeaseFinalizer
   var leaseID: String?
+  var requestURL: URL?
+  var redirectIndex: Int64 = 0
   var preparation: Task<PiliBridgeValue, Error>?
   var ending = false
 

@@ -66,7 +66,11 @@ enum PiliHTTPRequestContextBridgeCodec {
           case .dictionary(let rawHeaders) = fields["headers"] else {
       throw PiliHTTPRequestContextError.invalidResponse
     }
-    let refreshed = try headers(rawHeaders)
+    return try refreshedHeaders(rawHeaders, context: context)
+  }
+
+  private static func refreshedHeaders(_ raw: [String: PiliBridgeValue], context: PiliHTTPRequestContext) throws -> [String: String] {
+    let refreshed = try headers(raw)
     func isCookie(_ name: String) -> Bool { name.lowercased() == "cookie" }
     guard refreshed.keys.contains(where: isCookie),
           refreshed.filter({ !isCookie($0.key) }) == context.request.headers.filter({ !isCookie($0.key) }) else {
@@ -75,29 +79,92 @@ enum PiliHTTPRequestContextBridgeCodec {
     return refreshed
   }
 
+  static func redirectRequestArguments(
+    context: PiliHTTPRequestContext, head: PiliHTTPResponseHead
+  ) throws -> [String: PiliBridgeValue] {
+    let requestURL = try routeURL(context)
+    guard context.mayReissueRedirect, (300..<400).contains(head.statusCode),
+          !autoRedirectStatuses.contains(head.statusCode), case .separatedFields = head.cookieFields,
+          let locations = head.locationValues, locations.count == 1, let location = locations.first,
+          !location.utf8.contains(0x0D), !location.utf8.contains(0x0A),
+          let target = location.isEmpty ? requestURL : URL(string: location, relativeTo: requestURL)?.absoluteURL,
+          inOrigin(target, of: requestURL) else {
+      throw PiliHTTPRequestContextError.invalidRequest
+    }
+    let response = PiliHTTPRequestResponseCookies(url: head.url, statusCode: head.statusCode,
+      cookieSource: .separatedFields, setCookieValues: [], redirects: head.redirects, locationValues: locations)
+    let trace = try redirectArguments(response, original: requestURL, limit: context.remainingRedirects)
+    var fields = responseFields(response, redirects: trace)
+    fields["locationValues"] = .array([.string(location)])
+    return ["requestID": .string(context.requestID), "leaseID": .string(context.leaseID),
+            "redirectIndex": .integer(context.redirectIndex + 1), "response": .dictionary(fields)]
+  }
+
+  static func decodeRedirect(_ value: PiliBridgeValue, context: PiliHTTPRequestContext) throws -> PiliHTTPRequestContext {
+    let fields = try response(value)
+    guard Set(fields.keys) == Set(["state", "requestID", "leaseID", "redirectIndex", "url", "headers",
+                                  "remainingRedirects", "executionAllowed"]),
+          fields["state"] == .string("redirectPrepared"),
+          let requestID = canonicalID(context.requestID), fields["requestID"] == .string(requestID),
+          let leaseID = canonicalID(context.leaseID), fields["leaseID"] == .string(leaseID),
+          let limit = context.remainingRedirects, limit > 0,
+          fields["redirectIndex"] == .integer(context.redirectIndex + 1),
+          fields["remainingRedirects"] == .integer(limit - 1),
+          case .string(let rawURL) = fields["url"], let target = URL(string: rawURL),
+          target.absoluteString == rawURL, inOrigin(target, of: context.request.url),
+          case .dictionary(let rawHeaders) = fields["headers"] else {
+      throw PiliHTTPRequestContextError.invalidResponse
+    }
+    return .init(requestID: context.requestID, leaseID: context.leaseID,
+      request: .init(url: target, method: "GET", headers: try refreshedHeaders(rawHeaders, context: context)),
+      revision: context.revision, generation: context.generation, limit: context.limit, policy: context.policy,
+      redirectIndex: context.redirectIndex + 1)
+  }
+
   static func finishArguments(
     context: PiliHTTPRequestContext,
     response: PiliHTTPRequestResponseCookies
   ) throws -> [String: PiliBridgeValue] {
-    guard let requestID = canonicalID(context.requestID), canonicalID(context.leaseID) != nil,
-          let expectedURL = url(for: .searchTrending(limit: context.limit)),
-          context.request.url.absoluteString == expectedURL.absoluteString,
-          context.request.method == "GET",
-          (100...599).contains(response.statusCode) else {
+    let requestURL = try routeURL(context)
+    guard (100...599).contains(response.statusCode),
+          context.redirectIndex == 0 || (response.statusCode >= 200 && response.cookieSource == .separatedFields) else {
       throw PiliHTTPRequestContextError.invalidRequest
     }
-    let redirects = try redirectArguments(response, original: expectedURL, policy: context.policy)
-    let locations = try terminalLocationArguments(response, original: expectedURL, policy: context.policy)
+    let redirects = try redirectArguments(response, original: requestURL, limit: context.remainingRedirects)
+    let locations = try terminalLocationArguments(response, context: context)
+    var fields = responseFields(response, redirects: redirects)
+    if let locations { fields["locationValues"] = .array(locations) }
+    var arguments: [String: PiliBridgeValue] = ["requestID": .string(context.requestID.lowercased()),
+      "leaseID": .string(context.leaseID), "response": .dictionary(fields)]
+    if context.redirectIndex > 0 { arguments["redirectIndex"] = .integer(context.redirectIndex) }
+    return arguments
+  }
+
+  private static func routeURL(_ context: PiliHTTPRequestContext) throws -> URL {
+    guard canonicalID(context.requestID) != nil, canonicalID(context.leaseID) != nil,
+          let expected = url(for: .searchTrending(limit: context.limit)), context.request.method == "GET" else {
+      throw PiliHTTPRequestContextError.invalidRequest
+    }
+    let isValid = context.redirectIndex == 0
+      ? context.request.url.absoluteString == expected.absoluteString
+      : context.remainingRedirects != nil && context.policy.retry?.installed == true && inOrigin(context.request.url, of: expected)
+    guard isValid else {
+      throw PiliHTTPRequestContextError.invalidRequest
+    }
+    return context.request.url
+  }
+
+  private static func responseFields(_ response: PiliHTTPRequestResponseCookies,
+                                     redirects: [PiliBridgeValue]) -> [String: PiliBridgeValue] {
     var fields: [String: PiliBridgeValue] = ["url": .string(response.url.absoluteString),
       "statusCode": .integer(Int64(response.statusCode)), "cookieSource": .string(response.cookieSource.rawValue),
       "setCookieValues": .array(response.setCookieValues.map(PiliBridgeValue.string))]
     if !redirects.isEmpty { fields["redirects"] = .array(redirects) }
-    if let locations { fields["locationValues"] = .array(locations) }
-    return ["requestID": .string(requestID), "leaseID": .string(context.leaseID), "response": .dictionary(fields)]
+    return fields
   }
 
   private static func redirectArguments(
-    _ response: PiliHTTPRequestResponseCookies, original: URL, policy: PiliPreparedHTTPPolicy
+    _ response: PiliHTTPRequestResponseCookies, original: URL, limit: Int64?
   ) throws -> [PiliBridgeValue] {
     guard let last = response.redirects.last else {
       guard response.url.absoluteString == original.absoluteString else {
@@ -105,7 +172,7 @@ enum PiliHTTPRequestContextBridgeCodec {
       }
       return []
     }
-    guard policy.followRedirects, Int64(response.redirects.count) <= policy.maxRedirects,
+    guard let limit, Int64(response.redirects.count) <= limit,
           response.cookieSource == .separatedFields, response.statusCode >= 200 else {
       throw PiliHTTPRequestContextError.invalidRequest
     }
@@ -134,26 +201,29 @@ enum PiliHTTPRequestContextBridgeCodec {
   private static let autoRedirectStatuses: Set<Int> = [301, 302, 303, 307, 308]
 
   private static func terminalLocationArguments(
-    _ response: PiliHTTPRequestResponseCookies, original: URL, policy: PiliPreparedHTTPPolicy
+    _ response: PiliHTTPRequestResponseCookies, context: PiliHTTPRequestContext
   ) throws -> [PiliBridgeValue]? {
     let isRedirect = (300..<400).contains(response.statusCode)
     guard let locations = response.locationValues else {
-      guard !isRedirect || response.redirects.isEmpty else { throw PiliHTTPRequestContextError.invalidRequest }
+      guard !isRedirect || (response.redirects.isEmpty && context.redirectIndex == 0) else {
+        throw PiliHTTPRequestContextError.invalidRequest
+      }
       return nil
     }
+    let policy = context.policy
     guard isRedirect, response.cookieSource == .separatedFields,
           !(policy.followRedirects && autoRedirectStatuses.contains(response.statusCode)),
-          locations.isEmpty || !policy.followRedirects || policy.maxRedirects <= 0 || policy.retry?.installed == false else {
+          locations.isEmpty || (context.remainingRedirects ?? 0) <= 0 || policy.retry?.installed == false else {
       throw PiliHTTPRequestContextError.invalidRequest
     }
     // Dio's extra writes resolve against the last raw Location reference.
-    guard let base = URL(string: response.redirects.last?.location ?? original.absoluteString) else {
+    guard let base = URL(string: response.redirects.last?.location ?? context.request.url.absoluteString) else {
       throw PiliHTTPRequestContextError.invalidRequest
     }
     return try locations.map { location in
       guard !location.utf8.contains(0x0D), !location.utf8.contains(0x0A),
             let destination = location.isEmpty ? base : URL(string: location, relativeTo: base)?.absoluteURL,
-            inOrigin(destination, of: original) else {
+            inOrigin(destination, of: context.request.url) else {
         throw PiliHTTPRequestContextError.invalidRequest
       }
       return .string(location)

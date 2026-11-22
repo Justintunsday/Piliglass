@@ -74,7 +74,7 @@ private struct PreparedHTTPPolicyChecks {
           case "retry-installed-zero":
             try expect(policy.retry?.installed == true && policy.retry?.count == 0 && policy.retry?.delayMilliseconds == 37,
                        "Installed zero is distinct from absence")
-            try expect(reasons.contains(.retry), "Installed zero can still follow 3xx in the interceptor")
+            try expect(!reasons.contains(.retry), "Installed zero has a bounded candidate for interceptor redirects")
           case "retry-absent":
             try expect(policy.retry?.installed == false && policy.retry?.count == 0 && policy.retry?.delayMilliseconds == nil,
                        "No interceptor does not invent a delay")

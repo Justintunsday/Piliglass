@@ -5,6 +5,7 @@ import 'package:PiliPlus/http/api.dart';
 import 'package:PiliPlus/http/constants.dart';
 import 'package:PiliPlus/http/effective_http_policy.dart';
 import 'package:PiliPlus/http/init.dart';
+import 'package:PiliPlus/http/retry_interceptor.dart';
 import 'package:PiliPlus/models/common/account_type.dart';
 import 'package:PiliPlus/services/native_accounts/account_cookie_mutation_port.dart';
 import 'package:PiliPlus/services/native_accounts/account_credential_reader.dart';
@@ -19,7 +20,7 @@ import 'package:dio/dio.dart';
 import 'package:uuid/v4.dart';
 
 typedef _RequestInput = ({Uri url, Map<String, String> headers, PreparedHTTPPolicy policy,
-  Object? decoder, Object? encoder, Object validateStatus});
+  Object? decoder, Object? encoder, ValidateStatus validateStatus});
 
 enum NativeHTTPRequestLeaseOutcome {
   finished,
@@ -296,7 +297,63 @@ final class NativeHTTPRequestLeaseService {
     required String requestID,
     required String leaseID,
     required int attempt,
+  }) => Future.sync(() {
+    final (key, entry, context) = _preparedEntry(requestID, leaseID);
+    if (context.preparingAttempt) throw const NativeHTTPRequestLeaseException('retryInProgress');
+    if (attempt != context.retryAttempt + 1 || attempt > context.snapshot.policy.retryLimit) {
+      throw const NativeHTTPRequestLeaseException('invalidRetryAttempt');
+    }
+    return _prepareAttempt(key, entry, context, url: context.url, path: context.path,
+      retryAttempt: attempt, redirectIndex: context.redirectIndex);
+  });
+
+  Future<({Uri url, Map<String, String> headers, int remainingRedirects})> prepareRedirect({
+    required String requestID,
+    required String leaseID,
+    required int redirectIndex,
+    required NativeHTTPRequestLeaseResponse response,
   }) async {
+    final (key, entry, context) = _preparedEntry(requestID, leaseID);
+    if (context.preparingAttempt) throw const NativeHTTPRequestLeaseException('redirectInProgress');
+    final remaining = context.remainingRedirects;
+    final policy = context.snapshot.policy;
+    if (redirectIndex != context.redirectIndex + 1 || remaining == null || remaining <= 0 ||
+        policy.retryInstalled != true || policy.values['responseType'] != 'json' ||
+        policy.values['decoder'] != 'manualCompressionUTF8' || policy.values['receiveDataWhenStatusError'] != true) {
+      throw const NativeHTTPRequestLeaseException('invalidRedirectAttempt');
+    }
+    const invalid = NativeHTTPRequestLeaseException('invalidResponse');
+    final status = response.statusCode;
+    final locations = response.locationValues;
+    if (!_isRedirect(status) || _autoRedirectStatuses.contains(status) ||
+        response.cookieSource != SetCookieSource.separatedFields || locations == null || locations.length != 1 ||
+        response.setCookieValues.isNotEmpty) {
+      throw invalid;
+    }
+    if (!_owns(context)) throw const NativeHTTPRequestLeaseException('revoked');
+
+    final Uri target;
+    final String path;
+    try {
+      if (context.input.validateStatus(status)) throw invalid;
+      _responseRealUri(context, response);
+      final location = locations.single;
+      if (location.contains('\r') || location.contains('\n')) throw invalid;
+      final redirect = RetryInterceptor.resolveRedirect(context.url, location);
+      path = redirect.path;
+      // The interceptor changes RequestOptions.path and keeps its query map.
+      target = Options(method: 'GET').compose(_options(), path,
+        queryParameters: {'limit': context.snapshot.limit}).uri;
+      if (!_inOrigin(redirect.uri, context.url) || !_inOrigin(target, context.url)) throw invalid;
+    } catch (_) {
+      throw invalid;
+    }
+    final headers = await _prepareAttempt(key, entry, context, url: target, path: path,
+      retryAttempt: context.retryAttempt, redirectIndex: redirectIndex);
+    return (url: target, headers: headers, remainingRedirects: remaining - 1);
+  }
+
+  (String, _LiveLease, _PreparedLease) _preparedEntry(String requestID, String leaseID) {
     final key = _id(requestID);
     final token = _id(leaseID);
     _ensureOpen();
@@ -307,33 +364,47 @@ final class NativeHTTPRequestLeaseService {
     if (entry.finishing) throw const NativeHTTPRequestLeaseException('consumed');
     final context = entry.context;
     if (context == null) throw const NativeHTTPRequestLeaseException('notPrepared');
-    if (context.preparingRetry) throw const NativeHTTPRequestLeaseException('retryInProgress');
+    return (key, entry, context);
+  }
+
+  Future<Map<String, String>> _prepareAttempt(String key, _LiveLease entry, _PreparedLease context, {
+    required Uri url,
+    required String path,
+    required int retryAttempt,
+    required int redirectIndex,
+  }) async {
     final snapshot = context.snapshot;
-    if (attempt != context.retryAttempt + 1 || attempt > snapshot.policy.retryLimit) {
-      throw const NativeHTTPRequestLeaseException('invalidRetryAttempt');
-    }
     final account = context.stamp.account;
-    context.preparingRetry = true;
+    context.preparingAttempt = true;
     try {
       if (!_owns(context)) throw const NativeHTTPRequestLeaseException('revoked');
       _confirmInput(account, snapshot.limit, context.stamp, context.input);
-      final cookies = await _loadCookies(account, snapshot.url);
+      if (redirectIndex > 0 && AccountManager.skipsCookiesForPath(path)) {
+        throw const NativeHTTPRequestLeaseException('invalidRedirectAttempt');
+      }
+      final cookies = await _loadCookies(account, url);
       _ensurePreparing(key, entry);
       if (!_owns(context)) throw const NativeHTTPRequestLeaseException('revoked');
       _confirmInput(account, snapshot.limit, context.stamp, context.input);
+      if (redirectIndex > 0 && AccountManager.skipsCookiesForPath(path)) {
+        throw const NativeHTTPRequestLeaseException('invalidRedirectAttempt');
+      }
       // Dio reuses RequestOptions. Its account interceptor merges the previous
       // Cookie header with a fresh jar read from the originally bound owner.
       final headers = Map<String, String>.unmodifiable(_withCookies(context.lastHeaders, cookies));
       context
+        ..url = url
+        ..path = path
         ..lastHeaders = headers
-        ..retryAttempt = attempt;
+        ..retryAttempt = retryAttempt
+        ..redirectIndex = redirectIndex;
       return headers;
     } on NativeHTTPRequestLeaseException {
       rethrow;
     } catch (_) {
       throw const NativeHTTPRequestLeaseException('invalidRequest');
     } finally {
-      context.preparingRetry = false;
+      context.preparingAttempt = false;
     }
   }
 
@@ -341,6 +412,7 @@ final class NativeHTTPRequestLeaseService {
     required String requestID,
     required String leaseID,
     required NativeHTTPRequestLeaseResponse response,
+    int redirectIndex = 0,
   }) async {
     final key = _id(requestID);
     final token = _id(leaseID);
@@ -352,13 +424,14 @@ final class NativeHTTPRequestLeaseService {
     if (entry.finishing) return const NativeHTTPRequestLeaseReceipt(NativeHTTPRequestLeaseOutcome.consumed);
     final context = entry.context;
     if (context == null) throw const NativeHTTPRequestLeaseException('notPrepared');
+    if (redirectIndex != context.redirectIndex) throw const NativeHTTPRequestLeaseException('invalidRedirectAttempt');
     // Keep a closed marker through awaits and expiry, without account references.
     entry
       ..finishing = true
       ..context = null;
     var outcome = NativeHTTPRequestLeaseOutcome.consumed;
     try {
-      final cookieUrls = _cookieUrls(context.snapshot, response);
+      final cookieUrls = _cookieUrls(context, response);
       if (!_owns(context)) {
         outcome = _closed ? NativeHTTPRequestLeaseOutcome.closed : NativeHTTPRequestLeaseOutcome.revoked;
         return NativeHTTPRequestLeaseReceipt(outcome);
@@ -382,35 +455,41 @@ final class NativeHTTPRequestLeaseService {
         return NativeHTTPRequestLeaseReceipt(outcome);
       }
       final account = context.stamp.account;
-      // Frozen transitions reject new write-back admission without touching the
-      // jar; the existing outcome vocabulary is unchanged (no write applied).
-      final admission = writeBackCoordinator.tryAdmit();
-      if (admission == null) {
-        outcome = NativeHTTPRequestLeaseOutcome.revoked;
-        return NativeHTTPRequestLeaseReceipt(outcome);
-      }
-      try {
-        for (final cookieUrl in cookieUrls) {
-          // Pinned CookieJar mutates before this Future completes. Do not defer it.
-          final saving = accountCookieMutationPort.saveResponseCookies(account, cookieUrl, cookies);
-          Accounts.notifyCookieMutation(account);
-          await _awaitCookieSave(account, cookieUrl, saving);
+      // A bad response travels back through every reissue's onError chain in
+      // Dio. A successful response runs AccountManager once in the last fetch.
+      final passes = redirectIndex > 0 && !context.input.validateStatus(response.statusCode) ? redirectIndex + 1 : 1;
+      var saved = false;
+      outcome = NativeHTTPRequestLeaseOutcome.finished;
+      for (var pass = 0; pass < passes; pass++) {
+        final admission = writeBackCoordinator.tryAdmit();
+        if (admission == null) {
+          outcome = NativeHTTPRequestLeaseOutcome.revoked;
+          break;
+        }
+        try {
+          for (final cookieUrl in cookieUrls) {
+            // Pinned CookieJar mutates before this Future completes.
+            final saving = accountCookieMutationPort.saveResponseCookies(account, cookieUrl, cookies);
+            Accounts.notifyCookieMutation(account);
+            saved = true;
+            await _awaitCookieSave(account, cookieUrl, saving);
+            if (!_owns(context)) {
+              outcome = _closed ? NativeHTTPRequestLeaseOutcome.closed : NativeHTTPRequestLeaseOutcome.revoked;
+              return NativeHTTPRequestLeaseReceipt(outcome, cookiesSaved: saved, cookieCount: cookies.length);
+            }
+          }
+          await _awaitAccountPersistence(account, account.onChange());
           if (!_owns(context)) {
             outcome = _closed ? NativeHTTPRequestLeaseOutcome.closed : NativeHTTPRequestLeaseOutcome.revoked;
-            return NativeHTTPRequestLeaseReceipt(outcome, cookiesSaved: true, cookieCount: cookies.length);
+            break;
           }
+        } finally {
+          admission.release();
         }
-        final persisting = account.onChange();
-        await _awaitAccountPersistence(account, persisting);
-        outcome = _owns(context) ? NativeHTTPRequestLeaseOutcome.finished
-            : _closed ? NativeHTTPRequestLeaseOutcome.closed : NativeHTTPRequestLeaseOutcome.revoked;
-        return NativeHTTPRequestLeaseReceipt(outcome, cookiesSaved: true, cookieCount: cookies.length);
-      } finally {
-        // Exactly once, including throw/abandon/dispose paths; the outer
-        // finally still owns lease-table cleanup.
-        admission.release();
       }
+      return NativeHTTPRequestLeaseReceipt(outcome, cookiesSaved: saved, cookieCount: saved ? cookies.length : 0);
     } catch (error) {
+      outcome = NativeHTTPRequestLeaseOutcome.consumed;
       if (error is NativeHTTPRequestLeaseException) rethrow;
       throw const NativeHTTPRequestLeaseException('persistenceFailed');
     } finally {
@@ -423,57 +502,67 @@ final class NativeHTTPRequestLeaseService {
 
   static const _autoRedirectStatuses = {301, 302, 303, 307, 308};
 
-  static List<Uri> _cookieUrls(NativeHTTPRequestLeaseSnapshot snapshot, NativeHTTPRequestLeaseResponse response) {
-    const invalid = NativeHTTPRequestLeaseException('invalidResponse');
-    final original = snapshot.url;
-    final status = response.statusCode;
-    if (status < 100 || status > 599) throw invalid;
-    final redirects = response.redirects;
-    final limit = snapshot.policy.redirectLimit;
-    final terminalRedirect = status >= 300 && status < 400;
-    final locations = response.locationValues;
-    final separated = response.cookieSource == SetCookieSource.separatedFields;
-    bool inOrigin(Uri url) => url.scheme == original.scheme && url.host == original.host &&
-        url.port == original.port && url.userInfo.isEmpty && !url.hasFragment;
+  static bool _isRedirect(int status) => status >= 300 && status < 400;
 
+  static bool _inOrigin(Uri url, Uri origin) => url.scheme == origin.scheme && url.host == origin.host &&
+      url.port == origin.port && url.userInfo.isEmpty && !url.hasFragment;
+
+  static Uri _responseRealUri(_PreparedLease context, NativeHTTPRequestLeaseResponse response) {
+    const invalid = NativeHTTPRequestLeaseException('invalidResponse');
+    final original = context.url;
+    final status = response.statusCode;
+    if (status < (context.redirectIndex > 0 ? 200 : 100) || status > 599) throw invalid;
+    final redirects = response.redirects;
+    if ((redirects.isNotEmpty || context.redirectIndex > 0) &&
+        response.cookieSource != SetCookieSource.separatedFields) {
+      throw invalid;
+    }
+    if (redirects.isEmpty) {
+      if (response.url.toString() != original.toString()) throw invalid;
+      return original;
+    }
+    final limit = context.remainingRedirects;
+    if (limit == null || redirects.length > limit || status < 200) throw invalid;
+    var current = original;
+    final visited = <Uri>{};
+    for (final hop in redirects) {
+      if (!_autoRedirectStatuses.contains(hop.statusCode) || hop.location.isEmpty) throw invalid;
+      final next = current.resolve(hop.location);
+      if (!_inOrigin(next, original) || next != hop.url || !visited.add(next)) throw invalid;
+      current = next;
+    }
+    if (current != response.url) throw invalid;
+    final realUri = Uri.parse(redirects.last.location);
+    if (!_inOrigin(original.resolveUri(realUri), original)) throw invalid;
+    return realUri;
+  }
+
+  static List<Uri> _cookieUrls(_PreparedLease context, NativeHTTPRequestLeaseResponse response) {
+    const invalid = NativeHTTPRequestLeaseException('invalidResponse');
+    final original = context.url;
+    final status = response.statusCode;
+    final limit = context.remainingRedirects;
+    final locations = response.locationValues;
+    if (_isRedirect(status) && locations == null && (response.redirects.isNotEmpty || context.redirectIndex > 0)) {
+      throw invalid;
+    }
     try {
-      final Uri realUri;
-      if (redirects.isEmpty) {
-        if (response.url.toString() != original.toString()) throw invalid;
-        realUri = original;
-      } else {
-        if (limit == null || redirects.length > limit || !separated || status < 200 ||
-            (terminalRedirect && locations == null)) {
-          throw invalid;
-        }
-        var current = original;
-        final visited = <Uri>{};
-        for (final hop in redirects) {
-          if (!_autoRedirectStatuses.contains(hop.statusCode) || hop.location.isEmpty) throw invalid;
-          final next = current.resolve(hop.location);
-          if (!inOrigin(next) || next != hop.url || !visited.add(next)) throw invalid;
-          current = next;
-        }
-        if (current != response.url) throw invalid;
-        realUri = Uri.parse(redirects.last.location);
-      }
+      final realUri = _responseRealUri(context, response);
       // Dio's realUri is the last Location reference. Only the primary write
-      // resolves it against the original request. Extra writes use it as-is.
-      final primary = original.resolveUri(realUri);
-      if (!inOrigin(primary)) throw invalid;
-      final destinations = [primary];
+      // resolves it against this RequestOptions URI. Extra writes use it as-is.
+      final destinations = [original.resolveUri(realUri)];
       if (locations == null) return destinations;
-      if (!terminalRedirect || !separated ||
+      if (!_isRedirect(status) || response.cookieSource != SetCookieSource.separatedFields ||
           (limit != null && _autoRedirectStatuses.contains(status)) ||
-          (locations.isNotEmpty && limit != null && limit > 0 && snapshot.policy.retryInstalled != false)) {
-        // The RetryInterceptor uses the original allowance even if the
+          (locations.isNotEmpty && limit != null && limit > 0 && context.snapshot.policy.retryInstalled != false)) {
+        // The RetryInterceptor uses the current options' allowance even if the
         // adapter used all of its own redirect hops.
         throw invalid;
       }
       for (final location in locations) {
         if (location.contains('\r') || location.contains('\n')) throw invalid;
         final destination = realUri.resolve(location);
-        if (!inOrigin(destination)) throw invalid;
+        if (!_inOrigin(destination, original)) throw invalid;
         destinations.add(destination);
       }
       return destinations;
@@ -609,13 +698,22 @@ final class _LiveLease {
 }
 
 final class _PreparedLease {
-  _PreparedLease(this.snapshot, this.stamp, this.input) : lastHeaders = snapshot.headers;
+  _PreparedLease(this.snapshot, this.stamp, this.input)
+    : url = snapshot.url, path = Api.searchTrending, lastHeaders = snapshot.headers;
   final NativeHTTPRequestLeaseSnapshot snapshot;
   final AccountRequestStamp<Account> stamp;
   final _RequestInput input;
+  Uri url;
+  String path;
   Map<String, String> lastHeaders;
   int retryAttempt = 0;
-  bool preparingRetry = false;
+  int redirectIndex = 0;
+  bool preparingAttempt = false;
+
+  int? get remainingRedirects => switch (snapshot.policy.redirectLimit) {
+    final int limit => limit - redirectIndex,
+    null => null,
+  };
 }
 
 final class _TerminalLease {

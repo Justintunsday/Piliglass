@@ -304,6 +304,83 @@ void runPreparedHTTPPolicyFixtures({required bool http2}) {
     expect(service.liveLeaseCount, 0);
   });
 
+  Map<String, Object?> redirectCommand(NativeHTTPRequestLeaseSnapshot snapshot, List<String> locations) => {
+    'requestID': snapshot.requestID, 'leaseID': snapshot.leaseID, 'redirectIndex': 1,
+    'response': {
+      'url': snapshot.url.toString(), 'statusCode': 300, 'locationValues': locations,
+      'cookieSource': 'separatedFields', 'setCookieValues': <String>[],
+    },
+  };
+
+  test('same-origin reissue pins the next URL, budget and subsequent Cookie reads', () async {
+    Request.dio.options
+      ..followRedirects = true
+      ..maxRedirects = 1;
+    final service = create();
+    final bridge = NativeHTTPRequestLeaseBridge(service: service);
+    final snapshot = await service.prepare(requestID: _requestID());
+    final revision = Accounts.requestRevision;
+    for (final locations in [
+      ['https://other.example/next'], ['https://api.bilibili.com:8443/next'], ['http://api.bilibili.com/next'],
+      ['https://user@api.bilibili.com/next'], ['/fixture/next#fragment'],
+      ['/fixture/hdslb.com/next'], ['/fixture/one', '/fixture/two'], <String>[],
+    ]) {
+      final result = await bridge.handle('prepareNativeHTTPRedirect', redirectCommand(snapshot, locations));
+      expect(result['state'], 'error', reason: '$locations');
+      expect(service.liveLeaseCount, 1);
+    }
+    expect(Accounts.requestRevision, revision);
+    final target = snapshot.url.resolve('/fixture/next/ranking?cursor=1&limit=10');
+    final command = redirectCommand(snapshot, ['/fixture/next/ranking?cursor=1']);
+    final next = await bridge.handle('prepareNativeHTTPRedirect', command);
+    expect(next['state'], 'redirectPrepared');
+    expect(next['url'], target.toString());
+    expect(next['remainingRedirects'], 0);
+    expect((await bridge.handle('prepareNativeHTTPRedirect', command))['code'], 'invalidRedirectAttempt');
+    final stale = await bridge.handle('finishNativeHTTPRequest', {
+      'requestID': snapshot.requestID, 'leaseID': snapshot.leaseID,
+      'response': {'url': snapshot.url.toString(), 'statusCode': 200, 'cookieSource': 'separatedFields',
+        'setCookieValues': ['stale=ignored; Path=/']},
+    });
+    expect(stale['code'], 'invalidRedirectAttempt');
+    await account.cookieJar.saveFromResponse(target, [Cookie('new_scope', 'present')..path = '/fixture/next/']);
+    final retry = await service.prepareRetry(requestID: snapshot.requestID, leaseID: snapshot.leaseID, attempt: 1);
+    expect(retry['cookie'], contains('new_scope=present'));
+    final receipt = await service.finish(requestID: snapshot.requestID, leaseID: snapshot.leaseID, redirectIndex: 1,
+      response: NativeHTTPRequestLeaseResponse(url: target, statusCode: 200,
+        cookieSource: SetCookieSource.separatedFields, setCookieValues: ['terminal=saved']));
+    expect(receipt.outcome.name, 'finished');
+    expect((await account.cookieJar.loadForRequest(target)).any((c) => c.name == 'terminal'), isTrue);
+    expect((await account.cookieJar.loadForRequest(snapshot.url)).any((c) => c.name == 'stale'), isFalse);
+  });
+
+  test('abandon during a reissue Cookie read denies both competing attempts and the late reply', () async {
+    final entered = Completer<void>(), release = Completer<void>();
+    var loads = 0;
+    final service = create(loadCookies: (owner, url) async {
+      if (++loads == 2) { entered.complete(); await release.future; }
+      return owner.cookieJar.loadForRequest(url);
+    });
+    final bridge = NativeHTTPRequestLeaseBridge(service: service);
+    final snapshot = await service.prepare(requestID: _requestID());
+    final command = redirectCommand(snapshot, ['/fixture/next']);
+    final preparing = bridge.handle('prepareNativeHTTPRedirect', command);
+    await entered.future;
+    try {
+      expect((await bridge.handle('prepareNativeHTTPRedirect', command))['code'], 'redirectInProgress');
+      final retry = await bridge.handle('prepareNativeHTTPRetry', {
+        'requestID': snapshot.requestID, 'leaseID': snapshot.leaseID, 'attempt': 1,
+      });
+      expect(retry['code'], 'retryInProgress');
+      expect(service.abandon(requestID: snapshot.requestID, leaseID: snapshot.leaseID).outcome.name, 'abandoned');
+    } finally {
+      release.complete();
+    }
+    expect((await preparing)['code'], 'abandoned');
+    expect(service.liveLeaseCount, 0);
+    expect(loads, 2);
+  });
+
   test('real production bridge exports composed policies for Swift consumption', () async {
     final cases = <Map<String, Object?>>[];
     Future<void> export(String name, {bool h11 = false}) async {

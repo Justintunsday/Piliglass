@@ -14,6 +14,13 @@ class RetryInterceptor extends Interceptor {
   int get delayMilliseconds => _delay;
   bool isBoundTo(Dio client) => identical(_client, client);
 
+  static ({String path, Uri uri}) resolveRedirect(Uri source, String location) {
+    final uri = Uri.parse(location);
+    if (uri.hasScheme) return (path: location, uri: uri);
+    final target = source.resolveUri(uri);
+    return (path: target.toString(), uri: target);
+  }
+
   @override
   void onError(DioException err, ErrorInterceptorHandler handler) {
     if (err.requestOptions.responseType == ResponseType.stream) {
@@ -24,14 +31,10 @@ class RetryInterceptor extends Interceptor {
       if (options.followRedirects && options.maxRedirects > 0) {
         final status = err.response!.statusCode;
         if (status != null && 300 <= status && status < 400) {
-          var redirectUrl = err.response!.headers.value('location');
-          if (redirectUrl != null) {
-            var uri = Uri.parse(redirectUrl);
-            if (!uri.hasScheme) {
-              uri = options.uri.resolveUri(uri);
-              redirectUrl = uri.toString();
-            }
-            (options..path = redirectUrl).maxRedirects--;
+          final location = err.response!.headers.value('location');
+          if (location != null) {
+            final target = resolveRedirect(options.uri, location);
+            (options..path = target.path).maxRedirects--;
             if (status == 303) {
               options
                 ..data = null
@@ -43,7 +46,7 @@ class RetryInterceptor extends Interceptor {
                   (i) => handler.resolve(
                     i
                       ..redirects.add(
-                        RedirectRecord(status, options.method, uri),
+                        RedirectRecord(status, options.method, target.uri),
                       )
                       ..isRedirect = true,
                   ),

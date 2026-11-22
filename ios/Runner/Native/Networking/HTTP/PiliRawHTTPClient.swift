@@ -5,10 +5,10 @@ import PiliHTTPTransport
 /// Runtime composition still uses Dart until this transport is accepted.
 struct PiliRawHTTPClient: PiliHTTPTransferring {
   private let transport: PiliRawHTTPTransport
-  private let redirectLimit: Int?
+  private let maximumRedirects: Int?
 
   init(profile: PiliRawHTTP11Profile, maximumBodyBytes: Int) throws {
-    redirectLimit = profile.redirectLimit
+    maximumRedirects = profile.redirectLimit
     transport = try PiliRawHTTPTransport(configuration: .init(
       protocolMode: .http11,
       connectMicroseconds: profile.connectMicroseconds,
@@ -20,9 +20,10 @@ struct PiliRawHTTPClient: PiliHTTPTransferring {
 
   func shutdown() async throws { try await transport.shutdown() }
 
-  func transfer(_ request: URLRequest,
+  func transfer(_ request: URLRequest, redirectLimit: Int?,
                 onHead: @escaping @Sendable (PiliHTTPResponseHead) -> Void) async -> PiliHTTPTransferOutcome {
-    guard request.httpMethod == "GET", request.httpBody == nil, request.httpBodyStream == nil,
+    let validLimit = redirectLimit.map { $0 >= 0 && $0 <= (maximumRedirects ?? -1) } ?? (maximumRedirects == nil)
+    guard validLimit, request.httpMethod == "GET", request.httpBody == nil, request.httpBodyStream == nil,
           let url = request.url else {
       return .init(head: nil, body: .failure(.client(.invalidRequest)))
     }

@@ -25,6 +25,29 @@ struct PiliHTTPRequestContext: Sendable, Equatable {
   let generation: Int64
   let limit: Int
   let policy: PiliPreparedHTTPPolicy
+  let redirectIndex: Int64
+
+  init(requestID: String, leaseID: String, request: PiliHTTPRequestDescriptor, revision: Int64,
+       generation: Int64, limit: Int, policy: PiliPreparedHTTPPolicy, redirectIndex: Int64 = 0) {
+    self.requestID = requestID
+    self.leaseID = leaseID
+    self.request = request
+    self.revision = revision
+    self.generation = generation
+    self.limit = limit
+    self.policy = policy
+    self.redirectIndex = redirectIndex
+  }
+
+  var remainingRedirects: Int64? {
+    guard policy.followRedirects, redirectIndex >= 0, policy.maxRedirects >= redirectIndex else { return nil }
+    return policy.maxRedirects - redirectIndex
+  }
+
+  var mayReissueRedirect: Bool {
+    policy.retry?.installed == true && (remainingRedirects ?? 0) > 0 && policy.responseType == "json"
+      && policy.receiveDataWhenStatusError
+  }
 
   // Context compatibility does not establish a verified Native transport.
   var executionAllowed: Bool { false }
@@ -81,6 +104,7 @@ enum PiliHTTPRequestContextError: Error, Sendable, Equatable {
 protocol PiliHTTPRequestContextProviding: Sendable {
   func prepare(_ purpose: PiliHTTPRequestPurpose) async throws -> PiliHTTPRequestContext
   func prepareRetry(_ context: PiliHTTPRequestContext, attempt: Int64) async throws -> [String: String]
+  func prepareRedirect(_ context: PiliHTTPRequestContext, response: PiliHTTPResponseHead) async throws -> PiliHTTPRequestContext
   func finish(
     _ context: PiliHTTPRequestContext,
     response: PiliHTTPRequestResponseCookies

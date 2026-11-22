@@ -37,31 +37,25 @@ final class NativeHTTPRequestLeaseBridge {
             'state': 'retryPrepared', 'requestID': requestID.toLowerCase(), 'leaseID': leaseID.toLowerCase(),
             'attempt': attempt, 'headers': headers, 'executionAllowed': false,
           });
-        case 'finishNativeHTTPRequest':
-          _keys(values, {'requestID', 'leaseID', 'response'});
+        case 'prepareNativeHTTPRedirect':
+          _keys(values, {'requestID', 'leaseID', 'redirectIndex', 'response'});
           final leaseID = _id(values['leaseID']);
-          final response = _map(values['response']);
-          const responseKeys = {'url', 'statusCode', 'cookieSource', 'setCookieValues'};
-          _keys(response, {...responseKeys, 'redirects', 'locationValues'}, required: responseKeys);
-          final url = _url(response['url']);
-          final statusCode = response['statusCode'];
-          if (statusCode is! int) {
-            throw const NativeHTTPRequestLeaseException('invalidArguments');
-          }
-          final cookies = _strings(response['setCookieValues']);
-          final locations = response.containsKey('locationValues') ? _strings(response['locationValues']) : null;
-          final source = switch (response['cookieSource']) {
-            'separatedFields' => SetCookieSource.separatedFields,
-            'foundationCombined' => SetCookieSource.foundationCombined,
-            'dioLegacyPossiblyFolded' => SetCookieSource.dioLegacyPossiblyFolded,
-            _ => throw const NativeHTTPRequestLeaseException('invalidArguments'),
-          };
+          final index = _positiveInt(values['redirectIndex']);
+          final prepared = await service.prepareRedirect(requestID: requestID, leaseID: leaseID,
+            redirectIndex: index, response: _response(values['response']));
+          return Map.unmodifiable({
+            'state': 'redirectPrepared', 'requestID': requestID.toLowerCase(), 'leaseID': leaseID.toLowerCase(),
+            'redirectIndex': index, 'url': prepared.url.toString(), 'headers': prepared.headers,
+            'remainingRedirects': prepared.remainingRedirects, 'executionAllowed': false,
+          });
+        case 'finishNativeHTTPRequest':
+          _keys(values, {'requestID', 'leaseID', 'response', 'redirectIndex'},
+            required: {'requestID', 'leaseID', 'response'});
+          final leaseID = _id(values['leaseID']);
           return _receipt(await service.finish(
             requestID: requestID, leaseID: leaseID,
-            response: NativeHTTPRequestLeaseResponse(url: url, statusCode: statusCode,
-                cookieSource: source, setCookieValues: cookies,
-                redirects: response.containsKey('redirects') ? _redirects(response['redirects']) : const [],
-                locationValues: locations),
+            redirectIndex: values.containsKey('redirectIndex') ? _positiveInt(values['redirectIndex']) : 0,
+            response: _response(values['response']),
           ));
         case 'abandonNativeHTTPRequest':
           _keys(values, {'requestID', 'leaseID'}, required: {'requestID'});
@@ -81,6 +75,29 @@ final class NativeHTTPRequestLeaseBridge {
     'state': receipt.outcome.name, 'cookiesSaved': receipt.cookiesSaved,
     'cookieCount': receipt.cookieCount, 'executionAllowed': false,
   });
+
+  static NativeHTTPRequestLeaseResponse _response(Object? value) {
+    final response = _map(value);
+    const responseKeys = {'url', 'statusCode', 'cookieSource', 'setCookieValues'};
+    _keys(response, {...responseKeys, 'redirects', 'locationValues'}, required: responseKeys);
+    final statusCode = response['statusCode'];
+    if (statusCode is! int) throw const NativeHTTPRequestLeaseException('invalidArguments');
+    final source = switch (response['cookieSource']) {
+      'separatedFields' => SetCookieSource.separatedFields,
+      'foundationCombined' => SetCookieSource.foundationCombined,
+      'dioLegacyPossiblyFolded' => SetCookieSource.dioLegacyPossiblyFolded,
+      _ => throw const NativeHTTPRequestLeaseException('invalidArguments'),
+    };
+    return NativeHTTPRequestLeaseResponse(url: _url(response['url']), statusCode: statusCode,
+      cookieSource: source, setCookieValues: _strings(response['setCookieValues']),
+      redirects: response.containsKey('redirects') ? _redirects(response['redirects']) : const [],
+      locationValues: response.containsKey('locationValues') ? _strings(response['locationValues']) : null);
+  }
+
+  static int _positiveInt(Object? value) {
+    if (value is! int || value < 1) throw const NativeHTTPRequestLeaseException('invalidArguments');
+    return value;
+  }
 
   static Map<String, Object?> _map(Object? value) {
     if (value is! Map || value.keys.any((key) => key is! String)) {

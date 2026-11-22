@@ -67,8 +67,7 @@ struct PiliHTTPPolicyCapability: Sendable {
     if connect == 0 { reasons.append(.connectTimeout) }
     if send != 0 { reasons.append(.sendTimeout) }
     if transform != 0 { reasons.append(.transformTimeout) }
-    if retry.count != 0 || retryDelay < 0 || retry.installed != (retry.delayMilliseconds != nil) ||
-        (policy.followRedirects && retry.installed) {
+    if retry.count != 0 || retryDelay < 0 || retry.installed != (retry.delayMilliseconds != nil) {
       reasons.append(.retry)
     }
     if policy.followRedirects, (redirectLimit ?? -1) < 0 { reasons.append(.redirect) }
@@ -146,8 +145,7 @@ struct PiliHTTPPolicyCapability: Sendable {
          delay > Int64.max / 1_000_000 { reject(.durationOverflow) }
       if foundation { reject(.retry) }
     }
-    if policy.followRedirects && (foundation || policy.maxRedirects < 0 || policy.retry?.installed != false ||
-        policy.retry?.count != 0) { reject(.redirect) }
+    if policy.followRedirects && (foundation || policy.maxRedirects < 0) { reject(.redirect) }
     if foundation { reject(.persistence); reject(.errorResponseBody) }
     if policy.responseType != "json" { reject(.responseType) }
     if policy.decoder != .manualCompressionUTF8 || foundation {

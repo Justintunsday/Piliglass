@@ -39,10 +39,11 @@ final class PiliURLSessionHTTPClient: PiliHTTPClient, PiliHTTPTransferring {
 
   func transfer(
     _ request: URLRequest,
+    redirectLimit: Int? = nil,
     onHead: @escaping @Sendable (PiliHTTPResponseHead) -> Void = { _ in }
   ) async -> PiliHTTPTransferOutcome {
     if Task.isCancelled { return PiliHTTPTransferOutcome(head: nil, body: .failure(.cancelled)) }
-    guard let url = request.url, url.scheme?.lowercased() == "https",
+    guard redirectLimit == nil, let url = request.url, url.scheme?.lowercased() == "https",
           url.host != nil, url.user == nil, url.password == nil else {
       return PiliHTTPTransferOutcome(head: nil, body: .failure(.client(.invalidRequest)))
     }

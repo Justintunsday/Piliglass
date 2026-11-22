@@ -28,6 +28,9 @@ private actor Provider: PiliHTTPRequestContextProviding {
     if retryDenied { throw PiliHTTPRequestContextError.serviceFailure(code: "revoked") }
     return ["accept-encoding": "br,gzip", "cookie": "fixture=retry-\(attempt)"]
   }
+  func prepareRedirect(_ context: PiliHTTPRequestContext, response: PiliHTTPResponseHead) async throws -> PiliHTTPRequestContext {
+    throw Failure(message: "Unexpected interceptor redirect")
+  }
   func finish(_ context: PiliHTTPRequestContext, response: PiliHTTPRequestResponseCookies) async throws -> PiliHTTPRequestContextReceipt {
     finishes += 1; cookies = response
     if finishError { throw PiliHTTPRequestContextError.terminalTimeout }
@@ -57,7 +60,8 @@ private actor Transfer: PiliHTTPTransferring {
   init(_ mode: Mode, provider: Provider, refusals: Int = 0) {
     self.mode = mode; self.provider = provider; self.refusals = refusals
   }
-  func transfer(_ request: URLRequest, onHead: @escaping @Sendable (PiliHTTPResponseHead) -> Void) async -> PiliHTTPTransferOutcome {
+  func transfer(_ request: URLRequest, redirectLimit: Int?,
+                onHead: @escaping @Sendable (PiliHTTPResponseHead) -> Void) async -> PiliHTTPTransferOutcome {
     calls += 1
     sent.append(.now)
     sentCookies.append(request.value(forHTTPHeaderField: "Cookie"))
@@ -120,13 +124,16 @@ private struct ExecutionChecks {
         == .candidate(.init(poolGeneration: 1, connectMicroseconds: 10_000_000, receiveIdleMicroseconds: nil,
                            poolIdleMicroseconds: 15_000_000, redirectLimit: nil)), "Absent and zero idle timeout map to disabled")
     }
+    let interceptorDelays: [Int64?] = [nil, 37]
     for limit in [0, 5] {
-      let redirects = policy(followRedirects: true, maxRedirects: Int64(limit))
-      try expect(evaluator.planRawHTTP11(redirects) == .candidate(.init(poolGeneration: 1,
-        connectMicroseconds: 10_000_000, receiveIdleMicroseconds: 10_000_000, poolIdleMicroseconds: 15_000_000,
-        redirectLimit: limit)), "A configured redirect limit is distinct from disabled redirects")
-      try expect(evaluator.evaluate(redirects, evidence: .rawCandidate) == .dart([.unverifiedTransport]),
-                 "Same-origin mapping alone cannot authorize the runtime")
+      for delay in interceptorDelays {
+        let redirects = policy(delay: delay, followRedirects: true, maxRedirects: Int64(limit))
+        try expect(evaluator.planRawHTTP11(redirects) == .candidate(.init(poolGeneration: 1,
+          connectMicroseconds: 10_000_000, receiveIdleMicroseconds: 10_000_000, poolIdleMicroseconds: 15_000_000,
+          redirectLimit: limit)), "A configured redirect limit survives with or without an installed zero-retry interceptor")
+        try expect(evaluator.evaluate(redirects, evidence: .rawCandidate) == .dart([.unverifiedTransport]),
+                   "Same-origin mapping alone cannot authorize the runtime")
+      }
     }
     let rejected: [(PiliPreparedHTTPPolicy, [PiliHTTPPolicyRejection])] = [
       (policy(connect: nil), [.connectTimeout]),
@@ -134,7 +141,6 @@ private struct ExecutionChecks {
       (policy(receive: -1), [.invalidDuration]),
       (policy(receive: Int64.max), [.durationOverflow]),
       (policy(retryCount: 2, delay: 500, followRedirects: true), [.retry]),
-      (policy(delay: 37, followRedirects: true), [.retry]),
       (policy(followRedirects: true, maxRedirects: -1), [.redirect]),
       (policy(proxy: .init(host: "fixture", port: 8080)), [.proxy, .certificateTrust]),
       (policy(issues: [.decoderChanged]), [.undescribedPolicy]),

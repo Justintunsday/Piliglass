@@ -298,6 +298,30 @@ private struct NativeRequestContextChecks {
       try await error({ _ = try PiliHTTPRequestContextBridgeCodec.finishArguments(context: context, response: invalid) },
         { ($0 as? PiliHTTPRequestContextError) == .invalidRequest }, "Invalid redirect trace never reaches the bridge")
     }
+
+    let intermediate = PiliHTTPResponseHead(url: terminal, statusCode: 300, headers: [:],
+      cookieFields: .separatedFields(["intermediate=discard"]), redirects: hops, locationValues: ["/fixture/next?step=1"])
+    let reissue = try PiliHTTPRequestContextBridgeCodec.redirectRequestArguments(context: retryInstalled, head: intermediate)
+    guard case .dictionary(let intermediateFields) = reissue["response"] else {
+      throw CheckFailure(message: "Missing interceptor redirect response")
+    }
+    try expect(reissue["redirectIndex"] == .integer(1) && intermediateFields["setCookieValues"] == .array([]),
+      "Reissue sends the next index without intermediate Cookie values")
+    let target = "https://api.bilibili.com/fixture/next?step=1&limit=10"
+    let reply: [String: PiliBridgeValue] = ["state": .string("redirectPrepared"), "requestID": .string(requestID),
+      "leaseID": .string(leaseID), "redirectIndex": .integer(1), "remainingRedirects": .integer(1),
+      "url": .string(target), "headers": .dictionary(["cookie": .string("next=fixture"), "env": .string("prod")]),
+      "executionAllowed": .bool(false)]
+    let next = try PiliHTTPRequestContextBridgeCodec.decodeRedirect(.dictionary(reply), context: retryInstalled)
+    try expect(next.request.url.absoluteString == target && next.redirectIndex == 1 && next.remainingRedirects == 1,
+      "Next route uses Dart's composed query and decreased allowance")
+    for (name, value) in [("url", PiliBridgeValue.string(outside.absoluteString)), ("redirectIndex", .integer(2)),
+      ("remainingRedirects", .integer(2)), ("executionAllowed", .bool(true))] {
+      var invalid = reply
+      invalid[name] = value
+      try await error({ _ = try PiliHTTPRequestContextBridgeCodec.decodeRedirect(.dictionary(invalid), context: retryInstalled) },
+        { ($0 as? PiliHTTPRequestContextError) == .invalidResponse }, "Invalid reissue reply cannot authorize a transfer")
+    }
   }
 
   static func ordinaryChecks() async throws {

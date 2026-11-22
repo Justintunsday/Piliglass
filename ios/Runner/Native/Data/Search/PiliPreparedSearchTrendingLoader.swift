@@ -18,7 +18,16 @@ struct PiliPreparedSearchTrendingLoader: Sendable {
     executor = PiliPreparedHTTPRequestExecutor(
       provider: PiliFlutterHTTPRequestContextProvider(transport: bridge),
       transport: transport,
-      evidence: evidence
+      evidence: evidence,
+      validateResponseBody: { response in
+        let decoded = try Self.decodeBody(response.body, encoding: response.header(named: "content-encoding"),
+                                          maximumBodyBytes: maximumBodyBytes)
+        let contentType = response.header(named: "content-type")?.split(separator: ";", maxSplits: 1).first
+        let mime = contentType?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if !decoded.isEmpty, let mime, mime == "application/json" || mime == "text/json" || mime.hasSuffix("+json") {
+          _ = try JSONSerialization.jsonObject(with: decoded, options: .fragmentsAllowed)
+        }
+      }
     )
     accounts = PiliAccountFlutterRepository(invoker: PiliBridgeMethodInvoker(transport: bridge))
     self.maximumBodyBytes = maximumBodyBytes
@@ -43,10 +52,7 @@ struct PiliPreparedSearchTrendingLoader: Sendable {
       guard let head = transfer.head else { throw PiliHTTPClientError.invalidResponse }
       let response = PiliHTTPResponse(url: head.url, statusCode: head.statusCode, headers: head.headers, body: body)
       let keywords = try PiliSearchTrendingDecoder.decode(response, requestedURL: requestedURL) { body in
-        let encoding = response.header(named: "content-encoding")
-        let headers = encoding.map { ["content-encoding": [$0]] } ?? [:]
-        let bytes = try PiliHTTPBodyDecoder.decode(body: body, headers: headers, maximumOutputBytes: maximumBodyBytes)
-        return Data(PiliHTTPBodyDecoder.utf8AllowMalformed(bytes).utf8)
+        try Self.decodeBody(body, encoding: response.header(named: "content-encoding"), maximumBodyBytes: maximumBodyBytes)
       }
       // The captured owner may still receive its Cookies after selection changes.
       // Only the currently selected credential generation can supply the UI.
@@ -57,5 +63,11 @@ struct PiliPreparedSearchTrendingLoader: Sendable {
       }
       return .keywords(keywords)
     }
+  }
+
+  private static func decodeBody(_ body: Data, encoding: String?, maximumBodyBytes: Int) throws -> Data {
+    let headers = encoding.map { ["content-encoding": [$0]] } ?? [:]
+    let bytes = try PiliHTTPBodyDecoder.decode(body: body, headers: headers, maximumOutputBytes: maximumBodyBytes)
+    return Data(PiliHTTPBodyDecoder.utf8AllowMalformed(bytes).utf8)
   }
 }

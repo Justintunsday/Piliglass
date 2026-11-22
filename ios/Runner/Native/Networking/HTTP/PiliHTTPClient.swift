@@ -84,6 +84,7 @@ protocol PiliHTTPTransferring: Sendable {
   // Observed head callbacks precede the returned outcome.
   func transfer(
     _ request: URLRequest,
+    redirectLimit: Int?,
     onHead: @escaping @Sendable (PiliHTTPResponseHead) -> Void
   ) async -> PiliHTTPTransferOutcome
 }
