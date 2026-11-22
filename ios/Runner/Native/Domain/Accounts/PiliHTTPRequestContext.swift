@@ -43,14 +43,17 @@ struct PiliHTTPRequestResponseCookies: Sendable, Equatable {
   let cookieSource: PiliHTTPRequestCookieSource
   let setCookieValues: [String]
   let redirects: [PiliHTTPRedirectHop]
+  // Nil when the transport does not expose ordered terminal Location fields.
+  let locationValues: [String]?
 
   init(url: URL, statusCode: Int, cookieSource: PiliHTTPRequestCookieSource, setCookieValues: [String],
-       redirects: [PiliHTTPRedirectHop] = []) {
+       redirects: [PiliHTTPRedirectHop] = [], locationValues: [String]? = nil) {
     self.url = url
     self.statusCode = statusCode
     self.cookieSource = cookieSource
     self.setCookieValues = setCookieValues
     self.redirects = redirects
+    self.locationValues = locationValues
   }
 }
 

@@ -86,14 +86,18 @@ final class NativeHTTPRequestLeaseResponse {
     required this.cookieSource,
     Iterable<String> setCookieValues = const [],
     Iterable<NativeHTTPRequestRedirectHop> redirects = const [],
+    Iterable<String>? locationValues,
   }) : setCookieValues = List.unmodifiable(setCookieValues),
-       redirects = List.unmodifiable(redirects);
+       redirects = List.unmodifiable(redirects),
+       locationValues = locationValues == null ? null : List.unmodifiable(locationValues);
 
   final Uri url;
   final int statusCode;
   final SetCookieSource cookieSource;
   final List<String> setCookieValues;
   final List<NativeHTTPRequestRedirectHop> redirects;
+  // Empty means the raw terminal response had no Location fields.
+  final List<String>? locationValues;
 }
 
 final class NativeHTTPRequestLeaseReceipt {
@@ -354,7 +358,7 @@ final class NativeHTTPRequestLeaseService {
       ..context = null;
     var outcome = NativeHTTPRequestLeaseOutcome.consumed;
     try {
-      final cookieUrl = _cookieUrl(context.snapshot, response);
+      final cookieUrls = _cookieUrls(context.snapshot, response);
       if (!_owns(context)) {
         outcome = _closed ? NativeHTTPRequestLeaseOutcome.closed : NativeHTTPRequestLeaseOutcome.revoked;
         return NativeHTTPRequestLeaseReceipt(outcome);
@@ -386,13 +390,15 @@ final class NativeHTTPRequestLeaseService {
         return NativeHTTPRequestLeaseReceipt(outcome);
       }
       try {
-        // Pinned CookieJar mutates before this Future completes. Do not defer it.
-        final saving = accountCookieMutationPort.saveResponseCookies(account, cookieUrl, cookies);
-        Accounts.notifyCookieMutation(account);
-        await _awaitCookieSave(account, cookieUrl, saving);
-        if (!_owns(context)) {
-          outcome = _closed ? NativeHTTPRequestLeaseOutcome.closed : NativeHTTPRequestLeaseOutcome.revoked;
-          return NativeHTTPRequestLeaseReceipt(outcome, cookiesSaved: true, cookieCount: cookies.length);
+        for (final cookieUrl in cookieUrls) {
+          // Pinned CookieJar mutates before this Future completes. Do not defer it.
+          final saving = accountCookieMutationPort.saveResponseCookies(account, cookieUrl, cookies);
+          Accounts.notifyCookieMutation(account);
+          await _awaitCookieSave(account, cookieUrl, saving);
+          if (!_owns(context)) {
+            outcome = _closed ? NativeHTTPRequestLeaseOutcome.closed : NativeHTTPRequestLeaseOutcome.revoked;
+            return NativeHTTPRequestLeaseReceipt(outcome, cookiesSaved: true, cookieCount: cookies.length);
+          }
         }
         final persisting = account.onChange();
         await _awaitAccountPersistence(account, persisting);
@@ -415,43 +421,62 @@ final class NativeHTTPRequestLeaseService {
     }
   }
 
-  static Uri _cookieUrl(NativeHTTPRequestLeaseSnapshot snapshot, NativeHTTPRequestLeaseResponse response) {
+  static const _autoRedirectStatuses = {301, 302, 303, 307, 308};
+
+  static List<Uri> _cookieUrls(NativeHTTPRequestLeaseSnapshot snapshot, NativeHTTPRequestLeaseResponse response) {
     const invalid = NativeHTTPRequestLeaseException('invalidResponse');
     final original = snapshot.url;
     final status = response.statusCode;
     if (status < 100 || status > 599) throw invalid;
     final redirects = response.redirects;
-    if (redirects.isEmpty) {
-      if (response.url.toString() != original.toString()) throw invalid;
-      return original;
-    }
     final limit = snapshot.policy.redirectLimit;
-    // A terminal 3xx may require additional Location-scoped writes in Dio.
-    if (limit == null || redirects.length > limit ||
-        response.cookieSource != SetCookieSource.separatedFields ||
-        status < 200 || (status >= 300 && status < 400)) {
-      throw invalid;
-    }
+    final terminalRedirect = status >= 300 && status < 400;
+    final locations = response.locationValues;
+    final separated = response.cookieSource == SetCookieSource.separatedFields;
     bool inOrigin(Uri url) => url.scheme == original.scheme && url.host == original.host &&
         url.port == original.port && url.userInfo.isEmpty && !url.hasFragment;
 
-    var current = original;
-    final visited = <Uri>{};
     try {
-      for (final hop in redirects) {
-        if (!const {301, 302, 303, 307, 308}.contains(hop.statusCode) || hop.location.isEmpty) {
+      final Uri realUri;
+      if (redirects.isEmpty) {
+        if (response.url.toString() != original.toString()) throw invalid;
+        realUri = original;
+      } else {
+        if (limit == null || redirects.length > limit || !separated || status < 200 ||
+            (terminalRedirect && locations == null)) {
           throw invalid;
         }
-        final next = current.resolve(hop.location);
-        if (!inOrigin(next) || next != hop.url || !visited.add(next)) throw invalid;
-        current = next;
+        var current = original;
+        final visited = <Uri>{};
+        for (final hop in redirects) {
+          if (!_autoRedirectStatuses.contains(hop.statusCode) || hop.location.isEmpty) throw invalid;
+          final next = current.resolve(hop.location);
+          if (!inOrigin(next) || next != hop.url || !visited.add(next)) throw invalid;
+          current = next;
+        }
+        if (current != response.url) throw invalid;
+        realUri = Uri.parse(redirects.last.location);
       }
-      if (current != response.url) throw invalid;
-      // Dio's realUri is the last Location reference. AccountManager resolves
-      // that reference against the original request when it persists Cookies.
-      final cookieUrl = original.resolve(redirects.last.location);
-      if (!inOrigin(cookieUrl)) throw invalid;
-      return cookieUrl;
+      // Dio's realUri is the last Location reference. Only the primary write
+      // resolves it against the original request. Extra writes use it as-is.
+      final primary = original.resolveUri(realUri);
+      if (!inOrigin(primary)) throw invalid;
+      final destinations = [primary];
+      if (locations == null) return destinations;
+      if (!terminalRedirect || !separated ||
+          (limit != null && _autoRedirectStatuses.contains(status)) ||
+          (locations.isNotEmpty && limit != null && limit > 0 && snapshot.policy.retryInstalled != false)) {
+        // The RetryInterceptor uses the original allowance even if the
+        // adapter used all of its own redirect hops.
+        throw invalid;
+      }
+      for (final location in locations) {
+        if (location.contains('\r') || location.contains('\n')) throw invalid;
+        final destination = realUri.resolve(location);
+        if (!inOrigin(destination)) throw invalid;
+        destinations.add(destination);
+      }
+      return destinations;
     } on FormatException {
       throw invalid;
     }

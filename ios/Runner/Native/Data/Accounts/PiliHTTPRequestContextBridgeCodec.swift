@@ -87,10 +87,12 @@ enum PiliHTTPRequestContextBridgeCodec {
       throw PiliHTTPRequestContextError.invalidRequest
     }
     let redirects = try redirectArguments(response, original: expectedURL, policy: context.policy)
+    let locations = try terminalLocationArguments(response, original: expectedURL, policy: context.policy)
     var fields: [String: PiliBridgeValue] = ["url": .string(response.url.absoluteString),
       "statusCode": .integer(Int64(response.statusCode)), "cookieSource": .string(response.cookieSource.rawValue),
       "setCookieValues": .array(response.setCookieValues.map(PiliBridgeValue.string))]
     if !redirects.isEmpty { fields["redirects"] = .array(redirects) }
+    if let locations { fields["locationValues"] = .array(locations) }
     return ["requestID": .string(requestID), "leaseID": .string(context.leaseID), "response": .dictionary(fields)]
   }
 
@@ -104,21 +106,16 @@ enum PiliHTTPRequestContextBridgeCodec {
       return []
     }
     guard policy.followRedirects, Int64(response.redirects.count) <= policy.maxRedirects,
-          response.cookieSource == .separatedFields,
-          response.statusCode >= 200, !(300..<400).contains(response.statusCode) else {
+          response.cookieSource == .separatedFields, response.statusCode >= 200 else {
       throw PiliHTTPRequestContextError.invalidRequest
     }
 
-    func inOrigin(_ url: URL) -> Bool {
-      url.scheme?.lowercased() == original.scheme && url.host?.lowercased() == original.host &&
-        (url.port ?? 443) == (original.port ?? 443) && url.user == nil && url.password == nil && url.fragment == nil
-    }
     var current = original
     var visited = Set<String>()
     let encoded: [PiliBridgeValue] = try response.redirects.map { hop in
-      guard [301, 302, 303, 307, 308].contains(hop.statusCode), !hop.location.isEmpty,
+      guard autoRedirectStatuses.contains(hop.statusCode), !hop.location.isEmpty,
             let resolved = URL(string: hop.location, relativeTo: current)?.absoluteURL,
-            inOrigin(resolved), resolved.absoluteString == hop.url.absoluteString,
+            inOrigin(resolved, of: original), resolved.absoluteString == hop.url.absoluteString,
             visited.insert(resolved.absoluteString).inserted else {
         throw PiliHTTPRequestContextError.invalidRequest
       }
@@ -127,10 +124,45 @@ enum PiliHTTPRequestContextBridgeCodec {
                           "url": .string(hop.url.absoluteString)])
     }
     guard current.absoluteString == response.url.absoluteString,
-          let cookieURL = URL(string: last.location, relativeTo: original)?.absoluteURL, inOrigin(cookieURL) else {
+          let cookieURL = URL(string: last.location, relativeTo: original)?.absoluteURL,
+          inOrigin(cookieURL, of: original) else {
       throw PiliHTTPRequestContextError.invalidRequest
     }
     return encoded
+  }
+
+  private static let autoRedirectStatuses: Set<Int> = [301, 302, 303, 307, 308]
+
+  private static func terminalLocationArguments(
+    _ response: PiliHTTPRequestResponseCookies, original: URL, policy: PiliPreparedHTTPPolicy
+  ) throws -> [PiliBridgeValue]? {
+    let isRedirect = (300..<400).contains(response.statusCode)
+    guard let locations = response.locationValues else {
+      guard !isRedirect || response.redirects.isEmpty else { throw PiliHTTPRequestContextError.invalidRequest }
+      return nil
+    }
+    guard isRedirect, response.cookieSource == .separatedFields,
+          !(policy.followRedirects && autoRedirectStatuses.contains(response.statusCode)),
+          locations.isEmpty || !policy.followRedirects || policy.maxRedirects <= 0 || policy.retry?.installed == false else {
+      throw PiliHTTPRequestContextError.invalidRequest
+    }
+    // Dio's extra writes resolve against the last raw Location reference.
+    guard let base = URL(string: response.redirects.last?.location ?? original.absoluteString) else {
+      throw PiliHTTPRequestContextError.invalidRequest
+    }
+    return try locations.map { location in
+      guard !location.utf8.contains(0x0D), !location.utf8.contains(0x0A),
+            let destination = location.isEmpty ? base : URL(string: location, relativeTo: base)?.absoluteURL,
+            inOrigin(destination, of: original) else {
+        throw PiliHTTPRequestContextError.invalidRequest
+      }
+      return .string(location)
+    }
+  }
+
+  private static func inOrigin(_ url: URL, of original: URL) -> Bool {
+    url.scheme?.lowercased() == original.scheme && url.host?.lowercased() == original.host &&
+      (url.port ?? 443) == (original.port ?? 443) && url.user == nil && url.password == nil && url.fragment == nil
   }
 
   static func decodeReceipt(_ value: PiliBridgeValue) throws -> PiliHTTPRequestContextReceipt {

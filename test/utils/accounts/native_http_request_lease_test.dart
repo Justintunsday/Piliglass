@@ -51,12 +51,14 @@ NativeHTTPRequestLeaseResponse _response(
   SetCookieSource source = SetCookieSource.separatedFields,
   Uri? url,
   Iterable<NativeHTTPRequestRedirectHop> redirects = const [],
+  Iterable<String>? locations,
 }) => NativeHTTPRequestLeaseResponse(
   url: url ?? snapshot.url,
   statusCode: status,
   cookieSource: source,
   setCookieValues: cookies,
   redirects: redirects,
+  locationValues: locations,
 );
 
 Future<NativeHTTPRequestLeaseReceipt> _finish(
@@ -560,6 +562,94 @@ void main() {
     expect(result['state'], 'finished');
   });
 
+  test('terminal 302 writes every Location in order to the bound account', () async {
+    final original = await select(101);
+    dio.options.followRedirects = false;
+    final destinations = <Uri>[];
+    final persisted = <Account>[];
+    final service = create(
+      awaitCookieSave: (account, url, saving) async {
+        expect(account, same(original));
+        await saving;
+        destinations.add(url);
+      },
+      awaitAccountPersistence: (account, saving) async {
+        await saving;
+        persisted.add(account);
+      },
+    );
+    final bridge = NativeHTTPRequestLeaseBridge(service: service);
+    final snapshot = await service.prepare(requestID: _requestID());
+    final current = await select(202);
+    final first = snapshot.url.resolve('/fixture/comma,kept/next');
+    final second = snapshot.url.resolve('/fixture/second/next');
+    final command = {
+      ..._finishCommand(snapshot),
+      'response': {
+        'url': snapshot.url.toString(), 'statusCode': 302,
+        'cookieSource': 'separatedFields', 'setCookieValues': ['lease_cookie=terminal'],
+        'locationValues': ['/fixture/comma,kept/next', second.toString(), '/fixture/comma,kept/next'],
+      },
+    };
+    final receipt = await bridge.handle('finishNativeHTTPRequest', command);
+    expect(receipt['state'], 'finished');
+    expect(receipt['cookieCount'], 1);
+    expect(destinations, [snapshot.url, first, second, first]);
+    expect(persisted, [same(original)]);
+    for (final url in [snapshot.url, first, second]) {
+      expect(await _cookie(original, url, 'lease_cookie'), 'terminal');
+      expect(await _cookie(current, url, 'lease_cookie'), isNull);
+    }
+    expect((await bridge.handle('finishNativeHTTPRequest', command))['state'], 'consumed');
+    expect(destinations, hasLength(4));
+  });
+
+  test('terminal Location validation rejects the entire batch before any Cookie write', () async {
+    final owner = await select(101);
+    dio.options.followRedirects = false;
+    final service = create();
+    const first = '/fixture/allowed/next';
+    for (final location in [
+      'https://other.example/next', 'https://api.bilibili.com:8443/next',
+      'http://api.bilibili.com/next', 'https://user@api.bilibili.com/next', '$first#fragment',
+      '$first\r\ncontinued',
+    ]) {
+      final snapshot = await service.prepare(requestID: _requestID());
+      final revision = Accounts.requestRevision;
+      final response = _response(snapshot, status: 302, locations: [first, location]);
+      await expectLater(service.finish(requestID: snapshot.requestID, leaseID: snapshot.leaseID, response: response),
+        throwsA(_leaseError('invalidResponse')), reason: location);
+      expect(Accounts.requestRevision, revision);
+      expect(await _cookie(owner, snapshot.url, 'lease_cookie'), isNull);
+      expect(await _cookie(owner, snapshot.url.resolve(first), 'lease_cookie'), isNull);
+      expect((await _finish(service, snapshot)).outcome.name, 'consumed');
+    }
+  });
+
+  test('credential replacement during terminal Cookie save prevents later Location writes', () async {
+    final original = await select(101, session: 'old');
+    dio.options.followRedirects = false;
+    final pause = _CompletionPause();
+    final service = create(awaitCookieSave: pause.save);
+    final snapshot = await service.prepare(requestID: _requestID());
+    const location = '/fixture/destination/next';
+    final finishing = service.finish(requestID: snapshot.requestID, leaseID: snapshot.leaseID,
+      response: _response(snapshot, status: 302, cookies: ['lease_cookie=terminal'], locations: [location]));
+    await pause.entered.future;
+    try {
+      final replacement = _account(101, session: 'replacement');
+      await Accounts.installCredentials(replacement);
+      expect(Accounts.account.get('101'), same(replacement));
+    } finally {
+      pause.release.complete();
+    }
+    final receipt = await finishing;
+    expect(receipt.outcome.name, 'revoked');
+    expect(receipt.cookieCount, 1);
+    expect(pause.calls, 1);
+    expect(await _cookie(original, snapshot.url.resolve(location), 'lease_cookie'), isNull);
+  });
+
   test('Foundation ambiguous field refuses whole batch instead of speculating', () async {
     final account = await select(101);
     final service = create();
@@ -721,6 +811,9 @@ void main() {
       {...response, 'statusCode': 200.0}, {...response, 'url': 1},
       {...response, 'setCookieValues': ['valid=one', 1]},
       {...response, 'location': 'https://passport.bilibili.com'},
+      {...response, 'locationValues': null},
+      {...response, 'locationValues': '/fixture'},
+      {...response, 'locationValues': ['/fixture', 1]},
       {...response, 'cookieSource': 'unproven'},
     ]) {
       final result = await bridge.handle('finishNativeHTTPRequest', {...command, 'response': invalid});

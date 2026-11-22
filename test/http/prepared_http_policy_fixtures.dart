@@ -258,6 +258,52 @@ void runPreparedHTTPPolicyFixtures({required bool http2}) {
       Request.dio.interceptors.remove(capture);
     }
   });
+  test('terminal 300 uses the original allowance and the raw legacy base', () async {
+    Request.dio.options
+      ..followRedirects = true
+      ..maxRedirects = 1;
+    final service = create();
+    final bridge = NativeHTTPRequestLeaseBridge(service: service);
+    Future<Map<String, Object?>> finish(NativeHTTPRequestLeaseSnapshot snapshot, List<String> locations) {
+      const hop = 'nested/last';
+      final finalUrl = snapshot.url.resolve(hop).toString();
+      return bridge.handle('finishNativeHTTPRequest', {
+        'requestID': snapshot.requestID, 'leaseID': snapshot.leaseID,
+        'response': {
+          'url': finalUrl, 'statusCode': 300, 'cookieSource': 'separatedFields',
+          'setCookieValues': ['terminal_fixture=saved'],
+          'redirects': [{'statusCode': 302, 'location': hop, 'url': finalUrl}],
+          'locationValues': locations,
+        },
+      });
+    }
+
+    Request.dio.interceptors
+      ..removeWhere((value) => value is RetryInterceptor)
+      ..add(RetryInterceptor(Request.dio, 0, 500));
+    final retryInstalled = await service.prepare(requestID: _requestID());
+    expect(retryInstalled.policy.retryInstalled, isTrue);
+    expect(retryInstalled.policy.retryLimit, 0);
+    Request.dio.interceptors.removeWhere((value) => value is RetryInterceptor);
+    final target = retryInstalled.url.resolve('/fixture/destination/next');
+    final revision = Accounts.requestRevision;
+    expect((await finish(retryInstalled, [target.toString()]))['code'], 'invalidResponse');
+    final relative = await service.prepare(requestID: _requestID());
+    expect(relative.policy.retryInstalled, isFalse);
+    expect((await finish(relative, [target.toString(), 'relative/next']))['code'], 'invalidResponse');
+    expect(Accounts.requestRevision, revision);
+
+    Request.dio.interceptors.add(RetryInterceptor(Request.dio, 2, 500));
+    final noLocation = await service.prepare(requestID: _requestID());
+    final receipt = await finish(noLocation, []);
+    expect(receipt['state'], 'finished');
+    expect(receipt['cookieCount'], 1);
+    expect((await account.cookieJar.loadForRequest(noLocation.url.resolve('nested/last')))
+        .any((cookie) => cookie.name == 'terminal_fixture'), isTrue);
+    expect((await account.cookieJar.loadForRequest(target)).any((cookie) => cookie.name == 'terminal_fixture'), isFalse);
+    expect(service.liveLeaseCount, 0);
+  });
+
   test('real production bridge exports composed policies for Swift consumption', () async {
     final cases = <Map<String, Object?>>[];
     Future<void> export(String name, {bool h11 = false}) async {

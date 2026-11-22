@@ -37,6 +37,7 @@ def cases():
         ('idle-timeout', ['idle=head; Path=/'], 200, 'idle-timeout', body),
     ]
     return [dict(id=name, wireValues=cookies, statusCode=status, mode=mode,
+                 locationValues=['/unexpected-redirect,kept', 'unfollowed/next'] if name == 'redirect' else None,
                  expectedBodyBase64=base64.b64encode(data).decode(), body=data)
             for name, cookies, status, mode, data in values]
 
@@ -53,6 +54,8 @@ def redirects():
         'follow-stage/terminal': ('follow-nested', 200, None, ['final=retained']),
         'follow-forbidden': ('follow-forbidden', 303, 'follow-denied', ['first=ignored']),
         'follow-denied': ('follow-forbidden', 403, None, ['denied=retained; Path=/']),
+        'follow-terminal': ('follow-terminal', 302, 'follow-terminal-last', ['first=ignored']),
+        'follow-terminal-last': ('follow-terminal', 300, None, ['terminal=retained']),
         'follow-limit': ('follow-limit', 308, 'follow-limit-next', ['first=ignored']),
         'follow-limit-next': ('follow-limit', 302, 'unexpected-redirect', ['next=ignored']),
         'follow-zero': ('follow-zero', 302, 'unexpected-redirect', ['zero=ignored']),
@@ -62,10 +65,12 @@ def redirects():
         'follow-other-target': ('follow-other-port', 200, None, ['other=retained; Path=/']),
         'follow-cancel': ('follow-cancel', 302, 'unexpected-redirect', ['pending=ignored']),
     }
+    terminal_locations = {'follow-terminal-last': ['/unused,one/next', '/unused/two/next']}
     modes = [
         (2, ['follow-chain', 'follow-next?hop=1', 'follow-result?limit=10'], None, None),
         (2, ['follow-nested', 'follow-stage/nested', 'follow-stage/terminal'], None, None),
         (1, ['follow-forbidden', 'follow-denied'], None, 'badResponse'),
+        (1, ['follow-terminal', 'follow-terminal-last'], None, 'badResponse'),
         (1, ['follow-limit', 'follow-limit-next'], 'redirectLimit', 'unknown'),
         (0, ['follow-zero'], 'redirectLimit', 'unknown'),
         (5, ['follow-loop', 'follow-loop'], 'redirectLoop', 'unknown'),
@@ -83,13 +88,15 @@ def redirects():
             redirectLimit=limit, nativeError=native_error, dartError=dart_error,
             nativeTargets=native_targets, dartTargets=paths,
             redirectLocations=[routes[path][2] for path in paths[:-1]] if native_error is None else None,
+            locationValues=terminal_locations.get(paths[-1]),
             legacyCookieTarget='terminal' if case_id == 'follow-nested' else paths[-1],
             statusCode=status if terminal else None, wireValues=cookies if terminal else [],
             expectedBodyBase64=base64.b64encode(body).decode() if terminal else None))
     return fixtures, {
         path: dict(redirectCase=case_id, statusCode=status, location=location, wireValues=cookies,
+                   locationValues=terminal_locations.get(path),
                    mode='pending' if case_id == 'follow-cancel' else 'keepalive',
-                   body=body if status in (200, 403) else b'intermediate redirect body\n')
+                   body=body if status in (200, 300, 403) else b'intermediate redirect body\n')
         for path, (case_id, status, location, cookies) in routes.items()
     }
 
@@ -164,7 +171,7 @@ class Handler(BaseHTTPRequestHandler):
                        ('Content-Type', 'application/octet-stream'),
                        ('Connection', 'keep-alive' if mode == 'keepalive' else 'close')]
             if mode == 'gzip': fields += [('Content-Encoding', 'gzip')]
-            if name == 'redirect': fields += [('Location', f'http://127.0.0.1:{self.server.server_port}/unexpected-redirect')]
+            fields.extend(('Location', value) for value in (item.get('locationValues') or ()))
             if location := item.get('location'):
                 if location == '@other-port':
                     child = '/dart' if client == 'dart' else ''
@@ -279,8 +286,8 @@ def main():
         summary.update(status='passed', wireCases=len(observations), actualDartWireCases=len(dart_observations),
                        redirectCases=len(redirect_fixtures), initialConnectionRefusal=True,
                        ios16Device=True, ios16Simulator=True,
-                       knownPending=['br decoder','H2/TLS/proxy/pool expiry','retry',
-                                     'redirect response Cookie ownership','actual API/account acceptance'])
+                       knownPending=['br decoder','H2/TLS/proxy/pool expiry','other Dio retries and interceptor redirects',
+                                     'cross-origin redirects','actual API/account acceptance'])
     except (OSError,RuntimeError,subprocess.TimeoutExpired) as error:
         summary['reason']=str(error); print(f'FAIL raw HTTP: {error}')
     (OUTPUT/'summary.json').write_text(json.dumps(summary,indent=2)+'\n',encoding='utf-8')

@@ -254,17 +254,24 @@ private struct NativeRequestContextChecks {
     }
     policy["followRedirects"] = .bool(true)
     policy["maxRedirects"] = .integer(2)
+    policy["issues"] = .array([.string("poolNotInstalled"), .string("decoderChanged")])
+    policy["retry"] = .dictionary(["installed": .bool(false), "count": .integer(0), "delayMilliseconds": .null])
     payload["policy"] = .dictionary(policy)
     let allowed = try PiliHTTPRequestContextBridgeCodec.decodePrepared(.dictionary(payload), requestID: requestID,
+      purpose: .searchTrending(limit: 10))
+    policy["retry"] = .dictionary(["installed": .bool(true), "count": .integer(0), "delayMilliseconds": .integer(500)])
+    payload["policy"] = .dictionary(policy)
+    let retryInstalled = try PiliHTTPRequestContextBridgeCodec.decodePrepared(.dictionary(payload), requestID: requestID,
       purpose: .searchTrending(limit: 10))
     let stage = URL(string: "https://api.bilibili.com/fixture/stage")!
     let terminal = URL(string: "https://api.bilibili.com/fixture/result")!
     let hops = [PiliHTTPRedirectHop(statusCode: 302, location: "/fixture/stage", url: stage),
                 .init(statusCode: 307, location: "result", url: terminal)]
-    func response(_ trace: [PiliHTTPRedirectHop]? = nil, url: URL? = nil, status: Int = 403)
+    func response(_ trace: [PiliHTTPRedirectHop]? = nil, url: URL? = nil, status: Int = 403,
+                  locations: [String]? = nil)
       -> PiliHTTPRequestResponseCookies {
       .init(url: url ?? terminal, statusCode: status, cookieSource: .separatedFields,
-            setCookieValues: ["host=final"], redirects: trace ?? hops)
+            setCookieValues: ["host=final"], redirects: trace ?? hops, locationValues: locations)
     }
     let arguments = try PiliHTTPRequestContextBridgeCodec.finishArguments(context: allowed, response: response())
     guard case .dictionary(let encoded) = arguments["response"], case .array(let trace) = encoded["redirects"] else {
@@ -273,9 +280,20 @@ private struct NativeRequestContextChecks {
     try expect(trace == hops.map { .dictionary(["statusCode": .integer(Int64($0.statusCode)),
       "location": .string($0.location), "url": .string($0.url.absoluteString)]) },
       "Finish retains original Location, status and resolved URL for each hop")
+    let noLocation = try PiliHTTPRequestContextBridgeCodec.finishArguments(context: retryInstalled,
+      response: response(status: 300, locations: []))
+    guard case .dictionary(let terminalFields) = noLocation["response"] else {
+      throw CheckFailure(message: "Missing terminal redirect fields")
+    }
+    try expect(terminalFields["locationValues"] == .array([]), "Empty raw Location list proves no interceptor redirect")
     let outside = URL(string: "https://api.bilibili.com:8443/fixture/result")!
     for (context, invalid) in [(disabled, response()), (allowed, response(url: endpoint)),
       (allowed, response(status: 302)), (allowed, response([hops[0], hops[0]], url: stage)),
+      (allowed, response(status: 302, locations: [])),
+      (allowed, response(status: 300, locations: ["/fixture/relative"])),
+      (retryInstalled, response(status: 300, locations: [terminal.absoluteString])),
+      (disabled, response([], url: endpoint, status: 302, locations: ["/fixture/allowed", outside.absoluteString])),
+      (disabled, response([], url: endpoint, status: 302, locations: ["/fixture/invalid\r\nfield"])),
       (allowed, response([hops[0], .init(statusCode: 302, location: outside.absoluteString, url: outside)], url: outside))] {
       try await error({ _ = try PiliHTTPRequestContextBridgeCodec.finishArguments(context: context, response: invalid) },
         { ($0 as? PiliHTTPRequestContextError) == .invalidRequest }, "Invalid redirect trace never reaches the bridge")

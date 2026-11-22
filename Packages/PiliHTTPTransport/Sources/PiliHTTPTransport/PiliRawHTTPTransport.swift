@@ -27,6 +27,9 @@ public struct PiliRawHTTPHead: Sendable, Equatable {
   public var setCookieFields: [String] {
     fields.filter { $0.name.lowercased() == "set-cookie" }.map(\.value)
   }
+  public var locationFields: [String] {
+    fields.filter { $0.name.lowercased() == "location" }.map(\.value)
+  }
 }
 
 public enum PiliRawHTTPFailure: String, Error, Sendable, Equatable {
@@ -196,8 +199,8 @@ public final class PiliRawHTTPTransport: Sendable {
                                   followed: inout Set<URL>) throws -> PiliRawHTTPRedirectHop? {
     guard let limit, [301, 302, 303, 307, 308].contains(head.statusCode) else { return nil }
     guard followed.count < limit else { throw PiliRawHTTPFailure.redirectLimit }
-    let locations = head.fields.filter { $0.name.lowercased() == "location" }
-    guard locations.count == 1, let location = locations.first?.value, !location.isEmpty,
+    let locations = head.locationFields
+    guard locations.count == 1, let location = locations.first, !location.isEmpty,
           let target = URL(string: location, relativeTo: head.url)?.absoluteURL,
           target.user == nil, target.password == nil, target.fragment == nil else {
       throw PiliRawHTTPFailure.invalidRedirect

@@ -154,8 +154,19 @@ private actor FixtureTransfer: PiliHTTPTransferring {
         return field
       }
       let redirects = try Self.redirects(response["redirects"])
+      let locations: [String]?
+      if let rawLocations = response["locationValues"] {
+        guard case .array(let values) = rawLocations else { throw FixtureError(message: "Expected Dart Location list") }
+        locations = try values.map { raw in
+          guard case .string(let field) = raw else { throw FixtureError(message: "Invalid Dart Location field") }
+          return field
+        }
+      } else {
+        locations = nil
+      }
       head = PiliHTTPResponseHead(url: url, statusCode: statusCode, headers: ["content-encoding": "gzip"],
-                                  cookieFields: .separatedFields(cookieFields), redirects: redirects)
+                                  cookieFields: .separatedFields(cookieFields), redirects: redirects,
+                                  locationValues: locations)
     } else if fixture.usesDart || fixture.name == "retryRevoked" {
       head = nil
     } else {
@@ -209,7 +220,8 @@ private struct PreparedSearchTrendingChecks {
       }
       let fixtures = try cases.map(TrendingFixture.init)
       let expected: Set<String> = ["selected", "switched", "revoked", "httpError", "corrupt", "declined", "redirects",
-                                   "redirected", "redirectedSwitched", "redirectedHTTPError", "retried", "retryRevoked"]
+                                   "redirected", "redirectedSwitched", "redirectedHTTPError", "retried", "retryRevoked",
+                                   "terminalRedirect", "redirectedTerminal"]
       guard fixtures.count == expected.count, Set(fixtures.map(\.name)) == expected else {
         throw FixtureError(message: "Missing or repeated Dart trending scenarios")
       }
@@ -262,6 +274,9 @@ private struct PreparedSearchTrendingChecks {
       valid = (failure as? PiliHTTPRequestContextError) == .serviceFailure(code: "revoked") && result.trending.isEmpty
     case "httpError", "redirectedHTTPError":
       valid = (failure as? PiliSearchTrendingError) == .httpStatus(403) && result.trending.isEmpty
+    case "terminalRedirect", "redirectedTerminal":
+      valid = (failure as? PiliSearchTrendingError) == .httpStatus(fixture.name == "terminalRedirect" ? 302 : 300)
+        && result.trending.isEmpty
     case "corrupt":
       valid = (failure as? PiliHTTPBodyDecodeFailure) == .malformedCompression && result.trending.isEmpty
     case "declined", "redirects":

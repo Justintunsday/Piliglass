@@ -39,14 +39,16 @@ struct PiliHTTPResponseHead: Sendable, Equatable {
   let headers: [String: String]
   let cookieFields: PiliHTTPResponseCookieFields
   let redirects: [PiliHTTPRedirectHop]
+  let locationValues: [String]?
 
   init(url: URL, statusCode: Int, headers: [String: String], cookieFields: PiliHTTPResponseCookieFields,
-       redirects: [PiliHTTPRedirectHop] = []) {
+       redirects: [PiliHTTPRedirectHop] = [], locationValues: [String]? = nil) {
     self.url = url
     self.statusCode = statusCode
     self.headers = headers
     self.cookieFields = cookieFields
     self.redirects = redirects
+    self.locationValues = locationValues
   }
 }
 

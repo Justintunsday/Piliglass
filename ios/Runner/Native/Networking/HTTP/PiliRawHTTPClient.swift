@@ -43,8 +43,10 @@ struct PiliRawHTTPClient: PiliHTTPTransferring {
       let name = field.name.lowercased()
       if headers[name] == nil { headers[name] = field.value }
     }
+    let locations = (300..<400).contains(value.statusCode) ? value.locationFields : nil
     return .init(url: value.url, statusCode: value.statusCode, headers: headers,
                  cookieFields: .separatedFields(value.setCookieFields),
-                 redirects: value.redirects.map { .init(statusCode: $0.statusCode, location: $0.location, url: $0.url) })
+                 redirects: value.redirects.map { .init(statusCode: $0.statusCode, location: $0.location, url: $0.url) },
+                 locationValues: locations)
   }
 }

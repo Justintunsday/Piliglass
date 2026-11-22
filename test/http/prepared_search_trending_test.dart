@@ -28,6 +28,8 @@ enum _Scenario {
   redirectedHTTPError,
   retried,
   retryRevoked,
+  terminalRedirect,
+  redirectedTerminal,
 }
 
 LoginAccount _account(int mid, String session) => LoginAccount(
@@ -72,7 +74,8 @@ void main() {
         await Accounts.set(AccountType.recommend, original);
 
         final redirected = switch (scenario) {
-          _Scenario.redirected || _Scenario.redirectedSwitched || _Scenario.redirectedHTTPError => true,
+          _Scenario.redirected || _Scenario.redirectedSwitched ||
+          _Scenario.redirectedHTTPError || _Scenario.redirectedTerminal => true,
           _ => false,
         };
         final followsRedirects = redirected || scenario == _Scenario.redirects;
@@ -115,9 +118,22 @@ void main() {
         final url = Uri.parse(prepared['url'] as String);
         final responseUrl = redirected ? url.resolve('/fixture/nested/response?limit=10') : url;
         final cookieUrl = redirected ? url.resolve('response?limit=10') : url;
-        final status = scenario == _Scenario.httpError || scenario == _Scenario.redirectedHTTPError ? 403 : 200;
+        final status = switch (scenario) {
+          _Scenario.httpError || _Scenario.redirectedHTTPError => 403,
+          _Scenario.terminalRedirect => 302,
+          _Scenario.redirectedTerminal => 300,
+          _ => 200,
+        };
+        final locations = switch (scenario) {
+          _Scenario.terminalRedirect => ['/fixture/comma,kept/next', '/fixture/second/next'],
+          _Scenario.redirectedTerminal => [url.resolve('/fixture/absolute/next').toString()],
+          _ => null,
+        };
         final fields = [
-          if (redirected) 'trending_fixture=endpoint' else 'trending_fixture=endpoint; Path=/x/v2/search',
+          if (redirected || locations != null)
+            'trending_fixture=endpoint'
+          else
+            'trending_fixture=endpoint; Path=/x/v2/search',
           'trending_fixture=root; Domain=.bilibili.com; Path=/',
         ];
         final declined =
@@ -135,6 +151,7 @@ void main() {
               'statusCode': status,
               'cookieSource': 'separatedFields',
               'setCookieValues': fields,
+              'locationValues': ?locations,
               if (redirected)
                 'redirects': [
                   {
@@ -190,6 +207,13 @@ void main() {
           ),
         );
         expect(await _responseCookies(other, cookieUrl), isEmpty);
+        if (locations != null) {
+          for (final location in locations) {
+            final destination = url.resolve(location);
+            expect(await _responseCookies(original, destination), unorderedEquals(['endpoint', 'root']));
+            expect(await _responseCookies(other, destination), isEmpty);
+          }
+        }
         if (redirected) {
           // A host-only Cookie without Path uses the legacy directory, even
           // though the final body arrived at a different same-origin path.

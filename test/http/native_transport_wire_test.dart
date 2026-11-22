@@ -72,11 +72,15 @@ void main() {
           observations.add({
             'id': name, 'status': response?.statusCode,
             'cookieFields': response?.headers['set-cookie'] ?? <String>[],
+            'locationFields': response?.headers['location'] ?? <String>[],
             'bodyBase64': body == null ? null : base64Encode(body),
             'error': failure?.type.name, 'elapsedSeconds': watch.elapsedMicroseconds / 1000000,
             'terminalURL': terminalUrl?.toString(),
             'legacyCookieURL': cookieScopeUrl?.toString(),
           });
+          if (item['locationValues'] case final List<dynamic> locations) {
+            expect(response?.headers['location'], locations, reason: name);
+          }
           if (redirectLimit != null) {
             expect(failure?.type.name, item['dartError'], reason: name);
             expect(response?.statusCode, item['statusCode'], reason: name);

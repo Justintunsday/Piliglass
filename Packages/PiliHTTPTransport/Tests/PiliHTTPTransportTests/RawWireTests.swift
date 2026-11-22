@@ -12,6 +12,7 @@ private struct WireCase: Decodable {
   let nativeError: String?
   let nativeTargets: [String]?
   let redirectLocations: [String]?
+  let locationValues: [String]?
 }
 
 private struct WireObservation: Codable {
@@ -24,6 +25,7 @@ private struct WireObservation: Codable {
   let elapsedSeconds: Double
   let terminalURL: String?
   let redirectLocations: [String]
+  let locationFields: [String]
 }
 
 private final class WireTransferProbe: @unchecked Sendable {
@@ -93,9 +95,12 @@ private final class WireTransferProbe: @unchecked Sendable {
     observations.append(.init(id: item.id, status: outcome.head?.statusCode, version: outcome.head?.version,
       cookieFields: outcome.head?.setCookieFields ?? [], bodyBase64: body?.base64EncodedString(), error: error,
       elapsedSeconds: seconds, terminalURL: outcome.head?.url.absoluteString,
-      redirectLocations: outcome.head?.redirects.map(\.location) ?? []))
+      redirectLocations: outcome.head?.redirects.map(\.location) ?? [], locationFields: outcome.head?.locationFields ?? []))
     let callbacks = probe.callbacks
     #expect(callbacks.heads == (outcome.head.map { [$0] } ?? []))
+    if let locations = item.locationValues {
+      #expect(outcome.head?.locationFields == locations)
+    }
     if item.redirectLimit != nil {
       #expect(error == item.nativeError)
       if item.nativeError == nil {
