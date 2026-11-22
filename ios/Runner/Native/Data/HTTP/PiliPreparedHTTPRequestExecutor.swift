@@ -57,6 +57,7 @@ struct PiliPreparedHTTPRequestExecutor: Sendable {
     }
     let endpoint = context.request.url
     var attempt: Int64 = 0
+    var headers = context.request.headers
     while true {
       if Task.isCancelled {
         _ = try await provider.abandon(context)
@@ -65,28 +66,25 @@ struct PiliPreparedHTTPRequestExecutor: Sendable {
       let limit = context.remainingRedirects.flatMap { Int(exactly: $0) }
       var request = URLRequest(url: context.request.url)
       request.httpMethod = "GET"
-      request.allHTTPHeaderFields = context.request.headers
+      request.allHTTPHeaderFields = headers
       request.httpShouldHandleCookies = false
       request.cachePolicy = .reloadIgnoringLocalCacheData
       let terminal = PiliHTTPHeadTerminal(context: context, provider: provider)
-      var outcome = await transport.transfer(request, redirectLimit: limit, onHead: { terminal.observe($0) })
-      if let retry = context.policy.retry, retry.installed, let delay = retry.delayMilliseconds, delay >= 0 {
-        while attempt < retry.count, outcome.retryableTransportFailure, outcome.head == nil,
-              !terminal.hasObservedHead, case .failure(.client(_)) = outcome.body {
-          attempt += 1
-          let (milliseconds, delayOverflow) = delay.multipliedReportingOverflow(by: attempt)
-          let (nanoseconds, unitOverflow) = milliseconds.multipliedReportingOverflow(by: 1_000_000)
-          guard !delayOverflow, !unitOverflow else { break }
+      let outcome = await transport.transfer(request, redirectLimit: limit, onHead: { terminal.observe($0) })
+      if let retry = context.policy.retry, retry.installed, attempt < retry.count,
+         let delay = retry.delayMilliseconds, delay >= 0, terminal.canRetry(outcome) {
+        attempt += 1
+        let (milliseconds, delayOverflow) = delay.multipliedReportingOverflow(by: attempt)
+        let (nanoseconds, unitOverflow) = milliseconds.multipliedReportingOverflow(by: 1_000_000)
+        if !delayOverflow, !unitOverflow {
           do {
             try await Task.sleep(nanoseconds: UInt64(nanoseconds))
-            let headers = try await provider.prepareRetry(context, attempt: attempt)
-            try Task.checkCancellation()
-            request.allHTTPHeaderFields = headers
+            headers = try await provider.prepareRetry(context, attempt: attempt)
+            continue
           } catch {
             _ = try await terminal.complete(nil)
             throw error
           }
-          outcome = await transport.transfer(request, redirectLimit: limit, onHead: { terminal.observe($0) })
         }
       }
 
@@ -100,6 +98,7 @@ struct PiliPreparedHTTPRequestExecutor: Sendable {
             try validateResponseBody(.init(url: head.url, statusCode: head.statusCode, headers: head.headers, body: body))
             if terminal.mayReissue(head) {
               context = try await provider.prepareRedirect(context, response: head)
+              headers = context.request.headers
               continue
             }
             finalHead = head
@@ -133,7 +132,17 @@ private final class PiliHTTPHeadTerminal: @unchecked Sendable {
     if !defers(head) { _ = claim(head) }
   }
 
-  var hasObservedHead: Bool { lock.withLock { observed } }
+  func canRetry(_ outcome: PiliHTTPTransferOutcome) -> Bool {
+    guard case .failure(.client(_)) = outcome.body else { return false }
+    return lock.withLock {
+      guard operation == nil else { return false }
+      switch outcome.retryEvidence {
+      case .beforeResponseHead?: return outcome.head == nil && !observed
+      case .incompleteResponseBody?: return outcome.head?.requiresCompleteBodyForWriteBack ?? !observed
+      case nil: return false
+      }
+    }
+  }
 
   func mayReissue(_ head: PiliHTTPResponseHead) -> Bool {
     context.mayReissueRedirect && (300..<400).contains(head.statusCode) && head.locationValues?.isEmpty == false
@@ -142,7 +151,7 @@ private final class PiliHTTPHeadTerminal: @unchecked Sendable {
   func defers(_ head: PiliHTTPResponseHead) -> Bool {
     // An interceptor only sees a response after Dio has transformed its body.
     // A reissued request's final result also goes back through Dio's error chain.
-    context.redirectIndex > 0 || mayReissue(head)
+    head.requiresCompleteBodyForWriteBack || context.redirectIndex > 0 || mayReissue(head)
   }
 
   func complete(_ head: PiliHTTPResponseHead?) async throws -> PiliHTTPRequestContextReceipt {

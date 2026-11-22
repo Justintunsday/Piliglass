@@ -166,6 +166,7 @@ private actor FixtureTransfer: PiliHTTPTransferring {
   private let requests: [RequestStep]
   private let intermediate: [(PiliHTTPResponseHead, Data)]
   let retryableFailures: [String]
+  let truncatedResponses: Int
   private(set) var sends = 0
   private(set) var matchedRequest = false
 
@@ -190,21 +191,29 @@ private actor FixtureTransfer: PiliHTTPTransferring {
     retryableFailures = fixture.retries.indices.map { index in
       index == 0 && fixture.name == "retried" ? "connectionRefused" : "remoteConnectionClosed"
     }
+    let truncatedResponses = switch fixture.name {
+    case "bodyRetried": fixture.retries.count
+    case "bodyRetryExhausted": fixture.retries.count + 1
+    default: 0
+    }
+    self.truncatedResponses = truncatedResponses
     body = fixture.body
     let intermediate = try fixture.intermediate.map { frame in
       (try Self.responseHead(frame.head, headers: ["content-type": "application/json"]), frame.body)
     }
     self.intermediate = intermediate
     if case .dictionary(let response) = fixture.terminal["response"] {
-      head = try Self.responseHead(response, headers: ["content-encoding": "gzip", "content-type": "application/json"])
-    } else if fixture.usesDart || fixture.name == "retryRevoked" || !intermediate.isEmpty {
+      head = try Self.responseHead(response, headers: ["content-encoding": "gzip", "content-type": "application/json"],
+                                   waitForBody: truncatedResponses > 0)
+    } else if fixture.usesDart || fixture.name == "retryRevoked" || truncatedResponses > 0 || !intermediate.isEmpty {
       head = nil
     } else {
       throw FixtureError(message: "Missing Dart response head")
     }
   }
 
-  private static func responseHead(_ response: [String: PiliBridgeValue], headers: [String: String]) throws -> PiliHTTPResponseHead {
+  private static func responseHead(_ response: [String: PiliBridgeValue], headers: [String: String],
+                                   waitForBody: Bool = false) throws -> PiliHTTPResponseHead {
     guard case .string(let rawURL) = response["url"], let url = URL(string: rawURL),
           case .integer(let status) = response["statusCode"], let statusCode = Int(exactly: status),
           case .array(let fields) = response["setCookieValues"] else { throw FixtureError(message: "Missing Dart response head") }
@@ -224,7 +233,8 @@ private actor FixtureTransfer: PiliHTTPTransferring {
       locations = nil
     }
     return .init(url: url, statusCode: statusCode, headers: headers,
-      cookieFields: .separatedFields(cookieFields), redirects: redirects, locationValues: locations)
+      cookieFields: .separatedFields(cookieFields), redirects: redirects, locationValues: locations,
+      requiresCompleteBodyForWriteBack: waitForBody)
   }
 
   private static func redirects(_ value: PiliBridgeValue?) throws -> [PiliHTTPRedirectHop] {
@@ -254,9 +264,16 @@ private actor FixtureTransfer: PiliHTTPTransferring {
     guard matchedRequest else {
       return .init(head: nil, body: .failure(.client(.invalidRequest)))
     }
+    if index < truncatedResponses {
+      let head = PiliHTTPResponseHead(url: request.url!, statusCode: 200, headers: ["content-type": "application/json"],
+        cookieFields: .separatedFields(["trending_fixture=truncated; Path=/"]), requiresCompleteBodyForWriteBack: true)
+      onHead(head)
+      return .init(head: head, body: .failure(.client(.nativeTransport(kind: "remoteConnectionClosed"))),
+                   retryEvidence: .incompleteResponseBody)
+    }
     if index < retryableFailures.count {
       return .init(head: nil, body: .failure(.client(.nativeTransport(kind: retryableFailures[index]))),
-                   retryableTransportFailure: true)
+                   retryEvidence: .beforeResponseHead)
     }
     let responseIndex = index - retryableFailures.count
     if intermediate.indices.contains(responseIndex) {
@@ -283,6 +300,7 @@ private struct PreparedSearchTrendingChecks {
       let fixtures = try cases.map(TrendingFixture.init)
       let expected: Set<String> = ["selected", "switched", "revoked", "httpError", "corrupt", "declined", "redirects",
                                    "redirected", "redirectedSwitched", "redirectedHTTPError", "retried", "retryRevoked",
+                                   "bodyRetried", "bodyRetryExhausted",
                                    "terminalRedirect", "redirectedTerminal", "interceptorSuccess", "interceptorDenied",
                                    "interceptorExhausted", "interceptorCorrupt", "interceptorRevoked"]
       guard fixtures.count == expected.count, Set(fixtures.map(\.name)) == expected else {
@@ -315,7 +333,7 @@ private struct PreparedSearchTrendingChecks {
     let suffix: [String]
     switch fixture.name {
     case "declined", "redirects": suffix = ["loadNativeSearchTrending"]
-    case "selected", "switched", "redirected", "redirectedSwitched", "retried", "interceptorSuccess":
+    case "selected", "switched", "redirected", "redirectedSwitched", "retried", "bodyRetried", "interceptorSuccess":
       suffix = ["loadNativeAccountSelection"]
     default: suffix = []
     }
@@ -329,7 +347,7 @@ private struct PreparedSearchTrendingChecks {
     }
     let valid: Bool
     switch fixture.name {
-    case "selected", "redirected", "retried", "interceptorSuccess":
+    case "selected", "redirected", "retried", "bodyRetried", "interceptorSuccess":
       valid = failure == nil && !fixture.keywords.isEmpty && result.trending == fixture.keywords
     case "switched", "redirectedSwitched":
       valid = failure == nil && result.trending.isEmpty
@@ -338,6 +356,8 @@ private struct PreparedSearchTrendingChecks {
         && result.trending.isEmpty
     case "retryRevoked", "interceptorRevoked":
       valid = (failure as? PiliHTTPRequestContextError) == .serviceFailure(code: "revoked") && result.trending.isEmpty
+    case "bodyRetryExhausted":
+      valid = (failure as? PiliHTTPClientError) == .nativeTransport(kind: "remoteConnectionClosed") && result.trending.isEmpty
     case "httpError", "redirectedHTTPError", "interceptorDenied":
       valid = (failure as? PiliSearchTrendingError) == .httpStatus(403) && result.trending.isEmpty
     case "terminalRedirect", "redirectedTerminal":

@@ -39,7 +39,7 @@ public enum PiliRawHTTPFailure: String, Error, Sendable, Equatable {
 }
 
 public enum PiliRawHTTPRetryReason: String, Sendable, Equatable {
-  case initialConnection, closedBeforeResponseHead
+  case initialConnection, closedBeforeResponseHead, incompleteResponseBody
 }
 
 public struct PiliRawHTTPOutcome: Sendable {
@@ -140,8 +140,9 @@ public final class PiliRawHTTPTransport: Sendable {
     onHead: @escaping @Sendable (PiliRawHTTPHead) -> Void = { _ in },
     onChunk: @escaping @Sendable (Int) -> Void = { _ in }
   ) async -> PiliRawHTTPOutcome {
+    enum Phase: Equatable { case preparing, awaitingHead, readingBody }
     var observed: PiliRawHTTPHead?
-    var awaitingHead = false
+    var phase: Phase = .preparing
     var redirects: [PiliRawHTTPRedirectHop] = []
     do {
       try Task.checkCancellation()
@@ -161,14 +162,15 @@ public final class PiliRawHTTPTransport: Sendable {
       var target = url
       var followed: Set<URL> = []
       while true {
+        phase = .preparing
         try Task.checkCancellation()
         var request = HTTPClientRequest(url: target.absoluteString)
         request.method = .GET
         for field in headers { request.headers.add(name: field.name, value: field.value) }
         // No resource-total deadline replacing a receive-idle timeout.
-        awaitingHead = true
+        phase = .awaitingHead
         let response = try await client.execute(request, deadline: .distantFuture)
-        awaitingHead = false
+        phase = .readingBody
         let head = PiliRawHTTPHead(url: response.url ?? target, statusCode: Int(response.status.code),
           version: "\(response.version.major).\(response.version.minor)",
           fields: response.headers.map { PiliRawHTTPField(name: $0.name, value: $0.value) }, redirects: redirects)
@@ -199,11 +201,15 @@ public final class PiliRawHTTPTransport: Sendable {
     } catch {
       let failure = Self.failure(error)
       let retryReason: PiliRawHTTPRetryReason?
-      if awaitingHead, protocolMode == .http11, failure == .remoteConnectionClosed {
-        // Automatic hops have no Cookie callback. Retry starts from the
-        // current prepared request with its original redirect allowance.
-        retryReason = .closedBeforeResponseHead
-      } else if awaitingHead, redirects.isEmpty, (failure == .connectionRefused || failure == .connectionTimeout) {
+      if protocolMode == .http11, failure == .remoteConnectionClosed {
+        // Automatic hops and their bodies are consumed by this transport.
+        // Both failures restart the current prepared request, including its redirects.
+        switch phase {
+        case .awaitingHead: retryReason = .closedBeforeResponseHead
+        case .readingBody: retryReason = .incompleteResponseBody
+        case .preparing: retryReason = nil
+        }
+      } else if phase == .awaitingHead, redirects.isEmpty, (failure == .connectionRefused || failure == .connectionTimeout) {
         retryReason = .initialConnection
       } else {
         retryReason = nil

@@ -34,8 +34,12 @@ struct PiliRawHTTPClient: PiliHTTPTransferring {
     let body = outcome.body.mapError { error -> PiliHTTPTransferFailure in
       error == .cancelled ? .cancelled : .client(.nativeTransport(kind: error.rawValue))
     }
-    return .init(head: outcome.head.map(Self.head), body: body,
-                 retryableTransportFailure: outcome.retryReason != nil)
+    let retryEvidence: PiliHTTPRetryEvidence? = switch outcome.retryReason {
+    case .initialConnection?, .closedBeforeResponseHead?: .beforeResponseHead
+    case .incompleteResponseBody?: .incompleteResponseBody
+    case nil: nil
+    }
+    return .init(head: outcome.head.map(Self.head), body: body, retryEvidence: retryEvidence)
   }
 
   private static func head(_ value: PiliRawHTTPHead) -> PiliHTTPResponseHead {
@@ -48,6 +52,6 @@ struct PiliRawHTTPClient: PiliHTTPTransferring {
     return .init(url: value.url, statusCode: value.statusCode, headers: headers,
                  cookieFields: .separatedFields(value.setCookieFields),
                  redirects: value.redirects.map { .init(statusCode: $0.statusCode, location: $0.location, url: $0.url) },
-                 locationValues: locations)
+                 locationValues: locations, requiresCompleteBodyForWriteBack: true)
   }
 }

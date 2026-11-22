@@ -28,6 +28,8 @@ enum _Scenario {
   redirectedHTTPError,
   retried,
   retryRevoked,
+  bodyRetried,
+  bodyRetryExhausted,
   terminalRedirect,
   redirectedTerminal,
   interceptorSuccess,
@@ -201,12 +203,15 @@ void main() {
 
         final redirected = switch (scenario) {
           _Scenario.redirected || _Scenario.redirectedSwitched ||
-          _Scenario.redirectedHTTPError || _Scenario.redirectedTerminal || _Scenario.retried => true,
+          _Scenario.redirectedHTTPError || _Scenario.redirectedTerminal ||
+          _Scenario.retried || _Scenario.bodyRetried => true,
           _ => false,
         };
         final followsRedirects = redirected || scenario == _Scenario.redirects || scenario.usesInterceptor;
         final retryRevoked = scenario == _Scenario.retryRevoked;
-        final retrying = retryRevoked || scenario == _Scenario.retried;
+        final bodyRetryExhausted = scenario == _Scenario.bodyRetryExhausted;
+        final retrying = retryRevoked || bodyRetryExhausted ||
+            scenario == _Scenario.retried || scenario == _Scenario.bodyRetried;
         if (retrying || scenario.usesInterceptor) {
           final retry = RetryInterceptor(Request.dio, retrying ? 2 : 0, 500);
           Request.dio.interceptors.insert(0, retry);
@@ -273,7 +278,7 @@ void main() {
         ];
         final declined =
             scenario == _Scenario.declined || scenario == _Scenario.redirects;
-        final abandoning = declined || retryRevoked;
+        final abandoning = declined || retryRevoked || bodyRetryExhausted;
         final terminalMethod = abandoning
             ? 'abandonNativeHTTPRequest'
             : 'finishNativeHTTPRequest';
@@ -330,7 +335,7 @@ void main() {
         final receipt = await bridge.handle(terminalMethod, terminal);
         final writes = !abandoning && scenario != _Scenario.revoked;
         expect(receipt['state'], switch (scenario) {
-          _Scenario.declined || _Scenario.redirects || _Scenario.retryRevoked => 'abandoned',
+          _Scenario.declined || _Scenario.redirects || _Scenario.retryRevoked || _Scenario.bodyRetryExhausted => 'abandoned',
           _Scenario.revoked => 'revoked',
           _ => 'finished',
         });

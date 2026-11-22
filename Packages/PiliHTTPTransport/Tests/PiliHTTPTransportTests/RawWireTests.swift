@@ -143,7 +143,9 @@ private final class WireTransferProbe: @unchecked Sendable {
     case "pending", "no-head":
       #expect(error == "cancelled")
       #expect(body == nil)
-    case "eof": #expect(error != nil)
+    case "eof", "chunked-eof":
+      #expect(error == "remoteConnectionClosed")
+      #expect(body == nil)
     case "idle-timeout": #expect(error == "receiveIdleTimeout")
     default:
       #expect(error == nil)

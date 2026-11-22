@@ -55,12 +55,16 @@ private actor Transfer: PiliHTTPTransferring {
   let mode: Mode
   let provider: Provider
   let retryableFailures: [String]
+  let truncatedResponses: Int
+  let waitForBody: Bool
   var calls = 0
   var headFinishedBeforeBody = false
   var sent: [ContinuousClock.Instant] = []
   var sentCookies: [String?] = []
-  init(_ mode: Mode, provider: Provider, retryableFailures: [String] = []) {
+  init(_ mode: Mode, provider: Provider, retryableFailures: [String] = [],
+       truncatedResponses: Int = 0, waitForBody: Bool = false) {
     self.mode = mode; self.provider = provider; self.retryableFailures = retryableFailures
+    self.truncatedResponses = truncatedResponses; self.waitForBody = waitForBody
   }
   func transfer(_ request: URLRequest, redirectLimit: Int?,
                 onHead: @escaping @Sendable (PiliHTTPResponseHead) -> Void) async -> PiliHTTPTransferOutcome {
@@ -69,15 +73,22 @@ private actor Transfer: PiliHTTPTransferring {
     sentCookies.append(request.value(forHTTPHeaderField: "Cookie"))
     if calls <= retryableFailures.count {
       return .init(head: nil, body: .failure(.client(.nativeTransport(kind: retryableFailures[calls - 1]))),
-                   retryableTransportFailure: true)
+                   retryEvidence: .beforeResponseHead)
     }
     if mode == .noHead { return .init(head: nil, body: .failure(.client(.transport(code: -1)))) }
+    let truncated = calls - retryableFailures.count <= truncatedResponses
+    let cookies = truncated ? ["partial=ignored; Path=/"] : ["same=path; Path=/x", "same=root; Path=/"]
     let head = PiliHTTPResponseHead(url: request.url!, statusCode: 403, headers: [:],
-      cookieFields: mode == .unsupportedFields ? .unsupported : .separatedFields(["same=path; Path=/x", "same=root; Path=/"]))
+      cookieFields: mode == .unsupportedFields ? .unsupported : .separatedFields(cookies),
+      requiresCompleteBodyForWriteBack: waitForBody)
     onHead(head)
+    if truncated {
+      return .init(head: head, body: .failure(.client(.nativeTransport(kind: "remoteConnectionClosed"))),
+                   retryEvidence: .incompleteResponseBody)
+    }
     if mode == .observedHead {
       return .init(head: nil, body: .failure(.client(.nativeTransport(kind: "remoteConnectionClosed"))),
-                   retryableTransportFailure: true)
+                   retryEvidence: .beforeResponseHead)
     }
     if mode == .duplicateHead { onHead(head) }
     if mode == .delayedBody {
@@ -160,8 +171,10 @@ private struct ExecutionChecks {
     }
   }
   static func execute(_ provider: Provider, _ transfer: Transfer,
-                      evidence: PiliHTTPTransportEvidence = .syntheticComplete) async throws -> PiliPreparedHTTPRequestExecution {
-    try await PiliPreparedHTTPRequestExecutor(provider: provider, transport: transfer, evidence: evidence)
+                      evidence: PiliHTTPTransportEvidence = .syntheticComplete,
+                      validateResponseBody: (@Sendable (PiliHTTPResponse) throws -> Void)? = nil) async throws -> PiliPreparedHTTPRequestExecution {
+    try await PiliPreparedHTTPRequestExecutor(provider: provider, transport: transfer, evidence: evidence,
+                                                validateResponseBody: validateResponseBody)
       .execute(.searchTrending(limit: 10))
   }
   static func transportRetries() async throws {
@@ -198,7 +211,7 @@ private struct ExecutionChecks {
     }
 
     let denied = Provider(policy: configured)
-    let revoked = Transfer(.success, provider: denied, retryableFailures: ["remoteConnectionClosed"])
+    let revoked = Transfer(.success, provider: denied, truncatedResponses: 1, waitForBody: true)
     await denied.configure(retryDenied: true)
     do { _ = try await execute(denied, revoked); throw Failure(message: "Revoked retry sent") }
     catch PiliHTTPRequestContextError.serviceFailure(code: "revoked") { checks += 1 }
@@ -206,7 +219,7 @@ private struct ExecutionChecks {
     try expect(deniedCalls == 1 && deniedTerminals == [1, 0, 1], "Revoked retry settles the original lease")
 
     let cancel = Provider(policy: policy(retryCount: 2, delay: 500))
-    let waiting = Transfer(.success, provider: cancel, retryableFailures: ["remoteConnectionClosed"])
+    let waiting = Transfer(.success, provider: cancel, truncatedResponses: 1, waitForBody: true)
     let operation = Task { try await execute(cancel, waiting) }
     for _ in 0..<500 {
       if await waiting.calls == 1 { break }
@@ -219,6 +232,49 @@ private struct ExecutionChecks {
     try expect(calls == 1 && retries.isEmpty && terminals == [1, 0, 1],
                "Cancellation during backoff stops before reauthorization")
   }
+
+  static func bodyRetries() async throws {
+    let configured = policy(retryCount: 2, delay: 25)
+    let recovered = Provider(policy: configured)
+    let transfer = Transfer(.delayedBody, provider: recovered, retryableFailures: ["connectionRefused"],
+                            truncatedResponses: 1, waitForBody: true)
+    guard case .transferred(_, let receipt, _, _) = try await execute(recovered, transfer, validateResponseBody: { response in
+      guard response.statusCode == 403, response.body == Data("body".utf8) else { throw PiliHTTPClientError.invalidResponse }
+    }) else { throw Failure(message: "Truncated response fell back after sending") }
+    try expect(receipt.outcome == .finished && receipt.cookieCount == 2, "Only the complete error response writes Cookie")
+    let written = await recovered.cookies
+    try expect(written?.setCookieValues == ["same=path; Path=/x", "same=root; Path=/"], "Truncated Cookie is discarded")
+    let retries = await recovered.retries
+    let calls = await transfer.calls, cookies = await transfer.sentCookies
+    let counts = await recovered.counts(), earlyWrite = await transfer.headFinishedBeforeBody
+    try expect(retries == [1, 2] && calls == 3 && cookies == [nil, "fixture=retry-1", "fixture=retry-2"],
+               "Connection and body failures share a retry budget and refresh the bound Cookie")
+    try expect(counts == [1, 1, 0] && !earlyWrite, "The completed response writes once after its body")
+
+    for retryCount: Int64 in [0, 2] {
+      let provider = Provider(policy: policy(retryCount: retryCount, delay: 25))
+      let transfer = Transfer(.success, provider: provider, truncatedResponses: 3, waitForBody: true)
+      guard case .transferred(_, let receipt, _, _) = try await execute(provider, transfer) else {
+        throw Failure(message: "Exhausted body retries fell back")
+      }
+      let calls = await transfer.calls, counts = await provider.counts()
+      try expect(calls == Int(retryCount + 1) && counts == [1, 0, 1] && receipt.outcome == .abandoned,
+                 "Exhaustion abandons the truncated response without a Cookie write")
+    }
+
+    let idle = Provider(policy: configured)
+    let idleFailure = Transfer(.headError, provider: idle, waitForBody: true)
+    _ = try await execute(idle, idleFailure)
+    let idleCalls = await idleFailure.calls, idleCounts = await idle.counts()
+    try expect(idleCalls == 1 && idleCounts == [1, 0, 1], "Other body failures end the held response without a retry or write")
+
+    let committed = Provider(policy: configured)
+    let headTime = Transfer(.success, provider: committed, truncatedResponses: 1)
+    _ = try await execute(committed, headTime)
+    let headCalls = await headTime.calls, headCounts = await committed.counts()
+    try expect(headCalls == 1 && headCounts == [1, 1, 0], "A body failure cannot retry a head already committed for write-back")
+  }
+
   static func main() async {
     do {
       let evaluator = PiliHTTPPolicyCapability()
@@ -230,6 +286,7 @@ private struct ExecutionChecks {
       try expect(Set(reasons).count == reasons.count, "Reasons deterministic and unique")
       try rawHTTP11Preflight(evaluator)
       try await transportRetries()
+      try await bodyRetries()
       for invalid in [policy(connect: -1), policy(receive: Int64.max), policy(retryCount: -1, delay: 10),
                       policy(delay: -1), policy(delay: Int64.max),
                       policy(proxy: .init(host: "fixture", port: -1)), policy(issues: [.decoderChanged])] {

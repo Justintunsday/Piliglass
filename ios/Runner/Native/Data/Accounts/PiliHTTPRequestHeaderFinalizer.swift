@@ -1,7 +1,7 @@
 import Foundation
 
 /// Account ownership and terminal claims remain in the injected provider.
-/// A body failure never discards a response head already captured by transport.
+/// Delivers the response head after the caller selects when to write it back.
 struct PiliHTTPRequestHeaderFinalizer: Sendable {
   private let provider: any PiliHTTPRequestContextProviding
 

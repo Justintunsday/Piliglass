@@ -1,7 +1,7 @@
 import Foundation
 import PiliHTTPBodyCodec
 
-/// Joins request ownership, head-time Cookie write-back and a decoded search result.
+/// Joins request ownership, Cookie write-back and a decoded search result.
 /// The composition supplies the transport and its evidence for this endpoint.
 struct PiliPreparedSearchTrendingLoader: Sendable {
   private let executor: PiliPreparedHTTPRequestExecutor

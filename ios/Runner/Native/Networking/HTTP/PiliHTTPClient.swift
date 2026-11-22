@@ -40,15 +40,19 @@ struct PiliHTTPResponseHead: Sendable, Equatable {
   let cookieFields: PiliHTTPResponseCookieFields
   let redirects: [PiliHTTPRedirectHop]
   let locationValues: [String]?
+  // A transport can hold Cookie write-back until a framed body is validated.
+  let requiresCompleteBodyForWriteBack: Bool
 
   init(url: URL, statusCode: Int, headers: [String: String], cookieFields: PiliHTTPResponseCookieFields,
-       redirects: [PiliHTTPRedirectHop] = [], locationValues: [String]? = nil) {
+       redirects: [PiliHTTPRedirectHop] = [], locationValues: [String]? = nil,
+       requiresCompleteBodyForWriteBack: Bool = false) {
     self.url = url
     self.statusCode = statusCode
     self.headers = headers
     self.cookieFields = cookieFields
     self.redirects = redirects
     self.locationValues = locationValues
+    self.requiresCompleteBodyForWriteBack = requiresCompleteBodyForWriteBack
   }
 }
 
@@ -63,20 +67,24 @@ enum PiliHTTPTransferFailure: Error, Sendable, Equatable {
   case client(PiliHTTPClientError)
 }
 
+enum PiliHTTPRetryEvidence: Sendable, Equatable {
+  case beforeResponseHead, incompleteResponseBody
+}
+
 struct PiliHTTPTransferOutcome: Sendable {
   let head: PiliHTTPResponseHead?
   let body: Result<Data, PiliHTTPTransferFailure>
   // Only an actual completion error in NSURLErrorDomain supplies this value.
   let transportErrorCode: Int?
   // Only a transport that observes the failure phase can supply this evidence.
-  let retryableTransportFailure: Bool
+  let retryEvidence: PiliHTTPRetryEvidence?
 
   init(head: PiliHTTPResponseHead?, body: Result<Data, PiliHTTPTransferFailure>, transportErrorCode: Int? = nil,
-       retryableTransportFailure: Bool = false) {
+       retryEvidence: PiliHTTPRetryEvidence? = nil) {
     self.head = head
     self.body = body
     self.transportErrorCode = transportErrorCode
-    self.retryableTransportFailure = retryableTransportFailure
+    self.retryEvidence = retryEvidence
   }
 }
 

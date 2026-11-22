@@ -109,8 +109,9 @@ void main() {
             expect(failure?.type, DioExceptionType.cancel);
           } else if (mode == 'idle-timeout') {
             expect(failure?.type, DioExceptionType.receiveTimeout);
-          } else if (mode == 'eof') {
-            expect(failure, isNotNull);
+          } else if (mode == 'eof' || mode == 'chunked-eof') {
+            expect(failure?.type, DioExceptionType.unknown, reason: name);
+            expect(response, isNull, reason: name);
           } else {
             expect(response?.statusCode, item['statusCode']);
             expect(body == null ? null : base64Encode(body), item['expectedBodyBase64']);
@@ -151,7 +152,7 @@ void main() {
             redirectLimit: fixture['redirectLimit'] as int?, timeout: deadline)});
         }
       }
-      expect(observations, hasLength(5));
+      expect(observations, hasLength(7));
       observations.add({'id': 'tls-stall', ...await _observeRetry(Uri.parse('https://127.0.0.1:$tlsStall/fixture'),
         expectedError: 'connectionTimeout', attempts: 3, delay: 25, timeout: deadline)});
       await File('$output/dart-network-retry.json').writeAsString(jsonEncode(observations));

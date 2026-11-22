@@ -22,9 +22,12 @@ RETRY_CASES = {
     'incomplete-head': {'error': 'connectionError', 'attempts': 3},
     'wait-before-head': {'error': 'receiveTimeout', 'attempts': 1},
     'early-eof': {'error': 'unknown', 'attempts': 3},
+    'chunked-eof': {'error': 'unknown', 'attempts': 3},
     'follow-closed': {'error': 'connectionError', 'attempts': 3},
+    'follow-body-eof': {'error': 'unknown', 'attempts': 3},
 }
 CLOSED_HEAD_MODES = ('closed-before-head', 'incomplete-head')
+TRUNCATED_BODY_MODES = ('eof', 'chunked-eof')
 
 
 def cases():
@@ -42,6 +45,8 @@ def cases():
         ('incomplete-head', [], None, 'incomplete-head', b''),
         ('wait-before-head', [], None, 'wait-before-head', b''),
         ('early-eof', ['eof=retained; Path=/'], 200, 'eof', body),
+        ('chunked-eof', ['cut=chunked; Path=/'], 200, 'chunked-eof', body),
+        ('connection-delimited', ['complete=close; Path=/'], 200, 'connection-delimited', body),
         ('keepalive-one', ['keep=one; Path=/'], 200, 'keepalive', body),
         ('keepalive-two', ['keep=two; Path=/'], 200, 'keepalive', body),
         ('gzip-raw', ['gzip=raw; Path=/'], 200, 'gzip', gzip.compress(body, mtime=0)),
@@ -53,7 +58,8 @@ def cases():
                  locationValues=['/unexpected-redirect,kept', 'unfollowed/next'] if name == 'redirect' else None,
                  nativeError=('remoteConnectionClosed' if mode in CLOSED_HEAD_MODES else
                               'receiveIdleTimeout' if mode == 'wait-before-head' else None),
-                 retryReason='closedBeforeResponseHead' if mode in CLOSED_HEAD_MODES else None,
+                 retryReason=('closedBeforeResponseHead' if mode in CLOSED_HEAD_MODES else
+                              'incompleteResponseBody' if mode in TRUNCATED_BODY_MODES else None),
                  dartRetry=RETRY_CASES.get(name),
                  expectedBodyBase64=base64.b64encode(data).decode() if status is not None else None, body=data)
             for name, cookies, status, mode, data in values]
@@ -83,6 +89,7 @@ def redirects():
         'follow-cancel': ('follow-cancel', 302, 'unexpected-redirect', ['pending=ignored']),
         'follow-closed': ('follow-closed', 302, 'follow-closed-destination', ['first=ignored']),
         'follow-closed-destination': ('follow-closed', None, None, []),
+        'follow-body-eof': ('follow-body-eof', 302, 'unexpected-redirect', ['cut=ignored']),
     }
     terminal_locations = {'follow-terminal-last': ['/unused,one/next', '/unused/two/next']}
     modes = [
@@ -97,6 +104,7 @@ def redirects():
         (1, ['follow-other-port', 'follow-other-target'], 'redirectOutsideOrigin', None),
         (2, ['follow-cancel'], 'cancelled', 'cancel'),
         (1, ['follow-closed', 'follow-closed-destination'], 'remoteConnectionClosed', 'connectionError'),
+        (1, ['follow-body-eof'], 'remoteConnectionClosed', 'unknown'),
     ]
     fixtures = []
     for limit, paths, native_error, dart_error in modes:
@@ -106,7 +114,8 @@ def redirects():
         native_targets = paths[:1] if native_error == 'redirectOutsideOrigin' else paths
         fixtures.append(dict(id=case_id, mode='cancel-redirect' if case_id == 'follow-cancel' else 'follow',
             redirectLimit=limit, nativeError=native_error, dartError=dart_error,
-            retryReason='closedBeforeResponseHead' if case_id == 'follow-closed' else None,
+            retryReason=('closedBeforeResponseHead' if case_id == 'follow-closed' else
+                         'incompleteResponseBody' if case_id == 'follow-body-eof' else None),
             dartRetry=RETRY_CASES.get(case_id),
             nativeTargets=native_targets, dartTargets=paths,
             redirectLocations=[routes[path][2] for path in paths[:-1]] if native_error is None else None,
@@ -117,7 +126,7 @@ def redirects():
     return fixtures, {
         path: dict(redirectCase=case_id, statusCode=status, location=location, wireValues=cookies,
                    locationValues=terminal_locations.get(path),
-                   mode=('pending' if case_id == 'follow-cancel' else
+                   mode=('pending' if case_id == 'follow-cancel' else 'eof' if case_id == 'follow-body-eof' else
                          'closed-before-head' if status is None else 'keepalive'),
                    body=body if status in (200, 300, 403) else b'intermediate redirect body\n')
         for path, (case_id, status, location, cookies) in routes.items()
@@ -235,8 +244,11 @@ class Handler(BaseHTTPRequestHandler):
                 self.connection.recv(1)
                 return
             fields = [('Set-Cookie', v) for v in item['wireValues']]
-            fields += [('Content-Length', str(4096 if mode in ('pending', 'eof') else len(body))),
-                       ('Content-Type', 'application/octet-stream'),
+            if mode == 'chunked-eof':
+                fields.append(('Transfer-Encoding', 'chunked'))
+            elif mode != 'connection-delimited':
+                fields.append(('Content-Length', str(4096 if mode in ('pending', 'eof') else len(body))))
+            fields += [('Content-Type', 'application/octet-stream'),
                        ('Connection', 'keep-alive' if mode == 'keepalive' else 'close')]
             if mode == 'gzip': fields += [('Content-Encoding', 'gzip')]
             fields.extend(('Location', value) for value in (item.get('locationValues') or ()))
@@ -258,7 +270,10 @@ class Handler(BaseHTTPRequestHandler):
                 time.sleep(11)
                 self.connection.sendall(body[1:])
             else:
-                self.connection.sendall(b'x' * 1024 if mode in ('pending', 'eof') else body)
+                if mode == 'chunked-eof':
+                    self.connection.sendall(b'100\r\npartial chunk')
+                else:
+                    self.connection.sendall(b'x' * 1024 if mode in ('pending', 'eof') else body)
                 record['chunks'].append(time.monotonic())
                 if item.get('redirectCase') == 'follow-cancel':
                     (OUTPUT / marker).write_text('first hop sent', encoding='ascii')
@@ -360,7 +375,7 @@ def main():
                        redirectCases=len(redirect_fixtures), initialConnectionRefusal=True,
                        retryWireCases=len(RETRY_CASES) + 1, tlsStallHandshakes=tls_stall.handshakes,
                        ios16Device=True, ios16Simulator=True,
-                       knownPending=['br decoder','H2/TLS trust/proxy/pool expiry','post-head body failures and other Dio retries',
+                       knownPending=['br decoder','H2/TLS trust/proxy/pool expiry','response decoder errors and other Dio retries',
                                      'cross-origin redirects','actual API/account acceptance'])
     except (OSError,RuntimeError,subprocess.TimeoutExpired) as error:
         summary['reason']=str(error); print(f'FAIL raw HTTP: {error}')
