@@ -35,7 +35,7 @@ struct PiliRawHTTPClient: PiliHTTPTransferring {
       error == .cancelled ? .cancelled : .client(.nativeTransport(kind: error.rawValue))
     }
     return .init(head: outcome.head.map(Self.head), body: body,
-                 failedDuringInitialConnection: outcome.failedDuringInitialConnection)
+                 retryableTransportFailure: outcome.retryReason != nil)
   }
 
   private static func head(_ value: PiliRawHTTPHead) -> PiliHTTPResponseHead {

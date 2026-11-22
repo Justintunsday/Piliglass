@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 import shutil
 import socket
+from socketserver import BaseRequestHandler, ThreadingTCPServer
 import subprocess
 import sys
 import threading
@@ -15,6 +16,15 @@ import time
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGE = ROOT / 'Packages/PiliHTTPTransport'
 OUTPUT = ROOT / 'build/native-raw-http-check'
+
+RETRY_CASES = {
+    'closed-before-head': {'error': 'connectionError', 'attempts': 3},
+    'incomplete-head': {'error': 'connectionError', 'attempts': 3},
+    'wait-before-head': {'error': 'receiveTimeout', 'attempts': 1},
+    'early-eof': {'error': 'unknown', 'attempts': 3},
+    'follow-closed': {'error': 'connectionError', 'attempts': 3},
+}
+CLOSED_HEAD_MODES = ('closed-before-head', 'incomplete-head')
 
 
 def cases():
@@ -28,6 +38,9 @@ def cases():
         ('redirect', ['redirect=original; Path=/'], 302, 'normal', body),
         ('cancel-head', ['cancel=retained; Path=/'], 200, 'pending', body),
         ('cancel-before', [], 200, 'no-head', body),
+        ('closed-before-head', [], None, 'closed-before-head', b''),
+        ('incomplete-head', [], None, 'incomplete-head', b''),
+        ('wait-before-head', [], None, 'wait-before-head', b''),
         ('early-eof', ['eof=retained; Path=/'], 200, 'eof', body),
         ('keepalive-one', ['keep=one; Path=/'], 200, 'keepalive', body),
         ('keepalive-two', ['keep=two; Path=/'], 200, 'keepalive', body),
@@ -38,7 +51,11 @@ def cases():
     ]
     return [dict(id=name, wireValues=cookies, statusCode=status, mode=mode,
                  locationValues=['/unexpected-redirect,kept', 'unfollowed/next'] if name == 'redirect' else None,
-                 expectedBodyBase64=base64.b64encode(data).decode(), body=data)
+                 nativeError=('remoteConnectionClosed' if mode in CLOSED_HEAD_MODES else
+                              'receiveIdleTimeout' if mode == 'wait-before-head' else None),
+                 retryReason='closedBeforeResponseHead' if mode in CLOSED_HEAD_MODES else None,
+                 dartRetry=RETRY_CASES.get(name),
+                 expectedBodyBase64=base64.b64encode(data).decode() if status is not None else None, body=data)
             for name, cookies, status, mode, data in values]
 
 
@@ -64,6 +81,8 @@ def redirects():
         'follow-other-port': ('follow-other-port', 302, '@other-port', ['first=ignored']),
         'follow-other-target': ('follow-other-port', 200, None, ['other=retained; Path=/']),
         'follow-cancel': ('follow-cancel', 302, 'unexpected-redirect', ['pending=ignored']),
+        'follow-closed': ('follow-closed', 302, 'follow-closed-destination', ['first=ignored']),
+        'follow-closed-destination': ('follow-closed', None, None, []),
     }
     terminal_locations = {'follow-terminal-last': ['/unused,one/next', '/unused/two/next']}
     modes = [
@@ -77,6 +96,7 @@ def redirects():
         (5, ['follow-missing'], 'invalidRedirect', 'unknown'),
         (1, ['follow-other-port', 'follow-other-target'], 'redirectOutsideOrigin', None),
         (2, ['follow-cancel'], 'cancelled', 'cancel'),
+        (1, ['follow-closed', 'follow-closed-destination'], 'remoteConnectionClosed', 'connectionError'),
     ]
     fixtures = []
     for limit, paths, native_error, dart_error in modes:
@@ -86,6 +106,8 @@ def redirects():
         native_targets = paths[:1] if native_error == 'redirectOutsideOrigin' else paths
         fixtures.append(dict(id=case_id, mode='cancel-redirect' if case_id == 'follow-cancel' else 'follow',
             redirectLimit=limit, nativeError=native_error, dartError=dart_error,
+            retryReason='closedBeforeResponseHead' if case_id == 'follow-closed' else None,
+            dartRetry=RETRY_CASES.get(case_id),
             nativeTargets=native_targets, dartTargets=paths,
             redirectLocations=[routes[path][2] for path in paths[:-1]] if native_error is None else None,
             locationValues=terminal_locations.get(paths[-1]),
@@ -95,7 +117,8 @@ def redirects():
     return fixtures, {
         path: dict(redirectCase=case_id, statusCode=status, location=location, wireValues=cookies,
                    locationValues=terminal_locations.get(path),
-                   mode='pending' if case_id == 'follow-cancel' else 'keepalive',
+                   mode=('pending' if case_id == 'follow-cancel' else
+                         'closed-before-head' if status is None else 'keepalive'),
                    body=body if status in (200, 300, 403) else b'intermediate redirect body\n')
         for path, (case_id, status, location, cookies) in routes.items()
     }
@@ -103,7 +126,8 @@ def redirects():
 
 def verify_redirect_requests(fixtures, records, client):
     for fixture in fixtures:
-        hops = [event for event in records if event.get('redirectCase') == fixture['id'] and event['client'] == client]
+        hops = [event for event in records if event.get('redirectCase') == fixture['id'] and event['client'] == client
+                and not event['retryProbe']]
         if [hop['id'] for hop in hops] != fixture[client + 'Targets']:
             raise RuntimeError(f"{client} redirect request sequence differed for {fixture['id']}")
         for hop in hops:
@@ -113,6 +137,45 @@ def verify_redirect_requests(fixtures, records, client):
                      else hop['retainedFixtureHeaders'])
             if not valid:
                 raise RuntimeError(f"{client} redirected headers differed at {hop['id']}")
+
+
+def verify_retry_requests(fixtures, records, *, check_native=True):
+    for fixture in fixtures:
+        if not (retry := fixture.get('dartRetry')): continue
+        dart_targets = fixture.get('dartTargets', [fixture['id']])
+        observed_dart = [event['id'] for event in records if event.get('client') == 'dart'
+                         and event['retryProbe'] and event['id'] in dart_targets]
+        if observed_dart != dart_targets * retry['attempts']:
+            raise RuntimeError(f"Dart retry request sequence differed for {fixture['id']}")
+        if check_native:
+            native_targets = fixture.get('nativeTargets', [fixture['id']])
+            observed_native = [event['id'] for event in records if event.get('client') == 'native'
+                               and event['id'] in native_targets]
+            if observed_native != native_targets:
+                raise RuntimeError(f"Raw client silently resent {fixture['id']}")
+
+
+class TLSStallHandler(BaseRequestHandler):
+    def handle(self):
+        self.request.settimeout(10)
+        try:
+            if self.request.recv(1) != b'\x16': return
+            with self.server.lock:
+                self.server.handshakes += 1
+            # Read the ClientHello without ever completing the handshake.
+            while self.request.recv(4096): pass
+        except (ConnectionError, socket.timeout):
+            pass
+
+
+class TLSStallServer(ThreadingTCPServer):
+    daemon_threads = True
+    block_on_close = False
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.handshakes = 0
+        super().__init__(('127.0.0.1', 0), TLSStallHandler)
 
 
 class Server(ThreadingHTTPServer):
@@ -150,7 +213,8 @@ class Handler(BaseHTTPRequestHandler):
             return
         mode, body = item['mode'], item['body']
         record = dict(id=name, client=client, connectionID=self.server.connection_ids[self.connection],
-                      received=time.monotonic(), cookieFields=item['wireValues'], chunks=[])
+                      received=time.monotonic(), cookieFields=item['wireValues'], chunks=[],
+                      retryProbe=self.headers.get('X-Wire-Retry') == '1')
         if 'redirectCase' in item:
             cookie = self.headers.get('Cookie')
             authorization = self.headers.get('Authorization')
@@ -162,8 +226,12 @@ class Handler(BaseHTTPRequestHandler):
         self.close_connection = mode != 'keepalive'
         self.connection.settimeout(15)
         try:
-            if mode == 'no-head':
-                (OUTPUT / marker).write_text('received', encoding='ascii')
+            if mode == 'closed-before-head': return
+            if mode == 'incomplete-head':
+                self.connection.sendall(b'HTTP/1.1 200 Fixture\r\nContent-Type: application/octet-stream\r\n')
+                return
+            if mode in ('no-head', 'wait-before-head'):
+                if mode == 'no-head': (OUTPUT / marker).write_text('received', encoding='ascii')
                 self.connection.recv(1)
                 return
             fields = [('Set-Cookie', v) for v in item['wireValues']]
@@ -236,7 +304,8 @@ def main():
         if resolved.exists(): shutil.copy2(resolved, OUTPUT/'Package.resolved')
         cross_origin = Server({'follow-other-target': redirect_routes.pop('follow-other-target')})
         server = Server(route_map | redirect_routes, redirect_port=cross_origin.server_port)
-        servers = (server, cross_origin)
+        tls_stall = TLSStallServer()
+        servers = (server, cross_origin, tls_stall)
         threads = [threading.Thread(target=listener.serve_forever, daemon=True) for listener in servers]
         for thread in threads: thread.start()
         try:
@@ -246,14 +315,17 @@ def main():
                 reserved.bind(('127.0.0.1', 0))
                 refused_port = reserved.getsockname()[1]
             env = {**os.environ, 'PILI_RAW_WIRE_BASE': f'http://127.0.0.1:{server.server_port}',
-                   'PILI_RAW_WIRE_OUTPUT': str(OUTPUT), 'PILI_RAW_REFUSED_PORT': str(refused_port)}
+                   'PILI_RAW_WIRE_OUTPUT': str(OUTPUT), 'PILI_RAW_REFUSED_PORT': str(refused_port),
+                   'PILI_RAW_TLS_STALL_PORT': str(tls_stall.server_address[1])}
             verify_connection_refusal(refused_port)
             run(['flutter','test','--no-pub','--reporter','expanded','test/http/native_transport_wire_test.dart'],
                 'dart-wire.log',timeout=300,env=env,cwd=ROOT)
+            if tls_stall.handshakes != 3: raise RuntimeError('Dart TLS stall did not reach three real handshakes')
             verify_connection_refusal(refused_port)
             run(['swift','test','--filter',
-                 'rawHeaderAndIdleWire|rawConfigurationRejectsUnknownSemantics|rawInitialConnectionRefused'],
+                 'rawHeaderAndIdleWire|rawConfigurationRejectsUnknownSemantics|rawInitialConnectionRefused|rawTLSHandshakeDeadline'],
                 'wire.log', env=env)
+            if tls_stall.handshakes != 4: raise RuntimeError('Raw TLS stall did not add exactly one handshake')
             verify_connection_refusal(refused_port)
         finally:
             for listener, thread in zip(servers, threads):
@@ -272,6 +344,7 @@ def main():
         ],indent=2)+'\n',encoding='utf-8')
         for client in ('native', 'dart'):
             verify_redirect_requests(redirect_fixtures, records, client)
+        verify_retry_requests(fixtures, records)
         records = {record['id']:record for record in server.records if record.get('client')=='native'}
         if records['keepalive-one']['connectionID'] != records['keepalive-two']['connectionID']:
             raise RuntimeError('Default pool did not reuse actual keepalive socket')
@@ -285,8 +358,9 @@ def main():
                  'CODE_SIGNING_ALLOWED=NO','build'],f'{label}-build.log',timeout=1800)
         summary.update(status='passed', wireCases=len(observations), actualDartWireCases=len(dart_observations),
                        redirectCases=len(redirect_fixtures), initialConnectionRefusal=True,
+                       retryWireCases=len(RETRY_CASES) + 1, tlsStallHandshakes=tls_stall.handshakes,
                        ios16Device=True, ios16Simulator=True,
-                       knownPending=['br decoder','H2/TLS/proxy/pool expiry','other Dio retries and interceptor redirects',
+                       knownPending=['br decoder','H2/TLS trust/proxy/pool expiry','post-head body failures and other Dio retries',
                                      'cross-origin redirects','actual API/account acceptance'])
     except (OSError,RuntimeError,subprocess.TimeoutExpired) as error:
         summary['reason']=str(error); print(f'FAIL raw HTTP: {error}')

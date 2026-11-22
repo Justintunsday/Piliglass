@@ -34,19 +34,24 @@ public struct PiliRawHTTPHead: Sendable, Equatable {
 
 public enum PiliRawHTTPFailure: String, Error, Sendable, Equatable {
   case invalidConfiguration, invalidRequest, cancelled, connectionTimeout, connectionRefused
-  case receiveIdleTimeout, sendIdleTimeout, deadline, bodyLimit, transport
+  case remoteConnectionClosed, receiveIdleTimeout, sendIdleTimeout, deadline, bodyLimit, transport
   case invalidRedirect, redirectLimit, redirectLoop, redirectOutsideOrigin
+}
+
+public enum PiliRawHTTPRetryReason: String, Sendable, Equatable {
+  case initialConnection, closedBeforeResponseHead
 }
 
 public struct PiliRawHTTPOutcome: Sendable {
   public let head: PiliRawHTTPHead?
   public let body: Result<Data, PiliRawHTTPFailure>
-  public let failedDuringInitialConnection: Bool
+  public let retryReason: PiliRawHTTPRetryReason?
+  public var failedDuringInitialConnection: Bool { retryReason == .initialConnection }
 
-  init(head: PiliRawHTTPHead?, body: Result<Data, PiliRawHTTPFailure>, failedDuringInitialConnection: Bool = false) {
+  init(head: PiliRawHTTPHead?, body: Result<Data, PiliRawHTTPFailure>, retryReason: PiliRawHTTPRetryReason? = nil) {
     self.head = head
     self.body = body
-    self.failedDuringInitialConnection = failedDuringInitialConnection
+    self.retryReason = retryReason
   }
 }
 
@@ -73,6 +78,7 @@ public final class PiliRawHTTPTransport: Sendable {
   }
 
   private let client: HTTPClient
+  private let protocolMode: Configuration.ProtocolMode
   private let maxBodyBytes: Int
   private let allowsLoopbackHTTP: Bool
   private let restrictsFixtureHost: Bool
@@ -117,6 +123,7 @@ public final class PiliRawHTTPTransport: Sendable {
     // Disable injected global tracing; requests can carry credential fields.
     native.tracing.tracer = nil
     client = HTTPClient(eventLoopGroupProvider: .singleton, configuration: native)
+    protocolMode = configuration.protocolMode
     maxBodyBytes = configuration.maxBodyBytes; allowsLoopbackHTTP = loopbackFixture
     restrictsFixtureHost = fixtureTrustRootsFile != nil
   }
@@ -134,7 +141,8 @@ public final class PiliRawHTTPTransport: Sendable {
     onChunk: @escaping @Sendable (Int) -> Void = { _ in }
   ) async -> PiliRawHTTPOutcome {
     var observed: PiliRawHTTPHead?
-    var receivedAnyHead = false
+    var awaitingHead = false
+    var redirects: [PiliRawHTTPRedirectHop] = []
     do {
       try Task.checkCancellation()
       guard (sameOriginRedirectLimit ?? 0) >= 0,
@@ -152,15 +160,15 @@ public final class PiliRawHTTPTransport: Sendable {
       }) else { throw PiliRawHTTPFailure.invalidRequest }
       var target = url
       var followed: Set<URL> = []
-      var redirects: [PiliRawHTTPRedirectHop] = []
       while true {
         try Task.checkCancellation()
         var request = HTTPClientRequest(url: target.absoluteString)
         request.method = .GET
         for field in headers { request.headers.add(name: field.name, value: field.value) }
         // No resource-total deadline replacing a receive-idle timeout.
+        awaitingHead = true
         let response = try await client.execute(request, deadline: .distantFuture)
-        receivedAnyHead = true
+        awaitingHead = false
         let head = PiliRawHTTPHead(url: response.url ?? target, statusCode: Int(response.status.code),
           version: "\(response.version.major).\(response.version.minor)",
           fields: response.headers.map { PiliRawHTTPField(name: $0.name, value: $0.value) }, redirects: redirects)
@@ -190,8 +198,17 @@ public final class PiliRawHTTPTransport: Sendable {
       }
     } catch {
       let failure = Self.failure(error)
-      return .init(head: observed, body: .failure(failure), failedDuringInitialConnection:
-        !receivedAnyHead && (failure == .connectionRefused || failure == .connectionTimeout))
+      let retryReason: PiliRawHTTPRetryReason?
+      if awaitingHead, protocolMode == .http11, failure == .remoteConnectionClosed {
+        // Automatic hops have no Cookie callback. Retry starts from the
+        // current prepared request with its original redirect allowance.
+        retryReason = .closedBeforeResponseHead
+      } else if awaitingHead, redirects.isEmpty, (failure == .connectionRefused || failure == .connectionTimeout) {
+        retryReason = .initialConnection
+      } else {
+        retryReason = nil
+      }
+      return .init(head: observed, body: .failure(failure), retryReason: retryReason)
     }
   }
 
@@ -220,11 +237,13 @@ public final class PiliRawHTTPTransport: Sendable {
     if error is CancellationError { return .cancelled }
     if let error = error as? HTTPClientError {
       if error == .cancelled { return .cancelled }
-      if error == .connectTimeout { return .connectionTimeout }
+      if error == .connectTimeout || error == .tlsHandshakeTimeout { return .connectionTimeout }
+      if error == .remoteConnectionClosed { return .remoteConnectionClosed }
       if error == .readTimeout { return .receiveIdleTimeout }
       if error == .writeTimeout { return .sendIdleTimeout }
       if error == .deadlineExceeded { return .deadline }
     }
+    if let error = error as? HTTPParserError, case .invalidEOFState = error { return .remoteConnectionClosed }
     #if canImport(Network)
     if let error = error as? HTTPClient.NWPOSIXError, error.errorCode == .ECONNREFUSED { return .connectionRefused }
     if let error = error as? NWError, case .posix(.ECONNREFUSED) = error { return .connectionRefused }

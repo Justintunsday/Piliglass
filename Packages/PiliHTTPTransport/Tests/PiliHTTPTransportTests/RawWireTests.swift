@@ -13,6 +13,7 @@ private struct WireCase: Decodable {
   let nativeTargets: [String]?
   let redirectLocations: [String]?
   let locationValues: [String]?
+  let retryReason: String?
 }
 
 private struct WireObservation: Codable {
@@ -26,6 +27,7 @@ private struct WireObservation: Codable {
   let terminalURL: String?
   let redirectLocations: [String]
   let locationFields: [String]
+  let retryReason: String?
 }
 
 private final class WireTransferProbe: @unchecked Sendable {
@@ -84,7 +86,7 @@ private final class WireTransferProbe: @unchecked Sendable {
       task.cancel()
     }
     let outcome = await task.value
-    #expect(!outcome.failedDuringInitialConnection)
+    #expect(outcome.retryReason?.rawValue == item.retryReason)
     let elapsed = start.duration(to: .now)
     let seconds = Double(elapsed.components.seconds) + Double(elapsed.components.attoseconds) / 1e18
     let body: Data?, error: String?
@@ -95,11 +97,19 @@ private final class WireTransferProbe: @unchecked Sendable {
     observations.append(.init(id: item.id, status: outcome.head?.statusCode, version: outcome.head?.version,
       cookieFields: outcome.head?.setCookieFields ?? [], bodyBase64: body?.base64EncodedString(), error: error,
       elapsedSeconds: seconds, terminalURL: outcome.head?.url.absoluteString,
-      redirectLocations: outcome.head?.redirects.map(\.location) ?? [], locationFields: outcome.head?.locationFields ?? []))
+      redirectLocations: outcome.head?.redirects.map(\.location) ?? [], locationFields: outcome.head?.locationFields ?? [],
+      retryReason: outcome.retryReason?.rawValue))
     let callbacks = probe.callbacks
     #expect(callbacks.heads == (outcome.head.map { [$0] } ?? []))
     if let locations = item.locationValues {
       #expect(outcome.head?.locationFields == locations)
+    }
+    if item.redirectLimit == nil, let expectedError = item.nativeError {
+      #expect(error == expectedError)
+      #expect(outcome.head == nil)
+      #expect(body == nil)
+      #expect(callbacks.bytes == 0)
+      continue
     }
     if item.redirectLimit != nil {
       #expect(error == item.nativeError)
@@ -155,6 +165,16 @@ private final class WireTransferProbe: @unchecked Sendable {
     #expect(outcome.failedDuringInitialConnection)
     #expect(throws: PiliRawHTTPFailure.connectionRefused) { try outcome.body.get() }
   }
+  try await client.shutdown()
+}
+
+@Test func rawTLSHandshakeDeadline() async throws {
+  let port = try #require(ProcessInfo.processInfo.environment["PILI_RAW_TLS_STALL_PORT"].flatMap(Int.init))
+  let client = try PiliRawHTTPTransport(configuration: .init(connectMicroseconds: 600_000), loopbackFixture: true)
+  let outcome = await client.get(URL(string: "https://127.0.0.1:\(port)/fixture")!)
+  #expect(outcome.head == nil)
+  #expect(outcome.retryReason == .initialConnection)
+  #expect(throws: PiliRawHTTPFailure.connectionTimeout) { try outcome.body.get() }
   try await client.shutdown()
 }
 

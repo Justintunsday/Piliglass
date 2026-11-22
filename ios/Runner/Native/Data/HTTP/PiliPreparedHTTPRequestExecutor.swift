@@ -71,7 +71,7 @@ struct PiliPreparedHTTPRequestExecutor: Sendable {
       let terminal = PiliHTTPHeadTerminal(context: context, provider: provider)
       var outcome = await transport.transfer(request, redirectLimit: limit, onHead: { terminal.observe($0) })
       if let retry = context.policy.retry, retry.installed, let delay = retry.delayMilliseconds, delay >= 0 {
-        while attempt < retry.count, outcome.failedDuringInitialConnection, outcome.head == nil,
+        while attempt < retry.count, outcome.retryableTransportFailure, outcome.head == nil,
               !terminal.hasObservedHead, case .failure(.client(_)) = outcome.body {
           attempt += 1
           let (milliseconds, delayOverflow) = delay.multipliedReportingOverflow(by: attempt)

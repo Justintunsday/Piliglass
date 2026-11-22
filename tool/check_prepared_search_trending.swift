@@ -165,7 +165,7 @@ private actor FixtureTransfer: PiliHTTPTransferring {
   let body: Data
   private let requests: [RequestStep]
   private let intermediate: [(PiliHTTPResponseHead, Data)]
-  let refusedAttempts: Int
+  let retryableFailures: [String]
   private(set) var sends = 0
   private(set) var matchedRequest = false
 
@@ -187,7 +187,9 @@ private actor FixtureTransfer: PiliHTTPTransferring {
       }
       return RequestStep(url: url, cookie: cookie, redirectLimit: limit)
     })
-    refusedAttempts = fixture.retries.count
+    retryableFailures = fixture.retries.indices.map { index in
+      index == 0 && fixture.name == "retried" ? "connectionRefused" : "remoteConnectionClosed"
+    }
     body = fixture.body
     let intermediate = try fixture.intermediate.map { frame in
       (try Self.responseHead(frame.head, headers: ["content-type": "application/json"]), frame.body)
@@ -252,11 +254,11 @@ private actor FixtureTransfer: PiliHTTPTransferring {
     guard matchedRequest else {
       return .init(head: nil, body: .failure(.client(.invalidRequest)))
     }
-    if sends <= refusedAttempts {
-      return .init(head: nil, body: .failure(.client(.nativeTransport(kind: "connectionRefused"))),
-                   failedDuringInitialConnection: true)
+    if index < retryableFailures.count {
+      return .init(head: nil, body: .failure(.client(.nativeTransport(kind: retryableFailures[index]))),
+                   retryableTransportFailure: true)
     }
-    let responseIndex = index - refusedAttempts
+    let responseIndex = index - retryableFailures.count
     if intermediate.indices.contains(responseIndex) {
       let (head, body) = intermediate[responseIndex]
       onHead(head)

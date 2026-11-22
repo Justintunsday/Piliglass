@@ -14,6 +14,7 @@ void main() {
   final base = Platform.environment['PILI_RAW_WIRE_BASE'];
   final output = Platform.environment['PILI_RAW_WIRE_OUTPUT'];
   final refused = Platform.environment['PILI_RAW_REFUSED_PORT'];
+  final tlsStall = Platform.environment['PILI_RAW_TLS_STALL_PORT'];
   test('actual Request H11 raw fields and receive-idle wire', () async {
     TestWidgetsFlutterBinding.ensureInitialized();
     // Flutter's widget binding installs a fixed-400 HttpClient globally. This
@@ -101,7 +102,10 @@ void main() {
             }
             continue;
           }
-          if (mode == 'no-head' || mode == 'pending') {
+          if (item['dartRetry'] case final Map<String, dynamic> retry when item['statusCode'] == null) {
+            expect(failure?.type.name, retry['error'], reason: name);
+            expect(response, isNull, reason: name);
+          } else if (mode == 'no-head' || mode == 'pending') {
             expect(failure?.type, DioExceptionType.cancel);
           } else if (mode == 'idle-timeout') {
             expect(failure?.type, DioExceptionType.receiveTimeout);
@@ -128,39 +132,71 @@ void main() {
 
   test('installed retry waits 500 ms then 1000 ms after real refused connections', () async {
     await HttpOverrides.runWithHttpOverrides(() async {
-      final dio = Dio();
-      final timer = Stopwatch()..start();
-      final starts = <int>[];
-      final failures = <int>[];
-      final errorKinds = <String>[];
-      dio.interceptors.add(InterceptorsWrapper(
-        onRequest: (options, handler) {
-          starts.add(timer.elapsedMilliseconds);
-          handler.next(options);
-        },
-        onError: (error, handler) {
-          failures.add(timer.elapsedMilliseconds);
-          errorKinds.add(error.type.name);
-          handler.next(error);
-        },
-      ));
-      dio.interceptors.add(RetryInterceptor(dio, 2, 500));
-      try {
-        await expectLater(dio.get<void>('https://127.0.0.1:$refused/fixture'), throwsA(isA<DioException>()
-          .having((error) => error.type, 'type', DioExceptionType.connectionError)));
-        expect(starts, hasLength(3));
-        expect(errorKinds, List.filled(3, DioExceptionType.connectionError.name));
-        final waits = [starts[1] - failures[0], starts[2] - failures[1]];
-        expect(waits[0], greaterThanOrEqualTo(490));
-        expect(waits[1], greaterThanOrEqualTo(990));
-        await File('$output/dart-initial-retry.json').writeAsString(jsonEncode({
-          'attempts': starts.length, 'errorKinds': errorKinds, 'backoffMilliseconds': waits,
-        }));
-      } finally {
-        dio.close(force: true);
-      }
+      final observation = await _observeRetry(Uri.parse('https://127.0.0.1:$refused/fixture'),
+        expectedError: 'connectionError', attempts: 3, delay: 500);
+      await File('$output/dart-initial-retry.json').writeAsString(jsonEncode(observation));
     }, _RealWireHttpOverrides());
   }, skip: refused == null || output == null);
+
+  test('installed retry observes the actual H1 and TLS failure kinds on loopback', () async {
+    await HttpOverrides.runWithHttpOverrides(() async {
+      final fixtures = jsonDecode(await File('$output/fixtures.json').readAsString()) as List<dynamic>;
+      final observations = <Map<String, Object?>>[];
+      const deadline = Duration(milliseconds: 600);
+      for (final fixture in fixtures.cast<Map<String, dynamic>>()) {
+        if (fixture['dartRetry'] case final Map<String, dynamic> retry) {
+          final id = fixture['id'] as String;
+          observations.add({'id': id, ...await _observeRetry(Uri.parse('$base/dart/$id'),
+            expectedError: retry['error'] as String, attempts: retry['attempts'] as int, delay: 25,
+            redirectLimit: fixture['redirectLimit'] as int?, timeout: deadline)});
+        }
+      }
+      expect(observations, hasLength(5));
+      observations.add({'id': 'tls-stall', ...await _observeRetry(Uri.parse('https://127.0.0.1:$tlsStall/fixture'),
+        expectedError: 'connectionTimeout', attempts: 3, delay: 25, timeout: deadline)});
+      await File('$output/dart-network-retry.json').writeAsString(jsonEncode(observations));
+    }, _RealWireHttpOverrides());
+  }, skip: base == null || output == null || tlsStall == null);
+}
+
+Future<Map<String, Object?>> _observeRetry(Uri url, {
+  required String expectedError, required int attempts, required int delay, int? redirectLimit, Duration? timeout,
+}) async {
+  expect(url.host, '127.0.0.1');
+  final dio = Dio(BaseOptions(responseType: ResponseType.bytes, connectTimeout: timeout, receiveTimeout: timeout));
+  final timer = Stopwatch()..start();
+  final starts = <int>[];
+  final failures = <int>[];
+  final types = <String>[];
+  var attachedResponse = false;
+  dio.interceptors.add(InterceptorsWrapper(
+    onRequest: (options, handler) {
+      starts.add(timer.elapsedMilliseconds);
+      handler.next(options);
+    },
+    onError: (error, handler) {
+      failures.add(timer.elapsedMilliseconds);
+      types.add(error.type.name);
+      attachedResponse = attachedResponse || error.response != null;
+      handler.next(error);
+    },
+  ));
+  dio.interceptors.add(RetryInterceptor(dio, 2, delay));
+  try {
+    await expectLater(dio.getUri<List<int>>(url, options: Options(
+      followRedirects: redirectLimit != null, maxRedirects: redirectLimit, headers: {'X-Wire-Retry': '1'},
+    )), throwsA(isA<DioException>().having((error) => error.type.name, 'type', expectedError)));
+    expect(starts, hasLength(attempts), reason: url.path);
+    expect(types, List.filled(attempts, expectedError), reason: url.path);
+    expect(attachedResponse, isFalse, reason: url.path);
+    final waits = [for (var i = 1; i < attempts; i++) starts[i] - failures[i - 1]];
+    for (var i = 0; i < waits.length; i++) {
+      expect(waits[i], greaterThanOrEqualTo(delay * (i + 1) - 10), reason: url.path);
+    }
+    return {'attempts': starts.length, 'errorKinds': types, 'backoffMilliseconds': waits};
+  } finally {
+    dio.close(force: true);
+  }
 }
 
 // Inherited createHttpClient delegates to dart:io's actual native implementation.

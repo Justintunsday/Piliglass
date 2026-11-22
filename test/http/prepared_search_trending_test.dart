@@ -201,7 +201,7 @@ void main() {
 
         final redirected = switch (scenario) {
           _Scenario.redirected || _Scenario.redirectedSwitched ||
-          _Scenario.redirectedHTTPError || _Scenario.redirectedTerminal => true,
+          _Scenario.redirectedHTTPError || _Scenario.redirectedTerminal || _Scenario.retried => true,
           _ => false,
         };
         final followsRedirects = redirected || scenario == _Scenario.redirects || scenario.usesInterceptor;

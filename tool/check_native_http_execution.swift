@@ -49,30 +49,36 @@ private actor Provider: PiliHTTPRequestContextProviding {
 }
 
 private actor Transfer: PiliHTTPTransferring {
-  enum Mode: Sendable, Equatable { case success, headCancel, headError, noHead, delayedBody, duplicateHead, unsupportedFields }
+  enum Mode: Sendable, Equatable {
+    case success, headCancel, headError, noHead, delayedBody, duplicateHead, unsupportedFields, observedHead
+  }
   let mode: Mode
   let provider: Provider
-  let refusals: Int
+  let retryableFailures: [String]
   var calls = 0
   var headFinishedBeforeBody = false
   var sent: [ContinuousClock.Instant] = []
   var sentCookies: [String?] = []
-  init(_ mode: Mode, provider: Provider, refusals: Int = 0) {
-    self.mode = mode; self.provider = provider; self.refusals = refusals
+  init(_ mode: Mode, provider: Provider, retryableFailures: [String] = []) {
+    self.mode = mode; self.provider = provider; self.retryableFailures = retryableFailures
   }
   func transfer(_ request: URLRequest, redirectLimit: Int?,
                 onHead: @escaping @Sendable (PiliHTTPResponseHead) -> Void) async -> PiliHTTPTransferOutcome {
     calls += 1
     sent.append(.now)
     sentCookies.append(request.value(forHTTPHeaderField: "Cookie"))
-    if calls <= refusals {
-      return .init(head: nil, body: .failure(.client(.nativeTransport(kind: "connectionRefused"))),
-                   failedDuringInitialConnection: true)
+    if calls <= retryableFailures.count {
+      return .init(head: nil, body: .failure(.client(.nativeTransport(kind: retryableFailures[calls - 1]))),
+                   retryableTransportFailure: true)
     }
     if mode == .noHead { return .init(head: nil, body: .failure(.client(.transport(code: -1)))) }
     let head = PiliHTTPResponseHead(url: request.url!, statusCode: 403, headers: [:],
       cookieFields: mode == .unsupportedFields ? .unsupported : .separatedFields(["same=path; Path=/x", "same=root; Path=/"]))
     onHead(head)
+    if mode == .observedHead {
+      return .init(head: nil, body: .failure(.client(.nativeTransport(kind: "remoteConnectionClosed"))),
+                   retryableTransportFailure: true)
+    }
     if mode == .duplicateHead { onHead(head) }
     if mode == .delayedBody {
       for _ in 0..<200 {
@@ -158,9 +164,10 @@ private struct ExecutionChecks {
     try await PiliPreparedHTTPRequestExecutor(provider: provider, transport: transfer, evidence: evidence)
       .execute(.searchTrending(limit: 10))
   }
-  static func initialConnectionRetries() async throws {
+  static func transportRetries() async throws {
     let configured = policy(retryCount: 2, delay: 25)
-    let success = Provider(policy: configured), recovered = Transfer(.success, provider: success, refusals: 2)
+    let success = Provider(policy: configured)
+    let recovered = Transfer(.success, provider: success, retryableFailures: ["connectionRefused", "remoteConnectionClosed"])
     guard case .transferred(let outcome, let receipt, _, _) = try await execute(success, recovered) else {
       throw Failure(message: "Failed Swift attempts must never replay via Dart")
     }
@@ -172,28 +179,34 @@ private struct ExecutionChecks {
     try expect(sent.count == 3 && sent[0].duration(to: sent[1]) >= .milliseconds(25)
       && sent[1].duration(to: sent[2]) >= .milliseconds(50), "Retry wait multiplies by attempt")
 
-    let exhausted = Provider(policy: configured), stillRefused = Transfer(.success, provider: exhausted, refusals: 3)
-    guard case .transferred = try await execute(exhausted, stillRefused) else {
+    let exhausted = Provider(policy: configured)
+    let stillClosed = Transfer(.success, provider: exhausted, retryableFailures: Array(repeating: "remoteConnectionClosed", count: 3))
+    guard case .transferred = try await execute(exhausted, stillClosed) else {
       throw Failure(message: "Retry exhaustion invoked a second transport")
     }
-    let exhaustedCalls = await stillRefused.calls, exhaustedTerminals = await exhausted.counts()
+    let exhaustedCalls = await stillClosed.calls, exhaustedTerminals = await exhausted.counts()
     try expect(exhaustedCalls == 3 && exhaustedTerminals == [1, 0, 1], "Exhaustion abandons once")
 
-    for mode in [Transfer.Mode.noHead, .headError, .headCancel] {
+    for mode in [Transfer.Mode.noHead, .headError, .headCancel, .observedHead] {
       let provider = Provider(policy: configured), transfer = Transfer(mode, provider: provider)
       _ = try await execute(provider, transfer)
       let calls = await transfer.calls, retries = await provider.retries
       try expect(calls == 1 && retries.isEmpty, "No resend after unclassified error, observed head or cancellation")
+      if mode == .observedHead {
+        try expect(await provider.counts() == [1, 1, 0], "A head callback preserves write-back even if the outcome lacks a head")
+      }
     }
 
-    let denied = Provider(policy: configured), revoked = Transfer(.success, provider: denied, refusals: 1)
+    let denied = Provider(policy: configured)
+    let revoked = Transfer(.success, provider: denied, retryableFailures: ["remoteConnectionClosed"])
     await denied.configure(retryDenied: true)
     do { _ = try await execute(denied, revoked); throw Failure(message: "Revoked retry sent") }
     catch PiliHTTPRequestContextError.serviceFailure(code: "revoked") { checks += 1 }
     let deniedCalls = await revoked.calls, deniedTerminals = await denied.counts()
     try expect(deniedCalls == 1 && deniedTerminals == [1, 0, 1], "Revoked retry settles the original lease")
 
-    let cancel = Provider(policy: policy(retryCount: 2, delay: 500)), waiting = Transfer(.success, provider: cancel, refusals: 1)
+    let cancel = Provider(policy: policy(retryCount: 2, delay: 500))
+    let waiting = Transfer(.success, provider: cancel, retryableFailures: ["remoteConnectionClosed"])
     let operation = Task { try await execute(cancel, waiting) }
     for _ in 0..<500 {
       if await waiting.calls == 1 { break }
@@ -216,7 +229,7 @@ private struct ExecutionChecks {
       try expect(reasons.contains(.unverifiedTransport) && reasons.contains(.requestSemantics), "Foundation cannot authorize runtime")
       try expect(Set(reasons).count == reasons.count, "Reasons deterministic and unique")
       try rawHTTP11Preflight(evaluator)
-      try await initialConnectionRetries()
+      try await transportRetries()
       for invalid in [policy(connect: -1), policy(receive: Int64.max), policy(retryCount: -1, delay: 10),
                       policy(delay: -1), policy(delay: Int64.max),
                       policy(proxy: .init(host: "fixture", port: -1)), policy(issues: [.decoderChanged])] {
