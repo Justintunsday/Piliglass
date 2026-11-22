@@ -70,7 +70,8 @@ private struct PreparedHTTPPolicyChecks {
             try expect(policy.retry?.installed == true && policy.retry?.count == 2 && policy.retry?.delayMilliseconds == 500,
                        "Actual copied/bound retry")
             try expect(policy.clientMode == (name == "forced-http11" ? .http11 : .main), "Selected client mode retained")
-            try expect(reasons.contains(.retry), "Actual retry-two stays on Dart")
+            try expect(!reasons.contains(.retry) && reasons.contains(.sendTimeout) && reasons.contains(.transformTimeout),
+                       "Actual retry-two is representable while the custom timeouts still require Dart")
           case "retry-installed-zero":
             try expect(policy.retry?.installed == true && policy.retry?.count == 0 && policy.retry?.delayMilliseconds == 37,
                        "Installed zero is distinct from absence")

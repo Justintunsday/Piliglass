@@ -30,6 +30,10 @@ enum _Scenario {
   retryRevoked,
   bodyRetried,
   bodyRetryExhausted,
+  decodeRetried,
+  decodeRetryExhausted,
+  apiRejected,
+  unsupportedTrial,
   terminalRedirect,
   redirectedTerminal,
   interceptorSuccess,
@@ -207,10 +211,13 @@ void main() {
           _Scenario.retried || _Scenario.bodyRetried => true,
           _ => false,
         };
-        final followsRedirects = redirected || scenario == _Scenario.redirects || scenario.usesInterceptor;
+        final followsRedirects = redirected || scenario == _Scenario.redirects ||
+            scenario == _Scenario.decodeRetried || scenario.usesInterceptor;
         final retryRevoked = scenario == _Scenario.retryRevoked;
         final bodyRetryExhausted = scenario == _Scenario.bodyRetryExhausted;
-        final retrying = retryRevoked || bodyRetryExhausted ||
+        final decodeRetryExhausted = scenario == _Scenario.decodeRetryExhausted;
+        final retrying = retryRevoked || bodyRetryExhausted || decodeRetryExhausted ||
+            scenario == _Scenario.decodeRetried || scenario == _Scenario.apiRejected ||
             scenario == _Scenario.retried || scenario == _Scenario.bodyRetried;
         if (retrying || scenario.usesInterceptor) {
           final retry = RetryInterceptor(Request.dio, retrying ? 2 : 0, 500);
@@ -219,11 +226,16 @@ void main() {
         }
         final previousRedirects = Request.dio.options.followRedirects;
         final previousLimit = Request.dio.options.maxRedirects;
+        final previousSendTimeout = Request.dio.options.sendTimeout;
         Request.dio.options.followRedirects = followsRedirects;
         if (scenario.usesInterceptor) Request.dio.options.maxRedirects = 2;
+        if (scenario == _Scenario.unsupportedTrial) {
+          Request.dio.options.sendTimeout = const Duration(seconds: 3);
+        }
         addTearDown(() {
           Request.dio.options.followRedirects = previousRedirects;
           Request.dio.options.maxRedirects = previousLimit;
+          Request.dio.options.sendTimeout = previousSendTimeout;
         });
         final service = NativeHTTPRequestLeaseService(autoExpire: false);
         final bridge = NativeHTTPRequestLeaseBridge(service: service);
@@ -277,8 +289,8 @@ void main() {
           'trending_fixture=root; Domain=.bilibili.com; Path=/',
         ];
         final declined =
-            scenario == _Scenario.declined || scenario == _Scenario.redirects;
-        final abandoning = declined || retryRevoked || bodyRetryExhausted;
+            scenario == _Scenario.declined || scenario == _Scenario.redirects || scenario == _Scenario.unsupportedTrial;
+        final abandoning = declined || retryRevoked || bodyRetryExhausted || decodeRetryExhausted;
         final terminalMethod = abandoning
             ? 'abandonNativeHTTPRequest'
             : 'finishNativeHTTPRequest';
@@ -313,7 +325,7 @@ void main() {
           await Accounts.installCredentials(_account(mid, 'replacement'));
         }
         final retries = <Map<String, Object?>>[];
-        if (retrying) {
+        if (retrying && scenario != _Scenario.apiRejected) {
           for (final attempt in retryRevoked ? [1] : [1, 2]) {
             if (!retryRevoked) {
               await original.cookieJar.saveFromResponse(url, [Cookie('retry_fixture', 'attempt-$attempt')..path = '/']);
@@ -335,7 +347,7 @@ void main() {
         final receipt = await bridge.handle(terminalMethod, terminal);
         final writes = !abandoning && scenario != _Scenario.revoked;
         expect(receipt['state'], switch (scenario) {
-          _Scenario.declined || _Scenario.redirects || _Scenario.retryRevoked || _Scenario.bodyRetryExhausted => 'abandoned',
+          _ when abandoning => 'abandoned',
           _Scenario.revoked => 'revoked',
           _ => 'finished',
         });
@@ -376,7 +388,9 @@ void main() {
         expect(snapshot['authority'], 'dartHive');
 
         final gzipBody = _trendingBody();
-        final wireBody = [...gzipBody];
+        final wireBody = scenario == _Scenario.apiRejected
+            ? gzip.encode(utf8.encode('{"code":-400,"message":"fixture denial","data":null}'))
+            : [...gzipBody];
         if (scenario == _Scenario.corrupt || status == 403) {
           wireBody[wireBody.length - 8] ^= 1;
           expect(
@@ -384,11 +398,26 @@ void main() {
             throwsFormatException,
           );
         }
+        final decodingFailures = switch (scenario) {
+          _Scenario.decodeRetried => [('gzip', 'invalid encoding'), (null, '{"code":0,}')],
+          _Scenario.decodeRetryExhausted => [(null, '{"code":'), ('br', 'invalid encoding')],
+          _ => <(String?, String)>[],
+        };
+        final failedFrames = <Map<String, Object?>>[];
+        for (final (encoding, text) in decodingFailures) {
+          final bytes = utf8.encode(text);
+          expect(() {
+            final expanded = Request.responseBytesDecoder(bytes, {if (encoding != null) 'content-encoding': [encoding]});
+            return jsonDecode(utf8.decode(expanded, allowMalformed: true));
+          }, throwsException);
+          failedFrames.add({'encoding': encoding, 'body': base64Encode(bytes)});
+        }
         cases.add({
           'name': scenario.name,
           'prepare': prepare,
           'prepared': prepared,
           'retries': retries,
+          if (failedFrames.isNotEmpty) 'decodingFailures': failedFrames,
           'terminalMethod': terminalMethod,
           'terminal': terminal,
           'receipt': receipt,

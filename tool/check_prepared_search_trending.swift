@@ -16,7 +16,8 @@ private struct TrendingFixture {
   let retries: [(command: [String: PiliBridgeValue], reply: [String: PiliBridgeValue])]
   let reissues: [(command: [String: PiliBridgeValue], reply: [String: PiliBridgeValue])]
   let intermediate: [(head: [String: PiliBridgeValue], body: Data)]
-  var usesDart: Bool { name == "declined" || name == "redirects" }
+  let decodingFailures: [(encoding: String?, body: Data)]
+  var usesDart: Bool { name == "declined" || name == "redirects" || name == "unsupportedTrial" }
   var authorizedRetryCookies: [String] {
     retries.compactMap { retry in
       guard case .dictionary(let headers) = retry.reply["headers"],
@@ -34,7 +35,8 @@ private struct TrendingFixture {
           let encoded = raw["body"] as? String, let body = Data(base64Encoded: encoded),
           let keywords = raw["keywords"] as? [[String: String]], let retries = raw["retries"] as? [[String: Any]],
           let reissues = (raw["reissues"] ?? []) as? [[String: Any]],
-          let intermediate = (raw["intermediate"] ?? []) as? [[String: Any]] else {
+          let intermediate = (raw["intermediate"] ?? []) as? [[String: Any]],
+          let decodingFailures = (raw["decodingFailures"] ?? []) as? [[String: Any]] else {
       throw FixtureError(message: "Invalid Dart trending fixture")
     }
     self.name = name
@@ -57,6 +59,12 @@ private struct TrendingFixture {
       }
       return (head: try Self.fields(entry["head"]), body: bytes)
     }
+    self.decodingFailures = try decodingFailures.map { entry in
+      guard let rawBody = entry["body"] as? String, let body = Data(base64Encoded: rawBody) else {
+        throw FixtureError(message: "Missing invalid response body")
+      }
+      return (entry["encoding"] as? String, body)
+    }
     self.keywords = try keywords.map { fields in
       guard let keyword = fields["keyword"], let reason = fields["reason"] else {
         throw FixtureError(message: "Invalid expected Dart keyword")
@@ -76,13 +84,17 @@ private struct TrendingFixture {
 @MainActor
 private final class FixtureBridge: PiliBridgeMethodTransport {
   let fixture: TrendingFixture
+  let aggregatedDiscovery: Bool
   private var requestID: PiliBridgeValue?
   private var retryIndex = 0
   private var redirectIndex = 0
   private(set) var methods: [String] = []
   private(set) var mismatch: String?
 
-  init(_ fixture: TrendingFixture) { self.fixture = fixture }
+  init(_ fixture: TrendingFixture, aggregatedDiscovery: Bool = false) {
+    self.fixture = fixture
+    self.aggregatedDiscovery = aggregatedDiscovery
+  }
 
   func invoke(
     _ method: String,
@@ -101,10 +113,11 @@ private final class FixtureBridge: PiliBridgeMethodTransport {
   private func reply(_ method: String, arguments: [String: PiliBridgeValue]?) -> PiliBridgeValue? {
     switch method {
     case "loadNativeSearchDiscovery":
-      guard arguments == ["includeTrending": .bool(false)] else { return nil }
+      guard arguments == (aggregatedDiscovery ? nil : ["includeTrending": .bool(false)]) else { return nil }
       return .dictionary([
         "state": .string("success"), "trendingEnabled": .bool(true),
         "history": .array([.string("saved")]),
+        "trending": .array([.dictionary(["keyword": .string("Dart aggregate")])]),
         "recommendations": .array([.dictionary(["keyword": .string("pick")])])
       ])
     case "prepareNativeHTTPRequest":
@@ -167,6 +180,7 @@ private actor FixtureTransfer: PiliHTTPTransferring {
   private let intermediate: [(PiliHTTPResponseHead, Data)]
   let retryableFailures: [String]
   let truncatedResponses: Int
+  let decodingFailures: [(encoding: String?, body: Data)]
   private(set) var sends = 0
   private(set) var matchedRequest = false
 
@@ -188,15 +202,19 @@ private actor FixtureTransfer: PiliHTTPTransferring {
       }
       return RequestStep(url: url, cookie: cookie, redirectLimit: limit)
     })
-    retryableFailures = fixture.retries.indices.map { index in
-      index == 0 && fixture.name == "retried" ? "connectionRefused" : "remoteConnectionClosed"
+    retryableFailures = switch fixture.name {
+    case "retried": ["connectionRefused", "remoteConnectionClosed"]
+    case "retryRevoked": ["remoteConnectionClosed"]
+    default: []
     }
     let truncatedResponses = switch fixture.name {
     case "bodyRetried": fixture.retries.count
     case "bodyRetryExhausted": fixture.retries.count + 1
+    case "decodeRetryExhausted": 1
     default: 0
     }
     self.truncatedResponses = truncatedResponses
+    decodingFailures = fixture.decodingFailures
     body = fixture.body
     let intermediate = try fixture.intermediate.map { frame in
       (try Self.responseHead(frame.head, headers: ["content-type": "application/json"]), frame.body)
@@ -204,7 +222,7 @@ private actor FixtureTransfer: PiliHTTPTransferring {
     self.intermediate = intermediate
     if case .dictionary(let response) = fixture.terminal["response"] {
       head = try Self.responseHead(response, headers: ["content-encoding": "gzip", "content-type": "application/json"],
-                                   waitForBody: truncatedResponses > 0)
+        waitForBody: truncatedResponses > 0 || !fixture.decodingFailures.isEmpty || fixture.name == "apiRejected")
     } else if fixture.usesDart || fixture.name == "retryRevoked" || truncatedResponses > 0 || !intermediate.isEmpty {
       head = nil
     } else {
@@ -271,11 +289,22 @@ private actor FixtureTransfer: PiliHTTPTransferring {
       return .init(head: head, body: .failure(.client(.nativeTransport(kind: "remoteConnectionClosed"))),
                    retryEvidence: .incompleteResponseBody)
     }
-    if index < retryableFailures.count {
-      return .init(head: nil, body: .failure(.client(.nativeTransport(kind: retryableFailures[index]))),
+    let retryIndex = index - truncatedResponses
+    if retryableFailures.indices.contains(retryIndex) {
+      return .init(head: nil, body: .failure(.client(.nativeTransport(kind: retryableFailures[retryIndex]))),
                    retryEvidence: .beforeResponseHead)
     }
-    let responseIndex = index - retryableFailures.count
+    let decodingIndex = retryIndex - retryableFailures.count
+    if decodingFailures.indices.contains(decodingIndex) {
+      let frame = decodingFailures[decodingIndex]
+      var headers = ["content-type": "application/json"]
+      headers["content-encoding"] = frame.encoding
+      let head = PiliHTTPResponseHead(url: request.url!, statusCode: 200, headers: headers,
+        cookieFields: .separatedFields(["trending_fixture=undecodable; Path=/"]), requiresCompleteBodyForWriteBack: true)
+      onHead(head)
+      return .init(head: head, body: .success(frame.body))
+    }
+    let responseIndex = decodingIndex - decodingFailures.count
     if intermediate.indices.contains(responseIndex) {
       let (head, body) = intermediate[responseIndex]
       onHead(head)
@@ -300,13 +329,15 @@ private struct PreparedSearchTrendingChecks {
       let fixtures = try cases.map(TrendingFixture.init)
       let expected: Set<String> = ["selected", "switched", "revoked", "httpError", "corrupt", "declined", "redirects",
                                    "redirected", "redirectedSwitched", "redirectedHTTPError", "retried", "retryRevoked",
-                                   "bodyRetried", "bodyRetryExhausted",
+                                   "bodyRetried", "bodyRetryExhausted", "decodeRetried", "decodeRetryExhausted",
+                                   "apiRejected", "unsupportedTrial",
                                    "terminalRedirect", "redirectedTerminal", "interceptorSuccess", "interceptorDenied",
                                    "interceptorExhausted", "interceptorCorrupt", "interceptorRevoked"]
       guard fixtures.count == expected.count, Set(fixtures.map(\.name)) == expected else {
         throw FixtureError(message: "Missing or repeated Dart trending scenarios")
       }
       for fixture in fixtures { try await check(fixture) }
+      try await checkTrialEntry(fixtures)
       print("\(fixtures.count) actual Dart prepared trending cases passed")
     } catch {
       print("FAIL prepared trending: \(error)")
@@ -315,12 +346,15 @@ private struct PreparedSearchTrendingChecks {
   }
 
   static func check(_ fixture: TrendingFixture) async throws {
-    if fixture.usesDart { try await checkRawCandidate(fixture) }
     let bridge = FixtureBridge(fixture)
     let transfer = try FixtureTransfer(fixture)
     let declined = fixture.usesDart
-    let loader = PiliPreparedSearchTrendingLoader(bridge: bridge, transport: transfer,
-      evidence: declined ? .rawCandidate : .syntheticComplete, maximumBodyBytes: 65_536)
+    let loader = PiliPreparedSearchTrendingLoader(bridge: bridge, selectTransport: { policy in
+      switch PiliHTTPPolicyCapability().evaluate(policy, evidence: declined ? .rawCandidate : .syntheticComplete) {
+      case .native: return .native(transfer)
+      case .dart(let reasons): return .dart(reasons)
+      }
+    }, maximumBodyBytes: 65_536)
     var failure: Error?
     let repository = PiliFlutterSearchRepository(invoker: PiliBridgeMethodInvoker(transport: bridge)) {
       do { return try await loader.load() }
@@ -332,8 +366,9 @@ private struct PreparedSearchTrendingChecks {
       + Array(repeating: "prepareNativeHTTPRedirect", count: fixture.reissues.count) + [fixture.terminalMethod]
     let suffix: [String]
     switch fixture.name {
-    case "declined", "redirects": suffix = ["loadNativeSearchTrending"]
-    case "selected", "switched", "redirected", "redirectedSwitched", "retried", "bodyRetried", "interceptorSuccess":
+    case "declined", "redirects", "unsupportedTrial": suffix = ["loadNativeSearchTrending"]
+    case "selected", "switched", "redirected", "redirectedSwitched", "retried", "bodyRetried",
+         "decodeRetried", "interceptorSuccess":
       suffix = ["loadNativeAccountSelection"]
     default: suffix = []
     }
@@ -347,7 +382,7 @@ private struct PreparedSearchTrendingChecks {
     }
     let valid: Bool
     switch fixture.name {
-    case "selected", "redirected", "retried", "bodyRetried", "interceptorSuccess":
+    case "selected", "redirected", "retried", "bodyRetried", "decodeRetried", "interceptorSuccess":
       valid = failure == nil && !fixture.keywords.isEmpty && result.trending == fixture.keywords
     case "switched", "redirectedSwitched":
       valid = failure == nil && result.trending.isEmpty
@@ -363,13 +398,16 @@ private struct PreparedSearchTrendingChecks {
     case "terminalRedirect", "redirectedTerminal":
       valid = (failure as? PiliSearchTrendingError) == .httpStatus(fixture.name == "terminalRedirect" ? 302 : 300)
         && result.trending.isEmpty
-    case "corrupt":
+    case "corrupt", "decodeRetryExhausted":
       valid = (failure as? PiliHTTPBodyDecodeFailure) == .malformedCompression && result.trending.isEmpty
+    case "apiRejected":
+      valid = (failure as? PiliSearchTrendingError) == .api(code: -400, message: "fixture denial")
+        && result.trending.isEmpty
     case "interceptorCorrupt":
       valid = failure != nil && result.trending.isEmpty
     case "interceptorExhausted":
       valid = (failure as? PiliSearchTrendingError) == .httpStatus(300) && result.trending.isEmpty
-    case "declined", "redirects":
+    case "declined", "redirects", "unsupportedTrial":
       valid = failure == nil && result.trending.map(\.keyword) == ["Dart hot"]
     default:
       valid = false
@@ -381,7 +419,60 @@ private struct PreparedSearchTrendingChecks {
     print("PASS prepared trending \(fixture.name)")
   }
 
-  static func checkRawCandidate(_ fixture: TrendingFixture) async throws {
+  static func checkTrialEntry(_ fixtures: [TrendingFixture]) async throws {
+    guard let fixture = fixtures.first(where: { $0.name == "decodeRetried" }),
+          let unsupported = fixtures.first(where: { $0.name == "unsupportedTrial" }),
+          let unavailable = fixtures.first(where: { $0.name == "declined" }) else {
+      throw FixtureError(message: "Missing Runner trial fixtures")
+    }
+    let transfer = try FixtureTransfer(fixture)
+    let factory: PiliPreparedSearchTrendingLoader.MakeRawTransport = { profile in
+      guard profile.redirectLimit == 5, profile.connectMicroseconds == 10_000_000,
+            profile.receiveIdleMicroseconds == 10_000_000, profile.poolIdleMicroseconds == 15_000_000 else {
+        throw FixtureError(message: "Unexpected Runner raw profile")
+      }
+      return transfer
+    }
+    let off = FixtureBridge(fixture, aggregatedDiscovery: true)
+    let defaultRepository = PiliPreparedSearchTrendingLoader.repository(bridge: off, launchArguments: [],
+                                                                      makeRawTransport: factory)
+    let defaults = try await defaultRepository.discovery()
+    guard off.mismatch == nil, off.methods == ["loadNativeSearchDiscovery"],
+          defaults.trending.map(\.keyword) == ["Dart aggregate"], await transfer.sends == 0 else {
+      throw FixtureError(message: "Runner without the launch argument changed the default Dart path")
+    }
+
+    let arguments = ["--pili-native-search-trending"]
+    let on = FixtureBridge(fixture)
+    let trial = PiliPreparedSearchTrendingLoader.repository(bridge: on, launchArguments: arguments,
+                                                            makeRawTransport: factory)
+    let native = try await trial.discovery()
+    guard on.mismatch == nil, on.methods == ["loadNativeSearchDiscovery", "prepareNativeHTTPRequest",
+      "prepareNativeHTTPRetry", "prepareNativeHTTPRetry", "finishNativeHTTPRequest", "loadNativeAccountSelection"],
+      native.trending == fixture.keywords, await transfer.sends == 3, await transfer.matchedRequest else {
+      throw FixtureError(message: "Runner trial did not take the prepared Native path for default HTTP/1.1")
+    }
+
+    for rejected in [unsupported, unavailable] {
+      let bridge = FixtureBridge(rejected)
+      let policyUnsupported = rejected.name == "unsupportedTrial"
+      let repository = PiliPreparedSearchTrendingLoader.repository(bridge: bridge, launchArguments: arguments,
+        makeRawTransport: { _ in
+          if policyUnsupported { return transfer }
+          throw PiliHTTPClientError.invalidRequest
+        })
+      let fallback = try await repository.discovery()
+      guard bridge.mismatch == nil, bridge.methods == ["loadNativeSearchDiscovery", "prepareNativeHTTPRequest",
+        "abandonNativeHTTPRequest", "loadNativeSearchTrending"],
+        fallback.trending.map(\.keyword) == ["Dart hot"], await transfer.sends == 3 else {
+        throw FixtureError(message: "\(rejected.name): Runner trial failed to fall back before sending")
+      }
+    }
+    try await checkRawPool(fixture)
+    print("PASS Runner trending default, opt-in recovery, pre-send fallback and pool reuse")
+  }
+
+  static func checkRawPool(_ fixture: TrendingFixture) async throws {
     guard case .string(let id) = fixture.prepared["requestID"] else {
       throw FixtureError(message: "Missing Dart ID for raw preflight")
     }
@@ -396,11 +487,22 @@ private struct PreparedSearchTrendingChecks {
           profile.redirectLimit == (context.policy.followRedirects ? Int(context.policy.maxRedirects) : nil) else {
       throw FixtureError(message: "Raw configuration drifted from the actual Dart pool")
     }
-    let client = try PiliRawHTTPClient(profile: profile, maximumBodyBytes: 65_536)
+    let pool = PiliRawHTTPClientPool(maximumBodyBytes: 65_536)
+    let client = try await pool.client(for: profile)
+    let reused = try await pool.client(for: profile)
+    let next = PiliRawHTTP11Profile(poolGeneration: profile.poolGeneration + 1,
+      connectMicroseconds: profile.connectMicroseconds, receiveIdleMicroseconds: profile.receiveIdleMicroseconds,
+      poolIdleMicroseconds: profile.poolIdleMicroseconds, redirectLimit: profile.redirectLimit)
+    let replacement = try await pool.client(for: next)
+    let stale = try await pool.client(for: profile)
+    let stillCurrent = try await pool.client(for: next)
+    guard client === reused, client !== replacement, stale !== client, stale !== replacement,
+          replacement === stillCurrent else {
+      throw FixtureError(message: "Raw pool did not reuse and replace clients by effective policy")
+    }
     var request = URLRequest(url: URL(string: "http://127.0.0.1:1/trending-fixture")!)
     request.httpMethod = "GET"
     let rejected = await client.transfer(request, redirectLimit: profile.redirectLimit, onHead: { _ in })
-    try await client.shutdown()
     guard rejected.head == nil,
           case .failure(.client(.nativeTransport(kind: "invalidRequest"))) = rejected.body else {
       throw FixtureError(message: "The configured candidate accepted a plain HTTP fixture URL")

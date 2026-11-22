@@ -41,8 +41,8 @@ final class PiliNativeRootViewController: UIViewController {
   private lazy var model = PiliNativeViewModel(
     channel: channel,
     flutterPlayerSurface: flutterPlayerSurface,
-    searchRepository: PiliFlutterSearchRepository(
-      invoker: PiliBridgeMethodInvoker(transport: PiliFlutterMethodTransport(channel: channel))
+    searchRepository: PiliPreparedSearchTrendingLoader.repository(
+      bridge: PiliFlutterMethodTransport(channel: channel)
     )
   )
   private var hostingController: UIHostingController<PiliNativeRootView>?

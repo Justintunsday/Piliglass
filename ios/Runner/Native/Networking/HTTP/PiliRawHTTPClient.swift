@@ -2,8 +2,7 @@ import Foundation
 import PiliHTTPTransport
 
 /// Runner adapter; endpoint/lease permission remains in Data, not this client.
-/// Runtime composition still uses Dart until this transport is accepted.
-struct PiliRawHTTPClient: PiliHTTPTransferring {
+final class PiliRawHTTPClient: PiliHTTPTransferring {
   private let transport: PiliRawHTTPTransport
   private let maximumRedirects: Int?
 
@@ -18,7 +17,10 @@ struct PiliRawHTTPClient: PiliHTTPTransferring {
     ))
   }
 
-  func shutdown() async throws { try await transport.shutdown() }
+  deinit {
+    let transport = self.transport
+    Task { try? await transport.shutdown() }
+  }
 
   func transfer(_ request: URLRequest, redirectLimit: Int?,
                 onHead: @escaping @Sendable (PiliHTTPResponseHead) -> Void) async -> PiliHTTPTransferOutcome {
@@ -53,5 +55,24 @@ struct PiliRawHTTPClient: PiliHTTPTransferring {
                  cookieFields: .separatedFields(value.setCookieFields),
                  redirects: value.redirects.map { .init(statusCode: $0.statusCode, location: $0.location, url: $0.url) },
                  locationValues: locations, requiresCompleteBodyForWriteBack: true)
+  }
+}
+
+/// Outstanding executors retain their own client across retries and redirects.
+actor PiliRawHTTPClientPool {
+  private let maximumBodyBytes: Int
+  private var current: (profile: PiliRawHTTP11Profile, client: PiliRawHTTPClient)?
+
+  init(maximumBodyBytes: Int) {
+    self.maximumBodyBytes = maximumBodyBytes
+  }
+
+  func client(for profile: PiliRawHTTP11Profile) throws -> PiliRawHTTPClient {
+    if let current, current.profile == profile { return current.client }
+    let client = try PiliRawHTTPClient(profile: profile, maximumBodyBytes: maximumBodyBytes)
+    if profile.poolGeneration >= (current?.profile.poolGeneration ?? 0) {
+      current = (profile, client)
+    }
+    return client
   }
 }

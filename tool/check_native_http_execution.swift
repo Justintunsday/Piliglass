@@ -152,12 +152,19 @@ private struct ExecutionChecks {
                    "Same-origin mapping alone cannot authorize the runtime")
       }
     }
+    let defaultRetry = policy(retryCount: 2, delay: 500, followRedirects: true)
+    try expect(evaluator.planRawHTTP11(defaultRetry) == .candidate(.init(poolGeneration: 1,
+      connectMicroseconds: 10_000_000, receiveIdleMicroseconds: 10_000_000,
+      poolIdleMicroseconds: 15_000_000, redirectLimit: 5)), "Default H1 retry policy is representable")
     let rejected: [(PiliPreparedHTTPPolicy, [PiliHTTPPolicyRejection])] = [
       (policy(connect: nil), [.connectTimeout]),
       (policy(connect: 0), [.connectTimeout]),
       (policy(receive: -1), [.invalidDuration]),
       (policy(receive: Int64.max), [.durationOverflow]),
-      (policy(retryCount: 2, delay: 500, followRedirects: true), [.retry]),
+      (policy(retryCount: -1, delay: 500), [.retry]),
+      (policy(retryCount: 2), [.retry]),
+      (policy(retryCount: 2, delay: -1), [.retry]),
+      (policy(retryCount: 2, delay: Int64.max / 1_000_000), [.durationOverflow]),
       (policy(followRedirects: true, maxRedirects: -1), [.redirect]),
       (policy(proxy: .init(host: "fixture", port: 8080)), [.proxy, .certificateTrust]),
       (policy(issues: [.decoderChanged]), [.undescribedPolicy]),

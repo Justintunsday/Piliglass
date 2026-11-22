@@ -59,7 +59,8 @@ struct PiliHTTPPolicyCapability: Sendable {
     }
     if idle == 0 { reasons.append(.poolLifetime) }
     if durations.contains(where: { $0 < 0 }) { reasons.append(.invalidDuration) }
-    if durations.contains(where: { $0 > Int64.max / 1_000 }) || retryDelay > Int64.max / 1_000_000 {
+    let maximumRetryDelay = Int64.max / 1_000_000 / max(1, retry.count)
+    if durations.contains(where: { $0 > Int64.max / 1_000 }) || retryDelay > maximumRetryDelay {
       reasons.append(.durationOverflow)
     }
     // An absent AHC connect timeout selects its default. It cannot express
@@ -67,7 +68,8 @@ struct PiliHTTPPolicyCapability: Sendable {
     if connect == 0 { reasons.append(.connectTimeout) }
     if send != 0 { reasons.append(.sendTimeout) }
     if transform != 0 { reasons.append(.transformTimeout) }
-    if retry.count != 0 || retryDelay < 0 || retry.installed != (retry.delayMilliseconds != nil) {
+    if retry.count < 0 || retryDelay < 0 || retry.installed != (retry.delayMilliseconds != nil)
+        || (!retry.installed && retry.count != 0) {
       reasons.append(.retry)
     }
     if policy.followRedirects, (redirectLimit ?? -1) < 0 { reasons.append(.redirect) }

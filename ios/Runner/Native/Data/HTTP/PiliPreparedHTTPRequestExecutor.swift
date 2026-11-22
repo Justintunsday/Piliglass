@@ -13,18 +13,41 @@ enum PiliPreparedHTTPRequestExecutionError: Error, Sendable, Equatable {
   case invalidDescriptor
 }
 
+enum PiliPreparedHTTPTransportSelection: Sendable {
+  case native(any PiliHTTPTransferring)
+  case dart([PiliHTTPPolicyRejection])
+}
+
+/// A complete body that the response transformer could not decode.
+/// Local resource limits and cancellation are deliberately separate errors.
+struct PiliHTTPResponseDecodingFailure: Error {
+  let underlying: any Error
+}
+
 /// The endpoint descriptor and authority come from the prepared lease. This
-/// executor grants no arbitrary URL/POST permissions and is not wired to Views.
+/// executor grants no arbitrary URL or method permissions.
 struct PiliPreparedHTTPRequestExecutor: Sendable {
+  typealias SelectTransport = @Sendable (PiliPreparedHTTPPolicy) async -> PiliPreparedHTTPTransportSelection
+
   private let provider: any PiliHTTPRequestContextProviding
-  private let transport: any PiliHTTPTransferring
-  private let evidence: PiliHTTPTransportEvidence
+  private let selectTransport: SelectTransport
   private let validateResponseBody: (@Sendable (PiliHTTPResponse) throws -> Void)?
 
   init(provider: any PiliHTTPRequestContextProviding,
        transport: any PiliHTTPTransferring, evidence: PiliHTTPTransportEvidence,
        validateResponseBody: (@Sendable (PiliHTTPResponse) throws -> Void)? = nil) {
-    self.provider = provider; self.transport = transport; self.evidence = evidence
+    self.init(provider: provider, selectTransport: { policy in
+      switch PiliHTTPPolicyCapability().evaluate(policy, evidence: evidence) {
+      case .native: return .native(transport)
+      case .dart(let reasons): return .dart(reasons)
+      }
+    }, validateResponseBody: validateResponseBody)
+  }
+
+  init(provider: any PiliHTTPRequestContextProviding, selectTransport: @escaping SelectTransport,
+       validateResponseBody: (@Sendable (PiliHTTPResponse) throws -> Void)? = nil) {
+    self.provider = provider
+    self.selectTransport = selectTransport
     self.validateResponseBody = validateResponseBody
   }
 
@@ -35,8 +58,11 @@ struct PiliPreparedHTTPRequestExecutor: Sendable {
       _ = try await provider.abandon(context)
       throw CancellationError()
     }
-    let decision = PiliHTTPPolicyCapability().evaluate(context.policy, evidence: evidence)
-    if case .dart(let reasons) = decision {
+    let transport: any PiliHTTPTransferring
+    switch await selectTransport(context.policy) {
+    case .native(let selected):
+      transport = selected
+    case .dart(let reasons):
       let receipt = try await provider.abandon(context)
       guard receipt.outcome == .abandoned else {
         throw PiliPreparedHTTPRequestExecutionError.terminalNotConfirmed(receipt.outcome)
@@ -71,8 +97,17 @@ struct PiliPreparedHTTPRequestExecutor: Sendable {
       request.cachePolicy = .reloadIgnoringLocalCacheData
       let terminal = PiliHTTPHeadTerminal(context: context, provider: provider)
       let outcome = await transport.transfer(request, redirectLimit: limit, onHead: { terminal.observe($0) })
+      let validatedHead = Result { try responseHead(outcome, terminal: terminal) }
+      let canRetry: Bool
+      switch validatedHead {
+      case .success:
+        canRetry = terminal.canRetry(outcome)
+      case .failure(let error):
+        canRetry = error is PiliHTTPResponseDecodingFailure && terminal.canRetryDecoding(outcome.head)
+      }
+
       if let retry = context.policy.retry, retry.installed, attempt < retry.count,
-         let delay = retry.delayMilliseconds, delay >= 0, terminal.canRetry(outcome) {
+         let delay = retry.delayMilliseconds, delay >= 0, canRetry {
         attempt += 1
         let (milliseconds, delayOverflow) = delay.multipliedReportingOverflow(by: attempt)
         let (nanoseconds, unitOverflow) = milliseconds.multipliedReportingOverflow(by: 1_000_000)
@@ -88,29 +123,34 @@ struct PiliPreparedHTTPRequestExecutor: Sendable {
         }
       }
 
-      var finalHead = outcome.head
-      if let head = finalHead, terminal.defers(head) {
-        finalHead = nil
-        if case .success(let body) = outcome.body {
-          do {
-            try Task.checkCancellation()
-            guard let validateResponseBody else { throw PiliHTTPClientError.invalidResponse }
-            try validateResponseBody(.init(url: head.url, statusCode: head.statusCode, headers: head.headers, body: body))
-            if terminal.mayReissue(head) {
-              context = try await provider.prepareRedirect(context, response: head)
-              headers = context.request.headers
-              continue
-            }
-            finalHead = head
-          } catch {
-            _ = try await terminal.complete(nil)
-            throw error
-          }
+      let finalHead: PiliHTTPResponseHead?
+      do {
+        finalHead = try validatedHead.get()
+        if let head = finalHead, terminal.mayReissue(head) {
+          context = try await provider.prepareRedirect(context, response: head)
+          headers = context.request.headers
+          continue
         }
+      } catch {
+        _ = try await terminal.complete(nil)
+        throw (error as? PiliHTTPResponseDecodingFailure)?.underlying ?? error
       }
       let receipt = try await terminal.complete(finalHead)
       return .transferred(outcome, receipt, generation: context.generation, requestedURL: endpoint)
     }
+  }
+
+  private func responseHead(
+    _ outcome: PiliHTTPTransferOutcome,
+    terminal: PiliHTTPHeadTerminal
+  ) throws -> PiliHTTPResponseHead? {
+    guard let head = outcome.head, terminal.defers(head) else { return outcome.head }
+    guard case .success(let body) = outcome.body else { return nil }
+    try Task.checkCancellation()
+    guard let validateResponseBody else { throw PiliHTTPClientError.invalidResponse }
+    try validateResponseBody(.init(url: head.url, statusCode: head.statusCode, headers: head.headers, body: body))
+    try Task.checkCancellation()
+    return head
   }
 }
 
@@ -142,6 +182,11 @@ private final class PiliHTTPHeadTerminal: @unchecked Sendable {
       case nil: return false
       }
     }
+  }
+
+  func canRetryDecoding(_ head: PiliHTTPResponseHead?) -> Bool {
+    guard head?.requiresCompleteBodyForWriteBack == true else { return false }
+    return lock.withLock { operation == nil }
   }
 
   func mayReissue(_ head: PiliHTTPResponseHead) -> Bool {

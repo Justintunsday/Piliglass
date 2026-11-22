@@ -2,31 +2,52 @@ import Foundation
 import PiliHTTPBodyCodec
 
 /// Joins request ownership, Cookie write-back and a decoded search result.
-/// The composition supplies the transport and its evidence for this endpoint.
 struct PiliPreparedSearchTrendingLoader: Sendable {
+  typealias MakeRawTransport = @Sendable (PiliRawHTTP11Profile) async throws -> any PiliHTTPTransferring
+
   private let executor: PiliPreparedHTTPRequestExecutor
   private let accounts: PiliAccountFlutterRepository
   private let maximumBodyBytes: Int
 
   @MainActor
+  static func repository(
+    bridge: any PiliBridgeMethodTransport,
+    launchArguments: [String] = CommandLine.arguments,
+    makeRawTransport: MakeRawTransport? = nil
+  ) -> PiliFlutterSearchRepository {
+    let invoker = PiliBridgeMethodInvoker(transport: bridge)
+    guard launchArguments.contains("--pili-native-search-trending") else {
+      return PiliFlutterSearchRepository(invoker: invoker)
+    }
+    let maximumBodyBytes = 4 * 1024 * 1024
+    let pool = PiliRawHTTPClientPool(maximumBodyBytes: maximumBodyBytes)
+    let loader = Self(bridge: bridge, selectTransport: { policy in
+      switch PiliHTTPPolicyCapability().planRawHTTP11(policy) {
+      case .unsupported(let reasons):
+        return .dart(reasons)
+      case .candidate(let profile):
+        do {
+          if let makeRawTransport { return .native(try await makeRawTransport(profile)) }
+          return .native(try await pool.client(for: profile))
+        } catch {
+          return .dart([.unverifiedTransport])
+        }
+      }
+    }, maximumBodyBytes: maximumBodyBytes)
+    return PiliFlutterSearchRepository(invoker: invoker, loadNativeTrending: { try await loader.load() })
+  }
+
+  @MainActor
   init(
     bridge: any PiliBridgeMethodTransport,
-    transport: any PiliHTTPTransferring,
-    evidence: PiliHTTPTransportEvidence,
+    selectTransport: @escaping PiliPreparedHTTPRequestExecutor.SelectTransport,
     maximumBodyBytes: Int
   ) {
     executor = PiliPreparedHTTPRequestExecutor(
       provider: PiliFlutterHTTPRequestContextProvider(transport: bridge),
-      transport: transport,
-      evidence: evidence,
+      selectTransport: selectTransport,
       validateResponseBody: { response in
-        let decoded = try Self.decodeBody(response.body, encoding: response.header(named: "content-encoding"),
-                                          maximumBodyBytes: maximumBodyBytes)
-        let contentType = response.header(named: "content-type")?.split(separator: ";", maxSplits: 1).first
-        let mime = contentType?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        if !decoded.isEmpty, let mime, mime == "application/json" || mime == "text/json" || mime.hasSuffix("+json") {
-          _ = try JSONSerialization.jsonObject(with: decoded, options: .fragmentsAllowed)
-        }
+        try Self.validateBody(response, maximumBodyBytes: maximumBodyBytes)
       }
     )
     accounts = PiliAccountFlutterRepository(invoker: PiliBridgeMethodInvoker(transport: bridge))
@@ -51,6 +72,9 @@ struct PiliPreparedSearchTrendingLoader: Sendable {
       }
       guard let head = transfer.head else { throw PiliHTTPClientError.invalidResponse }
       let response = PiliHTTPResponse(url: head.url, statusCode: head.statusCode, headers: head.headers, body: body)
+      if (200..<300).contains(head.statusCode), !Self.isJSON(response.header(named: "content-type")) {
+        throw PiliSearchTrendingError.invalidPayload
+      }
       let keywords = try PiliSearchTrendingDecoder.decode(response, requestedURL: requestedURL) { body in
         try Self.decodeBody(body, encoding: response.header(named: "content-encoding"), maximumBodyBytes: maximumBodyBytes)
       }
@@ -63,6 +87,63 @@ struct PiliPreparedSearchTrendingLoader: Sendable {
       }
       return .keywords(keywords)
     }
+  }
+
+  private static func validateBody(_ response: PiliHTTPResponse, maximumBodyBytes: Int) throws {
+    let decoded: Data
+    do {
+      decoded = try decodeBody(response.body, encoding: response.header(named: "content-encoding"),
+                               maximumBodyBytes: maximumBodyBytes)
+    } catch PiliHTTPBodyDecodeFailure.malformedCompression {
+      throw PiliHTTPResponseDecodingFailure(underlying: PiliHTTPBodyDecodeFailure.malformedCompression)
+    }
+    guard !decoded.isEmpty, isJSON(response.header(named: "content-type")) else { return }
+    do {
+      // JSONSerialization accepts trailing commas and can autodetect a BOM or
+      // a UTF-16 buffer. Dio parses the already-decoded UTF-8 string.
+      guard !decoded.starts(with: [0xEF, 0xBB, 0xBF]), !decoded.contains(0),
+            !containsTrailingComma(decoded) else {
+        throw PiliSearchTrendingError.invalidPayload
+      }
+      _ = try JSONSerialization.jsonObject(with: decoded, options: .fragmentsAllowed)
+    } catch {
+      throw PiliHTTPResponseDecodingFailure(underlying: error)
+    }
+  }
+
+  private static let mediaTypePattern: String = {
+    let token = #"[!#$%&'*+.^_\x60|~0-9A-Za-z-]+"#
+    let quoted = #""(?:[^"\x00-\x1F\x7F\\]|\\.)*""#
+    return #"\A[ \t]*"# + token + "/" + token + #"[ \t]*(?:;[ \t]*"# + token
+      + "=(?:" + token + "|" + quoted + #")[ \t]*)*\z"#
+  }()
+
+  private static func isJSON(_ contentType: String?) -> Bool {
+    guard let contentType, contentType.range(of: mediaTypePattern, options: .regularExpression) != nil,
+          let name = contentType.split(separator: ";", maxSplits: 1).first else { return false }
+    let mime = name.trimmingCharacters(in: .whitespaces).lowercased()
+    return mime == "application/json" || mime == "text/json" || mime.hasSuffix("+json")
+  }
+
+  private static func containsTrailingComma(_ body: Data) -> Bool {
+    var inString = false, escaped = false, afterComma = false
+    for byte in body {
+      if inString {
+        if escaped { escaped = false }
+        else if byte == 0x5C { escaped = true }
+        else if byte == 0x22 { inString = false }
+      } else {
+        switch byte {
+        case 0x09, 0x0A, 0x0D, 0x20: continue
+        case 0x5D, 0x7D:
+          if afterComma { return true }
+        default: break
+        }
+        inString = byte == 0x22
+        afterComma = byte == 0x2C
+      }
+    }
+    return false
   }
 
   private static func decodeBody(_ body: Data, encoding: String?, maximumBodyBytes: Int) throws -> Data {
