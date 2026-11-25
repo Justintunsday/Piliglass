@@ -49,7 +49,7 @@ import 'package:PiliPlus/pages/mine/controller.dart';
 import 'package:PiliPlus/pages/rcmd/controller.dart';
 import 'package:PiliPlus/pages/video/introduction/ugc/controller.dart';
 import 'package:PiliPlus/services/native_danmaku_settings.dart';
-import 'package:PiliPlus/services/native_http/native_http_request_lease_bridge.dart';
+import 'package:PiliPlus/services/native_http/native_trending_device_probe.dart';
 import 'package:PiliPlus/services/native_accounts/native_account_snapshot_service.dart';
 import 'package:PiliPlus/services/native_accounts/native_account_snapshot_bridge.dart';
 import 'package:PiliPlus/services/native_login/native_login_authority.dart';
@@ -85,7 +85,7 @@ final class IOSNativeUIBridge {
 
   final MainController mainController;
   final _danmakuSettings = NativeDanmakuSettings();
-  final _nativeHTTPRequests = NativeHTTPRequestLeaseBridge();
+  final _nativeTrendingProbe = NativeTrendingDeviceProbe();
   final _nativeAccountService = NativeAccountSnapshotService();
   late final _nativeAccountBridge = NativeAccountSnapshotBridge(_nativeAccountService);
   late final _nativeLoginAuthority = NativeLoginAuthority(
@@ -182,7 +182,9 @@ final class IOSNativeUIBridge {
       case 'prepareNativeHTTPRedirect':
       case 'finishNativeHTTPRequest':
       case 'abandonNativeHTTPRequest':
-        return _nativeHTTPRequests.handle(call.method, call.arguments);
+        return _nativeTrendingProbe.handleLease(call.method, call.arguments);
+      case 'nativeTrendingDeviceProbe':
+        return _nativeTrendingProbe.command(call.arguments);
       case 'selectTab':
         final index = _asInt(call.arguments);
         if (index != null &&
@@ -3873,7 +3875,7 @@ final class IOSNativeUIBridge {
 
   void dispose() {
     _disposed = true;
-    _nativeHTTPRequests.dispose();
+    _nativeTrendingProbe.requests.dispose();
     _nativePlayerShellActive = false;
     _snapshotTimer?.cancel();
     for (final worker in _workers) {

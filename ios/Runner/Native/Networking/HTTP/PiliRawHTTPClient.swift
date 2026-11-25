@@ -5,9 +5,12 @@ import PiliHTTPTransport
 final class PiliRawHTTPClient: PiliHTTPTransferring {
   private let transport: PiliRawHTTPTransport
   private let maximumRedirects: Int?
+  private let afterSuccessHead: (@Sendable () async throws -> Void)?
 
-  init(profile: PiliRawHTTP11Profile, maximumBodyBytes: Int) throws {
+  init(profile: PiliRawHTTP11Profile, maximumBodyBytes: Int,
+       afterSuccessHead: (@Sendable () async throws -> Void)? = nil) throws {
     maximumRedirects = profile.redirectLimit
+    self.afterSuccessHead = afterSuccessHead
     transport = try PiliRawHTTPTransport(configuration: .init(
       protocolMode: .http11,
       connectMicroseconds: profile.connectMicroseconds,
@@ -32,7 +35,10 @@ final class PiliRawHTTPClient: PiliHTTPTransferring {
     let outcome = await transport.get(url,
       headers: (request.allHTTPHeaderFields ?? [:]).map { .init(name: $0.key, value: $0.value) },
       sameOriginRedirectLimit: redirectLimit,
-      onHead: { onHead(Self.head($0)) })
+      onHead: { onHead(Self.head($0)) },
+      afterHead: { [afterSuccessHead] head in
+        if head.statusCode == 200 { try await afterSuccessHead?() }
+      })
     let body = outcome.body.mapError { error -> PiliHTTPTransferFailure in
       error == .cancelled ? .cancelled : .client(.nativeTransport(kind: error.rawValue))
     }

@@ -138,6 +138,7 @@ public final class PiliRawHTTPTransport: Sendable {
     _ url: URL, headers: [PiliRawHTTPField] = [],
     sameOriginRedirectLimit: Int? = nil,
     onHead: @escaping @Sendable (PiliRawHTTPHead) -> Void = { _ in },
+    afterHead: (@Sendable (PiliRawHTTPHead) async throws -> Void)? = nil,
     onChunk: @escaping @Sendable (Int) -> Void = { _ in }
   ) async -> PiliRawHTTPOutcome {
     enum Phase: Equatable { case preparing, awaitingHead, readingBody }
@@ -189,6 +190,7 @@ public final class PiliRawHTTPTransport: Sendable {
         }
         observed = head
         onHead(head)
+        try await afterHead?(head)
         var body = Data()
         for try await chunk in response.body {
           try Task.checkCancellation()
